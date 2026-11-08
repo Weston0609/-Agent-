@@ -1,0 +1,270 @@
+{
+  "id": "s6u5l1",
+  "title": "s6u5l1",
+  "kps": [
+    "ai.mm.vlm",
+    "ai.mm.vision_encoder"
+  ],
+  "theory": "## ai.mm.vlm\n\n# 视觉语言模型（VLM）：让大模型长眼睛\n\n> **一句话直觉**：LLM 只会读 token；VLM 做的事就是把一张图也变成一串 token，塞进同一个 Transformer。图不再是「另一路输入」，而是「另一种语言」。\n\n## 1. 三种主流架构\n\n把图变成 token 的方式决定了整个模型的结构，业界大致分三代：\n\n| 架构 | 做法 | 代表 | 特点 |\n| --- | --- | --- | --- |\n| 双塔对齐 | 图和文各自编码，只在最后算相似度 | CLIP | 只能匹配，不能生成描述 |\n| 投影桥接 | 视觉编码器 → 投影层 → 直接当 LLM 的输入 token | LLaVA、Qwen-VL | 结构简单、训练便宜，主流 |\n| 交叉注意力融合 | 在 LLM 每层插入对图像特征的 cross-attention | Flamingo、部分原生多模态 | 融合更充分，训练与推理都更贵 |\n\n现在开源的绝大多数 VLM 走第二条路：一个冻结或半冻结的 ViT 提特征，一个两层 MLP 做投影，把 N 个 patch 特征映射成 LLM 的 embedding 维度，然后和文本 token 拼在一起送进去。\n\n```\n图片 ──► ViT ──► patch 特征 (N×1024) ──► 投影层 ──► (N×4096) ─┐\n                                                              ├─► LLM ──► 文本\n问题 ──► tokenizer ──► embedding ─────────────────────────────┘\n```\n\n## 2. 分辨率是 VLM 最大的工程变量\n\nViT 的输入是固定尺寸（常见 336×336 或 448×448），切成 14×14 或 16×16 的 patch，一张图就是几百个 token。这带来两个直接后果：\n\n**后果一：小字读不清。** 一张 2000×3000 的发票被压到 336×336，字就糊成一片。所以现代 VLM 都支持「动态分辨率」或「切片（tiling）」：把大图切成若干块，每块单独编码，再拼起来。Qwen2-VL 的 naive dynamic resolution、InternVL 的动态切片都是这个思路。\n\n**后果二：token 数爆炸。** 切片越多，喂给 LLM 的 token 越多，显存和延迟都是线性增长。所以工程上必须做预算：\n\n```python\n# 粗略估算一次推理的视觉 token 数\ndef visual_tokens(width, height, patch=14, tile=448):\n    tiles = max(1, (width // tile + 1) * (height // tile + 1))\n    per_tile = (tile // patch) ** 2      # 448/14 = 32 → 1024\n    return tiles * per_tile\n\nprint(visual_tokens(2000, 3000))   # 约 5×8 块 × 1024 ≈ 40960 token，太贵\n```\n\n四万 token 已经超过很多模型的上下文长度。实践中的做法是：**先用低分辨率判断「这张图需不需要细看」，需要再对局部区域做高分辨率二次调用**。\n\n## 3. 调用一个 VLM 的正确姿势\n\n```python\nfrom openai import OpenAI\n\nclient = OpenAI()\n\nresp = client.chat.completions.create(\n    model=\"gpt-4o-mini\",\n    messages=[{\n        \"role\": \"user\",\n        \"content\": [\n            {\"type\": \"text\", \"text\": \"这张图里有几只猫？只回答数字。\"},\n            {\"type\": \"image_url\", \"image_url\": {\"url\": f\"data:image/jpeg;base64,{b64}\"}},\n        ],\n    }],\n    max_tokens=16,\n)\nprint(resp.choices[0].message.content)\n```\n\n三个容易出错的细节：\n\n- **先给指令、再给图**（或至少把指令放在图后）能显著提升指令遵循率。部分模型对顺序敏感。\n- **限制输出长度**。视觉问答的答案往往很短，`max_tokens=16` 既省钱又能减少跑题。\n- **要求结构化输出**。要数字就让它只输出数字，要 JSON 就给它 schema，否则你会在解析上花掉比推理更多的时间。\n\n## 4. VLM 不可靠的地方\n\n这一节比上一节重要。VLM 的失败模式和纯文本 LLM 不一样：\n\n- **幻觉细节**：图中没有的东西它会「补全」。让它数人数，它会给出一个听起来合理的数字。\n- **位置判断差**：「左上角的按钮是什么」这类空间指代经常答错。\n- **计数不准**：超过 5 个物体基本不可信。\n- **读小字不稳**：分辨率不够时它会猜，而且猜得很自信。\n- **多图推理弱**：一次给两张图做对比，容易把两张图的属性混淆。\n\n因此生产环境的通用原则是：**VLM 的输出当「候选」而不是「事实」**。关键字段要么用专门的检测/OCR 模型交叉验证，要么让 VLM 输出带置信度的结构化结果再由规则校验。\n\n## 5. 什么任务该用 VLM，什么不该\n\n- 该用：图像描述、图内文字理解（文档问答）、界面元素定位（Agent 操作浏览器）、开放式的视觉推理。\n- 不该用：精确计数、像素级测量、需要确定性输出的分类（用专门的分类模型更稳更便宜）、大批量简单打标（成本划不来）。\n\n一个常见的架构是**便宜模型打标 + VLM 兜底**：先用小分类器判断图片类别，只有判不准或需要细描述时才升级到 VLM。\n\n## 小结\n\nVLM 的本质是把视觉特征投影成 LLM 能读的 token。工程上真正决定成败的不是模型选型，而是**分辨率预算**和**对幻觉的防御**——把它的输出当作需要验证的候选，而不是直接落库的答案。\n\n## ai.mm.vision_encoder\n\n# 视觉编码器：ViT 是怎么把图变成特征的\n\n> **一句话直觉**：ViT 把图片切成小方块（patch），每个方块当一个「词」，然后完全用 Transformer 的注意力去理解它们之间的关系。它没有卷积，只有注意力。\n\n## 1. 一张图怎么变成一串 token\n\n```\n图片 224×224 ──切 patch(16×16)──► 14×14 = 196 个 patch\n                                    │\n                                    ├─ 每个 patch 拉平成 16×16×3 = 768 维\n                                    ├─ 线性投影到模型维度 D\n                                    ├─ 加位置编码\n                                    └─ 前面拼一个 [CLS] token\n                                          │\n                                          ▼\n                                    Transformer Encoder × L 层\n                                          │\n                                    [CLS] 的输出 = 整图特征\n```\n\n```python\nimport torch\nimport torch.nn as nn\n\nclass PatchEmbed(nn.Module):\n    def __init__(self, img_size=224, patch=16, in_ch=3, dim=768):\n        super().__init__()\n        self.proj = nn.Conv2d(in_ch, dim, kernel_size=patch, stride=patch)\n\n    def forward(self, x):                  # (B, 3, 224, 224)\n        x = self.proj(x)                   # (B, 768, 14, 14)\n        x = x.flatten(2).transpose(1, 2)   # (B, 196, 768)\n        return x\n```\n\n注意这里用 `Conv2d` 实现切块 + 投影，本质就是「不重叠的卷积」，比手动 reshape 更简洁也更快。\n\n## 2. 为什么需要位置编码\n\n注意力本身是**置换不变**的——把 196 个 patch 打乱顺序，输出集合不变。但图像是有空间结构的，「左上角」和「右下角」完全不同。所以必须显式注入位置信息：\n\n- **可学习绝对位置编码**：原版 ViT，一个 `(196+1, D)` 的参数矩阵，简单有效，但换分辨率就要插值。\n- **二维位置编码**：分别编码行和列，对非方形输入更友好。\n- **旋转位置编码（RoPE）**：现在多模态模型的主流，天然支持变长、外推性好。\n\n## 3. CLS token 与池化\n\n原版 ViT 用 `[CLS]` token 的输出做分类。但现代 VLM 通常**不用 CLS**——它需要的是每个 patch 的特征（N×D），因为要和文本 token 逐个对齐。\n\n```python\n# 分类任务：取 CLS\nfeat = out[:, 0]                       # (B, D)\n\n# 检索/生成任务：取所有 patch\nfeat = out[:, 1:]                      # (B, 196, D)\nfeat = feat.mean(dim=1)                # 或者池化成一个向量\n```\n\n## 4. 主流视觉编码器怎么选\n\n| 编码器 | 特点 | 适合 |\n| --- | --- | --- |\n| CLIP ViT | 与文本对齐，语义强 | 图文检索、VLM 的视觉塔 |\n| SigLIP | sigmoid 损失，比 softmax 更省、效果更好 | 新一代 VLM 首选 |\n| DINOv2 | 自监督，纯视觉特征极强 | 以图搜图、检测、分割 |\n| EVA-02 | 大规模蒸馏，参数量大效果好 | 需要高精度的场景 |\n\n选型的判断点：**下游任务要不要跨模态对齐**。要（比如 VLM、文搜图），选 CLIP/SigLIP 系；不要（纯视觉匹配、检测），DINOv2 往往更准。\n\n## 5. 分辨率与 patch 大小的取舍\n\n- **patch 越小**（14 比 16），token 越多，细节越好，代价是注意力 O(N²) 爆炸。\n- **输入分辨率越高**，小目标越清楚，同样 token 数暴涨。\n- **动态分辨率**是当前的主流解法：按图片原始长宽比切成若干块，每块固定尺寸编码，再拼接。\n\n实践上要盯住一个数字：**视觉 token 数**。它同时决定显存、延迟和成本，是所有多模态系统的一等公民。\n\n## 6. 冻结还是微调\n\nVLM 训练时视觉塔通常**冻结**，只训投影层（LLaVA 的第一阶段），再解冻一部分做指令微调（第二阶段）。原因是视觉塔参数量大、微调容易把预训练学到的通用表征破坏掉，而且需要海量图文对。\n\n如果领域差异极大（医学影像、工业缺陷），那就要考虑领域内继续预训练视觉塔，否则投影层再怎么训也补不回特征本身的缺失。\n\n## 小结\n\n视觉编码器把图片变成 N 个 patch token，位置编码保住空间结构，池化方式决定输出形态。工程上真正要权衡的是**token 数（成本）与分辨率（细节）**，以及**要不要跨模态对齐（选 CLIP 系还是 DINOv2 系）**。\n",
+  "quiz": [
+    {
+      "kp": "ai.mm.vlm",
+      "type": "single_choice",
+      "question": "目前主流开源 VLM（如 LLaVA、Qwen-VL）采用的架构是？",
+      "options": [
+        "双塔对齐，只在最后算图文相似度",
+        "视觉编码器 + 投影层，把图像特征映射成 LLM 的输入 token",
+        "在 LLM 每层插入 cross-attention 融合图像特征",
+        "把图片转成 ASCII art 再喂给 LLM"
+      ],
+      "answer": 1,
+      "explanation": "投影桥接结构简单、训练便宜，是当前主流；双塔只能匹配不能生成，交叉注意力融合更贵。",
+      "error_tag": "概念混淆",
+      "variant_group": "vlm_arch_projection"
+    },
+    {
+      "kp": "ai.mm.vlm",
+      "type": "single_choice",
+      "question": "把一张 2000×3000 的发票直接缩放到 336×336 再喂给 VLM，最可能的结果是？",
+      "options": [
+        "识别准确率反而更高，因为模型只见过小图",
+        "发票上的小字被压缩到糊成一片，内容识别不出来",
+        "模型会报错退出",
+        "推理速度变慢十倍"
+      ],
+      "answer": 1,
+      "explanation": "固定分辨率会丢失细节，小字识别必须靠动态分辨率或切片放大局部。",
+      "error_tag": "工程实践缺失",
+      "variant_group": "vlm_resolution_loss"
+    },
+    {
+      "kp": "ai.mm.vlm",
+      "type": "single_choice",
+      "question": "关于视觉 token 数量，以下说法正确的是？",
+      "options": [
+        "与分辨率无关，只取决于模型参数量",
+        "切片越多、patch 越小，token 越多，显存和延迟线性甚至平方增长",
+        "token 越多效果一定越好，没有代价",
+        "视觉 token 不占用上下文长度"
+      ],
+      "answer": 1,
+      "explanation": "视觉 token 同时决定显存、延迟和成本，是所有多模态系统的核心预算项。",
+      "error_tag": "概念混淆",
+      "variant_group": "vlm_token_budget"
+    },
+    {
+      "kp": "ai.mm.vlm",
+      "type": "single_choice",
+      "question": "以下哪个任务最不适合直接交给 VLM？",
+      "options": [
+        "描述一张风景照的内容",
+        "理解一张发票上的文字并提取金额",
+        "精确数出图中是否有 37 个螺丝",
+        "判断界面截图上哪个是「提交」按钮"
+      ],
+      "answer": 2,
+      "explanation": "VLM 对超过 5 个物体的计数基本不可信，精确计数要用检测模型。",
+      "error_tag": "边界错误",
+      "variant_group": "vlm_counting_limit"
+    },
+    {
+      "kp": "ai.mm.vlm",
+      "type": "single_choice",
+      "question": "生产环境里对 VLM 输出的正确态度是？",
+      "options": [
+        "直接落库，VLM 的输出就是事实",
+        "当作需要交叉验证的候选，关键字段用专门模型或规则校验",
+        "只要模型大就不会出错",
+        "先输出再人工全量复核"
+      ],
+      "answer": 1,
+      "explanation": "VLM 会幻觉细节且很自信，关键字段必须有交叉验证或规则兜底。",
+      "error_tag": "工程实践缺失",
+      "variant_group": "vlm_hallucination_defense"
+    },
+    {
+      "kp": "ai.mm.vlm",
+      "type": "multi_choice",
+      "question": "VLM 相比纯文本 LLM 特有的失败模式有哪些？（多选）",
+      "options": [
+        "幻觉出图中并不存在的细节",
+        "空间位置判断错误（左上/右下搞混）",
+        "对超过 5 个物体的计数不可信",
+        "分辨率不足时读小字会「猜」且很自信",
+        "完全无法处理任何自然语言指令"
+      ],
+      "answer": [0, 1, 2, 3],
+      "explanation": "前四项都是 VLM 的典型失败模式；VLM 当然能处理自然语言指令。",
+      "error_tag": "概念混淆",
+      "variant_group": "vlm_failure_modes"
+    },
+    {
+      "kp": "ai.mm.vlm",
+      "type": "fill_blank",
+      "question": "VLM 里把视觉编码器输出的特征映射到 LLM embedding 维度的那一层，通常是一个两层的 ______（MLP/CNN）。",
+      "options": [],
+      "answer": ["MLP", "mlp", "多层感知机"],
+      "explanation": "投影层通常是两层 MLP，把 ViT 的 patch 特征映射到 LLM 的 embedding 维度。",
+      "error_tag": "记忆缺失",
+      "variant_group": "vlm_projection_mlp"
+    },
+    {
+      "kp": "ai.mm.vlm",
+      "type": "fill_blank",
+      "question": "把大图切成若干固定尺寸的小块分别编码、再拼接特征的做法，通常称为 ______（tiling，中文填「切片」或英文 tiling）。",
+      "options": [],
+      "answer": ["切片", "tiling", "Tiling", "切块"],
+      "explanation": "动态分辨率/切片是解决小字识别与细节丢失的主流方案。",
+      "error_tag": "记忆缺失",
+      "variant_group": "vlm_tiling"
+    },
+    {
+      "kp": "ai.mm.vlm",
+      "type": "code_reading",
+      "question": "阅读以下调用代码，说明它在什么情况下会浪费大量成本、以及如何改进：\n\nresp = client.chat.completions.create(\n    model=\"gpt-4o-mini\",\n    messages=[{\"role\": \"user\", \"content\": [\n        {\"type\": \"text\", \"text\": \"这张图是什么？请详细描述所有细节。\"},\n        {\"type\": \"image_url\", \"image_url\": {\"url\": f\"data:image/jpeg;base64,{b64}\"}},\n    ]}],\n)",
+      "options": [],
+      "answer": "没有设置 max_tokens，模型会生成很长的描述，图片越复杂输出越长，token 成本不可控；而且「详细描述所有细节」这种开放指令会让模型倾向于幻觉。改进：明确任务并限制输出，比如「用一句话说明主体是什么」+ max_tokens=32；如果需要结构化结果就指定 JSON schema。另外指令放在图片之后通常指令遵循率更高。",
+      "explanation": "视觉问答的输出长度必须显式限制，开放指令会同时放大成本和幻觉。",
+      "error_tag": "工程实践缺失",
+      "variant_group": "vlm_unbounded_output"
+    },
+    {
+      "kp": "ai.mm.vlm",
+      "type": "scenario",
+      "question": "公司要用 VLM 做「发票信息自动录入」：从用户上传的发票照片里提取发票号、金额、开票日期。请说明你会怎么设计这条链路，以及如何控制识别错误带来的业务风险。",
+      "options": [],
+      "answer": null,
+      "explanation": "考查工程链路：动态分辨率/切片保证小字可读、结构化输出（JSON schema）、关键字段交叉校验（正则、金额求和校验、与订单金额比对）、低置信度转人工、留原图可追溯。",
+      "error_tag": "场景分析不足",
+      "variant_group": "vlm_invoice_pipeline",
+      "required_keywords": ["分辨率", "切片", "结构化", "校验", "人工", "置信度"]
+    },
+    {
+      "kp": "ai.mm.vision_encoder",
+      "type": "single_choice",
+      "question": "ViT 把一张 224×224 的图切成 16×16 的 patch，得到的 patch 数量是？",
+      "options": ["16", "196", "224", "768"],
+      "answer": 1,
+      "explanation": "224/16 = 14，14×14 = 196 个 patch。",
+      "error_tag": "概念混淆",
+      "variant_group": "vit_patch_count"
+    },
+    {
+      "kp": "ai.mm.vision_encoder",
+      "type": "single_choice",
+      "question": "ViT 为什么必须加位置编码？",
+      "options": [
+        "为了让模型训练更快",
+        "因为注意力是置换不变的，不加位置编码就无法区分 patch 的空间位置",
+        "因为 patch 的维度不够",
+        "为了减少参数量"
+      ],
+      "answer": 1,
+      "explanation": "自注意力对输入顺序不敏感，位置信息必须显式注入。",
+      "error_tag": "原理不清",
+      "variant_group": "vit_position_encoding"
+    },
+    {
+      "kp": "ai.mm.vision_encoder",
+      "type": "single_choice",
+      "question": "做图文检索时，ViT 的输出应该取什么？",
+      "options": [
+        "只取 [CLS] token 的输出",
+        "取所有 patch 的输出（或对它们池化），因为需要和文本 token 逐项对齐",
+        "取最后一层的第一个像素",
+        "取任意一个 patch 即可"
+      ],
+      "answer": 1,
+      "explanation": "分类任务用 CLS，检索/生成任务需要 patch 级特征。",
+      "error_tag": "概念混淆",
+      "variant_group": "vit_cls_vs_patch"
+    },
+    {
+      "kp": "ai.mm.vision_encoder",
+      "type": "single_choice",
+      "question": "纯视觉任务（以图搜图、检测）通常优先选哪类编码器？",
+      "options": [
+        "CLIP ViT，因为它和文本对齐",
+        "DINOv2 这类自监督编码器，纯视觉特征更强",
+        "任意编码器效果都一样",
+        "必须用 ResNet，ViT 不能做检测"
+      ],
+      "answer": 1,
+      "explanation": "不需要跨模态对齐时，DINOv2 系的纯视觉表征往往优于 CLIP。",
+      "error_tag": "选型错误",
+      "variant_group": "vision_encoder_choice"
+    },
+    {
+      "kp": "ai.mm.vision_encoder",
+      "type": "single_choice",
+      "question": "把 patch 从 16 改成 14，主要影响是？",
+      "options": [
+        "token 数减少，速度变快",
+        "token 数增加、细节变好，但注意力代价按 O(N²) 增长",
+        "模型参数量减半",
+        "不再需要位置编码"
+      ],
+      "answer": 1,
+      "explanation": "patch 越小 token 越多，自注意力是 N² 复杂度，代价增长很快。",
+      "error_tag": "性能误判",
+      "variant_group": "vit_patch_size_tradeoff"
+    },
+    {
+      "kp": "ai.mm.vision_encoder",
+      "type": "multi_choice",
+      "question": "关于视觉编码器的训练策略，以下说法正确的有哪些？（多选）",
+      "options": [
+        "VLM 训练第一阶段通常冻结视觉塔，只训投影层",
+        "冻结视觉塔是因为它参数大、微调容易破坏通用表征",
+        "领域差异极大时（医学影像）可能需要领域内继续预训练视觉塔",
+        "视觉塔必须全程冻结，永远不能微调",
+        "只训投影层无法弥补特征本身的缺失"
+      ],
+      "answer": [0, 1, 2, 4],
+      "explanation": "冻结是默认策略但非绝对；领域差异大时需要动视觉塔本身。",
+      "error_tag": "概念混淆",
+      "variant_group": "vision_encoder_freeze"
+    },
+    {
+      "kp": "ai.mm.vision_encoder",
+      "type": "fill_blank",
+      "question": "ViT 中用于汇总整图信息、常被用作分类头的特殊 token 叫 ______ token。",
+      "options": [],
+      "answer": ["CLS", "cls", "[CLS]"],
+      "explanation": "CLS token 与 patch 一起过 Transformer，其输出被当作整图表示。",
+      "error_tag": "记忆缺失",
+      "variant_group": "vit_cls_token"
+    },
+    {
+      "kp": "ai.mm.vision_encoder",
+      "type": "fill_blank",
+      "question": "用 sigmoid 损失替代 softmax 对比损失、在同等算力下效果更好的视觉文本编码器是 ______（英文名）。",
+      "options": [],
+      "answer": ["SigLIP", "siglip"],
+      "explanation": "SigLIP 用 sigmoid 损失，不要求全局归一化，是新一代 VLM 视觉塔的首选。",
+      "error_tag": "记忆缺失",
+      "variant_group": "siglip"
+    },
+    {
+      "kp": "ai.mm.vision_encoder",
+      "type": "code_reading",
+      "question": "以下代码有什么问题：\n\nclass PatchEmbed(nn.Module):\n    def __init__(self, dim=768):\n        super().__init__()\n        self.proj = nn.Conv2d(3, dim, kernel_size=16, stride=16)\n\n    def forward(self, x):\n        x = self.proj(x)\n        x = x.flatten(2).transpose(1, 2)\n        return x.mean(dim=1)",
+      "options": [],
+      "answer": "最后一步把 196 个 patch 特征直接 mean 成一个向量，丢掉了全部空间信息。VLM/检索任务需要 patch 级特征（B, 196, D）去和文本 token 对齐；只有做整图分类时才池化，而且通常用 CLS token 而不是简单 mean。应该返回 x 本身。",
+      "explanation": "过早池化会让 VLM 无法做细粒度对齐，是视觉塔改造时的常见错误。",
+      "error_tag": "边界错误",
+      "variant_group": "vit_premature_pool"
+    },
+    {
+      "kp": "ai.mm.vision_encoder",
+      "type": "scenario",
+      "question": "你要给一个工业质检系统选视觉编码器：产线相机拍 4000×3000 的零件图，要检测表面 1mm 级缺陷，每天 20 万张，缺陷样本极少。请说明你的选型思路和训练策略。",
+      "options": [],
+      "answer": null,
+      "explanation": "考查选型与训练策略：分辨率/切片保证小缺陷可见、token 预算控制吞吐、自监督或异常检测范式应对样本极少、是否需要领域继续预训练。",
+      "error_tag": "场景分析不足",
+      "variant_group": "vision_encoder_industrial",
+      "required_keywords": ["分辨率", "切片", "自监督", "异常检测", "预训练", "吞吐"]
+    }
+  ]
+}

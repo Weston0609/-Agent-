@@ -1,0 +1,310 @@
+{
+  "id": "s2u4l5",
+  "title": "s2u4l5",
+  "kps": [
+    "py.typehint.pydantic_basic"
+  ],
+  "theory": "## py.typehint.pydantic_basic\n\n# 类型提示与 Pydantic 入门\n\n## 一句话直觉\n\n**Python 的类型提示（type hints）就像给变量、函数贴\"标签\"，让 IDE 和自动化工具能在你运行代码之前，就发现\"把字符串传给需要数字的函数\"这类错误；而 Pydantic 则把这种标签变成\"运行时自动校验器\"，专门帮你守护从外部（用户输入、API、配置文件）进来的数据。**\n\n在生产级代码里，光靠 \"人手检查\" 或者 `if not isinstance(x, int)` 是远远不够的——注释会过时，文档会撒谎，但类型提示和 Pydantic 不会被跳过。\n\n---\n\n## 第 1 节：为什么需要类型提示？\n\nPython 是一门动态类型语言，`def add(a, b): return a + b` 对 `1 + 2` 和 `\"a\" + \"b\"` 都成立，但对 `1 + \"a\"` 就会在运行时崩溃。问题在于：**错误发生得太晚**，可能是在凌晨三点的生产环境上。\n\n类型提示（type hints，PEP 484 引入）让我们在声明的层面写出意图：\n\n```python\n# 声明：a 和 b 是 int，返回也是 int\ndef add(a: int, b: int) -> int:\n    return a + b\n```\n\n运行时 Python 解释器**不执行**这些提示（所以不会有性能损失，也不会因提示错误而拒绝运行），但 mypy、pyright、IDE 会读它们。这就是 PEP 484 说的\"类型检查器是可选的、独立的工具\"。\n\n```python\n# 一个简单的类型提示示例\n# 运行此代码不会报错，但 mypy 会警告 `add(\"a\", \"b\")`\ndef add(a: int, b: int) -> int:\n    return a + b\n\nprint(add(1, 2))       # 正常运行：3\nprint(add(\"a\", \"b\"))  # 运行时也 OK：\"ab\"（因为 + 对字符串也可用）\n```\n\n---\n\n## 第 2 节：类型提示的基本语法\n\n### 变量注解（variable annotations, PEP 526）\n\n```python\n# 模块级/局部变量注解\nname: str = \"Alice\"     # 冒号后一个空格，等号两侧各一个空格\nage: int = 30\n\n# 只注解不赋值也合法\nemail: str\n```\n\n### 函数注解（function annotations）\n\n```python\n# 参数名: 类型；-> 返回类型\ndef greet(name: str, times: int = 1) -> str:\n    return (\"Hi \" + name + \"! \") * times\n```\n\n### 常用容器类型\n\n从 Python 3.9 起可以直接用内置泛型 `list`、`dict`、`tuple`；更复杂的用 `typing` 模块。\n\n```python\n# Python 3.9+\nfrom typing import Optional\n\ndef scores(names: list[str]) -> dict[str, int]:\n    return {n: 0 for n in names}\n\n# Optional[X] 等价于 X | None，表示\"要么是 X，要么是 None\"\ndef maybe_id(prefix: str) -> Optional[int]:\n    return int(prefix) if prefix.isdigit() else None\n```\n\n### 类型别名（type alias）让复杂签名清晰可读\n\n```python\n# Python 3.12 用 type 语句，老版本用赋值\n# type Vector = list[float]\nVector = list[float]  # 老写法仍然完全可用\n\ndef scale(scalar: float, vector: Vector) -> Vector:\n    return [scalar * x for x in vector]\n```\n\n---\n\n## 第 3 节：运行时真的检查吗？—— Pydantic 登场\n\n类型提示本身**只是元数据**。如果你从一个 HTTP 请求里拿到了用户数据 `{\"age\": \"abc\"}`，Python 不会主动报错。这就是 Pydantic 存在的意义：**把类型提示变成运行时的自动校验 + 数据转换**。\n\nPydantic 的核心是 `BaseModel` 的子类：\n\n```python\n# 安装：pip install pydantic\n# Pydantic v2 写法\nfrom pydantic import BaseModel, ValidationError\n\nclass User(BaseModel):\n    name: str\n    age: int\n    email: str\n\n# 正常构造：合法数据会被直接接受\nu = User(name=\"Alice\", age=30, email=\"a@b.com\")\nprint(u)\n\n# 不合法数据：字符串 \"30\" 会被自动转成 int（默认宽松模式）\nu2 = User(name=\"Bob\", age=\"30\", email=\"b@c.com\")\nprint(u2.age, type(u2.age))  # 30 <class 'int'>\n\n# 无法转换的数据：抛 ValidationError\ntry:\n    User(name=\"C\", age=\"not-a-number\", email=\"c@d.com\")\nexcept ValidationError as e:\n    print(\"校验失败:\", e.errors()[0][\"msg\"])\n```\n\n### 关键优势\n\n1. **早失败**：数据进入你的业务逻辑之前就被校验。\n2. **自动类型转换**：JSON 里的字符串 `\"30\"` 变成 `int` 30。\n3. **IDE 友好**：`u.age` 会被识别为 `int`，有自动补全。\n4. **可序列化**：`u.model_dump()` 返回 dict，`u.model_dump_json()` 返回 JSON 字符串。\n\n```python\n# 序列化示例（Pydantic v2）\nfrom pydantic import BaseModel\n\nclass User(BaseModel):\n    name: str\n    age: int\n\nu = User(name=\"Alice\", age=30)\nprint(u.model_dump())          # {'name': 'Alice', 'age': 30}\nprint(u.model_dump_json())     # '{\"name\":\"Alice\",\"age\":30}'\n```\n\n---\n\n## 第 4 节：更贴近工程的用法——嵌套、默认值、约束\n\n真实场景里模型往往嵌套，且有默认值或校验约束。\n\n```python\nfrom pydantic import BaseModel, Field\nfrom typing import Optional\n\nclass Address(BaseModel):\n    city: str\n    zipcode: str\n\nclass User(BaseModel):\n    name: str\n    age: int = Field(ge=0, le=150)         # 数值范围约束\n    email: Optional[str] = None            # 可选字段，默认 None\n    tags: list[str] = []                   # 可变默认值，Pydantic 会正确处理\n    address: Optional[Address] = None      # 嵌套模型\n\n# 嵌套和默认值一起用\nu = User(\n    name=\"Alice\",\n    age=30,\n    address={\"city\": \"Beijing\", \"zipcode\": \"100000\"},  # dict 会自动转成 Address\n)\nprint(u.address.city)  # Beijing\n\n# 校验约束：年龄超范围直接报错\ntry:\n    User(name=\"B\", age=200)\nexcept Exception as e:\n    print(\"年龄超范围:\", str(e).splitlines()[-1])\n```\n\n### 用模型替代原始 dict 的价值\n\n在没有 Pydantic 的代码里，你经常写 `data[\"user\"][\"age\"]`，一旦字段名拼错、层级变深就会崩。用了模型后：\n\n- 字段名拼错 → IDE 立刻提示（不再等到运行时）。\n- 数据类型不对 → 构造时立刻报错，知道是哪一行数据。\n- 文档自动化：FastAPI 等框架直接读取 Pydantic 模型生成 OpenAPI 文档。\n\n---\n\n## 第 5 节：把类型提示和 Pydantic 落到工程实践\n\n**原则 1：公共函数/边界处一定加类型提示。** 特别是团队共享的模块、对外 API 的入口/出口。\n\n```python\n# 边界：外部来的数据先用 Pydantic 校验，内部逻辑再用纯函数\nfrom pydantic import BaseModel\n\ndef parse_user(payload: dict) -> \"User\":\n    return User(**payload)\n\ndef user_display(user: User) -> str:\n    return f\"{user.name} ({user.age})\"\n```\n\n**原则 2：类型检查器可选但强烈建议装。** 在 IDE 中打开 mypy/pyright，或在 CI 里跑一次：\n\n```bash\npip install mypy\nmypy your_module.py\n```\n\n**原则 3：使用类型别名（type aliases）和 `NewType` 防止把不同语义的同类值混用。**\n\n```python\nfrom typing import NewType\n\nUserId = NewType(\"UserId\", int)\nOrderId = NewType(\"OrderId\", int)\n\ndef get_user_name(uid: UserId) -> str:\n    return f\"user-{uid}\"\n\n# 显式构造才能通过类型检查\nprint(get_user_name(UserId(42)))\n```\n\n**原则 4：运行时和静态检查分工。** 静态检查器负责代码结构；Pydantic 负责数据边界（用户输入、配置文件、API 响应）。两者互补，不是二选一。\n\n---\n\n## 动手练习\n\n**任务：写一个\"用户注册数据\"的 Pydantic 模型并通过一组数据验证它。**\n\n步骤：\n\n1. 在本地新建文件 `pydantic_practice.py`。\n2. 安装依赖：`pip install pydantic`。\n3. 定义 `User` 模型，字段包含：\n   - `username: str`（长度 3~20，用 `Field(min_length=3, max_length=20)`）\n   - `age: int`（0~150）\n   - `email: str`\n   - `tags: list[str] = []`\n   - `nickname: Optional[str] = None`\n4. 准备一份 `data` 列表，包含：\n   - 一条合法的 dict；\n   - 一条 `age` 是字符串 `\"20\"` 的（应被 Pydantic 自动转成 int）；\n   - 一条 `age` 是 `-5` 的（应触发校验错误）；\n   - 一条 `username` 只有 2 个字符的（应触发校验错误）。\n5. 遍历数据，用 `try/except ValidationError` 打印成功结果或错误信息。\n6. 额外：对第一条成功的用户调用 `model_dump_json()`，打印 JSON 字符串。\n7. 进阶：给 `User` 添加 `model_config = {\"extra\": \"forbid\"}`，再传入带多余字段 `\"role\": \"admin\"` 的数据，观察 Pydantic 的行为。\n\n预期结果：你会看到合法的通过、可转换的被修复、非法的抛出清晰的错误信息——这就是 Pydantic 在生产里最常用的工作模式。\n",
+  "quiz": [
+    {
+      "kp": "py.typehint.pydantic_basic",
+      "type": "single_choice",
+      "question": "在数据校验与序列化场景中，以下哪段代码最有可能在模型实例化时直接抛出校验错误？\n\nA. 定义了一个含 `age: int` 字段的模型类，并用 `age=\"25\"` 构造实例\nB. 定义了一个含 `age: int` 字段的模型类，并用 `age=25` 构造实例\nC. 定义了一个含 `age: int` 字段的模型类，并用 `age=\"abc\"` 构造实例\nD. 定义了一个含 `age: int` 字段的模型类，并用 `age=25.0` 构造实例",
+      "options": [
+        "A. `age=\"25\"` 会抛出错误，因为字符串不能自动转成整数",
+        "B. `age=25` 会抛出错误，因为模型字段必须用字符串传入",
+        "C. `age=\"abc\"` 会抛出错误，因为该字符串无法解析为整数",
+        "D. `age=25.0` 会抛出错误，因为浮点数不能赋给整型字段"
+      ],
+      "answer": 2,
+      "explanation": "在带类型校验的模型里，通常会对可解析的数值字符串做强制转换，但 `\"abc\"` 无法解析成整数，因此会在实例化时抛出校验错误。`age=\"25\"` 通常可被转成 25；`age=25` 是标准用法；`age=25.0` 一般也能被接受并可能被转成 25（具体取决于严格模式设置，但在默认非严格模式下通常不会直接报错）。",
+      "error_tag": "类型强制转换理解错误",
+      "variant_group": "pydantic_basic_validation"
+    },
+    {
+      "kp": "py.typehint.pydantic_basic",
+      "type": "single_choice",
+      "question": "下列关于数据校验模型的说法，哪一项最准确？\n\nA. 模型类定义后，实例化时通常不会校验，只有调用序列化方法时才会校验\nB. 模型类实例化时通常会执行字段类型与约束校验，不符合要求则抛出校验异常\nC. 模型类只做静态类型标记，运行时完全不产生任何校验行为\nD. 模型类只在定义时校验字段名，不校验字段值",
+      "options": [
+        "A. 只有序列化时才校验",
+        "B. 实例化时通常执行校验，不符合则抛异常",
+        "C. 运行时完全不产生校验行为",
+        "D. 只在定义时校验字段名，不校验字段值"
+      ],
+      "answer": 1,
+      "explanation": "这类模型的核心能力之一就是在实例化时对输入数据做运行时校验，不符合类型或约束会抛出校验异常。选项 A、C、D 都是常见误解：把静态类型注解或序列化阶段误当成唯一校验时机。",
+      "error_tag": "校验时机理解错误",
+      "variant_group": "pydantic_basic_validation"
+    },
+    {
+      "kp": "py.typehint.pydantic_basic",
+      "type": "single_choice",
+      "question": "以下哪种情况最可能在实例化时触发校验错误？\n\nA. 字段类型为 `List[int]`，传入 `[1, 2, 3]`\nB. 字段类型为 `List[int]`，传入 `[\"a\", \"b\"]`\nC. 字段类型为 `List[int]`，传入 `[]`\nD. 字段类型为 `List[int]`，传入 `(1, 2)`",
+      "options": [
+        "A. 合法列表，元素均为整数",
+        "B. 元素无法解析为整数，会触发校验错误",
+        "C. 空列表合法",
+        "D. 元组通常可被转换为列表"
+      ],
+      "answer": 1,
+      "explanation": "`List[int]` 要求每个元素都能解析为整数。`[\"a\", \"b\"]` 中的元素无法解析为整数，因此会触发校验错误。A、C 均合法；D 中元组通常会被转换为列表并通过校验（具体取决于严格模式设置，但默认行为通常如此）。",
+      "error_tag": "列表元素类型校验误解",
+      "variant_group": "pydantic_basic_list"
+    },
+    {
+      "kp": "py.typehint.pydantic_basic",
+      "type": "single_choice",
+      "question": "关于模型字段的顺序与继承，以下说法哪一项最可能正确？\n\nA. 子类不能覆盖父类字段，只能新增字段\nB. 子类可以继承父类字段，并可在子类中重新声明以覆盖类型或默认值\nC. 继承后父类字段会被全部清除\nD. 字段顺序完全随机，与类定义无关",
+      "options": [
+        "A. 子类可以覆盖父类字段，并非只能新增",
+        "B. 子类可继承父类字段，并可重新声明覆盖",
+        "C. 继承后父类字段不会被全部清除",
+        "D. 字段顺序通常与类定义顺序有关"
+      ],
+      "answer": 1,
+      "explanation": "模型类支持继承，子类会继承父类字段，并且可以在子类中重新声明同名字段以覆盖类型或默认值。A、C、D 与常见的继承行为不符。",
+      "error_tag": "模型继承理解错误",
+      "variant_group": "pydantic_basic_inheritance"
+    },
+    {
+      "kp": "py.typehint.pydantic_basic",
+      "type": "single_choice",
+      "question": "在模型类中，以下哪种字段声明最可能被解释为“该字段是必填的”？\n\nA. `x: int = 0`\nB. `x: int`\nC. `x: int = None`\nD. `x: Optional[int] = None`",
+      "options": [
+        "A. 有默认值 0，通常非必填",
+        "B. 没有默认值，通常视为必填",
+        "C. 默认值为 None，通常非必填",
+        "D. 可选且默认 None，通常非必填"
+      ],
+      "answer": 1,
+      "explanation": "没有默认值的字段通常被视为必填，实例化时必须提供。A、C、D 都给出了默认值，因此通常不是必填。",
+      "error_tag": "必填字段判断错误",
+      "variant_group": "pydantic_basic_required"
+    },
+    {
+      "kp": "py.typehint.pydantic_basic",
+      "type": "single_choice",
+      "question": "关于校验失败时的异常类型，以下说法哪一项最可能正确？\n\nA. 所有校验失败都会抛出 `ValueError`，不会携带字段信息\nB. 通常会抛出专门的校验异常，其中可包含每个字段的错误详情\nC. 校验失败只会返回 `False`，不会抛异常\nD. 校验失败会自动忽略该字段并继续实例化",
+      "options": [
+        "A. 不只抛 ValueError，且通常包含字段级错误信息",
+        "B. 通常抛出专门校验异常，包含字段错误详情",
+        "C. 通常抛异常而非仅返回 False",
+        "D. 不会自动忽略并继续实例化"
+      ],
+      "answer": 1,
+      "explanation": "这类模型在校验失败时通常会抛出专门的校验异常，异常对象可提供按字段组织的错误列表，便于定位问题。A、C、D 都低估了错误信息的结构化程度或误解了失败时的处理方式。",
+      "error_tag": "校验异常理解错误",
+      "variant_group": "pydantic_basic_error"
+    },
+    {
+      "kp": "py.typehint.pydantic_basic",
+      "type": "single_choice",
+      "question": "如果字段类型声明为 `datetime`，以下哪种输入最可能在实例化时被接受？\n\nA. 字符串 `\"2024-01-01\"`\nB. 整数 `20240101`\nC. 列表 `[2024, 1, 1]`\nD. 字典 `{\"year\": 2024, \"month\": 1, \"day\": 1}`",
+      "options": [
+        "A. 常见日期字符串通常可被解析为 datetime",
+        "B. 整数通常不被直接解析为日期",
+        "C. 列表通常不被直接解析为日期",
+        "D. 字典通常不被直接解析为日期"
+      ],
+      "answer": 0,
+      "explanation": "在默认非严格模式下，`datetime` 字段通常可以接受符合常见格式的字符串并自动解析。整数、列表、字典一般不会被直接解析为日期对象，因此更可能报错。",
+      "error_tag": "日期类型解析误解",
+      "variant_group": "pydantic_basic_datetime"
+    },
+    {
+      "kp": "py.typehint.pydantic_basic",
+      "type": "single_choice",
+      "question": "关于模型实例的相等性比较，以下说法哪一项最可能正确？\n\nA. 两个模型实例只要有相同类型就一定相等\nB. 两个模型实例通常在所有字段值都相等时被视为相等\nC. 模型实例不支持相等比较，只能用 `is`\nD. 相等比较会自动忽略默认值字段",
+      "options": [
+        "A. 类型相同不一定相等，还需字段值相同",
+        "B. 通常所有字段值相等时视为相等",
+        "C. 通常支持相等比较，不限于 is",
+        "D. 不会自动忽略默认值字段"
+      ],
+      "answer": 1,
+      "explanation": "模型实例通常基于字段值进行相等比较，且要求类型一致。A 忽略了字段值的比较；C 与常见行为不符；D 没有依据。",
+      "error_tag": "模型相等性理解错误",
+      "variant_group": "pydantic_basic_equality"
+    },
+    {
+      "kp": "py.typehint.pydantic_basic",
+      "type": "single_choice",
+      "question": "以下哪种方式最可能用于在实例化后校验并修改字段值？\n\nA. 直接在实例化后赋值 `obj.age = -1`，模型会自动拒绝非法值\nB. 使用校验器（validator）在赋值或实例化时进行校验和转换\nC. 使用 `__init__` 方法覆盖所有字段校验逻辑\nD. 使用 `setattr` 绕过校验并始终生效",
+      "options": [
+        "A. 实例化后直接赋值是否触发校验取决于配置，并非总是自动拒绝",
+        "B. 使用校验器可在赋值或实例化时进行校验和转换",
+        "C. 覆盖 __init__ 不是推荐做法且可能破坏模型机制",
+        "D. setattr 不一定绕过校验，且并非稳定可靠的方案"
+      ],
+      "answer": 1,
+      "explanation": "这类模型通常提供校验器机制，可在字段赋值或实例化时执行自定义校验和转换逻辑，是扩展校验的推荐方式。A、D 的行为依赖配置且不稳定；C 容易破坏模型内部机制。",
+      "error_tag": "校验器使用理解错误",
+      "variant_group": "pydantic_basic_validator"
+    },
+    {
+      "kp": "py.typehint.pydantic_basic",
+      "type": "single_choice",
+      "question": "关于模型字段的别名（alias），以下说法哪一项最可能正确？\n\nA. 别名只能用于序列化，不能用于反序列化\nB. 别名可用于让输入数据使用与字段名不同的键，同时可通过配置控制输出时是否使用别名\nC. 别名一旦设置，字段原名将无法再被访问\nD. 别名必须是合法的 Python 标识符",
+      "options": [
+        "A. 别名通常也可用于反序列化输入",
+        "B. 别名可用于输入映射，并可配置是否用于输出",
+        "C. 设置别名后字段原名通常仍可访问",
+        "D. 别名可以是任意字符串，不要求是合法标识符"
+      ],
+      "answer": 1,
+      "explanation": "字段别名常用于处理输入键与字段名不一致的情况，同时可通过模型配置决定导出时是否使用别名。别名也能用于反序列化输入；原字段名通常仍可访问；别名可以是任意字符串。",
+      "error_tag": "字段别名理解错误",
+      "variant_group": "pydantic_basic_alias"
+    },
+    {
+      "kp": "py.typehint.pydantic_basic",
+      "type": "single_choice",
+      "question": "关于 `parse_obj` 或类似“从字典解析”的方法，以下说法哪一项最可能正确？\n\nA. 它只能解析字符串，不能解析字典\nB. 它通常用于把字典解析成模型实例，并执行与直接构造类似的校验\nC. 它不会执行任何校验，直接跳过字段检查\nD. 它只能用于嵌套模型，不能用于顶层模型",
+      "options": [
+        "A. 通常用于解析字典，不是只能解析字符串",
+        "B. 通常用于把字典解析成模型实例并执行校验",
+        "C. 通常会执行校验，不会跳过字段检查",
+        "D. 顶层和嵌套模型通常都可使用"
+      ],
+      "answer": 1,
+      "explanation": "从字典解析的方法通常用于将原始字典数据转换为模型实例，并执行与直接构造类似的字段校验。A、C、D 都与常见语义不符。",
+      "error_tag": "解析方法理解错误",
+      "variant_group": "pydantic_basic_parse"
+    },
+    {
+      "kp": "py.typehint.pydantic_basic",
+      "type": "single_choice",
+      "question": "在需要将模型实例输出为 JSON 字符串时，以下哪种做法最可能正确？\n\nA. 必须手动遍历所有字段并拼接字符串\nB. 可使用模型提供的 JSON 导出方法，通常会自动处理嵌套模型与基础类型转换\nC. 只能使用 `str(obj)`，且结果一定是合法 JSON\nD. 只能先转成字典再使用 `eval` 还原成 JSON",
+      "options": [
+        "A. 通常不需要手动拼接",
+        "B. 使用模型提供的 JSON 导出方法，通常自动处理嵌套与类型转换",
+        "C. str(obj) 通常不是合法 JSON",
+        "D. 使用 eval 不是正确或安全的做法"
+      ],
+      "answer": 1,
+      "explanation": "这类模型通常提供导出 JSON 字符串的方法，会自动处理嵌套模型、日期等类型的转换。手动拼接、`str(obj)` 或 `eval` 都不是可靠的做法。",
+      "error_tag": "JSON 导出理解错误",
+      "variant_group": "pydantic_basic_json"
+    },
+    {
+      "kp": "py.typehint.pydantic_basic",
+      "type": "single_choice",
+      "question": "下面哪种方式最符合“声明一个带默认值的可选字段”的写法？\n\nA. `name: str`\nB. `name: Optional[str] = None`\nC. `name: str = ...`\nD. `name: str()`",
+      "options": [
+        "A. `name: str` 表示可选字段且有默认值",
+        "B. `name: Optional[str] = None` 表示字段可为空且默认值为 None",
+        "C. `name: str = ...` 表示默认值是省略号字符串",
+        "D. `name: str()` 是声明字段的合法语法"
+      ],
+      "answer": 1,
+      "explanation": "`Optional[str]` 表示类型可为字符串或 None，配合 `= None` 给出默认值，是声明可选字段的常见写法。选项 A 不带默认值，通常是必填；C 中的 `...` 一般表示必填且无默认值；D 不是合法的字段声明语法。",
+      "error_tag": "可选字段声明错误",
+      "variant_group": "pydantic_basic_optional"
+    },
+    {
+      "kp": "py.typehint.pydantic_basic",
+      "type": "single_choice",
+      "question": "关于字段默认值，下面哪段代码最可能在实例化时因为缺少必填字段而报错？\n\nA. `class M: x: int = 0`，然后 `M()`\nB. `class M: x: int`，然后 `M()`\nC. `class M: x: int = 1`，然后 `M(x=2)`\nD. `class M: x: str = \"a\"`，然后 `M()`",
+      "options": [
+        "A. 有默认值 0，不会因缺字段报错",
+        "B. 没有默认值，未传 `x` 会因缺少必填字段报错",
+        "C. 显式传了 `x=2`，不会因缺字段报错",
+        "D. 有默认值 \"a\"，不会因缺字段报错"
+      ],
+      "answer": 1,
+      "explanation": "在类型校验模型中，没有默认值的字段通常视为必填，实例化时未提供会抛出校验错误。A、C、D 都有默认值或显式传参，不会因为缺少该字段而报错。",
+      "error_tag": "必填与默认值混淆",
+      "variant_group": "pydantic_basic_default"
+    },
+    {
+      "kp": "py.typehint.pydantic_basic",
+      "type": "single_choice",
+      "question": "在模型嵌套场景中，如果一个字段的类型是另一个模型类，以下说法哪一项最可能正确？\n\nA. 嵌套字段只能接收已经构造好的模型实例，不能接收字典\nB. 嵌套字段通常可以接收字典，并自动转换为对应的嵌套模型实例\nC. 嵌套字段在父模型实例化时不会做任何校验\nD. 嵌套字段必须声明为 `Any` 才能使用",
+      "options": [
+        "A. 只能接收模型实例，不能接收字典",
+        "B. 通常可接收字典，并自动转换为嵌套模型",
+        "C. 父模型实例化时不校验嵌套字段",
+        "D. 必须声明为 Any 才能使用"
+      ],
+      "answer": 1,
+      "explanation": "在嵌套模型字段中，传入字典时通常会自动解析并转换为对应的嵌套模型实例，同时执行嵌套校验。选项 A、C、D 都是常见误解：忽略了自动转换能力、误解了校验递归性，或误以为必须使用 `Any`。",
+      "error_tag": "嵌套模型转换理解错误",
+      "variant_group": "pydantic_basic_nested"
+    },
+    {
+      "kp": "py.typehint.pydantic_basic",
+      "type": "single_choice",
+      "question": "关于模型字段的额外属性（未在模型中声明的字段），默认情况下最可能的处理方式是？\n\nA. 直接忽略，不允许额外字段\nB. 自动加入模型并可通过属性访问\nC. 抛出语法错误，导致类定义失败\nD. 自动转成字符串并保存到 `__dict__`",
+      "options": [
+        "A. 默认忽略额外字段，不保留",
+        "B. 自动加入模型并可直接访问",
+        "C. 导致类定义失败",
+        "D. 自动转字符串保存"
+      ],
+      "answer": 0,
+      "explanation": "在默认配置下，未声明的额外字段通常会被忽略，不会成为模型属性。若需要保留额外字段，需要显式配置 extra 行为。选项 B、C、D 都是对默认行为或配置方式的误解。",
+      "error_tag": "额外字段行为误解",
+      "variant_group": "pydantic_basic_extra"
+    },
+    {
+      "kp": "py.typehint.pydantic_basic",
+      "type": "single_choice",
+      "question": "以下哪种写法最可能用于给字段添加“数值必须大于 0”的约束？\n\nA. `age: int = 0`\nB. `age: int = Field(gt=0)`\nC. `age: int = GreaterThan(0)`\nD. `age: int > 0`",
+      "options": [
+        "A. 只是默认值 0，没有大于 0 的约束",
+        "B. 使用 `Field(gt=0)` 设置大于 0 的校验约束",
+        "C. `GreaterThan` 不是标准字段约束声明方式",
+        "D. 不是合法的类型注解语法"
+      ],
+      "answer": 1,
+      "explanation": "在常见的数据校验模型中，使用 `Field` 并传入 `gt` 等参数可声明数值范围约束。选项 A 只是默认值；C 并非标准写法；D 不是合法的注解语法。",
+      "error_tag": "字段约束声明错误",
+      "variant_group": "pydantic_basic_constraints"
+    },
+    {
+      "kp": "py.typehint.pydantic_basic",
+      "type": "single_choice",
+      "question": "当你希望一个字符串字段只允许特定枚举值时，以下哪种做法最合适？\n\nA. 把字段类型声明为 `str`，然后在注释里写明允许值\nB. 使用枚举类型（如 `Enum` 子类）作为字段类型\nC. 使用 `int` 类型并在文档字符串中说明取值\nD. 使用 `Any` 类型并手动在业务代码中检查",
+      "options": [
+        "A. 注释提醒不是运行时校验，无法阻止非法值",
+        "B. 使用枚举类型作为字段类型，可实现取值约束与校验",
+        "C. int 类型不限制字符串取值，文档说明也不校验",
+        "D. Any 类型本身不做任何约束，手动检查容易被遗漏"
+      ],
+      "answer": 1,
+      "explanation": "将字段类型声明为枚举类，可以让模型在实例化时自动校验输入值是否属于允许的枚举成员，是最直接且可维护的做法。其余选项都依赖人工约定，无法在数据入口处提供可靠的自动校验。",
+      "error_tag": "枚举约束方式选择错误",
+      "variant_group": "pydantic_basic_enum"
+    },
+    {
+      "kp": "py.typehint.pydantic_basic",
+      "type": "single_choice",
+      "question": "下面关于模型配置的说法，哪一项最可能正确？\n\nA. 模型配置只能在模块顶层设置，不能按类设置\nB. 模型配置通常可以通过内部类或类属性按模型单独设置\nC. 模型配置一旦设置，所有模型类都会共享，无法覆盖\nD. 模型配置只能通过环境变量设置",
+      "options": [
+        "A. 只能在模块顶层设置，不能按类设置",
+        "B. 通常可通过内部类或类属性按模型单独设置",
+        "C. 设置后所有模型共享且无法覆盖",
+        "D. 只能通过环境变量设置"
+      ],
+      "answer": 1,
+      "explanation": "这类模型通常支持按模型类单独配置行为（例如额外字段处理、严格模式等），常见方式是通过内部配置类或类属性。A、C、D 都不符合常见的配置机制。",
+      "error_tag": "模型配置方式错误",
+      "variant_group": "pydantic_basic_config"
+    },
+    {
+      "kp": "py.typehint.pydantic_basic",
+      "type": "single_choice",
+      "question": "关于模型实例的字典导出，以下说法哪一项最可能正确？\n\nA. 只能导出模型中声明的字段，嵌套模型会自动变成字典\nB. 导出时一定会执行校验并可能抛出异常\nC. 导出方法会修改原对象的数据\nD. 导出只能得到字符串，不能得到字典",
+      "options": [
+        "A. 通常可导出声明字段，嵌套模型会递归转成字典",
+        "B. 导出一般不再触发输入校验",
+        "C. 导出通常不会修改原对象",
+        "D. 导出通常返回字典而非只能返回字符串"
+      ],
+      "answer": 0,
+      "explanation": "模型实例通常提供导出为字典的方法，会把声明字段按结构化方式输出，嵌套模型会递归转换。导出过程一般不再做输入校验，也不会修改原对象，因此 B、C、D 不正确。",
+      "error_tag": "序列化行为理解错误",
+      "variant_group": "pydantic_basic_serialize"
+    }
+  ]
+}

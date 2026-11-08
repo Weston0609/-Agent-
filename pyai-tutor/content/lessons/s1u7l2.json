@@ -1,0 +1,855 @@
+{
+  "id": "s1u7l2",
+  "title": "s1u7l2",
+  "kps": [
+    "py.exc.raise",
+    "py.exc.custom",
+    "py.exc.else"
+  ],
+  "theory": "## py.exc.raise\n\n# py.exc.raise：主动抛出异常\n\n> 一句话直觉：**当程序发现自己处于“不可能、不允许、无法继续”的状态时，与其默默返回一个错误的值，不如用 `raise` 大声告诉调用者“出事了”，让错误在正确的层级被处理。**\n\n前置：无。你只需要会写 Python 函数和 `if` 即可。\n\n---\n\n## 1. 为什么需要 raise：错误应该被“报告”，而不是被“吞掉”\n\n很多初学者遇到非法输入时喜欢返回 `None` 或返回一个“魔法值”表示失败：\n\n```python\ndef sqrt(x):\n    if x < 0:\n        return None   # 用 None 偷偷表示“失败”\n    return x ** 0.5\n```\n\n这看起来很“温柔”，但会带来灾难：调用者必须**记住**每个函数的“失败约定”，一旦忘记检查，`None` 就会一路传播，最后在某处爆出一个跟真正原因完全无关的 `TypeError`。\n\n更糟的是，`sqrt(0)` 返回 `0.0`，而 `sqrt(-1)` 返回 `None`——两个完全不同的语义被混在了一起。\n\n`raise` 的思想是：**函数只负责它该做的事，遇到它无法处理的情况就抛出一个异常（exception），把“我处理不了”这件事明确地、机器可识别地告诉调用栈。**\n\n```python\ndef sqrt(x):\n    if x < 0:\n        raise ValueError(f\"sqrt 只接受非负数，收到 {x!r}\")\n    return x ** 0.5\n\nsqrt(4)     # => 2.0\nsqrt(-1)    # 抛出 ValueError: sqrt 只接受非负数，收到 -1\n```\n\n**关键结论**：`raise` 不是“崩溃”，而是一种**控制流机制**——它把执行权从当前函数直接交给最近一个能处理这种异常的 `except`。如果没人处理，才变成程序崩溃。\n\n---\n\n## 2. raise 的三种基本用法\n\n### 2.1 抛出内置异常（最常见）\n\nPython 内置了一批语义清晰的异常类，直接 `raise 类名(消息)` 即可：\n\n```python\nraise ValueError(\"值不合法\")        # 值不对\nraise TypeError(\"参数类型不对\")     # 类型不对\nraise KeyError(\"missing_key\")       # 字典缺键\nraise FileNotFoundError(\"a.txt\")    # 文件不存在\nraise RuntimeError(\"不该到这里\")    # 兜底“不可能发生”\n```\n\n选异常的原则：**让看日志的人一眼知道“哪里错了”，而不是“出错了”。**\n\n### 2.2 抛出异常类（不推荐）\n\n```python\nraise ValueError       # 合法，但抛出的实例没有消息\n```\n\n运行时 Python 会帮你实例化，但调用者只能看到空的 `ValueError()`，调试时几乎没用。**永远带上消息**。\n\n### 2.3 重新抛出当前异常（bare raise）\n\n在 `except` 块里，如果你想“记录一下，但继续往上抛”，用不带表达式的 `raise`：\n\n```python\ntry:\n    do_something()\nexcept Exception:\n    print(\"do_something 失败了，准备继续上抛\")\n    raise              # 保留原始 traceback，继续传播\n```\n\n如果写成 `raise e`（e 是异常对象），会丢掉原始 traceback 的“来源链”，可读性差。**裸 `raise` 是重抛的标准写法。**\n\n---\n\n## 3. 异常链：raise X from Y\n\n当你把一个异常“翻译”成另一个更贴合上下文的异常时，原始异常默认会被挂到 `__context__` 上，打印 traceback 时会看到 “During handling of the above exception, another exception occurred”。\n\n如果这是你有意为之的“因果替换”，用 `raise X from Y` 明确表达，traceback 会显示 “The above exception was the direct cause of the following exception”：\n\n```python\nimport json\n\ndef load_config(text):\n    try:\n        return json.loads(text)\n    except json.JSONDecodeError as e:\n        # 明确告诉调用者：出问题的是“配置解析”这一层，\n        # 而不是让 JSONDecodeError 原样冒泡出去。\n        raise ValueError(\"配置文件不是合法 JSON\") from e\n```\n\n**结论**：`raise ... from e` = “我主动替换异常，但保留因果链”。\n如果确实想**切断**因果链（少见），用 `raise X from None`。\n\n---\n\n## 4. 自定义异常：让错误“会说人话”\n\n内置异常覆盖不了所有业务语义。这时应该派生子类。按惯例：\n\n- 继承 `Exception`（不要继承 `BaseException`，那是给 `SystemExit`/`KeyboardInterrupt` 这类“抓了反而是错”的异常留的）。\n- 类名以 `Error` 结尾。\n\n```python\nclass InsufficientBalanceError(Exception):\n    \"\"\"余额不足。\"\"\"\n\ndef withdraw(account, amount):\n    if amount <= 0:\n        raise ValueError(f\"取款金额必须为正，收到 {amount}\")\n    if amount > account[\"balance\"]:\n        raise InsufficientBalanceError(\n            f\"余额 {account['balance']}，无法取出 {amount}\"\n        )\n    account[\"balance\"] -= amount\n```\n\n这样调用方就能 `except InsufficientBalanceError` 精准处理，而不是 `except Exception` 一把抓。\n\n---\n\n## 5. 一个完整可运行的例子\n\n下面把“参数校验 → 业务规则 → 外层捕获”串起来，运行一次就能看到每种分支的实际效果。\n\n```python\nclass InsufficientBalanceError(Exception):\n    \"\"\"账户余额不足。\"\"\"\n\n\ndef withdraw(balance, amount):\n    # 1) 参数层：非法输入直接 ValueError\n    if not isinstance(amount, (int, float)):\n        raise TypeError(f\"amount 必须是数字，收到 {type(amount).__name__}\")\n    if amount <= 0:\n        raise ValueError(f\"金额必须为正，收到 {amount}\")\n\n    # 2) 业务层：规则违反用自定义异常\n    if amount > balance:\n        raise InsufficientBalanceError(\n            f\"余额 {balance} 不足以取出 {amount}\"\n        )\n    return balance - amount\n\n\ndef safe_withdraw(balance, amount):\n    try:\n        new_balance = withdraw(balance, amount)\n    except (TypeError, ValueError) as e:\n        # 输入错误：一般不重试、不吞，向上报告\n        print(f\"[输入错误] {e}\")\n        raise\n    except InsufficientBalanceError as e:\n        # 业务错误：可以在这里决定降级/提示用户\n        print(f\"[业务拒绝] {e}\")\n        return balance\n    else:\n        print(f\"[成功] 新余额 = {new_balance}\")\n        return new_balance\n\n\nif __name__ == \"__main__\":\n    safe_withdraw(100, 30)      # 成功，新余额 70\n    safe_withdraw(100, -1)      # 输入错误，向上抛 ValueError\n    safe_withdraw(100, 500)     # 业务拒绝，返回原余额 100\n```\n\n---\n\n## 6. 常见误区（PEP 8 与实践）\n\n1. **用返回值表示失败**：`return None` 或 `return -1` 这类“哨兵值”让调用者必须记住约定，一旦忘记就等着 `AttributeError` / `TypeError` 在最没相关的地方爆炸。**能 raise 就 raise。**\n2. **裸 `except:`**：它会连 `SystemExit`、`KeyboardInterrupt` 一起吞掉，Ctrl+C 都打断不了。想抓“所有普通错误”请写 `except Exception:`。\n3. **裸 `except` 后吞掉**：`except Exception: pass` 是调试噩梦——错误发生了，但什么都没说。要么处理，要么 `raise`。\n4. **`try` 块范围过大**：把一堆不相干的代码塞进 `try`，会把别人的异常也一起捕获。`try` 里只放“真正可能抛该异常”的那一两行。\n5. **在 `finally` 里 `return` / `break` / `continue`**：这会让正在传播的异常被静默取消，行为极其反直觉。要清理资源用 `with`。\n6. **异常类不用 `Error` 后缀、不从 `Exception` 派生**：破坏可读性和库之间的兼容约定。\n7. **重抛时写 `raise e`**：丢失原始 traceback；应使用裸 `raise`。\n\n---\n\n## 动手练习\n\n**任务**：实现一个学生成绩登记函数 `record_score(name, score)`，要求：\n\n1. `name` 必须是非空字符串，否则 `raise ValueError`，消息里包含实际收到的内容。\n2. `score` 必须是 `int` 或 `float`，否则 `raise TypeError`。\n3. `score` 必须在 `[0, 100]` 之间，否则 `raise ValueError`。\n4. 定义一个自定义异常类 `ScoreTooLowError(Exception)`；当 `score < 60` 时抛它，消息里带上学生姓名和分数。\n5. 在 `main` 里循环调用几个测试用例（正常的、类型错的、范围错的、不及格的），用**分别捕获**的方式打印不同提示，并在处理“类型/范围”错误后用裸 `raise` 重抛，观察 traceback。\n\n**验收标准**：\n- 每个异常分支能打印出可读的错误信息；\n- 不及格时能被 `except ScoreTooLowError` 精确捕获（而不是被 `except ValueError` 抢先）；\n- 通过 `raise ... from e` 至少演示一次异常链（例如把 `json` 解析错误包装成 `ValueError`）。\n\n**提示**：把自定义异常放在内置异常的子类里要小心继承顺序——`except` 是按从上到下的顺序匹配的，子类要写在父类前面。\n\n```python\nclass ScoreTooLowError(Exception):\n    \"\"\"分数低于及格线。\"\"\"\n\n\ndef record_score(name, score):\n    if not isinstance(name, str) or not name:\n        raise ValueError(f\"name 必须是非空字符串，收到 {name!r}\")\n    if not isinstance(score, (int, float)) or isinstance(score, bool):\n        raise TypeError(f\"score 必须是数字，收到 {type(score).__name__}\")\n    if not 0 <= score <= 100:\n        raise ValueError(f\"score 必须在 [0, 100]，收到 {score}\")\n    if score < 60:\n        raise ScoreTooLowError(f\"{name} 的成绩 {score} 未及格\")\n    return {\"name\": name, \"score\": score, \"passed\": True}\n\n\ndef main():\n    cases = [\n        (\"Alice\", 88),\n        (\"Bob\", 42),\n        (\"\", 90),\n        (\"Cara\", \"ninety\"),\n        (\"Dan\", 120),\n    ]\n    for name, score in cases:\n        try:\n            result = record_score(name, score)\n        except ScoreTooLowError as e:\n            print(f\"[不及格] {e}\")\n        except (ValueError, TypeError) as e:\n            print(f\"[输入错误] {e}\")\n             # 裸 raise 演示：把输入错误继续向上传播。\n             # 生产代码里这里通常会用日志记录后再 raise。\n            raise\n        else:\n            print(f\"[登记成功] {result}\")\n\n\nif __name__ == \"__main__\":\n    try:\n        main()\n    except Exception as e:\n        print(f\"[顶层兜底] {type(e).__name__}: {e}\")\n```\n\n## py.exc.custom\n\n# 自定义异常：从零基础到工程级\n\n## 一句话直觉\n\n**当程序出错时，如果你只会 `raise Exception(\"出错了\")`，调用方根本不知道发生了什么；自定义异常（custom exception）就是给你的错误起一个有意义的名字，让代码像读中文一样清晰。**\n\n---\n\n## 1. 为什么需要自定义异常\n\nPython 内置了很多异常，比如 `ValueError`、`TypeError`、`KeyError`。它们描述的是“语言层面”的错误。但真实项目里，错误往往和业务有关：\n\n- 用户余额不足\n- 库存扣减失败\n- 配置文件格式不对\n- 模型训练时梯度爆炸\n\n如果全部用 `ValueError`，调用方无法精确地区分和处理。自定义异常（custom exception）就是为你的领域（domain）定义专属的错误类型。\n\n```python\n# 不是好做法：所有错误都用一个 ValueError\nraise ValueError(\"余额不足\")\nraise ValueError(\"库存不足\")\n\n# 好做法：让错误类型自己说话\nclass InsufficientBalanceError(Exception):\n    pass\n\nraise InsufficientBalanceError(\"余额不足\")\n```\n\n> 关键结论：**异常类型本身就是一种“错误分类”，调用方可以 `except` 到具体类型，而不是靠字符串匹配。**\n\n---\n\n## 2. 定义自定义异常的最小写法\n\n在 Python 中，异常就是一个类，必须继承自 `BaseException` 或其子类。日常工程中，我们几乎总是继承 `Exception`。\n\n```python\n# 最小自定义异常：只继承 Exception，不做任何事\nclass MyError(Exception):\n    pass\n\n# 抛出与捕获\ntry:\n    raise MyError(\"something went wrong\")\nexcept MyError as e:\n    print(f\"捕获到自定义异常: {e}\")\n```\n\n**为什么继承 `Exception` 而不是 `BaseException`？**\n\n- `BaseException` 是给系统级异常用的，比如 `KeyboardInterrupt`、`SystemExit`。\n- 如果你继承 `BaseException`，`except Exception` 就抓不到它，会破坏很多工具的行为。\n\n> 关键结论：**自定义异常一律继承 `Exception`（或它的子类），不要直接继承 `BaseException`。**\n\n---\n\n## 3. 给异常加上结构化信息\n\n只传一个字符串是不够的。工程里我们常把出错的上下文（context）附在异常上，方便日志和上层处理。\n\n```python\nclass InsufficientBalanceError(Exception):\n    \"\"\"余额不足异常，携带账户和金额信息。\"\"\"\n    def __init__(self, account: str, needed: float, current: float):\n        self.account = account\n        self.needed = needed\n        self.current = current\n        # 调用父类构造，让 str(e) 有一个可读消息\n        super().__init__(\n            f\"账户 {account} 余额不足：需要 {needed}，当前 {current}\"\n        )\n\ntry:\n    raise InsufficientBalanceError(\"A1001\", needed=500, current=120)\nexcept InsufficientBalanceError as e:\n    print(e)\n    print(\"账户:\", e.account)\n    print(\"差额:\", e.needed - e.current)\n```\n\n> 关键结论：**自定义异常可以携带属性（attribute），让上层代码拿到结构化数据，而不是解析字符串。**\n\n---\n\n## 4. 建立异常层级（exception hierarchy）\n\n一个项目通常有多个业务异常。做法是先定义一个基类，再分门别类。\n\n```python\n# 项目统一异常基类\nclass AppError(Exception):\n    \"\"\"所有业务异常的基类。\"\"\"\n    pass\n\n# 具体业务异常\nclass ValidationError(AppError):\n    pass\n\nclass StorageError(AppError):\n    pass\n\nclass NetworkError(AppError):\n    pass\n\n# 上层可以粗粒度捕获\ntry:\n    raise ValidationError(\"字段 age 必须是整数\")\nexcept AppError as e:\n    print(\"业务异常:\", type(e).__name__, e)\n```\n\n这种结构的好处：\n\n- 上层可以只 `except AppError`，统一记录日志。\n- 底层可以抛具体子类，让关心细节的调用方精确处理。\n- 未来新增异常，只要挂在 `AppError` 下，上层代码不用改。\n\n> 关键结论：**先定义项目异常基类，再按业务维度派生子类，是一种可扩展的工程惯例。**\n\n---\n\n## 5. 工程级实践：链式异常与 `from`\n\n当你在 `except` 里抛出新的异常时，Python 会自动记录“原始异常”作为上下文。推荐显式使用 `raise ... from ...` 表达因果链。\n\n```python\nclass ConfigError(AppError):\n    pass\n\ndef load_config(raw: str) -> dict:\n    try:\n        import json\n        return json.loads(raw)\n    except json.JSONDecodeError as e:\n        # 把底层错误转成业务错误，并保留因果链\n        raise ConfigError(f\"配置文件不是合法 JSON: {raw!r}\") from e\n\ntry:\n    load_config(\"{not json}\")\nexcept ConfigError as e:\n    print(\"捕获:\", e)\n    print(\"根因:\", e.__cause__)\n```\n\n运行后会看到类似输出：\n\n```\n捕获: 配置文件不是合法 JSON: '{not json}'\n根因: Expecting property name enclosed in double quotes: line 1 column 2 (char 1)\n```\n\n> 关键结论：**在异常转换时使用 `raise NewError(...) from original`，可以同时保留业务语义和根因（root cause），是调试和日志的关键。**\n\n---\n\n## 动手练习\n\n**任务：为一个小型“图书馆借书”模块设计异常体系。**\n\n1. 定义一个基类 `LibraryError(Exception)`。\n2. 从基类派生三个子类：\n   - `BookNotFoundError`：携带 `isbn` 属性。\n   - `BookAlreadyBorrowedError`：携带 `isbn` 和 `borrower` 属性。\n   - `BorrowLimitExceededError`：携带 `borrower` 和 `limit` 属性。\n3. 实现函数 `borrow_book(isbn, borrower)`，规则如下：\n   - 如果 `isbn` 不在库存中，抛 `BookNotFoundError`。\n   - 如果书已被借出，抛 `BookAlreadyBorrowedError`。\n   - 如果该借阅人已借满 3 本，抛 `BorrowLimitExceededError`。\n   - 成功则返回一个字符串 `\"borrow ok: <isbn>\"`。\n4. 写一段测试代码，分别触发三种异常并捕获，打印异常的属性。\n\n**加分项**：在 `borrow_book` 内部捕获一个 `KeyError`，用 `raise ... from ...` 转成 `BookNotFoundError`，并打印 `__cause__`。\n\n---\n\n## 小结\n\n- 自定义异常 = 给错误起名字。\n- 继承 `Exception`，不要继承 `BaseException`。\n- 用属性携带结构化信息，不要只传字符串。\n- 用基类 + 子类构建异常层级。\n- 用 `raise ... from ...` 保留因果链。\n\n```python\nimport json\n\n\n# 1. 项目异常基类\nclass AppError(Exception):\n    \"\"\"所有业务异常的基类。\"\"\"\n    pass\n\n\n# 2. 具体业务异常\nclass ConfigError(AppError):\n    pass\n\n\nclass InsufficientBalanceError(AppError):\n    \"\"\"余额不足，携带账户和金额信息。\"\"\"\n    def __init__(self, account: str, needed: float, current: float):\n        self.account = account\n        self.needed = needed\n        self.current = current\n        super().__init__(\n            f\"账户 {account} 余额不足：需要 {needed}，当前 {current}\"\n        )\n\n\n# 3. 异常转换：保留因果链\ndef load_config(raw: str) -> dict:\n    try:\n        return json.loads(raw)\n    except json.JSONDecodeError as e:\n        raise ConfigError(f\"配置文件不是合法 JSON: {raw!r}\") from e\n\n\n# 4. 演示\nif __name__ == \"__main__\":\n    # 场景一：余额不足\n    try:\n        raise InsufficientBalanceError(\"A1001\", needed=500, current=120)\n    except AppError as e:\n        print(\"业务异常:\", type(e).__name__, e)\n        print(\"差额:\", e.needed - e.current)\n\n    # 场景二：异常转换 + 因果链\n    try:\n        load_config(\"{not json}\")\n    except ConfigError as e:\n        print(\"捕获:\", e)\n        print(\"根因:\", e.__cause__)\n```\n\n## py.exc.else\n\n# `try / except / else` 中的 `else`：让「成功路径」显式化\n\n> 一句话直觉：`else` 是给「try 块没抛异常时」准备的专属舞台，它让「正常成功后的收尾逻辑」和「兜底的异常处理逻辑」彻底分家，代码一眼就能看出「出事了走哪、没出事走哪」。\n\n前置说明：本节假设你已经会写 `try / except`。如果还不会，请先花 5 分钟回看 `try/except` 的基本用法；本节聚焦的是「第三个关键字：`else`」。\n\n---\n\n## 1. 为什么需要 `else`？—— 从一段「看起来没问题」的代码说起\n\n很多初学者会把「成功之后要执行的代码」直接塞进 `try` 里面，例如：\n\n```python\n# 反例：把所有逻辑都塞进 try\n try:\n     data = open(\"config.json\").read()   # 可能 FileNotFoundError\n     parsed = json.loads(data)            # 可能 JSONDecodeError\n     save_to_db(parsed)                   # 可能数据库异常\n except Exception as e:\n     print(\"出错了：\", e)\n```\n\n问题在哪？`save_to_db` 抛出的异常会被这个 `except Exception` 悄悄吞掉，你根本不知道到底是「读文件失败」「JSON 解析失败」还是「存数据库失败」。**`try` 块的边界太粗，异常类型无法精确定位**。\n\n**结论 1**：`try` 块应该只包住「真正可能抛该异常的语句」。成功后的后续处理，放到 `else` 里。\n\n```python\n# 正例：try 只包住可能出错的读取，成功后再处理\n try:\n     data = open(\"config.json\").read()   # 只可能在这里抛 IO 错误\n except OSError as e:\n     print(\"读文件失败：\", e)\n else:\n     # 只有 try 没抛异常才会走到这里\n     parsed = json.loads(data)\n     save_to_db(parsed)\n```\n\n现在 `except` 只负责「读文件失败」，`else` 里代码的异常会正常向上传播，不会被误吞。\n\n---\n\n## 2. `else` 的执行语义：三条规则\n\n`try / except / else / finally` 是一个整体，执行顺序固定为：\n\n1. 执行 `try` 块。\n2. 若抛出异常 → 跳到匹配的 `except`；**`else` 被跳过**。\n3. 若没抛异常 → 执行 `else` 块。\n4. 无论是否异常 → 最后执行 `finally`（如果写了）。\n\n**结论 2**：只要 `try` 块内**没有异常逃出**（包括内部 `return`、`break`、`continue` 也算「正常结束」），`else` 就会执行；否则 `else` 被跳过。\n\n```python\n# 演示：try 成功 vs 失败时 else 的差异\n def demo(flag: bool) -> None:\n     try:\n         print(\"A: try 开始\")\n         if flag:\n             raise ValueError(\"boom\")\n         print(\"B: try 正常结束\")\n     except ValueError as e:\n         print(\"C: 捕获到\", e)\n     else:\n         print(\"D: else 执行（只有 try 无异常才走这里）\")\n     finally:\n         print(\"E: finally 总会执行\")\n\n demo(True)   # A -> C -> E      （else 被跳过）\n demo(False)  # A -> B -> D -> E （else 被走到）\n```\n\n---\n\n## 3. `else` 和「写在 try 里」到底差在哪？—— 异常边界不同\n\n很多人会问：「我把 `else` 里的代码放回 `try` 末尾，不也能跑吗？」——能跑，但语义完全不同。\n\n**结论 3**：`else` 里的代码**不属于 try 的保护范围**，它抛的异常不会被同名 `except` 捕获，会向上冒泡。这正是我们想要的「精细边界」。\n\n```python\n# 对比：同样的逻辑，try 内 vs else 内，捕获到的异常范围不同\n def without_else():\n     try:\n         n = int(\"123\")        # 不会失败\n         print(10 / n)         # 可能抛 ZeroDivisionError\n     except ZeroDivisionError:\n         print(\"[without_else] 捕获到了 ZeroDivisionError\")\n\n def with_else():\n     try:\n         n = int(\"123\")\n     except ValueError:\n         print(\"[with_else] int() 转换失败\")\n     else:\n         print(10 / n)          # ZeroDivisionError 会往上抛，不被 except 捕获\n\n without_else()                # 打印“捕获到了 ZeroDivisionError”\n try:\n     with_else()               # ZeroDivisionError 冒泡到这里\n except ZeroDivisionError:\n     print(\"[caller] 在调用方处理了 ZeroDivisionError\")\n```\n\n这就是 `else` 的核心价值：**把「可能出错的步骤」和「出错后该怎么办」分离，让每个 `except` 只对一小段代码负责**。\n\n---\n\n## 4. `else` + `finally` + `continue/break/return` 的细节\n\n在循环里搭配 `else` 时，有几条容易踩坑的规则，集中说清：\n\n**结论 4**：\n- `try` 里执行了 `return` / `break` / `continue`，也算「正常结束」，`else` 仍会执行（在 `finally` 之前）。\n- 但 `break` / `continue` / `return` 会**直接结束整个 `try/else` 流程**，只是路径不同。\n- `finally` 永远最后执行，且**若 `finally` 内部有 `return`，会覆盖 `try` / `else` 的返回值**——这是经典坑。\n\n```python\n# 演示：try 里 return 时，else 依然会执行（在 finally 之前）\n def f():\n     try:\n         print(\"try\")\n         return 1\n     except Exception:\n         print(\"except\")\n     else:\n         print(\"else\")          # 会被打印\n     finally:\n         print(\"finally\")       # 最后打印\n\n print(\"返回值 =\", f())\n # 输出顺序：try -> else -> finally -> 返回值 = 1\n```\n\n```python\n# 演示：finally 里 return 会覆盖前面的返回值（应避免）\n def g():\n     try:\n         return \"from try\"\n     finally:\n         return \"from finally\"   # 覆盖，非常危险\n\n print(g())   # \"from finally\"\n```\n\n---\n\n## 5. 工程级用法：重试、资源获取、给调用方清晰失败点\n\n`else` 在工程代码中最常见的两个场景：\n\n**场景 A：资源获取失败就放弃，成功才进入主逻辑**\n\n```python\n# 拿锁失败就跳过，成功才处理任务\n from threading import Lock\n\n lock = Lock()\n\n def do_job():\n     acquired = lock.acquire(timeout=0.01)\n     if not acquired:\n         print(\"拿锁失败，跳过本次任务\")\n         return\n     try:\n         print(\"执行任务\")\n     finally:\n         lock.release()\n```\n\n**场景 B：重试框架里区分「重试条件」和「成功后续」**\n\n```python\n# 只有异常才重试；一旦成功，统一在 else 分支里做统计\n import time\n\n def retry(n: int, fn, attempts: int = 3):\n     last_exc = None\n     for i in range(attempts):\n         try:\n             return fn()\n         except Exception as e:\n             last_exc = e\n             time.sleep(0.1)\n     raise last_exc\n```\n\n注意上面用 `return fn()` 直接返回，本质上等价于「成功即走」。若你想在成功后再做一些统一统计，可以改写为 `try/except/else` 结构：\n\n```python\n def fetch_with_log(fn):\n     try:\n         result = fn()\n     except Exception as e:\n         print(\"抓取失败：\", e)\n         raise\n     else:\n         print(\"抓取成功，条数 =\", len(result))\n         return result\n```\n\n**结论 5**：在「先做一件可能失败的事，再基于结果做后续」的模式中，`else` 是最清晰的表达方式：**失败走 `except`，成功走 `else`，中间不做假设。**\n\n---\n\n## 小结（给零基础到工程级的记忆锚点）\n\n| 关键字 | 何时执行 | 常放什么 |\n|--------|----------|----------|\n| `try` | 总是先执行 | 只放真正可能抛异常的最小语句集 |\n| `except` | `try` 中抛异常时 | 针对具体异常类型的处理 |\n| `else` | `try` 正常结束、`except` 未触发时 | 成功后的后续逻辑 |\n| `finally` | 无论如何最后执行 | 资源释放、清理 |\n\n一句话收尾：**`else` 存在的意义，不是多一个语法糖，而是让「成功路径」和「失败路径」在代码上可见、可读、可测。**\n\n```python\nimport json\n\n# ============================================================\n# 场景：从字符串读取配置，解析成功才继续处理\n# 用 try / except / else / finally 展示四个块的职责分离\n# ============================================================\n\ndef load_config(raw: str) -> dict | None:\n    fp = None  # 占位，模拟一个需要在 finally 释放的资源\n    try:\n        # 只把「可能失败」的最小语句放进 try\n        parsed = json.loads(raw)\n    except json.JSONDecodeError as e:\n        # 失败路径：只处理 JSON 解析错误\n        print(f\"[except] 配置解析失败：{e}\")\n        return None\n    else:\n        # 成功路径：try 没有异常时才会走到这里\n        # 这里的异常（例如下面的 KeyError）不会被上面的 except 捕获\n        if \"version\" not in parsed:\n            raise KeyError(\"缺少 version 字段\")\n        print(f\"[else] 解析成功，version = {parsed['version']}\")\n        return parsed\n    finally:\n        # 清理路径：无论成功失败都会执行\n        print(\"[finally] 清理工作（例如关闭文件、释放连接）\")\n\n\nif __name__ == \"__main__\":\n    good = '{\"version\": 3, \"name\": \"demo\"}'\n    bad = '{not valid json}'\n\n    print(\"--- 成功用例 ---\")\n    print(\"结果:\", load_config(good))\n\n    print(\"\\n--- 失败用例（JSON 非法） ---\")\n    print(\"结果:\", load_config(bad))\n\n    print(\"\\n--- 失败用例（缺字段，会从 else 里抛出） ---\")\n    try:\n        load_config('{\"name\": \"demo\"}')\n    except KeyError as e:\n        print(\"[caller] 捕获到 else 里抛出的异常：\", e)\n```\n",
+  "quiz": [
+    {
+      "kp": "py.exc.raise",
+      "type": "single_choice",
+      "question": "在 Python 中，如果要在程序运行时主动引发一个异常，应当使用下列哪个关键字？",
+      "options": [
+        "throw",
+        "raise",
+        "error",
+        "except"
+      ],
+      "answer": 1,
+      "explanation": "Python 使用 raise 语句主动引发异常；throw 是 Java 等语言的写法，error 不是 Python 的异常抛出关键字，except 用于捕获异常。",
+      "error_tag": "语法混淆",
+      "variant_group": "raise-basic"
+    },
+    {
+      "kp": "py.exc.raise",
+      "type": "single_choice",
+      "question": "执行下面代码后，控制台会输出什么？\n\nraise ValueError(\"bad value\")",
+      "options": [
+        "程序正常结束，无输出",
+        "输出 bad value 并正常结束",
+        "抛出 ValueError 异常并显示 Traceback，程序中断",
+        "输出 ValueError: bad value 并继续执行后续代码"
+      ],
+      "answer": 2,
+      "explanation": "raise 引发异常后如果没有被捕获，会终止当前执行流程并打印 Traceback。",
+      "error_tag": "异常传播理解错误",
+      "variant_group": "raise-basic"
+    },
+    {
+      "kp": "py.exc.raise",
+      "type": "single_choice",
+      "question": "执行下面代码，最终会看到什么输出？\n\ndef f():\n    raise ValueError(\"inner\")\n\ntry:\n    f()\nexcept ValueError as e:\n    raise TypeError(\"outer\") from e",
+      "options": [
+        "只显示 TypeError: outer",
+        "显示 TypeError: outer，并带有直接原因 ValueError: inner 的异常链信息",
+        "只显示 ValueError: inner",
+        "显示 ValueError: inner 和 TypeError: outer，但两者无关联"
+      ],
+      "answer": 1,
+      "explanation": "from e 建立了异常链，Traceback 中会显示 The above exception was the direct cause of the following exception。",
+      "error_tag": "异常链理解错误",
+      "variant_group": "raise-from"
+    },
+    {
+      "kp": "py.exc.raise",
+      "type": "single_choice",
+      "question": "在自定义异常类时，如果希望异常消息能够被正确打印，通常需要在类中实现什么？",
+      "options": [
+        "必须重写 __str__ 方法",
+        "必须重写 __init__ 方法并调用 super().__init__(message)",
+        "必须继承自 BaseException 而不是 Exception",
+        "必须实现 __raise__ 方法"
+      ],
+      "answer": 1,
+      "explanation": "自定义异常通常继承 Exception，并在 __init__ 中把消息传给父类，这样 str(e) 才能返回消息。",
+      "error_tag": "自定义异常理解错误",
+      "variant_group": "raise-custom"
+    },
+    {
+      "kp": "py.exc.raise",
+      "type": "single_choice",
+      "question": "下面关于 raise 语句的说法，正确的是？",
+      "options": [
+        "raise 只能在 except 块中使用",
+        "raise 可以在任何需要引发异常的地方使用",
+        "raise 只能引发内置异常，不能引发自定义异常",
+        "raise 后必须跟字符串作为异常消息"
+      ],
+      "answer": 1,
+      "explanation": "raise 是通用语句，可以在任何位置引发异常；自定义异常同样可以通过 raise 抛出。",
+      "error_tag": "使用范围误解",
+      "variant_group": "raise-basic"
+    },
+    {
+      "kp": "py.exc.raise",
+      "type": "single_choice",
+      "question": "执行下面代码会发生什么？\n\ntry:\n    raise Exception(\"a\")\nexcept Exception:\n    raise Exception(\"b\")",
+      "options": [
+        "只抛出 Exception: a",
+        "只抛出 Exception: b",
+        "Exception: b 被抛出，且 a 不会出现在异常链中",
+        "Exception: b 被抛出，且 a 会作为隐式上下文出现在异常链中"
+      ],
+      "answer": 3,
+      "explanation": "在 except 块中抛出新的异常时，原异常会作为 __context__ 隐式关联，Traceback 中会显示 During handling of the above exception。",
+      "error_tag": "隐式异常上下文理解错误",
+      "variant_group": "raise-context"
+    },
+    {
+      "kp": "py.exc.raise",
+      "type": "single_choice",
+      "question": "如果想在抛出异常时抑制隐式的异常上下文显示，应该使用什么语法？",
+      "options": [
+        "raise NewError from None",
+        "raise NewError without context",
+        "raise NewError from False",
+        "raise NewError ignore_context"
+      ],
+      "answer": 0,
+      "explanation": "raise ... from None 会设置 __suppress_context__，从而在 Traceback 中隐藏原始异常上下文。",
+      "error_tag": "异常链抑制语法错误",
+      "variant_group": "raise-context"
+    },
+    {
+      "kp": "py.exc.raise",
+      "type": "single_choice",
+      "question": "下列哪个异常类型通常不被建议由用户代码主动 raise？",
+      "options": [
+        "ValueError",
+        "TypeError",
+        "SystemExit",
+        "KeyError"
+      ],
+      "answer": 2,
+      "explanation": "SystemExit 通常由解释器在退出时使用；用户代码主动 raise SystemExit 虽然可行，但一般应使用 sys.exit()，且它继承自 BaseException。",
+      "error_tag": "异常类型误用",
+      "variant_group": "raise-builtin"
+    },
+    {
+      "kp": "py.exc.raise",
+      "type": "single_choice",
+      "question": "下面代码中，raise 语句的参数是一个异常实例，消息可以通过哪个属性获取？\n\ne = ValueError(\"bad\")\nraise e",
+      "options": [
+        "e.args",
+        "e.message",
+        "e.msg",
+        "e.reason"
+      ],
+      "answer": 0,
+      "explanation": "Python 3 中异常消息存储在 args 元组中，通常使用 str(e) 获取可读消息；message 属性在 Python 3 已移除。",
+      "error_tag": "异常属性混淆",
+      "variant_group": "raise-instance"
+    },
+    {
+      "kp": "py.exc.raise",
+      "type": "single_choice",
+      "question": "执行下面代码，输出结果是什么？\n\ndef check(x):\n    if x < 0:\n        raise ValueError(\"negative\")\n    return x\n\nprint(check(-1))",
+      "options": [
+        "输出 -1",
+        "输出 None",
+        "抛出 ValueError: negative，程序中断",
+        "输出 negative 并返回 -1"
+      ],
+      "answer": 2,
+      "explanation": "check(-1) 在条件分支中 raise ValueError，未被捕获，因此程序中断并显示 Traceback。",
+      "error_tag": "异常传播理解错误",
+      "variant_group": "raise-basic"
+    },
+    {
+      "kp": "py.exc.raise",
+      "type": "single_choice",
+      "question": "下面关于 raise 与 try/except/else/finally 的说法，正确的是？",
+      "options": [
+        "raise 会跳过 finally 块",
+        "raise 会正常触发 finally 块的执行",
+        "raise 只能出现在 else 块中",
+        "raise 在 try 块中不会触发 except"
+      ],
+      "answer": 1,
+      "explanation": "无论 try 块中是否 raise，finally 块都会执行（除非进程被强制终止）。",
+      "error_tag": "控制流理解错误",
+      "variant_group": "raise-flow"
+    },
+    {
+      "kp": "py.exc.raise",
+      "type": "single_choice",
+      "question": "下面代码中，哪一处 raise 会被执行？\n\ndef f(n):\n    try:\n        if n == 1:\n            raise ValueError(\"one\")\n        return n\n    except ValueError:\n        raise KeyError(\"converted\")\n    finally:\n        print(\"cleanup\")",
+      "options": [
+        "只执行 raise ValueError(\"one\")",
+        "先执行 raise ValueError(\"one\")，再执行 raise KeyError(\"converted\")",
+        "只执行 raise KeyError(\"converted\")",
+        "两个 raise 都不会执行"
+      ],
+      "answer": 1,
+      "explanation": "当 n==1 时，先进入 raise ValueError，被 except 捕获后又执行 raise KeyError。",
+      "error_tag": "异常传播理解错误",
+      "variant_group": "raise-flow"
+    },
+    {
+      "kp": "py.exc.raise",
+      "type": "single_choice",
+      "question": "下列关于 raise 语句的写法，哪一个是合法的？",
+      "options": [
+        "raise ValueError",
+        "raise ValueError()",
+        "raise ValueError(\"invalid\")",
+        "以上写法均合法"
+      ],
+      "answer": 3,
+      "explanation": "raise 可以引发异常类、异常实例，或带参数的异常实例。",
+      "error_tag": "语法细节遗漏",
+      "variant_group": "raise-basic"
+    },
+    {
+      "kp": "py.exc.raise",
+      "type": "single_choice",
+      "question": "在异常处理结构中，raise 语句常常与哪个关键字配合使用，以便在捕获异常后重新抛出？",
+      "options": [
+        "try",
+        "except",
+        "finally",
+        "else"
+      ],
+      "answer": 1,
+      "explanation": "raise 通常出现在 except 块中，用于在捕获异常后重新抛出或抛出新的异常；finally 用于清理，不是重新抛出的必需关键字。",
+      "error_tag": "结构误用",
+      "variant_group": "raise-reraise"
+    },
+    {
+      "kp": "py.exc.raise",
+      "type": "single_choice",
+      "question": "执行下面代码，最终会得到什么结果？\n\ntry:\n    raise TypeError(\"type error\")\nexcept TypeError:\n    print(\"caught\")\n    raise",
+      "options": [
+        "只输出 caught",
+        "输出 caught，然后重新抛出 TypeError，程序中断",
+        "输出 caught，异常被忽略，程序正常结束",
+        "直接抛出 TypeError，不输出 caught"
+      ],
+      "answer": 1,
+      "explanation": "except 块中先打印 caught，随后 raise 不带参数会重新引发当前正在处理的异常。",
+      "error_tag": "重新抛出理解错误",
+      "variant_group": "raise-reraise"
+    },
+    {
+      "kp": "py.exc.raise",
+      "type": "single_choice",
+      "question": "在 except 块中使用不带任何参数的 raise 语句，其作用是？",
+      "options": [
+        "抛出一个新的 RuntimeError",
+        "重新抛出当前正在处理的异常",
+        "忽略当前异常并继续执行",
+        "结束当前函数并返回 None"
+      ],
+      "answer": 1,
+      "explanation": "裸 raise 会重新抛出当前 except 正在处理的异常，通常用于记录日志后继续向上传播。",
+      "error_tag": "裸 raise 误解",
+      "variant_group": "raise-reraise"
+    },
+    {
+      "kp": "py.exc.raise",
+      "type": "single_choice",
+      "question": "下面代码中，raise 的参数是一个异常类而不是实例，会发生什么？\n\nraise KeyError",
+      "options": [
+        "抛出 KeyError 类本身，不是实例",
+        "Python 自动实例化 KeyError 并抛出该实例",
+        "语法错误，无法运行",
+        "返回 KeyError 类对象，不抛异常"
+      ],
+      "answer": 1,
+      "explanation": "raise 后跟异常类时，Python 会自动调用该类的无参构造创建一个实例并抛出。",
+      "error_tag": "类与实例混淆",
+      "variant_group": "raise-instance"
+    },
+    {
+      "kp": "py.exc.raise",
+      "type": "single_choice",
+      "question": "执行下面代码后，异常的类型和消息分别是什么？\n\nraise RuntimeError(\"something failed\")",
+      "options": [
+        "类型为 RuntimeError，消息为 something failed",
+        "类型为 Exception，消息为 RuntimeError",
+        "类型为 RuntimeError，消息为空",
+        "类型为 something failed，消息为 RuntimeError"
+      ],
+      "answer": 0,
+      "explanation": "raise 后跟异常实例时，异常类型为实例所属类，消息为构造时传入的参数。",
+      "error_tag": "异常属性混淆",
+      "variant_group": "raise-instance"
+    },
+    {
+      "kp": "py.exc.raise",
+      "type": "single_choice",
+      "question": "关于 raise 与 assert 的区别，下列说法正确的是？",
+      "options": [
+        "raise 只能用于测试，assert 用于生产代码",
+        "assert 在优化模式下可能被移除，而 raise 不会",
+        "raise 不能抛出 AssertionError",
+        "assert 比 raise 更灵活，可以抛出任意异常类型"
+      ],
+      "answer": 1,
+      "explanation": "assert 语句在 Python 以 -O 优化模式运行时会被移除，而 raise 始终生效。",
+      "error_tag": "断言与异常混淆",
+      "variant_group": "raise-vs-assert"
+    },
+    {
+      "kp": "py.exc.raise",
+      "type": "single_choice",
+      "question": "下面哪段代码能够在捕获异常后抛出一个新的、带有原始异常上下文信息的异常？",
+      "options": [
+        "except ValueError:\n    raise ValueError(\"new\")",
+        "except ValueError as e:\n    raise ValueError(\"new\") from e",
+        "except ValueError:\n    return ValueError(\"new\")",
+        "except ValueError as e:\n    print(e); raise"
+      ],
+      "answer": 1,
+      "explanation": "raise ... from ... 会显式设置 __cause__，保留原始异常上下文；直接 raise 新异常不会显式关联原因，选项 D 是重新抛出原异常。",
+      "error_tag": "异常链理解错误",
+      "variant_group": "raise-from"
+    },
+    {
+      "kp": "py.exc.custom",
+      "type": "single_choice",
+      "question": "关于自定义异常类，下列说法正确的是？",
+      "options": [
+        "自定义异常类必须直接继承自 BaseException",
+        "自定义异常类通常继承自 Exception 或其子类",
+        "自定义异常类不能有自己的 __init__ 方法",
+        "自定义异常类只能是空类，不能添加任何属性"
+      ],
+      "answer": 1,
+      "explanation": "自定义异常一般继承 Exception（或其子类），这样既能被常规的 except Exception 捕获，又不会误捕获 KeyboardInterrupt、SystemExit 等 BaseException 直接子类。自定义异常完全可以添加属性和自定义 __init__。",
+      "error_tag": "概念混淆",
+      "variant_group": "自定义异常继承"
+    },
+    {
+      "kp": "py.exc.custom",
+      "type": "single_choice",
+      "question": "下面代码的输出是什么？\n\nclass MyError(Exception):\n    pass\n\ntry:\n    raise MyError('出错了')\nexcept Exception as e:\n    print(type(e).__name__, str(e))",
+      "options": [
+        "MyError 出错了",
+        "Exception 出错了",
+        "MyError",
+        "Exception"
+      ],
+      "answer": 0,
+      "explanation": "raise MyError('出错了') 抛出的是 MyError 实例，type(e).__name__ 得到类名 'MyError'，str(e) 得到传入的参数 '出错了'。MyError 继承自 Exception，所以能被 except Exception 捕获。",
+      "error_tag": "概念混淆",
+      "variant_group": "自定义异常实例属性"
+    },
+    {
+      "kp": "py.exc.custom",
+      "type": "multi_choice",
+      "question": "为何推荐自定义异常继承 Exception 而不是 BaseException？",
+      "options": [
+        "Exception 的子类不会意外拦截 KeyboardInterrupt 和 SystemExit",
+        "except Exception 能捕获业务异常，语义更清晰",
+        "BaseException 子类不能被 raise",
+        "继承 Exception 更符合 Python 异常层次的设计约定"
+      ],
+      "answer": [
+        0,
+        1,
+        3
+      ],
+      "explanation": "KeyboardInterrupt 和 SystemExit 直接继承 BaseException 而非 Exception，因此业务代码很少会误捕获它们。继承 Exception 语义清晰且符合约定。BaseException 子类同样可以 raise，C 错误。",
+      "error_tag": "概念混淆",
+      "variant_group": "自定义异常继承"
+    },
+    {
+      "kp": "py.exc.custom",
+      "type": "fill_blank",
+      "question": "补全下面的自定义异常类定义，使其继承 Exception 并调用父类初始化：\n\nclass MyError(______):\n    def __init__(self, msg):\n        ______(msg)",
+      "options": [],
+      "answer": [
+        "Exception, super().__init__",
+        "Exception, super().__init__",
+        "Exception, super().__init__",
+        "Exception,super().__init__"
+      ],
+      "explanation": "继承 Exception 是自定义异常的常规做法，第一空填 Exception。第二空应调用父类初始化，即 super().__init__(msg)，这样 str(e) 才能正常返回消息。",
+      "error_tag": "记忆缺失",
+      "variant_group": "自定义异常定义形式"
+    },
+    {
+      "kp": "py.exc.custom",
+      "type": "fill_blank",
+      "question": "在异常链中，raise NewError('failed') ______ e 可以把原始异常 e 记录为新异常的 __cause__。",
+      "options": [],
+      "answer": [
+        "from",
+        "from "
+      ],
+      "explanation": "使用 raise ... from e 语法可以显式设置 __cause__，形成异常链。不加 from 时 Python 也会自动设置 __context__，但 __cause__ 是显式指定的。",
+      "error_tag": "记忆缺失",
+      "variant_group": "异常链"
+    },
+    {
+      "kp": "py.exc.custom",
+      "type": "fill_blank",
+      "question": "给出一个最简单的自定义异常类定义（单行，继承 Exception）：______",
+      "options": [],
+      "answer": [
+        "class MyError(Exception): pass",
+        "class MyError(Exception):pass",
+        "class MyError( Exception ): pass"
+      ],
+      "explanation": "最简单的自定义异常只需继承 Exception 并提供空的类体。常见写法是 class MyError(Exception): pass。",
+      "error_tag": "记忆缺失",
+      "variant_group": "自定义异常定义形式"
+    },
+    {
+      "kp": "py.exc.custom",
+      "type": "code_reading",
+      "question": "阅读下面代码，问输出是什么？\n\nclass AppError(Exception):\n    pass\n\nclass DBError(AppError):\n    pass\n\ntry:\n    raise DBError('db fail')\nexcept AppError as e:\n    print('A', type(e).__name__)\nexcept DBError as e:\n    print('B', type(e).__name__)",
+      "options": [],
+      "answer": "输出为 A DBError。",
+      "explanation": "except 从上到下匹配，DBError 是 AppError 的子类，第一个分支 except AppError 先匹配成功，因此打印 'A DBError'。第二个 except DBError 永远不会执行。这体现了「子类应排在父类之前」的原则。",
+      "error_tag": "边界错误",
+      "variant_group": "except顺序"
+    },
+    {
+      "kp": "py.exc.custom",
+      "type": "code_reading",
+      "question": "阅读下面代码，问输出是什么？\n\nclass MyError(Exception):\n    def __init__(self, msg, code):\n        super().__init__(msg)\n        self.code = code\n\ntry:\n    raise MyError('not found', 404)\nexcept MyError as e:\n    print(str(e), e.code, e.args)",
+      "options": [],
+      "answer": "输出为：not found 404 ('not found',)。",
+      "explanation": "super().__init__(msg) 将 'not found' 存入 args，所以 str(e) 为 'not found'，e.args 为 ('not found',)。code 是自定义属性，值为 404。",
+      "error_tag": "概念混淆",
+      "variant_group": "自定义异常实例属性"
+    },
+    {
+      "kp": "py.exc.custom",
+      "type": "code_reading",
+      "question": "阅读下面代码，问输出是什么？\n\nclass Wrap(Exception):\n    pass\n\ntry:\n    try:\n        raise ValueError('origin')\n    except ValueError as e:\n        raise Wrap('wrapped') from e\nexcept Wrap as w:\n    print(type(w.__cause__).__name__, str(w.__cause__))",
+      "options": [],
+      "answer": "输出为：ValueError origin。",
+      "explanation": "raise Wrap('wrapped') from e 显式设置新异常的 __cause__ 为原始 ValueError 实例。外层捕获 Wrap 后，w.__cause__ 就是那个 ValueError，其类型名为 ValueError，字符串为 origin。",
+      "error_tag": "概念混淆",
+      "variant_group": "异常链"
+    },
+    {
+      "kp": "py.exc.custom",
+      "type": "scenario",
+      "question": "你在编写一个支付 SDK，需要区分「余额不足」「卡号无效」「风控拦截」三类业务错误，并让调用方可以分别捕获处理，同时保留底层网络异常作为根因。请描述你会如何设计异常类型体系以及抛出方式。",
+      "options": [],
+      "answer": null,
+      "explanation": "合理设计是定义一个基类（如 PaymentError 继承 Exception），再让三个具体错误作为其子类。调用方可以捕获基类统一处理，也可以捕获具体子类。底层网络异常在转换时使用 raise ... from e 保留 __cause__，便于排查根因。",
+      "error_tag": "概念混淆",
+      "variant_group": "自定义异常设计",
+      "required_keywords": [
+        "异常继承体系",
+        "基类",
+        "子类",
+        "捕获",
+        "raise from"
+      ]
+    },
+    {
+      "kp": "py.exc.custom",
+      "type": "scenario",
+      "question": "某服务中代码先 except Exception 再 except MyError，结果针对 MyError 的专门处理逻辑从不执行。请分析原因并给出修复方式。",
+      "options": [],
+      "answer": null,
+      "explanation": "因为 MyError 继承自 Exception，except Exception 分支会先匹配所有 Exception 子类，导致专门的 except MyError 永远不执行。修复方式是把更具体的子类异常（except MyError）放到前面，父类异常放到后面。",
+      "error_tag": "边界错误",
+      "variant_group": "except顺序",
+      "required_keywords": [
+        "异常继承",
+        "异常匹配顺序",
+        "子类异常",
+        "父类异常",
+        "except 顺序"
+      ]
+    },
+    {
+      "kp": "py.exc.custom",
+      "type": "single_choice",
+      "question": "关于自定义异常被捕获的顺序，下列说法正确的是？",
+      "options": [
+        "子类异常必须先于父类异常被 except 捕获",
+        "父类异常必须先于子类异常被 except 捕获",
+        "捕获顺序不影响结果",
+        "自定义异常不能被多层 except 捕获"
+      ],
+      "answer": 0,
+      "explanation": "except 从上到下匹配，先匹配到的分支生效。如果把父类异常写在前面，子类异常会被父类分支提前捕获，导致子类分支永远不执行，所以子类应排在父类前面。",
+      "error_tag": "边界错误",
+      "variant_group": "except顺序"
+    },
+    {
+      "kp": "py.exc.custom",
+      "type": "single_choice",
+      "question": "下列哪个做法最符合自定义异常的常见用途？",
+      "options": [
+        "为每种可预见的业务错误定义专门的异常类，便于调用方精确捕获",
+        "把所有错误都用 raise Exception('error') 抛出",
+        "用自定义异常替代所有 if 判断",
+        "把自定义异常当作普通数据容器返回值使用"
+      ],
+      "answer": 0,
+      "explanation": "自定义异常的价值在于表达领域特定的错误类型，让调用方可以针对性地捕获并处理。全部用 Exception 会丢失类型信息，无法精确区分；异常用于控制流替代 if 也不合适。",
+      "error_tag": "概念混淆",
+      "variant_group": "自定义异常用途"
+    },
+    {
+      "kp": "py.exc.custom",
+      "type": "single_choice",
+      "question": "下面代码中，MyError 的 __init__ 调用 super().__init__(msg) 的主要目的是什么？\n\nclass MyError(Exception):\n    def __init__(self, msg, code):\n        super().__init__(msg)\n        self.code = code",
+      "options": [
+        "让异常的 args 包含 msg，并保证 str(e) 正常返回该消息",
+        "强制异常必须带两个参数",
+        "让异常自动被打印到控制台",
+        "使异常无法被捕获"
+      ],
+      "answer": 0,
+      "explanation": "Exception.__init__ 会把参数存入 self.args，str(e) 默认返回 args 的表示，因此调用 super().__init__(msg) 能保证消息正确保存和显示。code 通过自定义属性额外附加。",
+      "error_tag": "概念混淆",
+      "variant_group": "自定义异常实例属性"
+    },
+    {
+      "kp": "py.exc.custom",
+      "type": "single_choice",
+      "question": "自定义异常类中定义 __str__ 方法的作用是？",
+      "options": [
+        "改变 print(e) 或 str(e) 时显示的文本",
+        "决定异常能否被捕获",
+        "决定异常的继承层次",
+        "决定异常是否终止程序"
+      ],
+      "answer": 0,
+      "explanation": "__str__ 控制对象的字符串表示，对异常来说就是 print(e) 或 str(e) 显示的内容，不影响捕获、继承或程序终止行为。",
+      "error_tag": "概念混淆",
+      "variant_group": "自定义异常字符串表示"
+    },
+    {
+      "kp": "py.exc.custom",
+      "type": "single_choice",
+      "question": "关于 raise ... from ... 语法，下列说法正确的是？",
+      "options": [
+        "它用于显式指定异常链的 __cause__，保留原始异常信息",
+        "它会把两个异常合并成一个",
+        "它只能用于内置异常",
+        "它会阻止原始异常被记录"
+      ],
+      "answer": 0,
+      "explanation": "raise NewError(...) from e 会把 e 设为新异常的 __cause__，形成显式异常链，便于追踪根因。它不会合并异常，也不限于内置异常。",
+      "error_tag": "记忆缺失",
+      "variant_group": "异常链"
+    },
+    {
+      "kp": "py.exc.custom",
+      "type": "single_choice",
+      "question": "如果一个自定义异常类继承了 Exception，那么它能否被 except BaseException 捕获？",
+      "options": [
+        "能，因为 Exception 是 BaseException 的子类",
+        "不能，必须直接继承 BaseException",
+        "不能，除非重新注册",
+        "只能被 finally 捕获"
+      ],
+      "answer": 0,
+      "explanation": "Exception 继承自 BaseException，所以 Exception 的任意子类（包括自定义异常）都能被 except BaseException 捕获。一般不推荐捕获 BaseException，因为它会吞掉 KeyboardInterrupt 和 SystemExit。",
+      "error_tag": "概念混淆",
+      "variant_group": "异常继承层次"
+    },
+    {
+      "kp": "py.exc.custom",
+      "type": "multi_choice",
+      "question": "下列关于自定义异常的说法，正确的有哪些？",
+      "options": [
+        "自定义异常应尽量继承 Exception 而非 BaseException",
+        "可以通过自定义属性携带结构化错误信息，如错误码",
+        "捕获时应把子类异常放在父类异常之前",
+        "自定义异常必须实现 __str__ 才能抛出",
+        "raise NewError() from e 可以保留原始异常作为 __cause__"
+      ],
+      "answer": [
+        0,
+        1,
+        2,
+        4
+      ],
+      "explanation": "A、B、C、E 都是自定义异常的常见正确做法。自定义异常不需要实现 __str__ 也能抛出，默认会使用 args 的表示，所以 D 错误。",
+      "error_tag": "概念混淆",
+      "variant_group": "自定义异常综合"
+    },
+    {
+      "kp": "py.exc.custom",
+      "type": "multi_choice",
+      "question": "下面哪些写法是定义自定义异常类的合法方式？",
+      "options": [
+        "class MyError(Exception): pass",
+        "class MyError(ValueError): pass",
+        "class MyError(Exception):\n    def __init__(self, msg, code):\n        super().__init__(msg)\n        self.code = code",
+        "class MyError: pass"
+      ],
+      "answer": [
+        0,
+        1,
+        2
+      ],
+      "explanation": "A、B、C 都是合法且常见的自定义异常定义。D 定义的类不继承任何异常基类，抛出时 raise MyError() 会因不是 BaseException 子类而报 TypeError，因此不是有效的异常类定义。",
+      "error_tag": "边界错误",
+      "variant_group": "自定义异常定义形式"
+    },
+    {
+      "kp": "py.exc.else",
+      "type": "single_choice",
+      "question": "关于 try/except/else/finally 的执行顺序，下列说法正确的是？",
+      "options": [
+        "try 块中一旦有任何语句执行，else 块就一定会执行",
+        "else 块只在 try 块没有抛出异常时执行",
+        "else 块在 try 块抛出异常时执行",
+        "else 块无论 try 块是否抛异常都会执行"
+      ],
+      "answer": 1,
+      "explanation": "else 子句仅在 try 块正常结束（没有异常传播出来）时执行；若 try 中抛出被捕获的异常，则执行 except 而跳过 else。finally 才是无论是否异常都执行。",
+      "error_tag": "概念混淆",
+      "variant_group": "try_else_basic"
+    },
+    {
+      "kp": "py.exc.else",
+      "type": "single_choice",
+      "question": "下面代码的输出是什么？\n\ntry:\n    print('A')\nexcept ValueError:\n    print('B')\nelse:\n    print('C')\nfinally:\n    print('D')",
+      "options": [
+        "A\\nD",
+        "A\\nC\\nD",
+        "A\\nB\\nC\\nD",
+        "A\\nC"
+      ],
+      "answer": 1,
+      "explanation": "try 块正常执行打印 A，无异常所以执行 else 打印 C，最后 finally 打印 D。输出顺序为 A、C、D。",
+      "error_tag": "概念混淆",
+      "variant_group": "try_else_basic"
+    },
+    {
+      "kp": "py.exc.else",
+      "type": "multi_choice",
+      "question": "关于 finally 与 else 的对比，下列说法正确的有哪些？",
+      "options": [
+        "无论是否发生异常，finally 都会执行",
+        "else 只在 try 正常结束时执行",
+        "发生异常时 else 与 finally 都不会执行",
+        "当 try 中执行了 return、break 或 continue 时，finally 仍会执行"
+      ],
+      "answer": [
+        0,
+        1,
+        3
+      ],
+      "explanation": "finally 在控制流离开 try 语句时总会被执行，包括 return/break/continue 的情形；发生异常时 else 跳过但 finally 仍会运行，所以第三项错误。",
+      "error_tag": "边界错误",
+      "variant_group": "else_finally_interaction"
+    },
+    {
+      "kp": "py.exc.else",
+      "type": "fill_blank",
+      "question": "在 try/except/else/finally 结构中，当 try 块没有抛出任何异常时，除了 try 块本身，还会执行 ____ 子句（用关键字填写）。",
+      "options": [],
+      "answer": [
+        "else"
+      ],
+      "explanation": "try 正常结束（无异常传播）时执行 else 子句；finally 无论是否异常都执行。",
+      "error_tag": "记忆缺失",
+      "variant_group": "try_else_basic"
+    },
+    {
+      "kp": "py.exc.else",
+      "type": "fill_blank",
+      "question": "要让 try/except 结构合法地附带 else 子句，try 后必须至少有一个 ____ 子句与之配对（填写关键字）。",
+      "options": [],
+      "answer": [
+        "except",
+        "except 子句",
+        "except子句"
+      ],
+      "explanation": "Python 语法要求 else 必须与至少一个 except 搭配，单独出现 try...else 会触发 SyntaxError。",
+      "error_tag": "语法错误",
+      "variant_group": "else_syntax_pairing"
+    },
+    {
+      "kp": "py.exc.else",
+      "type": "fill_blank",
+      "question": "在 try/except/else/finally 中，无论是否发生异常都一定会执行的子句是 ____。",
+      "options": [],
+      "answer": [
+        "finally",
+        "finally 子句",
+        "finally子句"
+      ],
+      "explanation": "finally 用于释放资源等必须执行的清理工作，不受异常是否发生影响。",
+      "error_tag": "记忆缺失",
+      "variant_group": "finally_semantics"
+    },
+    {
+      "kp": "py.exc.else",
+      "type": "code_reading",
+      "question": "阅读下列代码，写出输出结果：\n\ntry:\n    x = int('10')\nexcept ValueError:\n    print('bad')\nelse:\n    print('value', x)\nfinally:\n    print('cleanup')",
+      "options": [],
+      "answer": "value 10\\ncleanup",
+      "explanation": "int('10') 合法返回 10，无异常，因此 except 跳过、执行 else 打印 'value 10'，最后 finally 打印 'cleanup'。",
+      "error_tag": "概念混淆",
+      "variant_group": "try_else_basic"
+    },
+    {
+      "kp": "py.exc.else",
+      "type": "scenario",
+      "question": "工程场景：某函数用 try 包裹了两部分逻辑——第一部分是把用户输入字符串转成整数，第二部分是基于该整数访问一个字典并可能触发 KeyError 的后续计算。当前 except 同时捕获了 ValueError 和 KeyError。为了只保护转换操作，同时又不希望后续计算抛出的 KeyError 被误当作输入错误吞掉，你应如何调整异常结构的组织？",
+      "options": [],
+      "answer": null,
+      "explanation": "应缩小 try 的范围，只让转换操作处于 try 中并用 except ValueError 处理；把后续计算放入 else 子句，这样后续抛出的 KeyError 不会被本轮 except 捕获，从而暴露真实问题。",
+      "error_tag": "概念混淆",
+      "variant_group": "else_purpose",
+      "required_keywords": [
+        "ValueError",
+        "KeyError"
+      ]
+    },
+    {
+      "kp": "py.exc.else",
+      "type": "scenario",
+      "question": "工程场景：你在 with open(...) 之外用 try/except/else/finally 处理文件读写，希望在打开失败时打印提示并返回，在成功读取后执行数据处理，同时无论成败都记录日志关闭资源。请说明应把「打开文件」「数据处理」「记录日志」分别放在哪些子句中，并解释为什么「数据处理」不宜直接放在 try 块内。",
+      "options": [],
+      "answer": null,
+      "explanation": "打开文件放在 try，异常处理放 except，数据处理放 else，日志/清理放 finally。数据处理放 try 内会被本次 except 覆盖到其可能抛出的异常，放在 else 可将其与「打开失败」区分开来。",
+      "error_tag": "概念混淆",
+      "variant_group": "else_purpose",
+      "required_keywords": [
+        "try",
+        "except",
+        "else",
+        "finally",
+        "异常处理"
+      ]
+    },
+    {
+      "kp": "py.exc.else",
+      "type": "single_choice",
+      "question": "下面代码的输出是什么？\n\ntry:\n    raise ValueError('x')\nexcept ValueError:\n    print('caught')\nelse:\n    print('no error')\nfinally:\n    print('done')",
+      "options": [
+        "caught\\nno error\\ndone",
+        "caught\\ndone",
+        "no error\\ndone",
+        "caught\\nno error"
+      ],
+      "answer": 1,
+      "explanation": "try 抛出 ValueError 被 except 捕获打印 caught，因为有异常所以 else 被跳过，finally 一定执行打印 done。",
+      "error_tag": "概念混淆",
+      "variant_group": "try_else_basic"
+    },
+    {
+      "kp": "py.exc.else",
+      "type": "single_choice",
+      "question": "关于 else 子句在异常处理中的作用，下列哪种说法最准确？",
+      "options": [
+        "else 用来处理 try 中未捕获的异常",
+        "else 用来放置只在 try 块成功执行后才应运行的代码，以避免意外捕获其抛出的异常",
+        "else 等价于 finally，两者可互换",
+        "else 只能配合 except 使用，不能单独出现"
+      ],
+      "answer": 1,
+      "explanation": "把「成功后才执行」的逻辑放进 else，可以让其抛出的异常不被本次 except 捕获，从而与 try 中受保护的代码区分开，这是 else 的核心价值。",
+      "error_tag": "概念混淆",
+      "variant_group": "else_purpose"
+    },
+    {
+      "kp": "py.exc.else",
+      "type": "single_choice",
+      "question": "下面代码中，若 open 成功但 f.read() 抛出 OSError，实际输出是什么？\n\ntry:\n    f = open('data.txt')\nexcept OSError:\n    print('open failed')\nelse:\n    print('open ok')\n    data = f.read()\nfinally:\n    print('end')",
+      "options": [
+        "open failed\\nend",
+        "open ok\\nend",
+        "open ok，随后 OSError 传播，但 end 仍打印",
+        "open ok\\nopen failed\\nend"
+      ],
+      "answer": 2,
+      "explanation": "open 成功所以进入 else 打印 open ok；else 中的 f.read() 抛出的 OSError 不会被本 try 的 except 捕获，会向外传播，但 finally 依然会执行打印 end。",
+      "error_tag": "边界错误",
+      "variant_group": "else_purpose"
+    },
+    {
+      "kp": "py.exc.else",
+      "type": "single_choice",
+      "question": "下面代码的输出是什么？\n\ndef f():\n    try:\n        return 1\n    else:\n        return 2\n\nprint(f())",
+      "options": [
+        "1",
+        "2",
+        "None",
+        "抛出 SyntaxError"
+      ],
+      "answer": 3,
+      "explanation": "else 子句必须至少有一个 except 子句与之配对，单独的 try...else 是语法错误，会在编译时被拒绝。",
+      "error_tag": "语法错误",
+      "variant_group": "else_syntax_pairing"
+    },
+    {
+      "kp": "py.exc.else",
+      "type": "single_choice",
+      "question": "在 try/except/else/finally 结构中，若 try 抛出异常且没有匹配的 except，同时 else 和 finally 都存在，执行情况是？",
+      "options": [
+        "else 和 finally 都不执行",
+        "else 不执行，finally 执行，异常继续传播",
+        "else 执行，finally 执行",
+        "else 执行，finally 不执行"
+      ],
+      "answer": 1,
+      "explanation": "else 只在 try 无异常时执行，因此此处跳过；finally 无论如何都执行。未被捕获的异常在 finally 结束后继续向外传播。",
+      "error_tag": "边界错误",
+      "variant_group": "else_finally_interaction"
+    },
+    {
+      "kp": "py.exc.else",
+      "type": "single_choice",
+      "question": "下列关于 finally 中 return 的说法，正确的是？",
+      "options": [
+        "finally 中的 return 会被忽略，以 try 或 except 的 return 为准",
+        "finally 中的 return 会覆盖 try 或 except 中已经确定的返回值",
+        "finally 中不允许出现 return，否则报 SyntaxError",
+        "只有 try 中也有 return 时 finally 的 return 才生效"
+      ],
+      "answer": 1,
+      "explanation": "finally 块中若执行 return，会覆盖之前 try/except 中已计算的返回值，因为 finally 在返回前执行。这是常见的陷阱。",
+      "error_tag": "记忆缺失",
+      "variant_group": "finally_semantics"
+    },
+    {
+      "kp": "py.exc.else",
+      "type": "multi_choice",
+      "question": "关于 try/except/else/finally 的执行规则，下列说法正确的有哪些？",
+      "options": [
+        "else 子句只在 try 块未抛出异常时执行",
+        "finally 子句无论是否发生异常都会执行",
+        "else 中抛出的异常可以被同一个 try 的 except 捕获",
+        "else 必须与至少一个 except 搭配使用"
+      ],
+      "answer": [
+        0,
+        1,
+        3
+      ],
+      "explanation": "else 只在无异常时执行且必须与 except 配对；finally 总是执行。else 中抛出的异常不会被本轮 except 捕获，因此该项错误。",
+      "error_tag": "概念混淆",
+      "variant_group": "try_else_basic"
+    },
+    {
+      "kp": "py.exc.else",
+      "type": "multi_choice",
+      "question": "下列哪些做法体现了 else 子句的合理用途？",
+      "options": [
+        "把「成功后才会执行」的后续步骤放进 else，避免被 except 意外捕获",
+        "把需要严格保护、可能抛出被捕获异常的语句放进 try",
+        "把 except 中处理的异常重新放进 else 里执行",
+        "让 try 块只包含最小范围的、真正可能失败的代码"
+      ],
+      "answer": [
+        0,
+        1,
+        3
+      ],
+      "explanation": "else 的设计意图是隔离「成功路径」与「受保护操作」。缩小 try 范围、用 else 承载后续逻辑是推荐做法；把异常处理移入 else 没有意义。",
+      "error_tag": "概念混淆",
+      "variant_group": "else_purpose"
+    }
+  ]
+}

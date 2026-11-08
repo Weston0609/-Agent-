@@ -1,0 +1,968 @@
+{
+  "id": "s6u3l6",
+  "title": "s6u3l6",
+  "kps": [
+    "ai.llm.vllm",
+    "ai.llm.tgi",
+    "ai.llm.ollama"
+  ],
+  "theory": "## ai.llm.vllm\n\n# ai.llm.vllm：把大模型推理做成高吞吐服务\n\n## 一句话直觉\n如果你要让大语言模型（LLM, Large Language Model）在线上同时服务很多用户，**vLLM** 就是那个把“一次只算一个请求”变成“很多请求一起高效算”的推理引擎。\n\n---\n\n## 1. 为什么需要 vLLM：从“能跑”到“跑得快”\n\n零基础先记住一个事实：大模型推理（inference）不是只做一次矩阵乘法，而是**自回归生成**（autoregressive generation）——每生成一个 token（词元），都要把前面所有 token 重新送入模型计算。\n\n朴素做法的问题：\n- 每个请求单独跑一遍模型，GPU 利用率低。\n- 不同请求长度不同，批量处理（batching）很难做。\n- KV Cache（键值缓存，Key/Value Cache）占用大量显存，但传统方式碎片化严重。\n\nvLLM 的核心价值：**用更少的 GPU，服务更多的并发请求。**\n\n```python\n# 先看一个最朴素的“逐请求推理”思路（伪代码，帮助理解问题）\n# 假设 model.generate 一次只能处理一个 prompt\nprompts = [\"你好\", \"介绍一下Python\", \"写一首诗\"]\nfor p in prompts:\n    result = model.generate(p)  # 每个请求单独跑，GPU 经常在等\n    print(result)\n# 问题：3 个请求串行执行，吞吐量低，显存浪费\n```\n\n---\n\n## 2. vLLM 的关键武器：PagedAttention 与 Continuous Batching\n\n### 2.1 PagedAttention（分页注意力）\n\n传统 KV Cache 像“连续大数组”，长度变化时容易碎片化。  \nPagedAttention 借鉴操作系统虚拟内存分页（paging）思想，把 KV Cache 切成固定大小的 block（块），按需分配。\n\n好处：\n- 显存利用率更高。\n- 不同请求可以共享 block，减少浪费。\n- 支持更长的上下文和更多并发。\n\n### 2.2 Continuous Batching（连续批处理）\n\n传统 batching 要等一批请求都结束后再开始下一批。  \nContinuous Batching 是**请求级别动态进出**：某个请求生成完就立刻退出，新请求马上补进来。\n\n效果：GPU 几乎一直在忙，吞吐量显著提升。\n\n```python\n# 用 vLLM 的离线批量推理接口感受“批量”与“高吞吐”\nfrom vllm import LLM, SamplingParams\n\n# 1) 加载模型：这里用一个小模型便于本地运行\nllm = LLM(model=\"facebook/opt-125m\")\n\n# 2) 采样参数：控制生成行为\nsampling_params = SamplingParams(temperature=0.8, top_p=0.95, max_tokens=64)\n\n# 3) 一次传入多个 prompt，vLLM 内部会自动做高效批处理\nprompts = [\n    \"Hello, my name is\",\n    \"The capital of France is\",\n    \"Python is a programming language that\",\n]\noutputs = llm.generate(prompts, sampling_params)\n\n# 4) 打印结果\nfor output in outputs:\n    prompt = output.prompt\n    generated = output.outputs[0].text\n    print(f\"Prompt: {prompt!r}, Generated: {generated!r}\")\n```\n\n---\n\n## 3. 从离线到在线：vLLM 的服务化用法\n\nvLLM 不只是 Python 库，它还能启动一个 **OpenAI 兼容 API 服务**。这意味着：\n- 你可以像调用 OpenAI API 一样调用本地模型。\n- 现有基于 OpenAI SDK 的代码几乎不用改。\n\n启动命令示例（终端执行）：\n\n```bash\npython -m vllm.entrypoints.openai.api_server \\\n  --model facebook/opt-125m \\\n  --host 0.0.0.0 \\\n  --port 8000\n```\n\n然后客户端可以这样请求：\n\n```python\n# 用 OpenAI SDK 调用本地 vLLM 服务\nfrom openai import OpenAI\n\nclient = OpenAI(\n    base_url=\"http://localhost:8000/v1\",\n    api_key=\"EMPTY\",  # vLLM 本地服务通常不校验 key\n)\n\nresp = client.chat.completions.create(\n    model=\"facebook/opt-125m\",\n    messages=[{\"role\": \"user\", \"content\": \"用一句话解释什么是 vLLM\"}],\n    max_tokens=64,\n)\n\nprint(resp.choices[0].message.content)\n```\n\n---\n\n## 4. 工程级关注点：吞吐、延迟与显存\n\n学 vLLM 不能只会调用，还要知道怎么调优。\n\n- **吞吐量（throughput）**：单位时间处理的 token 数或请求数。  \n- **延迟（latency）**：单个请求从发出到收到完整结果的时间。  \n- **显存（GPU memory）**：KV Cache 是主要消耗者。\n\n常见调节手段：\n- `tensor_parallel_size`：张量并行，多卡拆模型。\n- `gpu_memory_utilization`：控制 vLLM 使用多少显存。\n- `max_model_len`：限制上下文长度，防止显存爆掉。\n- `max_num_seqs`：限制并发序列数。\n\n```python\n# 工程化加载示例：显式控制显存与并发\nfrom vllm import LLM, SamplingParams\n\nllm = LLM(\n    model=\"facebook/opt-125m\",\n    gpu_memory_utilization=0.8,  # 最多使用 80% 显存\n    max_model_len=512,           # 限制上下文长度\n    max_num_seqs=16,             # 最多同时处理 16 个序列\n)\n\nsampling_params = SamplingParams(temperature=0.7, max_tokens=32)\noutputs = llm.generate([\"Explain vLLM in one sentence.\"], sampling_params)\nprint(outputs[0].outputs[0].text)\n```\n\n---\n\n## 5. 最小可运行示例：本地跑通 vLLM\n\n如果你本地有 GPU，推荐先安装：\n\n```bash\npip install vllm\n```\n\n然后运行下面的代码。若没有 GPU，也可以先读懂逻辑，再到云 GPU 环境执行。\n\n```python\nfrom vllm import LLM, SamplingParams\n\n# 小模型便于快速验证\nllm = LLM(model=\"facebook/opt-125m\")\n\nsampling_params = SamplingParams(\n    temperature=0.8,\n    top_p=0.95,\n    max_tokens=64,\n)\n\nprompts = [\n    \"vLLM is\",\n    \"The main benefit of PagedAttention is\",\n]\n\noutputs = llm.generate(prompts, sampling_params)\n\nfor out in outputs:\n    print(\"PROMPT:\", out.prompt)\n    print(\"OUTPUT:\", out.outputs[0].text)\n    print(\"-\" * 40)\n```\n\n---\n\n## 动手练习\n\n**任务：搭一个本地 vLLM 迷你服务，并用 Python 客户端调用它。**\n\n1. 安装 vLLM：`pip install vllm openai`\n2. 在终端启动 OpenAI 兼容服务：\n   ```bash\n   python -m vllm.entrypoints.openai.api_server --model facebook/opt-125m --port 8000\n   ```\n3. 写一个 Python 脚本，向 `http://localhost:8000/v1/chat/completions` 发送 3 条不同问题。\n4. 记录每条请求的耗时，并思考：如果把 3 条请求并发发送，总耗时会不会更短？为什么？\n5. 进阶：把 `max_tokens` 从 32 改成 128，观察显存和延迟变化。\n\n---\n\n## 常见误区\n\n- 以为 vLLM 能“加速模型本身”。它主要优化的是**推理调度与显存管理**，不是改变模型计算量。\n- 以为装了 vLLM 就不需要 GPU。vLLM 主要面向 GPU 推理，CPU 支持有限且慢。\n- 把 `max_model_len` 设得过大，导致显存不足或启动失败。\n- 以为并发越高越好。并发过高会增加延迟，需要根据显存和业务目标调优。\n\n## ai.llm.tgi\n\n# 一、一句话直觉\nTGI（Text Generation Inference，文本生成推理）是 Hugging Face 推出的**面向生产环境的大语言模型推理服务框架**；学它，是为了把“本地能跑的模型”变成“能被多人、稳定、低延迟调用的在线服务”。\n\n---\n\n## 1. 从“能生成”到“能上线”：为什么需要 TGI\n\n很多人第一次用 LLM（Large Language Model，大语言模型）时，是这样写的：\n\n```python\nfrom transformers import pipeline\n\ngenerator = pipeline(\"text-generation\", model=\"gpt2\")\nprint(generator(\"Hello, I am\", max_new_tokens=20))\n```\n\n这段代码适合实验，但一旦上线会遇到几个问题：\n\n1. **并发差**：每个请求都占一份模型，显存很快爆。\n2. **吞吐低**：用户一个一个等，GPU 利用率不高。\n3. **缺少服务能力**：没有 HTTP API（Application Programming Interface，应用程序编程接口）、流式输出、监控、限流、健康检查。\n4. **部署复杂**：量化、张量并行（Tensor Parallelism，张量并行）、批处理都要自己写。\n\nTGI 的目标就是：**把 LLM 推理做成一个标准化、高性能、可部署的服务**。\n\n### 小结论\nTGI 不是模型，也不是训练框架；它是**推理服务层**，负责高效地“接待请求、组织计算、返回结果”。\n\n---\n\n## 2. TGI 的核心能力：它到底解决了什么\n\nTGI 常见能力包括：\n\n- **连续批处理（Continuous Batching）**：请求不必等整批结束，新请求可动态加入，显著提升吞吐。\n- **流式输出（Streaming）**：像 ChatGPT 一样逐 token 返回，改善体验。\n- **张量并行（Tensor Parallelism）**：大模型可切到多张 GPU 上运行。\n- **量化（Quantization）**：用更少显存运行模型，如 bitsandbytes、GPTQ、AWQ 等。\n- **OpenAI 兼容 API**：很多场景可无缝替换 OpenAI 接口。\n- **可观测性（Observability）**：指标、日志、健康检查。\n\n### 小结论\nTGI 的关键词不是“模型效果”，而是**吞吐、延迟、显存、并发、服务化**。\n\n---\n\n## 3. 最小可运行示例：先本地启动一个 TGI 服务\n\nTGI 最常见的启动方式是 Docker（容器化工具）。下面命令会在本机启动一个服务：\n\n```bash\n# 需要先安装 Docker，并确保有可用 GPU（CPU 也可体验，但速度慢）\ndocker run --gpus all --shm-size 1g -p 8080:80 \\\n  -v $PWD/data:/data \\\n  ghcr.io/huggingface/text-generation-inference:latest \\\n  --model-id gpt2\n```\n\n含义解释：\n\n- `--gpus all`：使用所有 GPU。\n- `-p 8080:80`：把容器 80 端口映射到本机 8080。\n- `--model-id gpt2`：指定要加载的模型。\n\n启动后，就可以用 HTTP 请求调用：\n\n```bash\ncurl 127.0.0.1:8080/generate \\\n  -X POST \\\n  -d '{\"inputs\":\"Hello, I am\",\"parameters\":{\"max_new_tokens\":20}}' \\\n  -H 'Content-Type: application/json'\n```\n\n如果你更熟悉 Python，也可以用 `huggingface_hub` 的 InferenceClient：\n\n```python\nfrom huggingface_hub import InferenceClient\n\nclient = InferenceClient(model=\"http://127.0.0.1:8080\")\nprint(client.text_generation(\"Hello, I am\", max_new_tokens=20))\n```\n\n### 小结论\nTGI 的典型形态是：**模型加载在服务端，客户端通过 HTTP 或 SDK 调用**。\n\n---\n\n## 4. 从工程视角理解 TGI：请求进来后发生了什么\n\n一个请求进入 TGI 后，通常会经历：\n\n1. **Tokenize（分词）**：把文本转成 token id。\n2. **排队与批处理（Queue & Batching）**：多个请求被动态合并成 batch。\n3. **模型前向计算（Forward Pass）**：GPU 执行推理。\n4. **采样（Sampling）**：根据 logits 选择下一个 token。\n5. **Detokenize（反分词）**：把 token id 转回文本。\n6. **流式返回**：边生成边返回。\n\n可以把它想成一个“餐厅后厨”：\n\n- 顾客 = 请求\n- 点菜单 = prompt\n- 厨师 = GPU\n- 传菜员 = TGI 调度系统\n- 连续批处理 = 不再一桌一桌做，而是把多桌菜一起安排\n\n### 小结论\nTGI 的价值在于**调度与工程优化**，而不仅仅是“调用模型”。\n\n---\n\n## 5. 什么时候该用 TGI，什么时候不该用\n\n适合使用 TGI 的场景：\n\n- 需要把 LLM 部署成在线 API。\n- 多用户并发访问。\n- 需要流式输出。\n- 需要控制显存、吞吐和延迟。\n- 希望兼容 OpenAI 风格接口。\n\n不太适合的场景：\n\n- 只是在 Notebook 里做一次实验。\n- 只需要离线批量跑一次。\n- 团队没有 GPU 或容器部署条件。\n- 模型非常小，普通 Flask/FastAPI 也能满足。\n\n### 小结论\nTGI 是**生产推理服务工具**，不是实验工具。学习它的目标是：让你具备把模型“上线”的能力。\n\n---\n\n## 6. 关键参数与调优直觉\n\n常见启动参数：\n\n- `--model-id`：模型 ID。\n- `--max-batch-total-tokens`：批处理总 token 上限。\n- `--max-concurrent-requests`：最大并发请求数。\n- `--max-input-length`：最大输入长度。\n- `--max-total-tokens`：最大总长度。\n- `--quantize`：量化方式。\n\n调优直觉：\n\n- 显存不够：降低 batch、启用量化、缩短最大长度。\n- 延迟高：检查并发、batch 大小、模型大小。\n- 吞吐低：提高 batch 上限，但别爆显存。\n\n### 小结论\nTGI 调优的核心是：**在显存、吞吐、延迟三者之间找平衡**。\n\n---\n\n## 7. 常见误区\n\n1. **把 TGI 当成模型**：TGI 是推理服务框架，不是模型本身。\n2. **以为必须多卡**：单卡也能跑，多卡主要用于大模型。\n3. **只看吞吐不看延迟**：批处理提升吞吐，但可能增加单请求等待时间。\n4. **忽略显存预算**：长上下文、大 batch、多并发都会吃显存。\n5. **直接暴露公网**：生产环境要加鉴权、限流、HTTPS、网关。\n\n---\n\n## 8. 动手练习\n\n**任务：本地启动一个 TGI 服务并完成一次流式调用。**\n\n要求：\n\n1. 安装 Docker。\n2. 用 TGI 启动一个小模型，例如 `gpt2` 或 `sshleifer/tiny-gpt2`。\n3. 使用 `curl` 调用 `/generate` 接口，拿到生成结果。\n4. 使用 `curl` 调用 `/generate_stream` 接口，观察流式返回。\n5. 记录：\n   - 启动命令\n   - 请求命令\n   - 返回结果\n   - 你观察到的延迟和输出差异\n\n进阶：\n\n- 改 `max_new_tokens`，观察输出长度变化。\n- 改 `temperature`，观察随机性变化。\n- 如果显存不足，尝试更小模型或量化参数。\n\n---\n\n## 9. 小结\n\nTGI 是 LLM 工程化的重要一环。它把模型推理从“本地函数调用”提升为“可部署、可扩展、可观测”的服务。掌握 TGI，意味着你开始具备把 AI 模型真正交付给用户的能力。\n\n## ai.llm.ollama\n\n## 一句话直觉\n学 Ollama 就像学“在自己电脑上装一个可编程的 ChatGPT 引擎”：它把大语言模型（LLM，Large Language Model）的下载、运行和本地 API（Application Programming Interface，应用程序接口）都封装成一条命令，让你不花云端费用、不泄露数据，也能在 Python 里调用 AI。\n\n---\n\n### 1. Ollama 是什么：本地 LLM 的“运行器 + 模型仓库”\nOllama 是一个开源工具，用来在本地运行大语言模型。你不需要自己配置 CUDA（Compute Unified Device Architecture，英伟达 GPU 计算平台）、量化（Quantization，把模型参数从高精度压缩成低精度）或推理引擎（Inference Engine，执行模型计算的程序）。Ollama 负责：\n- 下载模型权重：`ollama pull llama3.2`\n- 启动本地服务：默认监听 `http://localhost:11434`\n- 提供 REST API（Representational State Transfer，表述性状态转移接口）和命令行交互\n\n对 Python 开发者来说，最重要的是：Ollama 暴露了一个 HTTP 接口，我们可以用 `requests` 或官方 `ollama` 包直接调用。\n\n```python\n# 检查 Ollama 服务是否在运行\nimport requests\n\nresp = requests.get(\"http://localhost:11434/api/tags\", timeout=5)\nprint(resp.status_code)  # 200 表示服务正常\nprint(resp.json())       # 返回本地已下载的模型列表\n```\n\n**关键结论**：Ollama = 本地模型管理 + 本地推理服务 + 简单 API。\n\n---\n\n### 2. 安装与第一次对话：从命令行到 Python\n先安装 Ollama（官网下载安装包），然后在终端执行：\n\n```bash\nollama pull llama3.2\nollama run llama3.2\n```\n\n这会进入交互式聊天。要用 Python 调用，最直接的方式是发 HTTP 请求：\n\n```python\nimport requests\n\nurl = \"http://localhost:11434/api/generate\"\npayload = {\n    \"model\": \"llama3.2\",\n    \"prompt\": \"用一句话解释什么是大语言模型。\",\n    \"stream\": False\n}\n\nresp = requests.post(url, json=payload, timeout=60)\nprint(resp.json()[\"response\"])\n```\n\n**关键结论**：Ollama 的核心调用入口是 `/api/generate`，传入 `model` 和 `prompt` 即可。\n\n---\n\n### 3. 聊天接口：从单轮生成到多轮对话\n`/api/generate` 适合单轮补全。真实聊天需要记住上下文，这时用 `/api/chat`，消息格式是 `role` + `content`：\n\n```python\nimport requests\n\nurl = \"http://localhost:11434/api/chat\"\nmessages = [\n    {\"role\": \"system\", \"content\": \"你是一个简洁的 Python 助教。\"},\n    {\"role\": \"user\", \"content\": \"什么是列表推导式？\"}\n]\n\nresp = requests.post(url, json={\n    \"model\": \"llama3.2\",\n    \"messages\": messages,\n    \"stream\": False\n}, timeout=60)\n\nprint(resp.json()[\"message\"][\"content\"])\n```\n\n**关键结论**：多轮对话用 `/api/chat`，把历史消息按顺序传入 `messages` 列表。\n\n---\n\n### 4. 用官方 Python 包：更简洁的调用方式\nOllama 提供了 Python 包 `ollama`，安装：\n\n```bash\npip install ollama\n```\n\n然后可以这样写：\n\n```python\nfrom ollama import chat\n\nresponse = chat(\n    model=\"llama3.2\",\n    messages=[{\"role\": \"user\", \"content\": \"写一个 Python 函数计算阶乘。\"}]\n)\nprint(response[\"message\"][\"content\"])\n```\n\n流式输出（Streaming，边生成边返回）也很简单：\n\n```python\nfrom ollama import chat\n\nstream = chat(\n    model=\"llama3.2\",\n    messages=[{\"role\": \"user\", \"content\": \"数到 5。\"}],\n    stream=True\n)\n\nfor chunk in stream:\n    print(chunk[\"message\"][\"content\"], end=\"\", flush=True)\n```\n\n**关键结论**：官方包把 HTTP 细节封装成 `chat()` 和 `generate()`，适合工程代码。\n\n---\n\n### 5. 工程级用法：参数、错误处理与结构化输出\n真实项目里要控制随机性、超时、异常，还要让模型输出 JSON（JavaScript Object Notation，一种轻量数据交换格式）。\n\n```python\nfrom ollama import chat\nimport json\n\nresponse = chat(\n    model=\"llama3.2\",\n    messages=[{\n        \"role\": \"user\",\n        \"content\": \"返回 JSON：{'name': 'Ollama', 'type': 'local_llm'}\"\n    }],\n    format=\"json\",  # 要求模型输出 JSON\n    options={\n        \"temperature\": 0.2,  # 越低越确定\n        \"num_predict\": 100   # 最多生成 100 个 token\n    }\n)\n\ndata = json.loads(response[\"message\"][\"content\"])\nprint(data[\"name\"], data[\"type\"])\n```\n\n**关键结论**：`format=\"json\"` 可约束输出格式，`options` 控制生成行为，工程中必须加超时和异常捕获。\n\n---\n\n### 常见误区\n- 以为 Ollama 一定要 GPU：CPU 也能跑小模型，只是慢。\n- 把 `stream=False` 和流式输出混用：流式时返回的是迭代器，不是完整 JSON。\n- 忘记启动 Ollama 服务：Python 调用会连接失败。\n- 模型名写错：必须和 `ollama list` 里的名称一致。\n\n---\n\n### 动手练习\n任务：写一个 Python 脚本 `ask_ollama.py`，实现：\n1. 用 `/api/chat` 或 `ollama.chat` 向本地 `llama3.2` 提问：“用三句话介绍 Python 的虚拟环境”。\n2. 开启流式输出，逐字打印结果。\n3. 如果连接失败，打印“请先启动 Ollama 服务”。\n\n完成后运行：\n\n```bash\npython ask_ollama.py\n```\n",
+  "quiz": [
+    {
+      "kp": "ai.llm.vllm",
+      "type": "single_choice",
+      "question": "在使用 vLLM 部署大语言模型推理服务时，以下哪项描述最符合其核心设计目标？",
+      "options": [
+        "通过分页注意力机制高效管理 KV 缓存，提升吞吐量",
+        "通过量化压缩模型权重，降低显存占用",
+        "通过模型蒸馏技术，减小模型参数量",
+        "通过数据并行训练，加速模型收敛"
+      ],
+      "answer": 0,
+      "explanation": "vLLM 的核心创新是 PagedAttention，用于高效管理 KV 缓存，从而显著提升推理吞吐量。量化、蒸馏、训练加速均非 vLLM 的主要设计目标。",
+      "error_tag": "概念混淆",
+      "variant_group": "vllm_core_design"
+    },
+    {
+      "kp": "ai.llm.vllm",
+      "type": "single_choice",
+      "question": "某团队使用 vLLM 启动了一个在线推理服务，发现当并发请求数增加时，GPU 显存中 KV 缓存出现大量碎片，导致可服务的并发数受限。vLLM 是通过什么机制缓解这一问题的？",
+      "options": [
+        "将 KV 缓存分页存储，按需分配非连续显存块",
+        "将 KV 缓存全部卸载到 CPU 内存",
+        "对 KV 缓存进行 8-bit 量化",
+        "预先为每个请求分配最大长度的连续显存"
+      ],
+      "answer": 0,
+      "explanation": "vLLM 的 PagedAttention 将 KV 缓存划分为固定大小的块，按需分配，避免为每个请求预留最大长度连续显存，从而减少碎片。",
+      "error_tag": "机制理解错误",
+      "variant_group": "paged_attention"
+    },
+    {
+      "kp": "ai.llm.vllm",
+      "type": "single_choice",
+      "question": "vLLM 相比 Hugging Face Transformers 的默认推理流程，主要优势体现在？",
+      "options": [
+        "更高的吞吐量和更优的显存利用率",
+        "支持更多种类的模型架构",
+        "提供更丰富的训练功能",
+        "内置了数据预处理工具"
+      ],
+      "answer": 0,
+      "explanation": "vLLM 的核心优势是推理吞吐量和显存利用率；模型架构支持未必更多，训练功能并非其重点，数据预处理也不是其特色。",
+      "error_tag": "概念混淆",
+      "variant_group": "vllm_vs_transformers"
+    },
+    {
+      "kp": "ai.llm.vllm",
+      "type": "single_choice",
+      "question": "在 vLLM 中，以下哪项操作最可能导致 OOM（显存不足）？",
+      "options": [
+        "将 gpu_memory_utilization 设置得过高，且并发请求过多",
+        "将 max_tokens 设置为较小的值",
+        "将 temperature 设置为 0",
+        "使用较小的模型"
+      ],
+      "answer": 0,
+      "explanation": "gpu_memory_utilization 过高会占满显存，加上并发请求的 KV 缓存增长，容易 OOM；其他选项不会直接导致显存不足。",
+      "error_tag": "配置错误",
+      "variant_group": "vllm_config"
+    },
+    {
+      "kp": "ai.llm.vllm",
+      "type": "single_choice",
+      "question": "关于 vLLM 的异步推理接口，以下描述正确的是？",
+      "options": [
+        "vLLM 提供 AsyncLLMEngine 用于异步处理请求",
+        "vLLM 只支持同步推理，不支持异步",
+        "异步接口必须配合多进程才能使用",
+        "异步接口只能用于训练阶段"
+      ],
+      "answer": 0,
+      "explanation": "vLLM 提供 AsyncLLMEngine 支持异步推理，适用于高并发服务；同步和异步均可使用，不限于训练。",
+      "error_tag": "API 误用",
+      "variant_group": "vllm_async"
+    },
+    {
+      "kp": "ai.llm.vllm",
+      "type": "single_choice",
+      "question": "某开发者希望将 vLLM 部署为 OpenAI 兼容的 API 服务，以下哪种方式最直接？",
+      "options": [
+        "使用 vLLM 提供的 OpenAI 兼容服务器启动命令",
+        "使用 vLLM 的 Trainer 类导出为 ONNX",
+        "使用 vLLM 的 Pipeline 类封装为 REST",
+        "使用 vLLM 的 DataLoader 类生成 API"
+      ],
+      "answer": 0,
+      "explanation": "vLLM 提供 OpenAI 兼容的 API 服务器，可通过命令行启动；Trainer、Pipeline、DataLoader 并非 vLLM 的 API 封装工具。",
+      "error_tag": "API 误用",
+      "variant_group": "vllm_openai_server"
+    },
+    {
+      "kp": "ai.llm.vllm",
+      "type": "single_choice",
+      "question": "在 vLLM 中，以下哪项关于 KV 缓存的说法是正确的？",
+      "options": [
+        "KV 缓存用于存储自注意力机制中的键和值，避免重复计算",
+        "KV 缓存仅在训练阶段使用",
+        "KV 缓存的大小与序列长度无关",
+        "KV 缓存必须存储在 CPU 内存中"
+      ],
+      "answer": 0,
+      "explanation": "KV 缓存存储键和值，用于自回归解码时避免重复计算；它主要在推理阶段使用，大小随序列长度增长，通常存储在 GPU 显存。",
+      "error_tag": "概念混淆",
+      "variant_group": "kv_cache"
+    },
+    {
+      "kp": "ai.llm.vllm",
+      "type": "single_choice",
+      "question": "vLLM 的调度器在连续批处理中主要负责什么？",
+      "options": [
+        "动态决定哪些序列加入或退出当前批次",
+        "将模型权重分配到多张 GPU",
+        "对输入文本进行分词",
+        "将模型转换为半精度"
+      ],
+      "answer": 0,
+      "explanation": "调度器负责在连续批处理中动态管理序列的加入和退出；权重分配、分词、精度转换由其他组件完成。",
+      "error_tag": "机制理解错误",
+      "variant_group": "scheduler"
+    },
+    {
+      "kp": "ai.llm.vllm",
+      "type": "single_choice",
+      "question": "以下哪项不是 vLLM 的典型应用场景？",
+      "options": [
+        "大规模语言模型的训练",
+        "高吞吐量的在线推理服务",
+        "离线批量文本生成",
+        "OpenAI 兼容的 API 服务"
+      ],
+      "answer": 0,
+      "explanation": "vLLM 专注于推理，不用于训练；在线服务、离线批量生成、OpenAI 兼容 API 都是其典型场景。",
+      "error_tag": "概念混淆",
+      "variant_group": "vllm_use_cases"
+    },
+    {
+      "kp": "ai.llm.vllm",
+      "type": "single_choice",
+      "question": "使用 vLLM 的 LLM 类进行推理时，以下哪个方法用于生成文本？",
+      "options": [
+        "generate",
+        "fit",
+        "train",
+        "compile"
+      ],
+      "answer": 0,
+      "explanation": "LLM 类通过 generate 方法生成文本；fit、train、compile 并非其推理方法。",
+      "error_tag": "API 误用",
+      "variant_group": "vllm_python_api"
+    },
+    {
+      "kp": "ai.llm.vllm",
+      "type": "single_choice",
+      "question": "在 vLLM 中，以下哪项参数用于指定模型权重的数据类型？",
+      "options": [
+        "dtype",
+        "max_model_len",
+        "seed",
+        "swap_space"
+      ],
+      "answer": 0,
+      "explanation": "dtype 指定权重数据类型，如 float16、bfloat16；max_model_len 指定最大序列长度，seed 设置随机种子，swap_space 设置交换空间。",
+      "error_tag": "参数混淆",
+      "variant_group": "vllm_config"
+    },
+    {
+      "kp": "ai.llm.vllm",
+      "type": "single_choice",
+      "question": "某团队希望使用 vLLM 同时服务多个不同模型，以下哪种做法最合理？",
+      "options": [
+        "为每个模型启动独立的 vLLM 服务实例",
+        "在一个 LLM 实例中加载所有模型",
+        "使用 vLLM 的 Pipeline 类串联多个模型",
+        "使用 vLLM 的 DataLoader 类动态加载模型"
+      ],
+      "answer": 0,
+      "explanation": "vLLM 的单个 LLM 实例通常对应一个模型；服务多个模型可通过启动多个实例实现。Pipeline 和 DataLoader 并非 vLLM 用于多模型服务的 API。",
+      "error_tag": "架构理解错误",
+      "variant_group": "vllm_multi_model"
+    },
+    {
+      "kp": "ai.llm.vllm",
+      "type": "single_choice",
+      "question": "在 vLLM 中，连续批处理（continuous batching）相比传统静态批处理的主要优势是什么？",
+      "options": [
+        "请求完成后可立即释放资源并加入新请求，无需等待整批结束",
+        "将多个请求的输入拼接成一个更长的序列，减少前向次数",
+        "在训练阶段动态调整批次大小以节省显存",
+        "自动选择最优的模型并行策略"
+      ],
+      "answer": 0,
+      "explanation": "连续批处理允许在序列级别动态加入和退出请求，提高了 GPU 利用率；静态批处理需等待整批完成。",
+      "error_tag": "概念混淆",
+      "variant_group": "continuous_batching"
+    },
+    {
+      "kp": "ai.llm.vllm",
+      "type": "single_choice",
+      "question": "使用 vLLM 的 Python API 加载一个 Hugging Face 模型时，以下哪段代码最符合常见的初始化方式？",
+      "options": [
+        "from vllm import LLM; llm = LLM(model=\"meta-llama/Llama-2-7b-hf\")",
+        "import vllm; vllm.load_model(\"meta-llama/Llama-2-7b-hf\")",
+        "from vllm import Model; m = Model.from_pretrained(\"meta-llama/Llama-2-7b-hf\")",
+        "import vllm; vllm.init(model_path=\"meta-llama/Llama-2-7b-hf\")"
+      ],
+      "answer": 0,
+      "explanation": "vLLM 提供 LLM 类用于离线推理，通过 LLM(model=...) 加载模型。其他选项中的函数或类并不存在于 vLLM 的公开 API 中。",
+      "error_tag": "API 误用",
+      "variant_group": "vllm_python_api"
+    },
+    {
+      "kp": "ai.llm.vllm",
+      "type": "single_choice",
+      "question": "关于 vLLM 的 PagedAttention，以下说法正确的是？",
+      "options": [
+        "它借鉴了操作系统虚拟内存分页的思想来管理 KV 缓存",
+        "它要求每个序列的 KV 缓存必须存储在连续的显存块中",
+        "它仅适用于编码器-解码器架构的模型",
+        "它通过压缩注意力头数量来减少显存占用"
+      ],
+      "answer": 0,
+      "explanation": "PagedAttention 借鉴操作系统分页机制，将 KV 缓存分成块并允许非连续存储，从而减少碎片；它适用于自回归解码，不要求连续显存。",
+      "error_tag": "机制理解错误",
+      "variant_group": "paged_attention"
+    },
+    {
+      "kp": "ai.llm.vllm",
+      "type": "single_choice",
+      "question": "某开发者希望使用 vLLM 进行离线批量推理，以下哪种方式最合适？",
+      "options": [
+        "使用 vLLM 的 LLM 类配合 generate 方法批量生成",
+        "使用 vLLM 的 Trainer 类进行多轮训练",
+        "使用 vLLM 的 DataLoader 加载数据并调用 fit",
+        "使用 vLLM 的 Pipeline 类串联多个模型"
+      ],
+      "answer": 0,
+      "explanation": "vLLM 的离线推理入口是 LLM 类，通过 generate 方法批量生成。Trainer、DataLoader、Pipeline 等并非 vLLM 的标准离线推理 API。",
+      "error_tag": "API 误用",
+      "variant_group": "vllm_offline_inference"
+    },
+    {
+      "kp": "ai.llm.vllm",
+      "type": "single_choice",
+      "question": "在 vLLM 中，以下哪项参数通常用于控制 GPU 显存中用于 KV 缓存的比例？",
+      "options": [
+        "gpu_memory_utilization",
+        "max_batch_size",
+        "tensor_parallel_size",
+        "dtype"
+      ],
+      "answer": 0,
+      "explanation": "gpu_memory_utilization 用于指定 GPU 显存中用于模型权重和 KV 缓存的比例；max_batch_size 控制批大小，tensor_parallel_size 控制张量并行度，dtype 控制数据类型。",
+      "error_tag": "参数混淆",
+      "variant_group": "vllm_config"
+    },
+    {
+      "kp": "ai.llm.vllm",
+      "type": "single_choice",
+      "question": "vLLM 支持张量并行（tensor parallelism）来运行超大模型。以下关于其使用的描述哪项正确？",
+      "options": [
+        "通过设置 tensor_parallel_size 为 GPU 数量，将模型权重切分到多张 GPU 上",
+        "张量并行会自动将模型转换为量化版本以节省显存",
+        "张量并行只能在 CPU 上运行，不能使用 GPU",
+        "张量并行要求每张 GPU 都保存完整的模型权重副本"
+      ],
+      "answer": 0,
+      "explanation": "vLLM 通过 tensor_parallel_size 指定张量并行度，将模型权重切分到多张 GPU；它并不自动量化，也不要求每张 GPU 保存完整权重。",
+      "error_tag": "概念混淆",
+      "variant_group": "tensor_parallelism"
+    },
+    {
+      "kp": "ai.llm.vllm",
+      "type": "single_choice",
+      "question": "关于 vLLM 的采样参数，以下哪项用于控制生成文本的随机性？",
+      "options": [
+        "temperature",
+        "max_tokens",
+        "top_p",
+        "stop"
+      ],
+      "answer": 0,
+      "explanation": "temperature 控制采样随机性；max_tokens 控制最大生成长度；top_p 控制核采样范围；stop 指定停止字符串。",
+      "error_tag": "参数混淆",
+      "variant_group": "sampling_params"
+    },
+    {
+      "kp": "ai.llm.vllm",
+      "type": "single_choice",
+      "question": "某团队在使用 vLLM 部署服务时，发现相同提示词在多次请求下返回结果完全一致。最可能的原因是？",
+      "options": [
+        "temperature 被设置为 0",
+        "top_p 被设置为 1.0",
+        "max_tokens 被设置为 1",
+        "stop 参数为空"
+      ],
+      "answer": 0,
+      "explanation": "temperature=0 时模型进行贪心解码，输出确定；top_p=1.0 仍可能采样；max_tokens 和 stop 不影响随机性。",
+      "error_tag": "参数理解错误",
+      "variant_group": "sampling_params"
+    },
+    {
+      "kp": "ai.llm.tgi",
+      "type": "single_choice",
+      "question": "关于当前主流大语言模型推理服务常用的批处理调度方式，下列哪项描述最准确？",
+      "options": [
+        "静态批处理：必须等同一批所有请求都生成完毕才能返回，短请求会被长请求阻塞",
+        "连续批处理：某条请求生成结束后，可立即把新请求插入该空闲槽位继续计算",
+        "连续批处理要求所有请求的输入长度与输出长度完全一致才能工作",
+        "流式输出必须在静态批处理下才能实现"
+      ],
+      "answer": 1,
+      "explanation": "连续批处理（continuous batching）的核心是在序列级别动态调度，某条序列完成后即可让新请求占用其槽位，从而减少 GPU 空闲、降低长尾阻塞。静态批处理才会出现整批等待、被最长请求拖慢的问题；它对输入输出长度一致没有要求。",
+      "error_tag": "概念混淆",
+      "variant_group": "批处理调度机制"
+    },
+    {
+      "kp": "ai.llm.tgi",
+      "type": "single_choice",
+      "question": "在使用大模型推理服务时，分页注意力（PagedAttention）主要解决什么问题？",
+      "options": [
+        "把模型权重量化到 4bit 以减少显存占用",
+        "把 KV 缓存按固定大小的块管理，减少显存碎片并支持块级共享",
+        "把输入文本按 token 分页以便并行发送 HTTP 请求",
+        "把多个用户的请求合并成一条 batch 以减少网络往返"
+      ],
+      "answer": 1,
+      "explanation": "分页注意力把 KV 缓存切分为固定大小的块，用类似操作系统虚拟内存分页的方式管理，显著降低显存碎片、提高显存利用率，并允许不同序列共享相同的块（如共享前缀）。量化、HTTP 分批、请求合并都不是它的作用。",
+      "error_tag": "概念混淆",
+      "variant_group": "显存管理与KV缓存"
+    },
+    {
+      "kp": "ai.llm.tgi",
+      "type": "single_choice",
+      "question": "关于在推理服务中设置 max_tokens 参数，下列说法正确的是？",
+      "options": [
+        "它限制的是输入 prompt 的 token 数，与输出无关",
+        "它限制的是生成的输出 token 数，达到上限后生成会被截断",
+        "它必须大于上下文窗口大小才能生效",
+        "它会自动把超出部分的输入截断以保证输出完整"
+      ],
+      "answer": 1,
+      "explanation": "max_tokens 通常限制输出侧生成的 token 数，达到上限即停止，可能导致回答被截断。输入长度的限制一般由上下文窗口或服务端的输入长度限制控制，两者不同。",
+      "error_tag": "概念混淆",
+      "variant_group": "上下文窗口与长度限制"
+    },
+    {
+      "kp": "ai.llm.tgi",
+      "type": "single_choice",
+      "question": "某服务的日志显示：同样的请求，在夜间低并发时 P99 延迟为 1.2s，白天高并发时上升到 4.5s，且错误率基本不变。最合理的解释是？",
+      "options": [
+        "夜间模型精度更高，计算更快",
+        "高并发下请求排队等待组批与算力分配的时间增加，导致尾延迟上升",
+        "白天网络丢包导致重传，延长了延迟",
+        "白天用户输入的 prompt 更长，所以模型必然变慢"
+      ],
+      "answer": 1,
+      "explanation": "在错误率基本不变的前提下，延迟随并发上升，最典型的原因是排队与组批等待，以及共享算力导致的单请求变慢。模型精度不随昼夜变化；题干未提网络或输入长度变化。",
+      "error_tag": "概念混淆",
+      "variant_group": "吞吐与延迟权衡"
+    },
+    {
+      "kp": "ai.llm.tgi",
+      "type": "multi_choice",
+      "question": "下列哪些因素会直接影响大模型推理时的显存占用？（多选）",
+      "options": [
+        "模型权重的参数量与数值精度",
+        "同时并发的序列数量（批大小）",
+        "每条序列的上下文（KV 缓存）长度",
+        "客户端使用的编程语言",
+        "HTTP 请求头中的 User-Agent"
+      ],
+      "answer": [
+        0,
+        1,
+        2
+      ],
+      "explanation": "显存占用主要来自模型权重、KV 缓存以及中间激活。权重规模与精度、并发序列数、上下文长度都会显著影响显存。客户端语言与请求头不影响服务端显存。",
+      "error_tag": "概念混淆",
+      "variant_group": "显存管理与KV缓存"
+    },
+    {
+      "kp": "ai.llm.tgi",
+      "type": "multi_choice",
+      "question": "关于推理服务中的量化（如将权重以更低精度存储与计算），下列说法正确的有？（多选）",
+      "options": [
+        "可以降低显存占用，使更大的模型能放进已有的 GPU",
+        "可能带来一定的精度损失，需要评估对任务效果的影响",
+        "量化后模型的计算量与显存占用一定完全不变",
+        "常与算子优化配合以提升推理吞吐",
+        "量化只能用于训练阶段，不能在推理阶段使用"
+      ],
+      "answer": [
+        0,
+        1,
+        3
+      ],
+      "explanation": "量化降低数值精度，从而减少显存占用并可能借助更高效的算子提升吞吐，但可能带来精度损失，需要针对任务评估。它并非对计算/显存毫无影响，也常用于推理阶段。",
+      "error_tag": "概念混淆",
+      "variant_group": "量化与精度"
+    },
+    {
+      "kp": "ai.llm.tgi",
+      "type": "multi_choice",
+      "question": "下列哪些做法有助于提升大模型推理服务的吞吐？（多选）",
+      "options": [
+        "采用连续批处理而非静态批处理",
+        "使用分页注意力减少 KV 缓存碎片",
+        "对请求长度做合理限制并设置合适的批大小上限",
+        "把每条请求串行处理，处理完一条再取下一条",
+        "在服务端对相同前缀的请求复用已缓存的 KV 块"
+      ],
+      "answer": [
+        0,
+        1,
+        2,
+        4
+      ],
+      "explanation": "连续批处理、分页 KV 缓存、长度限制与合理批大小、前缀复用都能提升 GPU 利用率与吞吐。逐条串行处理会让 GPU 大量空闲，吞吐反而最低。",
+      "error_tag": "概念混淆",
+      "variant_group": "吞吐与延迟权衡"
+    },
+    {
+      "kp": "ai.llm.tgi",
+      "type": "multi_choice",
+      "question": "一名工程师在排查推理服务「响应偶发被截断」的问题，下列哪些方向值得检查？（多选）",
+      "options": [
+        "输出是否达到了 max_tokens 上限而被截断",
+        "输入长度加上期望输出是否超出了模型的上下文窗口",
+        "客户端是否对响应做了超时或长度截断处理",
+        "GPU 的算力型号是否影响了 tokenizer 的分词结果",
+        "服务端是否有停止条件（如停止符）过早触发"
+      ],
+      "answer": [
+        0,
+        1,
+        2,
+        4
+      ],
+      "explanation": "输出被截断常见于达到 max_tokens、超出上下文窗口、客户端侧超时/截断、停止条件过早触发。GPU 型号不影响分词结果。",
+      "error_tag": "概念混淆",
+      "variant_group": "上下文窗口与长度限制"
+    },
+    {
+      "kp": "ai.llm.tgi",
+      "type": "fill_blank",
+      "question": "在自回归生成中，为了避免每一步都对全部历史前缀重新计算注意力，服务通常会把历史 token 的 key/value 投影缓存下来，这种缓存简称为 ____ 缓存。",
+      "options": [],
+      "answer": [
+        "KV",
+        "kv",
+        "KV缓存",
+        "kv cache"
+      ],
+      "explanation": "该缓存保存历史 token 的 key 与 value 投影，使每步只需计算新 token，从而显著降低计算量，通常被简称为 KV 缓存。",
+      "error_tag": "记忆缺失",
+      "variant_group": "显存管理与KV缓存"
+    },
+    {
+      "kp": "ai.llm.tgi",
+      "type": "fill_blank",
+      "question": "某推理服务希望让客户端在生成过程中逐步看到结果，而不是等全部生成完再返回，应启用 ____ 输出。",
+      "options": [],
+      "answer": [
+        "流式",
+        "stream",
+        "streaming",
+        "流式输出"
+      ],
+      "explanation": "流式输出把生成过程分块返回给客户端，改善感知延迟。它不改变总计算量。",
+      "error_tag": "记忆缺失",
+      "variant_group": "流式输出"
+    },
+    {
+      "kp": "ai.llm.tgi",
+      "type": "code_reading",
+      "question": "阅读下面这段用于调用推理服务的伪代码，回答它请求了多少个输出 token，以及结果可能被截断的原因：\n\npayload = {\n  \"prompt\": \"请用三句话介绍杭州\",\n  \"max_tokens\": 16,\n  \"temperature\": 0.2\n}\nresp = client.generate(payload)\nprint(resp[\"text\"])\n\n（假设模型输出到第 16 个 token 仍未结束。）",
+      "options": [],
+      "answer": "最多请求生成 16 个输出 token；若模型到 16 个 token 仍未结束，输出会在上限处被截断。",
+      "explanation": "max_tokens 限制的是输出侧生成的 token 数。当达到该上限而模型尚未生成结束符时，结果会被截断；这与输入长度无关，也不是模型主动选择停止。",
+      "error_tag": "边界错误",
+      "variant_group": "上下文窗口与长度限制"
+    },
+    {
+      "kp": "ai.llm.tgi",
+      "type": "scenario",
+      "question": "工程场景：你负责把一个大模型接入线上客服系统。压测发现并发从 4 升到 64 后，整体吞吐确实提高，但单次对话的首 token 延迟从 0.6s 涨到 3s，用户体验变差。请说明你会如何调整部署与调度策略，并解释其中的权衡依据。",
+      "options": [],
+      "answer": null,
+      "explanation": "高并发下吞吐提升而首 token 延迟上升，本质是排队与组批等待、以及共享算力导致的单请求变慢。可考虑限制最大批大小、按延迟目标设置调度优先级、缩短排队时间、用分页 KV 缓存与量化降低显存压力以支撑更多并发，或在多副本间做负载均衡，从而在吞吐与延迟之间取得平衡。",
+      "error_tag": "概念混淆",
+      "variant_group": "吞吐与延迟权衡",
+      "required_keywords": [
+        "缓存",
+        "并发"
+      ]
+    },
+    {
+      "kp": "ai.llm.tgi",
+      "type": "single_choice",
+      "question": "关于大模型推理服务对外开放的接口形式，下列说法正确的是？",
+      "options": [
+        "只能通过命令行工具调用，无法用编程语言直接调用",
+        "通常同时提供 HTTP 接口和兼容 OpenAI 风格的接口，便于已有客户端迁移",
+        "必须使用 UDP 协议传输才能获得低延迟",
+        "接口一次只能返回一个 token，无法一次返回多个 token"
+      ],
+      "answer": 1,
+      "explanation": "主流推理服务通常暴露 HTTP 接口，并提供与 OpenAI 兼容的请求/响应结构，客户端可复用现有 SDK。传输协议并非必须 UDP；服务也可以在非流式模式下一次性返回完整结果。",
+      "error_tag": "概念混淆",
+      "variant_group": "服务接口形态"
+    },
+    {
+      "kp": "ai.llm.tgi",
+      "type": "scenario",
+      "question": "工程场景：线上推理服务的监控显示 GPU 显存长期接近上限，且随着对话轮次变多，服务开始拒绝新请求。你判断显存主要被注意力缓存占用。请给出至少两条可落地的缓解措施，并说明理由。",
+      "options": [],
+      "answer": null,
+      "explanation": "多轮对话会让 KV 缓存随上下文增长而持续膨胀，逼近显存上限后新请求无法分配空间而被拒绝。可采取的措施包括：使用分页/块式 KV 缓存减少碎片并支持前缀共享；对上下文长度与并发数设置上限并在超出时排队或拒绝；对权重做量化以腾出显存；把长会话做截断或摘要以控制缓存增长。",
+      "error_tag": "边界错误",
+      "variant_group": "显存管理与KV缓存",
+      "required_keywords": [
+        "缓存",
+        "并发"
+      ]
+    },
+    {
+      "kp": "ai.llm.tgi",
+      "type": "single_choice",
+      "question": "在推理服务的部署中，张量并行（tensor parallelism）通常用于什么场景？",
+      "options": [
+        "单张 GPU 显存不足以放下完整模型时，把权重切分到多张 GPU 上协同计算",
+        "把同一个请求复制到多台机器上做冗余计算以提高准确率",
+        "把多条请求分派到不同的 GPU 上以提升吞吐",
+        "把模型权重从 GPU 卸载到 CPU 内存以节省显存"
+      ],
+      "answer": 0,
+      "explanation": "张量并行把单个层的权重矩阵按维度切分到多张 GPU，每张卡只保存一部分参数，从而让超出单卡显存的模型可以运行。请求级的分派属于数据并行/负载均衡，把权重卸载到 CPU 属于 offload，不是张量并行。",
+      "error_tag": "概念混淆",
+      "variant_group": "并行策略"
+    },
+    {
+      "kp": "ai.llm.tgi",
+      "type": "single_choice",
+      "question": "某推理服务在压测时发现：并发请求数上升后，单请求的首 token 延迟明显增加，但吞吐仍在提升。最可能的原因是？",
+      "options": [
+        "模型权重被错误地量化，导致计算变慢",
+        "增大批大小让计算更密集，单请求的排队与等待时间变长，因此首 token 延迟上升",
+        "客户端网络带宽不足，导致请求发不出去",
+        "KV 缓存被完全禁用，每步都要重新计算全部前缀"
+      ],
+      "answer": 1,
+      "explanation": "批大小增大提高 GPU 利用率和整体吞吐，但请求需要等待组批、排队，且与更多序列共享算力，所以单请求的首 token 延迟会上升。这是吞吐与延迟之间的典型权衡，而不是量化或缓存被禁用导致。",
+      "error_tag": "概念混淆",
+      "variant_group": "吞吐与延迟权衡"
+    },
+    {
+      "kp": "ai.llm.tgi",
+      "type": "single_choice",
+      "question": "关于大模型推理中的采样参数 temperature，下列理解正确的是？",
+      "options": [
+        "temperature 越高，输出分布越尖锐，结果越确定",
+        "temperature 越低，输出分布越平坦，结果越随机",
+        "temperature 接近 0 时倾向于选择概率最高的 token，输出更确定",
+        "temperature 只影响输出长度，不影响 token 选择"
+      ],
+      "answer": 2,
+      "explanation": "temperature 用于缩放 logits：值越低分布越尖锐、越接近贪心解码，输出更确定；值越高分布越平坦、随机性越强。它影响的是 token 的选择分布，而不是输出长度。",
+      "error_tag": "概念混淆",
+      "variant_group": "解码与采样参数"
+    },
+    {
+      "kp": "ai.llm.tgi",
+      "type": "single_choice",
+      "question": "下列哪项最能说明推理服务需要做输入长度与输出长度的限制？",
+      "options": [
+        "因为超出上下文窗口的输入无法被模型正确编码，且输出过长会显著增加显存与时间开销",
+        "因为 HTTP 协议不允许超过 4096 字节的请求体",
+        "因为超过限制后模型会自动改用另一个模型回答",
+        "因为限制长度可以让模型完全避免幻觉"
+      ],
+      "answer": 0,
+      "explanation": "模型的上下文窗口有限，超出部分无法被注意力机制覆盖；输出越长，KV 缓存与生成步数越多，显存和时间开销线性增长，因此需要限制长度。HTTP 本身没有这个限制，长度限制也不能消除幻觉。",
+      "error_tag": "概念混淆",
+      "variant_group": "上下文窗口与长度限制"
+    },
+    {
+      "kp": "ai.llm.tgi",
+      "type": "single_choice",
+      "question": "在大模型推理服务中，「流式输出」的主要作用是？",
+      "options": [
+        "减少模型的计算量，让生成更快完成",
+        "让客户端在生成过程中逐步收到 token，改善感知延迟与交互体验",
+        "把模型权重分片传输到客户端",
+        "让服务端可以跳过解码阶段直接返回 prompt"
+      ],
+      "answer": 1,
+      "explanation": "流式输出并不减少总计算量，而是让用户在生成过程中逐步看到 token，从而降低感知延迟、改善交互体验。它不传输权重，也不会跳过解码。",
+      "error_tag": "概念混淆",
+      "variant_group": "流式输出"
+    },
+    {
+      "kp": "ai.llm.tgi",
+      "type": "single_choice",
+      "question": "关于 KV 缓存（key/value cache）在自回归生成中的作用，下列描述正确的是？",
+      "options": [
+        "缓存的是模型权重，避免每步重新加载参数",
+        "缓存的是已生成 token 的 key/value 投影，避免每步对全部前缀重新计算",
+        "缓存的是用户的原始输入文本，避免重复分词",
+        "缓存的是最终输出结果，用于命中相同请求时直接返回"
+      ],
+      "answer": 1,
+      "explanation": "自回归生成每步只需计算新 token，但注意力需要此前所有 token 的 key/value，因此把这些投影缓存下来，避免重复计算前缀，显著降低每步开销。它缓存的不是权重、原始文本或最终答案。",
+      "error_tag": "概念混淆",
+      "variant_group": "显存管理与KV缓存"
+    },
+    {
+      "kp": "ai.llm.tgi",
+      "type": "single_choice",
+      "question": "某团队要在生产环境部署一个参数量较大的模型，单卡显存放不下，且需要一定并发。下列做法最合理的是？",
+      "options": [
+        "把模型权重全部放到 CPU 上，每次前向都从内存读取",
+        "结合张量并行把权重切分到多卡，并配合合适的批处理与显存管理策略",
+        "把上下文窗口设为 1，这样显存占用最小",
+        "关闭 KV 缓存，避免缓存占显存"
+      ],
+      "answer": 1,
+      "explanation": "单卡放不下时，常用做法是用张量并行把权重切到多卡，再配合连续批处理和分页 KV 缓存等显存管理策略来支撑并发。全放 CPU 会因带宽瓶颈严重变慢；把上下文设为 1 或关闭 KV 缓存都会破坏功能或使计算量暴涨。",
+      "error_tag": "边界错误",
+      "variant_group": "部署与并行策略"
+    },
+    {
+      "kp": "ai.llm.ollama",
+      "type": "single_choice",
+      "question": "在使用 Ollama 在本地运行大语言模型时，下列关于「拉取模型」与「运行模型」的说法，哪一项是正确的？",
+      "options": [
+        "必须先手动下载模型文件并通过环境变量指定路径，ollama run 才会工作",
+        "ollama run 在本地不存在该模型时通常会自动先拉取再运行",
+        "ollama pull 只能拉取已在本地的模型进行校验，不会真正下载",
+        "模型拉取后必须手动编译成二进制才能被调用"
+      ],
+      "answer": 1,
+      "explanation": "Ollama 的设计是：运行一个本地不存在的模型时，会自动从模型库拉取后再启动；也可以先用 pull 显式拉取。A 错误在于无需手动指定路径；C 曲解了 pull 的作用；D 是常见误解，Ollama 不需要用户手动编译模型。",
+      "error_tag": "概念混淆",
+      "variant_group": "ollama_pull_run"
+    },
+    {
+      "kp": "ai.llm.ollama",
+      "type": "single_choice",
+      "question": "关于 Ollama 提供的本地 HTTP 服务接口，下列描述正确的是？",
+      "options": [
+        "它只能被 Ollama 自带的命令行工具访问，其他程序无法调用",
+        "它默认在本机某端口提供 REST 风格接口，程序可通过 HTTP 请求调用模型",
+        "它要求必须连接公网才能响应生成请求",
+        "它只支持流式返回，无法获得一次性完整响应"
+      ],
+      "answer": 1,
+      "explanation": "Ollama 在本地启动一个 HTTP 服务，默认监听本机端口，提供 REST 风格接口（如生成、对话等），本地程序可通过 HTTP 调用；也支持流式与非流式。A、C、D 均为常见误解。",
+      "error_tag": "概念混淆",
+      "variant_group": "ollama_api"
+    },
+    {
+      "kp": "ai.llm.ollama",
+      "type": "multi_choice",
+      "question": "关于在本地使用 Ollama 运行大语言模型，下列哪些说法是正确的？（多选）",
+      "options": [
+        "可以在本地拉取并运行多种开源模型",
+        "程序可以通过本地 HTTP 接口调用模型完成生成任务",
+        "模型必须联网才能推理，离线无法使用",
+        "运行模型会占用本机内存/显存，模型越大占用通常越高"
+      ],
+      "answer": [
+        0,
+        1,
+        3
+      ],
+      "explanation": "Ollama 支持本地拉取运行多种开源模型、提供本地 HTTP 接口供程序调用，且推理会占用本地内存/显存。C 错误：一旦模型已在本地，推理可离线进行。",
+      "error_tag": "概念混淆",
+      "variant_group": "ollama_basic"
+    },
+    {
+      "kp": "ai.llm.ollama",
+      "type": "multi_choice",
+      "question": "在使用 Ollama 的对话接口构造请求时，下列哪些做法是合理且有依据的？（多选）",
+      "options": [
+        "按角色（如 system / user / assistant）组织消息列表",
+        "根据需要传入或覆盖系统提示词来约束模型行为",
+        "每次请求都把全部历史无限制地拼接进去，从不裁剪",
+        "通过参数控制是否流式返回"
+      ],
+      "answer": [
+        0,
+        1,
+        3
+      ],
+      "explanation": "对话请求通常按角色组织消息、可设置系统提示词、可控制流式。C 不合理：无限制拼接历史会超出上下文窗口并影响效果，应裁剪或摘要。",
+      "error_tag": "边界错误",
+      "variant_group": "ollama_chat_request"
+    },
+    {
+      "kp": "ai.llm.ollama",
+      "type": "multi_choice",
+      "question": "当发现本地 Ollama 推理速度很慢时，下列哪些排查或优化方向是有依据的？（多选）",
+      "options": [
+        "检查是否因内存/显存不足导致大量换页或降级到较慢路径",
+        "尝试使用量化程度更高、更小的模型变体",
+        "确认请求是否使用了流式，避免误以为是「卡住」",
+        "把模型文件复制到多个目录以提升速度"
+      ],
+      "answer": [
+        0,
+        1,
+        2
+      ],
+      "explanation": "速度慢常见原因包括资源不足、模型过大，以及把流式输出误判为无响应。复制模型文件不会提升推理速度，D 无依据。",
+      "error_tag": "边界错误",
+      "variant_group": "ollama_perf"
+    },
+    {
+      "kp": "ai.llm.ollama",
+      "type": "multi_choice",
+      "question": "下列关于 Ollama 与程序集成的描述，哪些是正确的？（多选）",
+      "options": [
+        "可以用任意支持 HTTP 请求的编程语言与之交互",
+        "通常需要保证请求地址与 Ollama 实际监听的地址、端口一致",
+        "遇到连接错误时应先确认服务是否已启动",
+        "必须把模型源码复制到自己的 Python 项目里才能调用"
+      ],
+      "answer": [
+        0,
+        1,
+        2
+      ],
+      "explanation": "Ollama 通过 HTTP 暴露能力，任何能发 HTTP 请求的语言都可集成；地址端口需匹配；连接错误优先排查服务是否启动。D 无依据，调用是通过接口而非复制模型源码。",
+      "error_tag": "概念混淆",
+      "variant_group": "ollama_integration"
+    },
+    {
+      "kp": "ai.llm.ollama",
+      "type": "fill_blank",
+      "question": "Ollama 通常以本机 HTTP 服务的形式对外提供能力，程序通过发送 HTTP ______ 来调用模型的生成或对话功能。（填写一个英文单词）",
+      "options": [],
+      "answer": [
+        "请求",
+        "request",
+        "requests",
+        "HTTP 请求",
+        "http 请求"
+      ],
+      "explanation": "Ollama 对外提供 REST 风格接口，调用方通过发送 HTTP 请求来使用生成/对话功能。",
+      "error_tag": "记忆缺失",
+      "variant_group": "ollama_api"
+    },
+    {
+      "kp": "ai.llm.ollama",
+      "type": "fill_blank",
+      "question": "在 Ollama 的模型名中，用于区分同一模型不同版本或量化规格的后缀部分，通常称为 ______。（填一个中文或英文词）",
+      "options": [],
+      "answer": [
+        "标签",
+        "tag",
+        "tags",
+        "标签（tag）"
+      ],
+      "explanation": "模型名后附带的部分（如 :latest 等）是标签，用于区分不同版本或量化规格。",
+      "error_tag": "记忆缺失",
+      "variant_group": "ollama_tag"
+    },
+    {
+      "kp": "ai.llm.ollama",
+      "type": "fill_blank",
+      "question": "在 Ollama 的生成参数中，控制输出随机性/多样性、取值越大越随机的参数名是 ______。（填英文参数名）",
+      "options": [],
+      "answer": [
+        "temperature",
+        "温度",
+        "temperature 参数",
+        "temp"
+      ],
+      "explanation": "temperature 用于控制采样随机性：值越大越随机多样，越小越确定。",
+      "error_tag": "记忆缺失",
+      "variant_group": "ollama_params"
+    },
+    {
+      "kp": "ai.llm.ollama",
+      "type": "code_reading",
+      "question": "阅读下面这段伪代码（描述调用本地 Ollama 对话接口的逻辑），回答问题：\n\nmessages = [\n  {\"role\": \"system\", \"content\": \"你是一个简洁的助手\"},\n  {\"role\": \"user\", \"content\": \"用一句话解释什么是量化\"}\n]\n发请求到本地 Ollama 服务，携带 messages，设置 stream=False\n\n问：这段代码发送一次请求后，调用方能否直接拿到完整的一段回答文本？为什么？",
+      "options": [],
+      "answer": "能。因为设置了非流式（stream=False），服务会把生成的完整结果聚合后一次性返回，而不是逐段推送，所以调用方能直接拿到一段完整回答文本。",
+      "explanation": "该伪代码演示了带系统提示词的对话请求，并显式设置非流式，因此返回的是完整结果；若改为流式则需逐块拼接。",
+      "error_tag": "概念混淆",
+      "variant_group": "ollama_stream"
+    },
+    {
+      "kp": "ai.llm.ollama",
+      "type": "code_reading",
+      "question": "阅读下面这段伪代码，回答问题：\n\nfor i in range(3):\n    messages.append({\"role\": \"user\", \"content\": 第 i 轮用户输入})\n    messages.append({\"role\": \"assistant\", \"content\": 第 i 轮模型回复})\n    resp = 调用本地 Ollama 对话接口(messages, stream=True)\n    逐块拼接 resp 得到本轮完整回复\n    messages.append({\"role\": \"assistant\", \"content\": 本轮完整回复})\n\n问：这个循环里为什么要手动往 messages 里追加 assistant 的回复？如果从不追加历史消息，会有什么后果？",
+      "options": [],
+      "answer": "因为本地 Ollama 对话接口通常是无状态的，服务端不替调用方保存上下文，必须由调用方把历史消息一并带上。若不追加历史消息，每轮请求只包含当前这一条，模型看不到之前的对话，就无法进行连贯的多轮对话，会「忘记」上下文。",
+      "explanation": "该循环演示了手动维护对话历史：把每轮的模型回复也放回 messages，下一轮请求才带有完整上下文。不维护历史会导致多轮对话失忆。",
+      "error_tag": "概念混淆",
+      "variant_group": "ollama_history"
+    },
+    {
+      "kp": "ai.llm.ollama",
+      "type": "scenario",
+      "question": "工程场景：你在本地用 Ollama 部署了一个开源模型，写了一个 Python 脚本通过 HTTP 接口调用它。运行时脚本报出「连接被拒绝（connection refused）」。你确认代码里的请求地址和端口没问题，模型也已拉取。请问你会如何定位和解决？请说明思路。",
+      "options": [],
+      "answer": null,
+      "explanation": "连接被拒绝通常意味着目标地址端口没有服务在监听。应首先确认 Ollama 服务是否已启动、是否正在监听期望的地址与端口，再核对脚本用的地址端口是否与之完全一致；可分别在终端和脚本中验证连通性。模型是否拉取不直接影响连接是否被拒。",
+      "error_tag": "边界错误",
+      "variant_group": "ollama_conn",
+      "required_keywords": [
+        "服务监听",
+        "端口",
+        "连通性",
+        "Ollama 服务",
+        "地址"
+      ]
+    },
+    {
+      "kp": "ai.llm.ollama",
+      "type": "single_choice",
+      "question": "某程序向本地 Ollama 服务发送一个生成请求，期望一次拿到完整回答而不是逐段输出。关于返回方式，下列理解正确的是？",
+      "options": [
+        "必须使用流式，否则服务会报错",
+        "可以通过参数控制是否流式，非流式时得到完整结果后再一次返回",
+        "非流式会丢失所有 token",
+        "是否流式由模型文件决定，调用方无法选择"
+      ],
+      "answer": 1,
+      "explanation": "Ollama 的生成接口通常支持通过参数选择流式或非流式返回；非流式会聚合完整结果后返回。流式与否由调用参数决定，而非模型文件或强制要求。",
+      "error_tag": "概念混淆",
+      "variant_group": "ollama_stream"
+    },
+    {
+      "kp": "ai.llm.ollama",
+      "type": "scenario",
+      "question": "工程场景：团队要在离线环境中做一款对话助手，要求数据不出本机、且要能控制回答的随机程度。团队打算基于 Ollama 本地运行模型。请说明这个方案为何合适，以及要注意哪些方面（提示：从数据可控、离线可用、参数控制、资源限制角度作答）。",
+      "options": [],
+      "answer": null,
+      "explanation": "Ollama 能在本地运行模型，数据不必离开本机，符合数据可控与离线要求；可通过生成参数（如温度）控制随机程度；但要注意本地内存/显存等资源限制，必要时选用更小或量化程度更高的模型，并妥善管理对话上下文长度。",
+      "error_tag": "概念混淆",
+      "variant_group": "ollama_vs_cloud",
+      "required_keywords": [
+        "数据可控",
+        "离线可用",
+        "生成参数",
+        "温度",
+        "资源限制"
+      ]
+    },
+    {
+      "kp": "ai.llm.ollama",
+      "type": "single_choice",
+      "question": "关于 Ollama 中「模型名与标签」（如某模型名后带 :latest 之类的标签）的说法，正确的是？",
+      "options": [
+        "标签只是显示用，实际加载的永远是同一个权重",
+        "标签用于区分同一模型的不同版本或量化规格，不同标签可能对应不同大小与效果",
+        "标签必须是纯数字，否则无法加载",
+        "只要模型名相同，标签不同也会强制报错"
+      ],
+      "answer": 1,
+      "explanation": "在 Ollama 中，模型名通常可带标签，用来区分不同版本或量化规格，不同标签对应的文件大小与效果可能不同。A、C、D 均为错误理解。",
+      "error_tag": "概念混淆",
+      "variant_group": "ollama_tag"
+    },
+    {
+      "kp": "ai.llm.ollama",
+      "type": "single_choice",
+      "question": "使用 Ollama 本地运行大模型时，关于显存/内存与模型大小的关系，下列说法合理的是？",
+      "options": [
+        "模型大小与内存占用无关，只要磁盘够就行",
+        "量化后模型通常更小、更省内存，但可能带来一定效果损失",
+        "只要把模型放到磁盘上，运行时完全不占内存",
+        "内存不足时 Ollama 会自动把模型训练得更大以适应"
+      ],
+      "answer": 1,
+      "explanation": "量化会压缩权重，使模型文件更小、运行时占用更少内存/显存，但可能牺牲一定质量。运行时必须把权重加载进内存/显存，磁盘够并不等于能跑；内存不足不会「训练得更大」。",
+      "error_tag": "边界错误",
+      "variant_group": "ollama_resource"
+    },
+    {
+      "kp": "ai.llm.ollama",
+      "type": "single_choice",
+      "question": "关于 Ollama 的「系统提示词 / 模板」概念，下列理解正确的是？",
+      "options": [
+        "系统提示词只能在服务端配置文件中全局修改，单次请求无法覆盖",
+        "可以通过请求参数传入或覆盖系统提示词，从而影响模型行为",
+        "系统提示词对输出没有任何影响",
+        "系统提示词只对非流式请求生效"
+      ],
+      "answer": 1,
+      "explanation": "Ollama 的接口通常允许在请求中传入系统提示词（可覆盖模型自带模板的一部分行为），从而影响生成结果；它对流式与非流式都有效。",
+      "error_tag": "概念混淆",
+      "variant_group": "ollama_prompt"
+    },
+    {
+      "kp": "ai.llm.ollama",
+      "type": "single_choice",
+      "question": "在程序里通过 HTTP 调用本地 Ollama 服务时，若收到连接被拒绝（connection refused）类错误，最可能的原因是？",
+      "options": [
+        "模型权重文件损坏",
+        "本地 Ollama 服务未启动或监听地址/端口与请求的不一致",
+        "Python 版本过低",
+        "请求里没有写系统提示词"
+      ],
+      "answer": 1,
+      "explanation": "连接被拒绝通常表示目标地址/端口上没有服务在监听，即服务未启动或地址端口不匹配；与权重损坏、Python 版本或是否写系统提示词无关。",
+      "error_tag": "边界错误",
+      "variant_group": "ollama_conn"
+    },
+    {
+      "kp": "ai.llm.ollama",
+      "type": "single_choice",
+      "question": "下列关于 Ollama 与「云端大模型 API」的对比，哪一项更准确？",
+      "options": [
+        "Ollama 只能联网使用，与云 API 没有区别",
+        "Ollama 侧重在本地运行模型，数据不必离开本机，但受本地算力限制",
+        "Ollama 运行模型不需要任何硬件资源",
+        "云 API 无法流式返回，只有 Ollama 可以"
+      ],
+      "answer": 1,
+      "explanation": "Ollama 的核心价值是本地运行模型，数据可控、可离线，但受本地内存/算力限制。A、C、D 均为明显错误或常见误解。",
+      "error_tag": "概念混淆",
+      "variant_group": "ollama_vs_cloud"
+    },
+    {
+      "kp": "ai.llm.ollama",
+      "type": "single_choice",
+      "question": "关于 Ollama 中「对话历史」的处理方式，下列说法正确的是？",
+      "options": [
+        "服务端会自动永久保存每次对话，下次请求自动带上全部历史",
+        "调用方需要在请求中自行携带历史消息，服务端通常不替你管理上下文",
+        "对话历史只能保存一条消息",
+        "历史消息越长，模型响应一定越准确，无需裁剪"
+      ],
+      "answer": 1,
+      "explanation": "Ollama 的对话接口通常是无状态风格：需要调用方在请求里自行带上历史消息来构造上下文；服务端一般不为调用方维护长期会话；历史过长还会挤占上下文窗口，需要裁剪。",
+      "error_tag": "概念混淆",
+      "variant_group": "ollama_history"
+    },
+    {
+      "kp": "ai.llm.ollama",
+      "type": "single_choice",
+      "question": "关于 Ollama 的生成参数（如温度 temperature），下列理解正确的是？",
+      "options": [
+        "温度越高输出越确定，越低越随机",
+        "温度越高输出通常越随机多样，越低越趋向确定性",
+        "温度只能设为 0 或 1 两个值",
+        "温度参数只影响服务启动速度，不影响输出"
+      ],
+      "answer": 1,
+      "explanation": "temperature 越大，采样分布越平坦，输出越随机多样；越小则越趋向确定性。它会影响输出而非启动速度，取值也非只有 0/1。",
+      "error_tag": "概念混淆",
+      "variant_group": "ollama_params"
+    }
+  ]
+}

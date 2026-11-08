@@ -1,0 +1,28 @@
+{
+  "id": "s1u1l2",
+  "title": "注释、缩进与变量",
+  "kps": ["py.syntax.comment", "py.syntax.indent", "py.syntax.var"],
+  "theory": "# 注释、缩进与变量\n\n## 1. 注释\n\n注释是给人类看的说明，Python 不执行它。\n\n```python\n# 这是单行注释\nx = 1  # 行尾注释也可以\n\n\"\"\"\n这是多行注释（其实是一个字符串字面量）。\nPython 没有真正的多行注释语法，\n约定用三引号字符串代替。\n\"\"\"\n```\n\n## 2. 缩进\n\nPython 用**缩进**（而不是花括号）划分代码块，这是它最鲜明的语法特征。\n\n```python\nif True:\n    print(\"这一行缩进了 4 个空格\")   # 属于 if 块\n    print(\"还在 if 块里\")\nprint(\"顶格，不在 if 块里\")\n```\n\n> 约定用 **4 个空格**缩进，不要混用 Tab 和空格，否则会报 `IndentationError`。\n\n## 3. 变量\n\n变量是给数据起的名字，用 `=` 赋值。Python 是**动态类型**语言——不需要声明类型。\n\n```python\nname = \"Alice\"     # 字符串\nage = 30           # 整数\nheight = 1.75      # 浮点数\nis_student = True  # 布尔值\n\nprint(name)\nprint(age + 1)     # 31\n```\n\n命名规范：用小写字母 + 下划线（snake_case），例如 `user_name`、`total_count`。\n",
+  "quiz": [
+    {
+      "question": "Python 单行注释用什么符号开头？",
+      "options": ["#", "//", "/*", "--"],
+      "answer": 0
+    },
+    {
+      "question": "Python 用什么来划分代码块（作用域）？",
+      "options": ["缩进", "花括号 {}", "圆括号 ()", "分号 ;"],
+      "answer": 0
+    },
+    {
+      "question": "下面哪个是正确的 Python 变量赋值？",
+      "options": ["age = 30", "int age = 30", "var age = 30", "age := 30"],
+      "answer": 0
+    },
+    {
+      "question": "混用 Tab 和空格缩进会引发什么错误？",
+      "options": ["IndentationError", "SyntaxError", "TypeError", "NameError"],
+      "answer": 0
+    }
+  ]
+}

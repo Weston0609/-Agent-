@@ -1,0 +1,605 @@
+{
+  "id": "s5u2l2",
+  "title": "s5u2l2",
+  "kps": [
+    "py.db.async_db",
+    "py.db.alembic"
+  ],
+  "theory": "## py.db.async_db\n\n# 异步数据库访问（Async DB）：让 I/O 等待不再卡住你的程序\n\n> **一句话直觉**：普通数据库调用像在窗口排队——你必须站着等前面的人办完；异步数据库访问像取号后去喝咖啡——等待时还能处理别的事，轮到你再回来。\n\n本讲义知识点：`py.db.async_db`。属于起点级内容，不假设你懂异步或数据库。\n\n---\n\n## 1. 为什么需要异步数据库访问？\n\n在 Web 服务、爬虫、AI 推理服务里，程序大量时间花在“等 I/O”上：等网络、等磁盘、等数据库返回。\n\n**同步（synchronous）**写法下：\n\n```python\ndef get_user(uid):\n    row = db.execute(\"SELECT * FROM users WHERE id=?\", (uid,))  # 整个线程被阻塞\n    return row\n```\n\n线程卡在这一行，期间什么也做不了。想并发就得开很多线程，而线程上下文切换成本高、数量有限。\n\n**异步（asynchronous）**的目标：单线程内，当某个操作在等待 I/O 时，把 CPU 让给其他任务。这正是 Python `asyncio` 的核心思想。\n\n关键术语：\n- **协程（coroutine）**：`async def` 定义的函数，调用它得到协程对象，需被调度执行。\n- **事件循环（event loop）**：负责调度协程、监听 I/O 事件的中枢。\n- **await**：挂起当前协程，把控制权交还给事件循环，等被等待对象就绪后恢复。\n- **异步驱动（async driver）**：支持协程接口的数据库客户端，如 `asyncpg`（PostgreSQL）、`aiomysql`/`asyncmy`（MySQL）、`aiosqlite`（SQLite）、`motor`（MongoDB）。\n\n---\n\n## 2. 第一个异步数据库程序：`aiosqlite`\n\n`aiosqlite` 是对标准库 `sqlite3` 的异步封装，零依赖、无需数据库服务，最适合入门。\n\n```python\nimport asyncio\nimport aiosqlite\n\nasync def main():\n    # 打开（异步）一个内存数据库连接\n    async with aiosqlite.connect(\":memory:\") as db:\n        # 建表\n        await db.execute(\"CREATE TABLE user (id INTEGER PRIMARY KEY, name TEXT)\")\n        # 插入\n        await db.execute(\"INSERT INTO user (name) VALUES (?)\", (\"Alice\",))\n        await db.commit()\n        # 查询\n        async with db.execute(\"SELECT id, name FROM user\") as cursor:\n            async for row in cursor:\n                print(row)\n\nasyncio.run(main())\n```\n\n要点：\n- `connect`、`execute`、`commit`、游标迭代全部是 `await` / `async with` / `async for`。\n- 阻塞式 API（如 `sqlite3`）被包在 `await asyncio.to_thread(...)` 里执行，因此仍是真正的异步。\n\n---\n\n## 3. 连接池（Connection Pool）：工程级必备\n\n生产环境不会每条请求都新建连接。需要**连接池**：预先维护 N 个连接，按需借用、用完归还。\n\n以 `asyncpg` 为例：\n\n```python\nimport asyncio\nimport asyncpg\n\nasync def main():\n    # 创建连接池；min_size/max_size 控制池容量\n    pool = await asyncpg.create_pool(\n        dsn=\"postgresql://user:pass@localhost/mydb\",\n        min_size=1,\n        max_size=10,\n    )\n    async with pool.acquire() as conn:      # 借一条连接\n        rows = await conn.fetch(\"SELECT id, name FROM user\")\n        for r in rows:\n            print(dict(r))\n    await pool.close()\n\nasyncio.run(main())\n```\n\n要点：\n- **`create_pool` 是异步的**，返回 `Pool` 对象。\n- 用 `async with pool.acquire()` 确保连接**一定归还**，否则池会耗尽、请求挂起。\n- `min_size` / `max_size` 要根据数据库承载能力与并发量调优；`max_size` 过小会排队，过大反而拖垮数据库。\n\n---\n\n## 4. 并发访问：`asyncio.gather` 与 `TaskGroup`\n\n异步数据库最有价值的地方就是“同时发起多个查询”。\n\n```python\nimport asyncio\nimport aiosqlite\n\nasync def fetch_name(db, uid):\n    async with db.execute(\"SELECT name FROM user WHERE id=?\", (uid,)) as cur:\n        row = await cur.fetchone()\n        return row[0] if row else None\n\nasync def main():\n    async with aiosqlite.connect(\":memory:\") as db:\n        await db.execute(\"CREATE TABLE user (id INTEGER PRIMARY KEY, name TEXT)\")\n        await db.executemany(\n            \"INSERT INTO user (id, name) VALUES (?, ?)\",\n            [(1, \"A\"), (2, \"B\"), (3, \"C\")],\n        )\n        await db.commit()\n        # 三个查询并发执行\n        names = await asyncio.gather(*(fetch_name(db, i) for i in (1, 2, 3)))\n        print(names)  # ['A', 'B', 'C']\n\nasyncio.run(main())\n```\n\n要点：\n- `asyncio.gather(*coros)` 并发跑多个协程，返回结果列表（顺序与输入一致）。\n- 想请求“一失败就取消全部”，可用 `asyncio.gather(..., return_exceptions=False)` 或 Python 3.11+ 的 `asyncio.TaskGroup`。\n- **数据库并发不等于无限并发**：受连接池 `max_size` 与 DB 限制；应结合 `asyncio.Semaphore` 限流。\n\n---\n\n## 5. 事务（transaction）与常见工程模式\n\n事务保证一组操作“全成功或全失败”。异步环境里同样如此，但要显式管理。\n\n```python\nasync def transfer(pool, from_id, to_id, amount):\n    async with pool.acquire() as conn:\n        async with conn.transaction():      # asyncpg 提供异步事务上下文\n            await conn.execute(\"UPDATE account SET bal = bal - $1 WHERE id = $2\", amount, from_id)\n            await conn.execute(\"UPDATE account SET bal = bal + $1 WHERE id = $2\", amount, to_id)\n```\n\n工程级建议（模式速记）：\n- **仓储层（Repository）**：把 SQL 封装到 async 函数里，业务层只 `await` 语义方法。\n- **生命周期管理**：应用启动时 `create_pool`，关闭时 `pool.close()`（如 FastAPI 的 `lifespan`）。\n- **类型提示（type hints）**：给 async 函数加返回类型，配合 mypy/pyright 抓出漏 `await` 这类常见错误。\n- **超时与重试**：用 `asyncio.wait_for` 加超时；重试要幂等。\n- **可观测性**：给慢查询打日志/埋点。\n\n一句话总结：**异步数据库 = 异步驱动 + 连接池 + 协程并发 + 事务边界**。\n\n## py.db.alembic\n\n# 数据库迁移与 Alembic：让你的表结构也能\"进版本控制\"\n\n## 一句话直觉\n\n**Alembic** 是 SQLAlchemy（Python 最流行的 ORM/数据库工具包）的官方**数据库迁移（database migration）** 工具——它像 Git 管理代码一样管理数据库表结构的变化：每次改表都生成一个可回放的\"迁移脚本\"，让团队里每个人的数据库能一键升级到最新结构，出问题时还能一键回滚。\n\n---\n\n## 1. 为什么需要 Alembic？（没有它会怎样）\n\n假设你写了一个用户表：\n\n```python\nclass User(Base):\n    __tablename__ = \"users\"\n    id = Column(Integer, primary_key=True)\n    name = Column(String)\n```\n\n后来产品说\"要加邮箱字段\"，你在代码里加了 `email = Column(String)`。**运行时你的 Python 代码认识 email，但数据库的表里没有这一列**——一查询就报 `no such column: users.email`。\n\n三种常见应对方式：\n\n| 方式 | 问题 |\n|------|------|\n| 手动 `ALTER TABLE` | 团队其他人不知道你改了啥；线上忘记执行就炸 |\n| 删库重建 | 生产数据全丢 |\n| **Alembic 迁移脚本** | 结构变化有版本号、有历史、可回滚、可 code review ✅ |\n\n**核心直觉**：数据库结构变化 = 一份有顺序的、不可变的脚本序列，就像 Git 提交一样。\n\n---\n\n## 2. 核心概念：Revision（修订）与 version 表\n\nAlembic 在数据库里维护一张小表 `alembic_version`，只存一行——**当前数据库所处的修订号**：\n\n```\n+------------------+\n| alembic_version  |\n+------------------+\n| a1b2c3d4e5f6     |   <- 当前 HEAD\n+------------------+\n```\n\n每个迁移脚本（在 `versions/` 目录下）是一个 Python 文件，包含 `upgrade()` 和 `downgrade()` 两个函数：\n\n- `upgrade()`：怎么\"向前走一步\"\n- `downgrade()`：怎么\"退回去\"\n\n脚本之间通过 `down_revision` 指针连成一条链，形成历史。\n\n---\n\n## 3. 最小工作流（5 条命令走天下）\n\n```bash\n# 1) 初始化：生成 alembic.ini + alembic/ 目录\nalembic init alembic\n\n# 2) 改配置：让 alembic 知道你的数据库 URL 和元数据\n#    编辑 alembic/env.py，指向 Base.metadata\n\n# 3) 生成迁移脚本（对比模型 vs 数据库，自动 diff）\nalembic revision --autogenerate -m \"add email to users\"\n\n# 4) 检查生成的脚本（务必肉眼过一遍！）\n#    然后应用\nalembic upgrade head\n\n# 5) 出错了就回滚一步\nalembic downgrade -1\n```\n\n`--autogenerate` 是 Alembic 最爽的功能：**它读你的 ORM 模型，连到数据库对比差异，帮你写脚本**。但它不是万能的（见第 5 节）。\n\n---\n\n## 4. 关键配置：`env.py` 里连上你的 `MetaData`\n\nAlembic 要能\"看到\"你的模型定义，靠的是 `target_metadata`。典型配置：\n\n```python\n# alembic/env.py\nfrom myapp.models import Base          # 你的 declarative Base\ntarget_metadata = Base.metadata        # ← 就是这一行让 autogenerate 生效\n```\n\n同时把数据库 URL 告诉 Alembic，推荐从环境变量读（别硬编码密码）：\n\n```python\n# alembic.ini 或 env.py\nimport os\nconfig.set_main_option(\n    \"sqlalchemy.url\",\n    os.environ.get(\"DATABASE_URL\", \"sqlite:///./dev.db\")\n)\n```\n\n---\n\n## 5. `--autogenerate` 能自动搞定什么、不能搞定什么\n\n**能自动**：新增/删除表、新增/删除列、改列类型（部分）、新增索引、新增外键。\n\n**不能自动**（必须手写）：\n- 表名/列名**重命名**（它以为是删了一个又建一个，会丢数据！）\n- 数据迁移（比如把 `full_name` 拆成 `first_name` + `last_name`）\n- 复杂约束、触发器、视图\n\n所以工程铁律：**autogenerate 只负责草稿，人必须逐行 review**。\n\n练习看一个完整例子（见下方 `example_code`），你会看到：\n1. 定义一个含 `User` 表的模型\n2. 用 Alembic 的 API 以编程方式创建引擎和版本表\n3. 模拟\"加一列\"的迁移过程\n\n---\n\n## 6. 从个人脚本到团队协作：三条工程实践\n\n1. **迁移脚本进 Git，跟代码一起走。** 一次提交 = 模型变化 + 对应迁移脚本。\n2. **部署时先跑 `alembic upgrade head` 再启动服务。** 容器里常常写成 entrypoint 的一部分。\n3. **回顾（downgrade）要写对。** 很多团队 downgrade 写成 `pass`，结果线上回滚时才发现根本退不回去。写迁移时**顺手把 downgrade 写完整**。\n\n> 一句话总结：**Alembic = 数据库结构的 Git。** 模型改了 → `revision --autogenerate` → review → `upgrade head` → 上线前自动执行。\n\n---\n\n# 结尾：动手练习\n\n**任务**：本地搭一个会\"迁移\"的最小项目。\n\n1. `pip install sqlalchemy alembic`\n2. 建目录 `mig_lab/`，写 `models.py`：\n   ```python\n   from sqlalchemy.orm import declarative_base\n   from sqlalchemy import Column, Integer, String\n   Base = declarative_base()\n   class Book(Base):\n       __tablename__ = \"books\"\n       id = Column(Integer, primary_key=True)\n       title = Column(String(100))\n   ```\n3. 运行 `alembic init alembic`，编辑 `alembic/env.py`：\n   - 加 `import sys; sys.path.append(\".\")`\n   - 加 `from models import Base`，设置 `target_metadata = Base.metadata`\n   - 把 `sqlalchemy.url` 改成 `sqlite:///./library.db`\n4. 执行 `alembic revision --autogenerate -m \"create books\"`，**打开生成的脚本读一遍**。\n5. 执行 `alembic upgrade head`，然后用 `sqlite3 library.db \".schema books\"` 验证表被创建。\n6. **进阶**：在 `Book` 里加一列 `author = Column(String(50))`，再 autogenerate 一次，生成第二个迁移。执行 upgrade 后验证新列出现；执行 `alembic downgrade -1` 验证列消失。\n7. **写进笔记**：为什么 autogenerate 处理不了\"重命名列\"？如果真要重命名，正确的迁移脚本长什么样？\n\n完成这个练习，你就掌握了\"让数据库结构进入版本控制\"的核心肌肉记忆。\n",
+  "quiz": [
+    {
+      "kp": "py.db.async_db",
+      "type": "single_choice",
+      "question": "在使用异步数据库驱动（如 asyncpg、aiomysql）时，下面哪种写法最符合 Python 异步编程的规范？",
+      "options": [
+        "在普通 def 函数中直接调用 await conn.fetch(...)",
+        "在 async def 函数中使用 await conn.fetch(...)",
+        "在 async def 函数中调用 conn.fetch(...) 但不加 await",
+        "在普通 def 函数中调用 asyncio.run(conn.fetch(...))"
+      ],
+      "answer": 1,
+      "explanation": "asyncpg/aiomysql 等驱动的操作是协程，必须在 async def 函数中通过 await 等待；普通函数不能使用 await；不加 await 只会拿到协程对象而不执行；把协程直接传给 asyncio.run 也通常不符合预期语义，且需要可等待对象而非已创建协程在普通函数中这样使用。",
+      "error_tag": "异步语法误用",
+      "variant_group": "async_db_await_basic"
+    },
+    {
+      "kp": "py.db.async_db",
+      "type": "single_choice",
+      "question": "关于异步数据库连接池（如 asyncpg.create_pool），下列说法正确的是？",
+      "options": [
+        "create_pool 返回的是一个连接对象，可以直接执行 SQL",
+        "create_pool 返回的是一个连接池对象，通常用 async with 获取连接",
+        "create_pool 返回的是普通列表，需要手动遍历取连接",
+        "create_pool 只能在同步代码中调用"
+      ],
+      "answer": 1,
+      "explanation": "asyncpg.create_pool 创建的是连接池，典型用法是 async with pool.acquire() as conn 获取连接再执行 SQL。它不是单个连接，也不是列表；且 create_pool 本身是协程，需要在异步环境调用。",
+      "error_tag": "连接池概念混淆",
+      "variant_group": "async_db_pool"
+    },
+    {
+      "kp": "py.db.async_db",
+      "type": "single_choice",
+      "question": "关于异步数据库连接的生命周期，下面哪种做法更合适？",
+      "options": [
+        "在模块导入时创建一个全局连接，永不关闭",
+        "在应用启动时创建连接池，在应用关闭时释放连接池",
+        "每次查询都创建新连接且不关闭",
+        "把连接对象保存在全局变量中并在多个事件循环间共享"
+      ],
+      "answer": 1,
+      "explanation": "连接池适合在应用生命周期内创建与释放。全局连接不关闭会泄漏；每次新建不关闭也会耗尽资源；连接/连接池通常与特定事件循环绑定，跨事件循环共享容易出错。",
+      "error_tag": "连接生命周期",
+      "variant_group": "async_db_lifecycle"
+    },
+    {
+      "kp": "py.db.async_db",
+      "type": "single_choice",
+      "question": "在异步数据库操作中，使用 async with 获取连接的主要好处是什么？",
+      "options": [
+        "让 SQL 自动变成异步执行",
+        "保证连接在使用后归还连接池，即使发生异常也会释放",
+        "自动提交事务，无需手动 commit",
+        "把查询结果自动缓存起来"
+      ],
+      "answer": 1,
+      "explanation": "async with pool.acquire() as conn 能确保上下文退出时归还连接，异常时也释放；它不会自动把同步 SQL 变异步，也不会自动提交或缓存结果。",
+      "error_tag": "上下文管理器作用",
+      "variant_group": "async_db_context_manager"
+    },
+    {
+      "kp": "py.db.async_db",
+      "type": "single_choice",
+      "question": "下面哪种场景最适合使用异步数据库访问？",
+      "options": [
+        "CPU 密集型的大规模数值计算",
+        "I/O 密集、高并发的 Web 请求中访问数据库",
+        "只需要运行一次的简单命令行脚本",
+        "对数据库做大量本地文件读写"
+      ],
+      "answer": 1,
+      "explanation": "异步数据库访问的收益主要在 I/O 密集和高并发场景；CPU 密集型任务不会因异步而加速；一次性简单脚本没有必要；文件读写与数据库访问是不同 I/O 类型。",
+      "error_tag": "异步适用场景",
+      "variant_group": "async_db_usecase"
+    },
+    {
+      "kp": "py.db.async_db",
+      "type": "single_choice",
+      "question": "使用异步数据库驱动时，如何正确执行多条 SQL 语句并确保它们在同一事务中？",
+      "options": [
+        "分别在多个连接上执行，驱动会自动合并事务",
+        "在同一个连接上使用事务上下文，依次 await 执行各条语句",
+        "使用连接池的 execute 方法，它会自动开启事务",
+        "把多条 SQL 拼成一个字符串一次性执行一定安全"
+      ],
+      "answer": 1,
+      "explanation": "同一事务需要同一连接，并在该连接上通过事务上下文依次执行。多连接不会自动合并事务；连接池不自动为多次调用开启同一事务；拼接多语句可能受驱动限制且有注入风险。",
+      "error_tag": "事务范围误解",
+      "variant_group": "async_db_transaction"
+    },
+    {
+      "kp": "py.db.async_db",
+      "type": "single_choice",
+      "question": "关于异步数据库驱动中「连接」与「连接池」的关系，下面哪项正确？",
+      "options": [
+        "连接池是连接的集合，连接池负责创建、复用和回收连接",
+        "连接是连接池的集合，一个连接包含多个池",
+        "连接池和连接完全等价，可以互换使用",
+        "连接池只能容纳一个连接"
+      ],
+      "answer": 0,
+      "explanation": "连接池管理多个连接，负责创建、复用、回收；连接是单个会话；两者不等价；连接池可配置多个连接，不是只能一个。",
+      "error_tag": "连接与连接池关系",
+      "variant_group": "async_db_pool"
+    },
+    {
+      "kp": "py.db.async_db",
+      "type": "single_choice",
+      "question": "在异步数据库代码中，下面哪种异常处理方式更合理？",
+      "options": [
+        "捕获所有异常并忽略，避免程序中断",
+        "对数据库操作使用 try/except，必要时回滚事务并向上抛出或记录",
+        "只在同步代码中处理异常，异步代码不需要",
+        "把所有数据库异常都转换成 SystemExit"
+      ],
+      "answer": 1,
+      "explanation": "数据库操作应显式处理异常，事务失败时回滚，并根据情况记录或抛出；忽略所有异常、认为异步不需要处理、转成 SystemExit 都不合理。",
+      "error_tag": "异步异常处理",
+      "variant_group": "async_db_error_handling"
+    },
+    {
+      "kp": "py.db.async_db",
+      "type": "single_choice",
+      "question": "下面关于异步数据库驱动中批量插入的说法，哪项更准确？",
+      "options": [
+        "批量插入必须逐条 await，无法优化",
+        "许多异步驱动提供批量执行接口，可以减少往返次数，通常配合事务使用",
+        "批量插入只能用于同步驱动",
+        "批量插入会自动忽略所有约束错误"
+      ],
+      "answer": 1,
+      "explanation": "异步驱动常提供 executemany 或 copy 等批量接口，减少网络往返，并常置于事务中；不是只能逐条；同步驱动也支持批量；约束错误不会被自动忽略。",
+      "error_tag": "批量操作理解",
+      "variant_group": "async_db_batch"
+    },
+    {
+      "kp": "py.db.async_db",
+      "type": "single_choice",
+      "question": "在异步 Web 应用中，多个请求同时访问数据库时，使用连接池的主要限制作用是什么？",
+      "options": [
+        "限制每个请求的 SQL 长度",
+        "限制同时打开的数据库连接数，避免压垮数据库",
+        "限制每个请求只能执行一条 SQL",
+        "限制只能用只读事务"
+      ],
+      "answer": 1,
+      "explanation": "连接池的 max_size 等参数限制并发连接数，保护数据库；不限制 SQL 长度，不限制请求的 SQL 条数，也不限制只读。",
+      "error_tag": "连接池并发控制",
+      "variant_group": "async_db_pool"
+    },
+    {
+      "kp": "py.db.async_db",
+      "type": "single_choice",
+      "question": "下面哪项最准确地描述了异步数据库访问与多线程数据库访问的区别？",
+      "options": [
+        "异步访问一定比多线程快，无论场景",
+        "异步访问在单线程事件循环中通过协程切换处理 I/O，多线程通过线程切换并发",
+        "异步访问不能处理并发请求",
+        "多线程访问不需要考虑连接安全，异步访问需要"
+      ],
+      "answer": 1,
+      "explanation": "异步通过事件循环与协程在等待 I/O 时切换，多线程靠线程调度；异步不保证所有场景都更快；异步也能处理并发；两者都需要考虑连接/共享状态安全。",
+      "error_tag": "异步与多线程对比",
+      "variant_group": "async_db_concurrency"
+    },
+    {
+      "kp": "py.db.async_db",
+      "type": "single_choice",
+      "question": "在异步数据库代码中，下面哪种做法可能导致「连接泄漏」？",
+      "options": [
+        "使用 async with pool.acquire() as conn",
+        "手动调用 conn = await pool.acquire() 后忘记 release 或关闭",
+        "在事务上下文中执行查询",
+        "使用 try/finally 确保释放连接"
+      ],
+      "answer": 1,
+      "explanation": "手动 acquire 后必须 release/close，否则连接不会归还连接池，造成泄漏；async with、事务上下文、try/finally 都有助于正确释放。",
+      "error_tag": "连接泄漏",
+      "variant_group": "async_db_lifecycle"
+    },
+    {
+      "kp": "py.db.async_db",
+      "type": "single_choice",
+      "question": "在异步 Web 框架（如 FastAPI）中调用异步数据库查询时，下面哪种做法最可能导致事件循环被阻塞？",
+      "options": [
+        "使用 await conn.fetch(...)",
+        "使用 await asyncio.sleep(0.1)",
+        "在异步处理函数中调用同步阻塞的数据库库（如 psycopg2 的 cursor.execute）",
+        "使用 async with pool.acquire() as conn"
+      ],
+      "answer": 2,
+      "explanation": "同步阻塞的数据库调用会占用事件循环线程，导致其他协程无法推进；await 异步操作、asyncio.sleep、async with 都不会阻塞事件循环。",
+      "error_tag": "阻塞事件循环",
+      "variant_group": "async_db_blocking"
+    },
+    {
+      "kp": "py.db.async_db",
+      "type": "single_choice",
+      "question": "使用异步数据库驱动时，为什么推荐使用连接池而不是每次请求都新建连接？",
+      "options": [
+        "因为异步驱动不支持直接建连接",
+        "因为建连接开销大，连接池可复用连接并限制并发连接数",
+        "因为连接池能自动把 SQL 转换成异步语句",
+        "因为连接池可以省略 await"
+      ],
+      "answer": 1,
+      "explanation": "连接池复用已有连接，减少握手/认证开销，并可限制最大连接数保护数据库。异步驱动本身支持建连接；连接池不会自动改写 SQL；连接池操作仍需 await。",
+      "error_tag": "连接池意义误解",
+      "variant_group": "async_db_pool_why"
+    },
+    {
+      "kp": "py.db.async_db",
+      "type": "single_choice",
+      "question": "下面哪段代码正确展示了在异步函数中执行查询并获取结果？",
+      "options": [
+        "async def f():\n    conn = await asyncpg.connect(dsn)\n    rows = conn.fetch('SELECT 1')\n    return rows",
+        "async def f():\n    conn = await asyncpg.connect(dsn)\n    rows = await conn.fetch('SELECT 1')\n    return rows",
+        "def f():\n    conn = asyncpg.connect(dsn)\n    rows = await conn.fetch('SELECT 1')\n    return rows",
+        "async def f():\n    conn = asyncpg.connect(dsn)\n    rows = conn.fetch('SELECT 1')\n    return rows"
+      ],
+      "answer": 1,
+      "explanation": "asyncpg.connect 和 conn.fetch 都是协程，需要 await；且 await 必须出现在 async def 中。选项 A 漏 await；C 在同步函数中使用 await；D 连接和查询都没 await。",
+      "error_tag": "异步调用漏 await",
+      "variant_group": "async_db_await_syntax"
+    },
+    {
+      "kp": "py.db.async_db",
+      "type": "single_choice",
+      "question": "关于异步数据库事务，下面哪种理解是正确的？",
+      "options": [
+        "异步驱动不支持事务",
+        "事务必须在同一个连接对象上开始、提交或回滚",
+        "事务可以跨多个连接自动保持一致性",
+        "只要使用连接池，每个查询都自动处于同一事务中"
+      ],
+      "answer": 1,
+      "explanation": "事务上下文绑定在单个连接上，需要在同一连接上执行 BEGIN/COMMIT/ROLLBACK。异步驱动支持事务；跨连接不会自动共享事务；连接池中每次 acquire 可能拿到不同连接，不保证同一事务。",
+      "error_tag": "事务与连接关系误解",
+      "variant_group": "async_db_transaction"
+    },
+    {
+      "kp": "py.db.async_db",
+      "type": "single_choice",
+      "question": "使用类似 asyncpg 的 fetch 方法时，下面哪种做法能防止 SQL 注入？",
+      "options": [
+        "用 f-string 把用户输入拼进 SQL",
+        "用参数占位符（如 $1、$2）并通过参数列表传递用户输入",
+        "把用户输入直接放在引号中拼接",
+        "先对用户输入做 str() 转换再拼接"
+      ],
+      "answer": 1,
+      "explanation": "参数化查询由驱动安全处理参数，避免 SQL 注入；字符串拼接、f-string、str() 转换都不能从根本上防止注入。",
+      "error_tag": "SQL 注入防护",
+      "variant_group": "async_db_param"
+    },
+    {
+      "kp": "py.db.async_db",
+      "type": "single_choice",
+      "question": "在异步数据库访问中，下面哪个操作通常不是可等待对象（awaitable）？",
+      "options": [
+        "pool.acquire()",
+        "conn.fetch('SELECT 1')",
+        "conn.close()",
+        "一个已经完成的普通 int 值"
+      ],
+      "answer": 3,
+      "explanation": "pool.acquire、conn.fetch、conn.close 在异步驱动中通常返回协程/可等待对象；普通 int 值不可等待，await 它会导致 TypeError。",
+      "error_tag": "awaitable 判断",
+      "variant_group": "async_db_awaitable"
+    },
+    {
+      "kp": "py.db.async_db",
+      "type": "single_choice",
+      "question": "下面关于异步数据库驱动中「游标」的说法，哪一项更合理？",
+      "options": [
+        "异步驱动没有游标概念",
+        "异步游标通常需要 await 来迭代或获取下一条记录",
+        "异步游标可以像普通迭代器一样同步 for 循环",
+        "异步游标只能返回字典，不能返回元组"
+      ],
+      "answer": 1,
+      "explanation": "异步驱动通常提供异步游标，取数据时需要 await；不能直接用同步 for 循环迭代；异步驱动与游标概念并不冲突；返回类型取决于驱动和配置，不是只能字典。",
+      "error_tag": "异步游标用法",
+      "variant_group": "async_db_cursor"
+    },
+    {
+      "kp": "py.db.async_db",
+      "type": "single_choice",
+      "question": "在异步代码中，如果忘记 await 一个数据库查询协程，最可能发生什么？",
+      "options": [
+        "查询会立即执行并返回结果",
+        "查询不会执行，并可能出现「协程从未被等待」的警告",
+        "程序会立即崩溃并抛出语法错误",
+        "数据库连接会被自动关闭"
+      ],
+      "answer": 1,
+      "explanation": "未 await 的协程不会运行，Python 可能发出 RuntimeWarning；不会立即执行；通常是运行时警告而非语法错误；连接也不会因此自动关闭。",
+      "error_tag": "协程未等待",
+      "variant_group": "async_db_await_basic"
+    },
+    {
+      "kp": "py.db.alembic",
+      "type": "single_choice",
+      "question": "在使用 Alembic 管理数据库迁移时，下列哪一项最准确地描述了 revision 与 database schema 之间的关系？",
+      "options": [
+        "每个 revision 文件描述从一个 schema 状态到下一个状态的变化，Alembic 按 revision 链依次应用",
+        "每个 revision 文件保存数据库当前完整的建表 SQL，应用时整库重建",
+        "revision 只是给数据库表打的标签，实际 schema 变化由 SQLAlchemy 模型自动同步",
+        "revision 与 schema 无关，仅用于记录开发者提交代码的时间顺序"
+      ],
+      "answer": 0,
+      "explanation": "Alembic 的迁移是增量的：每个 revision 记录相对上一版本的变更（upgrade/downgrade），通过 down_revision 串成链，按顺序应用。它不会保存整库 SQL，也不会自动同步模型。",
+      "error_tag": "概念混淆",
+      "variant_group": "alembic_revision_basics"
+    },
+    {
+      "kp": "py.db.alembic",
+      "type": "single_choice",
+      "question": "执行 `alembic revision --autogenerate -m \"add email column\"` 后，生成的文件里 upgrade() 函数最可能包含什么？",
+      "options": [
+        "op.add_column('users', sa.Column('email', sa.String(length=255), nullable=True))",
+        "op.create_table('email', sa.Column('id', sa.Integer, primary_key=True))",
+        "op.execute('ALTER TABLE users ADD email TEXT')",
+        "op.drop_column('users', 'email')"
+      ],
+      "answer": 0,
+      "explanation": "autogenerate 会对比模型与数据库，为新增列生成 op.add_column 调用，并给出对应的 sa.Column 定义。其他选项与「新增 email 列」这一意图不符。",
+      "error_tag": "概念混淆",
+      "variant_group": "alembic_autogenerate"
+    },
+    {
+      "kp": "py.db.alembic",
+      "type": "multi_choice",
+      "question": "关于 Alembic 的 revision 文件结构，下列哪些说法是正确的？（多选）",
+      "options": [
+        "文件通常包含 revision、down_revision、branch_labels、depends_on 等模块级变量",
+        "upgrade() 和 downgrade() 是两个必须定义的函数",
+        "revision 标识符在项目内必须全局唯一",
+        "revision 文件一旦生成就绝不允许手工修改"
+      ],
+      "answer": [
+        0,
+        1,
+        2
+      ],
+      "explanation": "revision 文件包含这几个模块级变量和 upgrade/downgrade 函数；revision 标识符需唯一。文件在生成后经常需要人工调整（例如重命名、复杂数据迁移），因此第四条错误。",
+      "error_tag": "概念混淆",
+      "variant_group": "alembic_revision_basics"
+    },
+    {
+      "kp": "py.db.alembic",
+      "type": "multi_choice",
+      "question": "下列哪些操作在使用 Alembic autogenerate 时需要人工审查或补充？（多选）",
+      "options": [
+        "列的重命名",
+        "列类型的变更（可能涉及数据转换）",
+        "带有 server_default 的列的新增",
+        "纯粹新增一张空表"
+      ],
+      "answer": [
+        0,
+        1,
+        2
+      ],
+      "explanation": "重命名会被识别成删+建，类型变更需要处理数据兼容，server_default 往往需要手工确认默认值表达式；单纯新增空表一般 autogenerate 可正确处理。",
+      "error_tag": "边界错误",
+      "variant_group": "alembic_autogenerate"
+    },
+    {
+      "kp": "py.db.alembic",
+      "type": "multi_choice",
+      "question": "关于 Alembic 分支（branch）与合并（merge），下列说法正确的是？（多选）",
+      "options": [
+        "当两个 revision 共用同一个 down_revision 时，会产生分支",
+        "alembic merge 可以创建一个新的 revision 把多个分支汇合",
+        "分支存在时直接 upgrade head 可能报错，提示有多个 head",
+        "分支只能通过删除其中一个 revision 来解决"
+      ],
+      "answer": [
+        0,
+        1,
+        2
+      ],
+      "explanation": "共用父节点即分支，merge 用于合并分支，多 head 时 upgrade head 会提示歧义。分支可通过 merge 解决，不一定要删除 revision。",
+      "error_tag": "概念混淆",
+      "variant_group": "alembic_branching"
+    },
+    {
+      "kp": "py.db.alembic",
+      "type": "fill_blank",
+      "question": "在 Alembic 迁移脚本中，给已有表 users 增加一个名为 age 的整型列，通常写作 op.______('users', sa.Column('age', sa.Integer(), nullable=True))。请填写下划线处的函数名。",
+      "options": [],
+      "answer": [
+        "add_column"
+      ],
+      "explanation": "Alembic 的操作接口中，向已有表添加列使用 op.add_column(table_name, column)。",
+      "error_tag": "记忆缺失",
+      "variant_group": "alembic_op_api"
+    },
+    {
+      "kp": "py.db.alembic",
+      "type": "fill_blank",
+      "question": "在 Alembic 的 revision 文件中，用来指向父 revision 的模块级变量名是 ______。",
+      "options": [],
+      "answer": [
+        "down_revision"
+      ],
+      "explanation": "down_revision 记录父 revision 标识符，Alembic 用它构建迁移链；首条迁移的 down_revision 为 None。",
+      "error_tag": "记忆缺失",
+      "variant_group": "alembic_revision_basics"
+    },
+    {
+      "kp": "py.db.alembic",
+      "type": "fill_blank",
+      "question": "当模型与数据库结构发生变化、需要生成一个新迁移文件时，常用命令是：alembic ______ --autogenerate -m \"描述信息\"。请填写下划线处的子命令。",
+      "options": [],
+      "answer": [
+        "revision"
+      ],
+      "explanation": "`alembic revision --autogenerate` 会对比 target_metadata 与数据库并生成新的迁移文件。",
+      "error_tag": "记忆缺失",
+      "variant_group": "alembic_cli_commands"
+    },
+    {
+      "kp": "py.db.alembic",
+      "type": "code_reading",
+      "question": "阅读以下迁移脚本片段，回答问题：\n\nrevision = 'a1b2c3'\ndown_revision = 'f9e8d7'\n\ndef upgrade():\n    op.drop_column('users', 'nickname')\n\ndef downgrade():\n    op.add_column('users', sa.Column('nickname', sa.String(50), nullable=True))\n\n若当前数据库版本为 f9e8d7，执行 `alembic upgrade a1b2c3` 后，数据库的版本和 users 表结构分别发生了什么变化？",
+      "options": [],
+      "answer": "版本号更新为 a1b2c3，users 表中的 nickname 列被删除。",
+      "explanation": "upgrade 中执行 drop_column，且当前版本正好是其父版本 f9e8d7，因此应用该迁移后 nickname 列被删除，alembic_version 记录更新为 a1b2c3。",
+      "error_tag": "概念混淆",
+      "variant_group": "alembic_upgrade_downgrade"
+    },
+    {
+      "kp": "py.db.alembic",
+      "type": "code_reading",
+      "question": "阅读以下 migration 片段的执行结果：\n\ndef upgrade():\n    op.create_table(\n        'products',\n        sa.Column('id', sa.Integer, primary_key=True),\n        sa.Column('name', sa.String(100), nullable=False),\n    )\n\n若数据库中已存在一张名为 products 的表（结构相同），此时执行该迁移最可能出现什么结果？（提示：考虑 Alembic/SQL 层的行为）",
+      "options": [],
+      "answer": "会因尝试创建已存在的表而报错（如表已存在），迁移中断，数据库版本不会前进到该 revision。",
+      "explanation": "op.create_table 生成 CREATE TABLE 语句，若表已存在会被底层数据库拒绝；Alembic 事务回滚，alembic_version 不会更新，迁移停在原版本。若确实需要，应使用 op.create_table 前先检查或在迁移中省略。",
+      "error_tag": "边界错误",
+      "variant_group": "alembic_op_api"
+    },
+    {
+      "kp": "py.db.alembic",
+      "type": "scenario",
+      "question": "团队在多人协作中，A 同学和 B 同学基于同一个 revision 同时各自生成了新迁移，导致本地出现两个 head。合并代码后执行 `alembic upgrade head` 报错提示有多个 head。请描述应当如何解决，以及为什么会产生这个问题。",
+      "options": [],
+      "answer": null,
+      "explanation": "两人基于同一父 revision 各自生成新 revision，构成两条分支，因此有两个 head。`alembic upgrade head` 无法确定目标而报错。解决方式是使用 `alembic merge -m \"merge\"` 生成一个合并 revision（其 down_revision 指向两个 head），把分支汇合；之后再 upgrade 即可。",
+      "error_tag": "概念混淆",
+      "variant_group": "alembic_branching",
+      "required_keywords": [
+        "head",
+        "revision",
+        "分支",
+        "alembic merge",
+        "down_revision"
+      ]
+    },
+    {
+      "kp": "py.db.alembic",
+      "type": "scenario",
+      "question": "线上数据库已经用 SQL 手工建好，现在要正式接入 Alembic 管理，希望不重建表、不执行已有迁移，只让库中记录当前应处的 revision。你会使用什么命令，为什么？",
+      "options": [],
+      "answer": null,
+      "explanation": "使用 `alembic stamp <revision>` 只更新 alembic_version 表中的版本记录，不会运行 upgrade()。这样现有数据库被登记为已处于目标版本，之后再生成的迁移可正常增量应用。若直接 upgrade 会重新执行迁移，可能与已有结构冲突。",
+      "error_tag": "概念混淆",
+      "variant_group": "alembic_cli_commands",
+      "required_keywords": [
+        "版本",
+        "迁移"
+      ]
+    },
+    {
+      "kp": "py.db.alembic",
+      "type": "single_choice",
+      "question": "关于 Alembic 的 downgrade() 函数，下列说法正确的是？",
+      "options": [
+        "downgrade() 应实现 upgrade() 的逆操作，用于回退到上一个 revision",
+        "downgrade() 是自动生成的，开发者无需关心其内容是否正确",
+        "downgrade() 只能删除整个数据库，无法做细粒度回退",
+        "downgrade() 在 upgrade() 执行失败时会被自动调用"
+      ],
+      "answer": 0,
+      "explanation": "downgrade() 是 upgrade() 的逆操作。autogenerate 对某些操作（如重命名、类型变更）可能生成不完整的 downgrade，需要人工检查；它也不会在 upgrade 失败时自动执行。",
+      "error_tag": "概念混淆",
+      "variant_group": "alembic_upgrade_downgrade"
+    },
+    {
+      "kp": "py.db.alembic",
+      "type": "single_choice",
+      "question": "下列关于 Alembic 迁移链的说法，哪一项是正确的？",
+      "options": [
+        "revision 文件中的 down_revision 指向父 revision，多个分支可以通过 merge revision 合并",
+        "每个 revision 只能有一个子 revision，不允许出现分支",
+        "down_revision 必须为 None，表示这是初始迁移",
+        "revision 标识符必须与文件名完全相同，否则无法识别"
+      ],
+      "answer": 0,
+      "explanation": "down_revision 指向父节点，多个子节点会产生分支（branch），可用 `alembic merge` 生成合并节点。并非所有 revision 的 down_revision 都为 None，只有首个迁移才是。",
+      "error_tag": "概念混淆",
+      "variant_group": "alembic_revision_basics"
+    },
+    {
+      "kp": "py.db.alembic",
+      "type": "single_choice",
+      "question": "在 Alembic 中要撤销最近一次迁移，应使用哪个命令？",
+      "options": [
+        "alembic downgrade -1",
+        "alembic upgrade -1",
+        "alembic rollback -1",
+        "alembic revision --undo"
+      ],
+      "answer": 0,
+      "explanation": "`alembic downgrade -1` 表示回退一个 revision。Alembic 没有 rollback 或 revision --undo 这样的命令，upgrade 用于前进而不是回退。",
+      "error_tag": "记忆缺失",
+      "variant_group": "alembic_cli_commands"
+    },
+    {
+      "kp": "py.db.alembic",
+      "type": "single_choice",
+      "question": "关于 `alembic upgrade head` 与 `alembic upgrade <revision>` 的区别，下列描述正确的是？",
+      "options": [
+        "head 表示迁移链的最新版本，指定具体 revision 则升级到该版本为止",
+        "head 只能用于首次初始化，之后再升级必须指定具体 revision",
+        "两者完全等价，只是写法不同",
+        "指定具体 revision 会忽略中间所有 revision，直接跳到目标"
+      ],
+      "answer": 0,
+      "explanation": "head 是迁移链末端的别名；指定 revision 时 Alembic 会按顺序执行中间所有尚未应用的迁移直到该 revision。它不会跳过中间步骤。",
+      "error_tag": "概念混淆",
+      "variant_group": "alembic_cli_commands"
+    },
+    {
+      "kp": "py.db.alembic",
+      "type": "single_choice",
+      "question": "在迁移脚本中，下面哪种做法最符合 Alembic 的推荐实践？",
+      "options": [
+        "在 upgrade() 中使用 op.alter_column 修改 nullable，并显式提供 existing_type 等上下文参数",
+        "直接在 upgrade() 里连接数据库执行任意 SQL，绕过 op 接口",
+        "把模型定义复制到迁移文件中，运行时 import 模型以获得最新定义",
+        "在 upgrade() 中调用 metadata.create_all(engine) 来同步所有表"
+      ],
+      "answer": 0,
+      "explanation": "Alembic 推荐使用 op.* 接口编写迁移，必要时对 alter_column 提供 existing_type/existing_nullable 等。直接执行任意 SQL、import 模型或 create_all 都会破坏迁移的可预测性和可移植性。",
+      "error_tag": "概念混淆",
+      "variant_group": "alembic_migration_practice"
+    },
+    {
+      "kp": "py.db.alembic",
+      "type": "single_choice",
+      "question": "关于 Alembic 的 `alembic stamp` 命令，下列哪项描述最准确？",
+      "options": [
+        "把数据库的版本标记设置为指定 revision，但不执行任何迁移操作",
+        "把当前 revision 的迁移内容重新执行一遍以校验一致性",
+        "把 revision 文件中的代码固化（stamp）为只读，防止误修改",
+        "把 revision 标识符重命名为时间戳格式"
+      ],
+      "answer": 0,
+      "explanation": "stamp 仅修改 alembic_version 表中的版本号，不运行迁移逻辑，常用于把已存在的数据库纳入 Alembic 管理或修正版本记录。",
+      "error_tag": "概念混淆",
+      "variant_group": "alembic_cli_commands"
+    },
+    {
+      "kp": "py.db.alembic",
+      "type": "single_choice",
+      "question": "在 Alembic 的 env.py 中，target_metadata 的作用是什么？",
+      "options": [
+        "指向 SQLAlchemy 的 MetaData 对象，autogenerate 时用它和数据库当前状态做对比",
+        "指定数据库连接字符串，供迁移时使用",
+        "记录所有已执行过的 revision 列表",
+        "定义迁移文件生成的目录路径"
+      ],
+      "answer": 0,
+      "explanation": "target_metadata 让 autogenerate 知道代码中的模型结构，从而与数据库进行 diff。连接串在 alembic.ini 或 env.py 的 engine 配置中，已执行 revision 记录在 alembic_version 表里。",
+      "error_tag": "概念混淆",
+      "variant_group": "alembic_env_config"
+    },
+    {
+      "kp": "py.db.alembic",
+      "type": "single_choice",
+      "question": "执行 `alembic revision --autogenerate` 时，下面哪种变更通常不会被自动检测到？",
+      "options": [
+        "表名的重命名（ORM 中看到的是删旧表加新表）",
+        "新增一个普通列",
+        "新增一张表",
+        "新加一个外键约束"
+      ],
+      "answer": 0,
+      "explanation": "autogenerate 无法可靠区分「重命名」和「删除+新建」，重命名会被识别为 drop_table + create_table，导致数据丢失风险，需要人工修改迁移脚本。",
+      "error_tag": "边界错误",
+      "variant_group": "alembic_autogenerate"
+    }
+  ]
+}

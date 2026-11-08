@@ -1,0 +1,635 @@
+{
+  "id": "s7u5l1",
+  "title": "s7u5l1",
+  "kps": [
+    "agent.multi.supervisor",
+    "agent.multi.hierarchical"
+  ],
+  "theory": "## agent.multi.supervisor\n\n# `agent.multi.supervisor` 教学讲义\n\n## 一句话直觉\n\n当你让 AI 只做一件事的时候，你只需要对一个 Agent 说一句话；但当任务需要「先查资料、再写代码、再验证、再汇报」时，单个 Agent 容易乱，于是我们引入一个 **Supervisor（监督者/主管）Agent** 来统筹其他子 Agent —— 这就是 `agent.multi.supervisor` 要解决的问题。\n\n---\n\n## 1. 为什么要学它：从单 Agent 到多 Agent\n\n一个单独的 Agent（智能体）本质上就是一个「会调用工具的 LLM 循环」：\n\n```\n用户 → LLM → 决定调用工具 → 观察结果 → LLM → ... → 最终回答\n```\n\n当任务变复杂，这个循环会遇到三个真实问题：\n\n1. **上下文爆炸**：一个 Agent 要记住所有历史，Prompt 会越来越长。\n2. **角色冲突**：同一个 Agent 既要当「研究员」又要当「程序员」又要当「审查员」，容易互相干扰。\n3. **无法并行**：串行执行，效率低。\n\n**多 Agent（Multi-Agent）** 的思路是：把任务拆给不同的专职 Agent。\n**Supervisor（监督者）** 则是这些 Agent 里的「组长」：它不亲自干重活，只负责**决定下一步交给谁**。\n\n---\n\n## 2. Supervisor 的核心结构\n\n一个最小可用的 Supervisor 由三部分组成：\n\n| 角色 | 职责 | 类比 |\n| --- | --- | --- |\n| **Supervisor** | 读当前状态，决定下一个该谁做 | 项目经理 |\n| **Workers（子 Agent）** | 各自完成自己的专长任务 | 研究员 / 编码员 / 审查员 |\n| **Shared State（共享状态）** | 存储所有消息和中间产物 | 项目文档 |\n\n执行流程可以画成一张「状态机」图：\n\n```\n       ┌────────────┐\n       │ Supervisor │◄──────┐\n       └─────┬──────┘       │\n             │ 路由决策        │ 完成后回到 Supervisor\n             ▼               │\n   ┌────┬────┬────┐          │\n   │ R  │ C  │ V  │──────────┘\n   └────┴────┴────┘\n   Researcher / Coder / Verifier\n```\n\n关键点：**Supervisor 本身永远不返回最终答案**，它只返回「下一个节点是谁」或「FINISH」。这是它与普通 Agent 最大的区别。\n\n---\n\n## 3. 用一个最小的 Python 例子理解路由\n\n先不引入任何框架，用纯 Python 模拟 Supervisor 的决策逻辑，这样你能看清本质：\n\n```python\n# 极简 Supervisor 决策函数：只做「下一步交给谁」的判断\nfrom typing import Literal\n\nNode = Literal[\"Researcher\", \"Coder\", \"Verifier\", \"FINISH\"]\n\ndef supervisor(state: dict) -> Node:\n    \"\"\"根据共享状态决定下一个执行者。\"\"\"\n    history = state[\"history\"]\n    if \"research\" not in state:\n        return \"Researcher\"      # 第一步：先查资料\n    if \"code\" not in state:\n        return \"Coder\"          # 第二步：再写代码\n    if \"verified\" not in state:\n        return \"Verifier\"      # 第三步：验证\n    return \"FINISH\"              # 全部完成\n```\n\n上面这段代码展示的就是 **Supervisor Pattern（监督者模式）** 的全部精髓：**用状态决定路由，而不是用 LLM 硬算**。真实工程中这一步通常由 LLM 完成（让模型返回下一个节点名），但逻辑完全一致。\n\n---\n\n## 4. 用 LLM 充当 Supervisor 的标准写法\n\n生产级的 Supervisor 通常让 LLM 输出结构化路由决策。下面是可运行骨架（伪 LLM，方便本地无 API 运行）：\n\n```python\nimport json\nfrom typing import Literal, TypedDict\n\nclass State(TypedDict):\n    task: str\n    history: list[dict]\n\n# 用一个假 LLM 代替真正的模型调用，方便离线测试\ndef fake_llm(prompt: str) -> str:\n    # 真实场景里这里换成 openai.chat.completions.create(...)\n    if \"research\" not in prompt:\n        return json.dumps({\"next\": \"Researcher\"})\n    if \"code\" not in prompt:\n        return json.dumps({\"next\": \"Coder\"})\n    return json.dumps({\"next\": \"FINISH\"})\n\ndef supervisor(state: State) -> str:\n    prompt = f\"\"\"你是主管 Agent。当前任务：{state['task']}\n历史：{state['history']}\n请从 [Researcher, Coder, FINISH] 中选下一个执行者，返回 JSON：{{\\\"next\\\": ...}}\"\"\"\n    raw = fake_llm(prompt)\n    return json.loads(raw)[\"next\"]\n\n# 模拟一轮调度\nstate = {\"task\": \"写一个冒泡排序并测试\", \"history\": []}\nprint(supervisor(state))                    # Researcher\nstate[\"history\"].append({\"agent\": \"Researcher\", \"out\": \"research\"})\nprint(supervisor(state))                    # Coder\nstate[\"history\"].append({\"agent\": \"Coder\", \"out\": \"code\"})\nprint(supervisor(state))                    # FINISH\n```\n\n输出：\n\n```\nResearcher\nCoder\nFINISH\n```\n\n**要点**：Supervisor 输出的是「下一个节点名」，调度循环由外部执行器（executor）负责。LLM 只做决策，不做副作用，这样系统才好测试。\n\n---\n\n## 5. 什么时候该用 Supervisor，什么时候不该用\n\n**该用**：\n- 任务可以被清晰拆成串行/并行子阶段（研究 → 编码 → 验证）。\n- 每个子阶段有明确专长（不同 Prompt / 不同工具）。\n- 需要可观测性（谁做了什么、卡在哪里）。\n\n**不该用**：\n- 单轮问答（一问一答）—— 引入 Supervisor 只会让延迟翻倍。\n- 子任务之间耦合度极高，每次都要交换大量上下文 —— 共享状态会变成瓶颈。\n- 无法定义清晰的终止条件 —— Supervisor 会陷入「再派一个 Agent 试试」的死循环。\n\n**记住一条工程原则**：Supervisor 的价值在 **编排（orchestration）**，不在 **智能**。如果任务本身不需要编排，就不要加它。\n\n---\n\n## 动手练习\n\n**任务**：在本地实现一个「3 节点 Supervisor」系统，要求：\n\n1. 定义三个子 Agent：`Researcher`、`Writer`、`Reviewer`，每个只用 `print` 模拟动作。\n2. 定义一个 `supervisor(state)` 函数，规则如下：\n   - 如果 `state` 里没有 `final_text`，派 `Researcher`；\n   - 如果 `state` 里有 `final_text` 但没有 `review`，派 `Reviewer`；\n   - 如果 `state` 里已有 `review` 且值为 `\"pass\"`，返回 `\"FINISH\"`；\n   - 否则派 `Writer` 重写。\n3. 写一个 `run(task)` 主循环，最多 10 轮，打印每轮 Supervisor 的决策和状态变化。\n4. **加分项**：如果 10 轮内没 FINISH，抛出异常，并打印当前 `state`。\n\n**验收标准**：\n- 打印顺序能清楚看出「谁被派了 → 做了什么 → 状态怎么变」。\n- 用同一份 `state` 字典贯穿全程，验证「共享状态」概念。\n\n完成后你就掌握了 Supervisor Pattern 的最小可用形态，之后换成真实 LLM 只需替换 `supervisor` 内部的判断逻辑。\n\n```python\nimport json\nfrom typing import Literal, TypedDict\n\nclass State(TypedDict, total=False):\n    task: str\n    research: str\n    draft: str\n    review: str\n    history: list[dict]\n\nNode = Literal[\"Researcher\", \"Writer\", \"Reviewer\", \"FINISH\"]\n\ndef supervisor(state: State) -> Node:\n    \"\"\"Supervisor 只做路由：读共享状态，返回下一个节点。\"\"\"\n    if \"research\" not in state:\n        return \"Researcher\"\n    if \"draft\" not in state:\n        return \"Writer\"\n    if \"review\" not in state:\n        return \"Reviewer\"\n    if state[\"review\"] == \"pass\":\n        return \"FINISH\"\n    # 未通过则让 Writer 重写\n    state.pop(\"review\", None)\n    state.pop(\"draft\", None)\n    return \"Writer\"\n\ndef researcher(state: State) -> None:\n    state[\"research\"] = f\"关于《{state['task']}》的调研要点\"\n    state[\"history\"].append({\"agent\": \"Researcher\", \"draft\": state[\"research\"]})\n\ndef writer(state: State) -> None:\n    state[\"draft\"] = f\"基于『{state['research']}』撰写的初稿\"\n    state[\"history\"].append({\"agent\": \"Writer\", \"draft\": state[\"draft\"]})\n\ndef reviewer(state: State) -> None:\n    # 简单规则：提到 '调研' 就通过，否则打回\n    state[\"review\"] = \"pass\" if \"调研\" in state[\"draft\"] else \"revise\"\n    state[\"history\"].append({\"agent\": \"Reviewer\", \"review\": state[\"review\"]})\n\nWORKERS = {\n    \"Researcher\": researcher,\n    \"Writer\": writer,\n    \"Reviewer\": reviewer,\n}\n\ndef run(task: str, max_rounds: int = 10) -> State:\n    state: State = {\"task\": task, \"history\": []}\n    for i in range(max_rounds):\n        nxt = supervisor(state)\n        print(f\"[Round {i + 1}] Supervisor -> {nxt}\")\n        if nxt == \"FINISH\":\n            print(\"任务完成。\")\n            return state\n        WORKERS[nxt](state)\n    raise RuntimeError(f\"超过 {max_rounds} 轮仍未完成，当前状态：{json.dumps(state, ensure_ascii=False)}\")\n\nif __name__ == \"__main__\":\n    final_state = run(\"写一篇关于多 Agent 的短文\")\n    print(\"最终状态 keys：\", list(final_state.keys()))\n```\n\n## agent.multi.hierarchical\n\n# 多智能体分层架构 (Hierarchical Multi-Agent Architecture)\n\n> 一句话直觉：当任务复杂到单个智能体「脑子不够用」时，就找一个「总指挥」智能体去调度一群「专家」智能体——这就是分层多智能体。\n\n本讲是 `agent.multi.hierarchical` 的入门，前置知识为空，所以我们会从「什么是智能体」讲起，逐步搭建一个可以运行的分层多智能体系统。\n\n---\n\n## 一、为什么要学「分层多智能体」？\n\n想象你要完成一个复杂任务：「帮我分析一家公司的财报并给出投资建议」。\n\n- 单个智能体（Agent，即能自主调用工具、思考并行动的 AI 程序）要把「抓数据 → 算指标 → 写分析 → 出建议」全干完，容易出现：**上下文过长、职责混乱、出错难追踪**。\n- 换成**分层结构**：一个**管理者智能体（Manager Agent）**只负责「拆解任务、分派、汇总」；下面挂 **研究员智能体（Researcher）**、**分析师智能体（Analyst）**、**撰写智能体（Writer）** 各司其职。\n\n这就是**分层多智能体（Hierarchical Multi-Agent）**：用树状的「管理者—工作者（Manager–Worker）」结构，把复杂任务分解到多个专职智能体上。\n\n**核心思想一句话**：*分工 + 分层调度 = 可扩展的复杂任务处理。*\n\n---\n\n## 二、三个关键概念\n\n### 1. 智能体（Agent）\n\n一个智能体至少包含：\n\n- **角色（Role）**：它是谁，负责什么。\n- **工具（Tool）**：它能调用什么函数（搜索、计算、写文件……）。\n- **消息（Message）**：它接收输入、输出结果。\n\n```python\n# 一个最小智能体：就是「角色 + 一个处理函数」\nclass SimpleAgent:\n    def __init__(self, name, role):\n        self.name = name\n        self.role = role\n\n    def run(self, task: str) -> str:\n        # 真实场景里这里会调用 LLM；此处用字符串模拟\n        return f\"[{self.name}] 处理任务: {task}\"\n```\n\n### 2. 分层（Hierarchical）\n\n把智能体组织成**树**：\n\n```\n              Manager\n             /   |    \\\n       Worker1 Worker2 Worker3\n```\n\n- **Manager** 只关心：*分解任务、选谁干、合并结果*。\n- **Worker** 只关心：*执行分配到的子任务*。\n\n好处：每一层职责单一，容易替换、容易加新 Worker。\n\n### 3. 任务分解（Task Decomposition）\n\n分层的关键动作就是**把一个大任务切成若干可并行的子任务**。这一步通常在 Manager 内完成。\n\n```python\ndef decompose(task: str) -> list[str]:\n    # 真实场景由 LLM 生成；这里用规则模拟\n    if \"财报\" in task:\n        return [\"收集财报数据\", \"计算关键财务比率\", \"撰写分析报告\"]\n    return [task]\n```\n\n---\n\n## 三、最小可运行的分层多智能体\n\n我们用一个 Manager + 三个 Worker 组成一个分层系统，跑通「任务分解 → 分派 → 执行 → 汇总」的完整链路。\n\n```python\nclass Worker(SimpleAgent):\n    def run(self, task: str) -> str:\n        # 每个 Worker 只管自己的那一段\n        return f\"[{self.name}/{self.role}] 完成 -> {task}\"\n\nclass ManagerAgent:\n    def __init__(self, workers):\n        self.workers = workers          # 下层工作者\n\n    def handle(self, task: str) -> str:\n        subtasks = decompose(task)      # 1. 分解\n        results = []\n        for i, sub in enumerate(subtasks):\n            worker = self.workers[i % len(self.workers)]  # 2. 分派\n            results.append(worker.run(sub))\n        return \"\\n\".join(results)       # 3. 汇总\n```\n\n这就是**分层多智能体的最小骨架**——它和工业界 LangGraph / CrewAI 里的 Hierarchical 模式思想完全一致，只是把「规则分解」换成「LLM 分解」、把「print」换成「真实工具调用」。\n\n---\n\n## 四、分层 vs 扁平：什么时候该用分层？\n\n| 场景 | 推荐结构 |\n|---|---|\n| 任务简单、步骤少 | 单智能体（Single Agent） |\n| 任务可拆成并列子任务 | 扁平多智能体（Flat Multi-Agent） |\n| 子任务本身还需要再拆 / 需要统一裁决 | **分层多智能体（Hierarchical）** |\n\n分层的两个典型收益：\n\n1. **上下文隔离**：Manager 不用看每个 Worker 的全部推理过程，只接收精炼后的结果。\n2. **可扩展**：新增一个 Worker，只需在 Manager 的分派表里注册，其它层不用动。\n\n---\n\n## 五、工程级要点（写进生产代码前务必记住）\n\n1. **Manager 是单点瓶颈**：它挂了整套系统就挂了，需要超时与降级。\n2. **避免无限递归**：Worker 如果想「再往下叫一个 Agent」，要给整棵调用树设**最大深度（max_depth）**。\n3. **结果合并（Result Aggregation）要显式**：Manager 必须定义清晰的合并策略（拼接？投票？再喂给 LLM 总结？），否则容易丢信息。\n4. **可观测性（Observability）**：每个 Agent 的输入输出都要打日志，否则分层一深就成大黑盒。\n\n```python\n# 加入 max_depth 防递归爆炸\ndef run_hierarchical(manager, task, depth=0, max_depth=3):\n    if depth >= max_depth:\n        raise RuntimeError(\"超过最大层级，停止递归\")\n    return manager.handle(task)\n```\n\n```python\n\"\"\"分层多智能体最小可运行示例。\"\"\"\n\n# ---------- 1. 基础智能体 ----------\nclass SimpleAgent:\n    def __init__(self, name: str, role: str):\n        self.name = name\n        self.role = role\n\n    def run(self, task: str) -> str:\n        return f\"[{self.name}] 处理任务: {task}\"\n\n\n# ---------- 2. 工作者：只执行分配到的子任务 ----------\nclass Worker(SimpleAgent):\n    def run(self, task: str) -> str:\n        return f\"[{self.name}/{self.role}] 完成 -> {task}\"\n\n\n# ---------- 3. 任务分解（真实场景由 LLM 生成） ----------\ndef decompose(task: str) -> list[str]:\n    if \"财报\" in task:\n        return [\"收集财报数据\", \"计算关键财务比率\", \"撰写分析报告\"]\n    return [task]\n\n\n# ---------- 4. 管理者：分解 + 分派 + 汇总 ----------\nclass ManagerAgent:\n    def __init__(self, workers: list[Worker]):\n        self.workers = workers\n\n    def handle(self, task: str) -> str:\n        subtasks = decompose(task)              # 1. 分解\n        results = []\n        for i, sub in enumerate(subtasks):\n            worker = self.workers[i % len(self.workers)]  # 2. 分派\n            results.append(worker.run(sub))\n        return \"\\n\".join(results)               # 3. 汇总\n\n\n# ---------- 5. 顶层入口：带最大深度保护 ----------\ndef run_hierarchical(manager: ManagerAgent, task: str,\n                     depth: int = 0, max_depth: int = 3) -> str:\n    if depth >= max_depth:\n        raise RuntimeError(\"超过最大层级，停止递归\")\n    return manager.handle(task)\n\n\n# ---------- 6. 组装并运行 ----------\nif __name__ == \"__main__\":\n    w1 = Worker(\"Researcher\", \"收集数据\")\n    w2 = Worker(\"Analyst\", \"分析数据\")\n    w3 = Worker(\"Writer\", \"撰写报告\")\n\n    manager = ManagerAgent([w1, w2, w3])\n    output = run_hierarchical(manager, \"帮我分析这家公司的财报并给出投资建议\")\n    print(output)\n```\n",
+  "quiz": [
+    {
+      "kp": "agent.multi.supervisor",
+      "type": "single_choice",
+      "question": "在多智能体系统中，'supervisor'（监督者）模式的核心职责是什么？",
+      "options": [
+        "直接执行所有子任务，不分配给其他智能体",
+        "协调、调度多个子智能体，并根据任务结果决定下一步行动",
+        "仅负责记录日志，不参与任务决策",
+        "替代所有子智能体，独立完成整个任务"
+      ],
+      "answer": 1,
+      "explanation": "Supervisor 模式的核心是充当协调者/调度者，负责任务分解、分配给合适的子智能体，并根据返回结果决定后续步骤（继续、结束或重新分配）。它不直接包揽所有执行工作，也不仅仅是日志记录者。",
+      "error_tag": "概念理解错误",
+      "variant_group": "supervisor_role"
+    },
+    {
+      "kp": "agent.multi.supervisor",
+      "type": "single_choice",
+      "question": "以下关于 supervisor 与子智能体（worker）关系的描述，哪一项是正确的？",
+      "options": [
+        "Supervisor 必须知道每个子智能体的内部实现细节才能调度",
+        "子智能体之间必须直接互相通信，supervisor 不参与",
+        "Supervisor 根据任务需求选择子智能体，子智能体只负责处理被分配的子任务",
+        "Supervisor 只能调度一个子智能体，不能有多个"
+      ],
+      "answer": 2,
+      "explanation": "Supervisor 通过抽象接口调度子智能体，不需要了解其内部实现；子智能体专注于被分配的子任务。子智能体之间通常不直接通信，而是通过 supervisor 协调。Supervisor 可以管理多个子智能体。",
+      "error_tag": "关系理解错误",
+      "variant_group": "supervisor_worker_relation"
+    },
+    {
+      "kp": "agent.multi.supervisor",
+      "type": "single_choice",
+      "question": "在 supervisor 模式中，supervisor 通常如何知道有哪些子智能体可供调度？",
+      "options": [
+        "子智能体在运行时随机出现，supervisor 无法预知",
+        "Supervisor 维护一个子智能体列表或注册表，并根据任务需求从中选择",
+        "Supervisor 必须遍历整个文件系统查找子智能体",
+        "子智能体通过蓝牙自动连接 supervisor"
+      ],
+      "answer": 1,
+      "explanation": "在实际实现中，supervisor 通常维护一个已知子智能体的列表或注册表，包含每个子智能体的名称、能力描述等信息，从而根据任务需求选择合适的子智能体。子智能体不会随机出现，也不需要遍历文件系统或蓝牙连接。",
+      "error_tag": "实现机制误解",
+      "variant_group": "agent_registry"
+    },
+    {
+      "kp": "agent.multi.supervisor",
+      "type": "single_choice",
+      "question": "以下关于 supervisor 模式中'消息传递'的描述，哪一项是正确的？",
+      "options": [
+        "消息只能从 supervisor 传给子智能体，不能反向传递",
+        "消息可以在 supervisor 和子智能体之间双向传递，用于任务分配和结果返回",
+        "消息传递必须使用 HTTP 协议，不能用其他方式",
+        "消息传递只能传递纯文本，不能传递结构化数据"
+      ],
+      "answer": 1,
+      "explanation": "在 supervisor 模式中，消息传递通常是双向的：supervisor 向子智能体发送任务指令，子智能体向 supervisor 返回结果或状态。消息传递的实现方式多样，不限于 HTTP，也可以传递结构化数据。",
+      "error_tag": "通信机制误解",
+      "variant_group": "message_passing"
+    },
+    {
+      "kp": "agent.multi.supervisor",
+      "type": "single_choice",
+      "question": "在设计 supervisor 多智能体系统时，以下哪种做法有助于提高系统的可维护性？",
+      "options": [
+        "将所有子智能体的逻辑都写在 supervisor 内部",
+        "为每个子智能体定义清晰的职责边界和输入输出接口",
+        "让所有子智能体共享同一个全局变量，随意修改",
+        "避免为子智能体编写任何文档"
+      ],
+      "answer": 1,
+      "explanation": "为每个子智能体定义清晰的职责边界和输入输出接口，有助于降低耦合、提高可维护性和可测试性。把所有逻辑塞进 supervisor、共享全局变量随意修改、不写文档都会降低可维护性。",
+      "error_tag": "设计原则错误",
+      "variant_group": "maintainability"
+    },
+    {
+      "kp": "agent.multi.supervisor",
+      "type": "single_choice",
+      "question": "在 supervisor 模式中，'人工介入'（human-in-the-loop）通常如何实现？",
+      "options": [
+        "禁止人类参与任何决策",
+        "在 supervisor 决定下一步之前，允许人类审查或修改决策",
+        "让人类直接替代所有子智能体",
+        "人类只能作为子智能体之一，不能审查 supervisor"
+      ],
+      "answer": 1,
+      "explanation": "在 supervisor 模式中，人工介入通常通过在 supervisor 决策点之前或之后插入人工审查/确认环节来实现，人类可以批准、修改或拒绝 supervisor 的下一步决定。人类不一定替代子智能体，也可以参与审查。",
+      "error_tag": "人机协作理解错误",
+      "variant_group": "human_in_the_loop"
+    },
+    {
+      "kp": "agent.multi.supervisor",
+      "type": "single_choice",
+      "question": "以下哪种说法最能体现 supervisor 模式中 supervisor 的'决策'本质？",
+      "options": [
+        "Supervisor 的决策是完全随机的，没有依据",
+        "Supervisor 根据当前状态、任务目标和子智能体能力，选择最优的下一步行动",
+        "Supervisor 的决策只依赖于第一次输入，后续不再改变",
+        "Supervisor 的决策必须由外部程序硬编码，不能动态调整"
+      ],
+      "answer": 1,
+      "explanation": "Supervisor 的决策本质上是基于当前状态、任务目标和可用子智能体能力，动态选择下一步行动（调用哪个子智能体或结束）。它不是随机的，也不局限于第一次输入，通常可以动态调整。",
+      "error_tag": "决策机制理解错误",
+      "variant_group": "decision_making"
+    },
+    {
+      "kp": "agent.multi.supervisor",
+      "type": "single_choice",
+      "question": "在 supervisor 多智能体系统中，如果子智能体 A 和子智能体 B 需要共享一些中间结果，推荐的做法是什么？",
+      "options": [
+        "让 A 直接修改 B 的内部变量",
+        "通过 supervisor 或共享状态来传递中间结果",
+        "让 A 和 B 通过全局变量直接通信，绕过 supervisor",
+        "禁止 A 和 B 共享任何信息"
+      ],
+      "answer": 1,
+      "explanation": "在 supervisor 模式中，推荐通过 supervisor 或共享状态来传递中间结果，这样保持协调中心化、便于追踪和调试。直接修改其他智能体内部变量或绕过 supervisor 使用全局变量会破坏封装和可维护性。",
+      "error_tag": "协作方式错误",
+      "variant_group": "result_sharing"
+    },
+    {
+      "kp": "agent.multi.supervisor",
+      "type": "single_choice",
+      "question": "以下关于 supervisor 模式中'终止条件'的描述，哪一项是正确的？",
+      "options": [
+        "终止条件只能由子智能体决定，supervisor 无权决定",
+        "终止条件可以由 supervisor 根据任务完成情况、步数上限或外部信号来决定",
+        "终止条件必须硬编码在操作系统层面",
+        "Supervisor 模式不需要终止条件，可以无限运行"
+      ],
+      "answer": 1,
+      "explanation": "终止条件通常由 supervisor 根据任务是否完成、是否达到最大步数、是否收到外部停止信号等来决定。子智能体也可以报告完成，但最终决定权通常在 supervisor。无限运行不是合理设计。",
+      "error_tag": "终止条件理解错误",
+      "variant_group": "termination_condition"
+    },
+    {
+      "kp": "agent.multi.supervisor",
+      "type": "single_choice",
+      "question": "在 supervisor 模式中，如果 supervisor 本身是一个基于大语言模型的智能体，它通常通过什么方式来决定下一步？",
+      "options": [
+        "通过查表法，预先列出所有可能的决策",
+        "通过生成结构化的输出（如函数调用或路由指令）来表达下一步决策",
+        "通过随机数生成器选择",
+        "通过读取子智能体的源代码"
+      ],
+      "answer": 1,
+      "explanation": "基于大语言模型的 supervisor 通常通过生成结构化输出（如工具调用、JSON 路由指令等）来表达下一步决策，而不是查表、随机选择或读取源代码。",
+      "error_tag": "实现方式误解",
+      "variant_group": "llm_supervisor"
+    },
+    {
+      "kp": "agent.multi.supervisor",
+      "type": "single_choice",
+      "question": "以下哪种情况最可能导致 supervisor 模式效率低下？",
+      "options": [
+        "Supervisor 根据任务需求动态选择合适的子智能体",
+        "Supervisor 在每一步都调用所有子智能体，然后从中挑选结果",
+        "Supervisor 设置合理的终止条件",
+        "Supervisor 维护清晰的子智能体注册表"
+      ],
+      "answer": 1,
+      "explanation": "如果 supervisor 在每一步都调用所有子智能体再挑选结果，会造成大量不必要的计算和资源浪费，导致效率低下。动态选择、合理终止条件和清晰注册表都是提高效率的做法。",
+      "error_tag": "性能问题",
+      "variant_group": "efficiency"
+    },
+    {
+      "kp": "agent.multi.supervisor",
+      "type": "single_choice",
+      "question": "在 supervisor 多智能体系统中，'路由'决策通常基于哪些信息？",
+      "options": [
+        "仅基于子智能体的名称长度",
+        "基于当前状态、任务目标、子智能体能力描述以及历史交互信息",
+        "仅基于随机数",
+        "仅基于系统的当前时间"
+      ],
+      "answer": 1,
+      "explanation": "路由决策通常综合考虑当前状态、任务目标、子智能体的能力描述以及历史交互信息，选择最合适的下一步。仅基于名称长度、随机数或时间都不是合理的路由依据。",
+      "error_tag": "路由依据错误",
+      "variant_group": "routing_criteria"
+    },
+    {
+      "kp": "agent.multi.supervisor",
+      "type": "single_choice",
+      "question": "在使用 supervisor 模式构建多智能体系统时，通常需要一个'路由'机制。这个路由机制的作用是什么？",
+      "options": [
+        "决定网络数据包走哪条物理线路",
+        "根据当前状态和任务需求，决定下一个被调用的智能体是谁",
+        "对子智能体的输出进行加密",
+        "自动生成子智能体的源代码"
+      ],
+      "answer": 1,
+      "explanation": "在 supervisor 模式中，路由机制负责根据当前对话状态、任务进展或 supervisor 的决策，选择下一个要调用的智能体（或结束流程）。它与网络路由无关，也不涉及加密或代码生成。",
+      "error_tag": "概念混淆",
+      "variant_group": "routing_mechanism"
+    },
+    {
+      "kp": "agent.multi.supervisor",
+      "type": "single_choice",
+      "question": "以下哪种场景最适合使用 supervisor 多智能体模式？",
+      "options": [
+        "单个简单的数学计算任务",
+        "需要多个专业领域智能体协作完成的复杂任务，且需要统一协调",
+        "仅需要调用一次外部 API 的场景",
+        "纯静态文本格式化任务"
+      ],
+      "answer": 1,
+      "explanation": "Supervisor 模式适用于需要多个专业智能体协作、且需要统一协调调度的复杂任务。简单计算、单次 API 调用和纯静态格式化通常不需要多智能体协调，用单一函数或智能体即可。",
+      "error_tag": "场景误用",
+      "variant_group": "supervisor_use_case"
+    },
+    {
+      "kp": "agent.multi.supervisor",
+      "type": "single_choice",
+      "question": "在 supervisor 模式中，如果 supervisor 决定将任务分配给某个子智能体，子智能体完成任务后，通常接下来会发生什么？",
+      "options": [
+        "子智能体直接结束整个流程",
+        "子智能体将结果返回给 supervisor，由 supervisor 决定下一步",
+        "子智能体自动变成新的 supervisor",
+        "子智能体直接调用其他所有子智能体"
+      ],
+      "answer": 1,
+      "explanation": "子智能体完成被分配的任务后，通常将结果返回给 supervisor，由 supervisor 根据结果决定是继续分配、结束流程还是调整策略。子智能体不会自动结束整个流程或变成 supervisor。",
+      "error_tag": "流程理解错误",
+      "variant_group": "supervisor_flow"
+    },
+    {
+      "kp": "agent.multi.supervisor",
+      "type": "single_choice",
+      "question": "以下关于 supervisor 模式中'状态'（state）的描述，哪一项最准确？",
+      "options": [
+        "状态只保存在 supervisor 中，子智能体无法访问",
+        "状态用于在 supervisor 和子智能体之间传递上下文和中间结果",
+        "状态一旦创建就不能修改",
+        "状态只能存储字符串，不能存储列表或字典"
+      ],
+      "answer": 1,
+      "explanation": "在多智能体系统中，状态通常用于在 supervisor 和子智能体之间共享上下文、消息历史和中间结果。状态可以被读写和更新，也可以包含多种数据类型。子智能体通常可以访问状态中与其任务相关的部分。",
+      "error_tag": "状态理解错误",
+      "variant_group": "state_handling"
+    },
+    {
+      "kp": "agent.multi.supervisor",
+      "type": "single_choice",
+      "question": "在设计 supervisor 多智能体系统时，以下哪种做法有助于避免无限循环？",
+      "options": [
+        "让 supervisor 永远不结束，保持运行",
+        "设置最大迭代次数或明确的终止条件",
+        "禁止子智能体返回任何结果",
+        "让所有子智能体都返回相同的内容"
+      ],
+      "answer": 1,
+      "explanation": "设置最大迭代次数或明确的终止条件（如任务完成、达到步数上限）是避免 supervisor 无限循环的常见做法。永远运行、禁止返回结果或返回相同内容都不是合理的解决方案。",
+      "error_tag": "设计缺陷",
+      "variant_group": "loop_prevention"
+    },
+    {
+      "kp": "agent.multi.supervisor",
+      "type": "single_choice",
+      "question": "Supervisor 模式与'流水线'（pipeline）模式的主要区别是什么？",
+      "options": [
+        "Supervisor 模式中智能体按固定顺序执行，流水线模式是动态的",
+        "Supervisor 模式由一个中心协调者动态决定调用哪个智能体，流水线模式按预定义顺序执行",
+        "两者完全相同，只是名称不同",
+        "流水线模式必须使用 supervisor，supervisor 模式不需要流水线"
+      ],
+      "answer": 1,
+      "explanation": "Supervisor 模式的特点是有一个中心协调者（supervisor）动态决定下一步调用哪个智能体；流水线模式则按预先定义好的固定顺序依次执行各步骤。两者在控制流和灵活性上有明显区别。",
+      "error_tag": "模式混淆",
+      "variant_group": "supervisor_vs_pipeline"
+    },
+    {
+      "kp": "agent.multi.supervisor",
+      "type": "single_choice",
+      "question": "在 supervisor 模式中，如果某个子智能体无法完成被分配的任务，合理的处理方式是什么？",
+      "options": [
+        "忽略该子智能体的失败，直接进入下一步",
+        "Supervisor 根据失败信息决定重新分配、更换子智能体或终止流程",
+        "让该子智能体无限重试直到成功",
+        "自动删除该子智能体并重新启动整个系统"
+      ],
+      "answer": 1,
+      "explanation": "当子智能体失败时，supervisor 应根据返回的错误信息或状态，决定是重新分配任务、换一个子智能体、调整策略还是终止流程。忽略失败、无限重试或重启整个系统都不是合理的默认处理方式。",
+      "error_tag": "错误处理不当",
+      "variant_group": "failure_handling"
+    },
+    {
+      "kp": "agent.multi.supervisor",
+      "type": "single_choice",
+      "question": "以下哪种情况说明使用 supervisor 多智能体模式可能过度设计？",
+      "options": [
+        "任务需要多个专业领域知识协作",
+        "任务需要动态决定调用顺序",
+        "任务非常简单，单个函数或单个智能体即可完成",
+        "任务需要多个智能体并行处理不同子任务"
+      ],
+      "answer": 2,
+      "explanation": "如果任务非常简单，单个函数或单个智能体就能完成，引入 supervisor 多智能体模式会增加不必要的复杂度和开销，属于过度设计。其他选项都是 supervisor 模式的合理应用场景。",
+      "error_tag": "过度设计",
+      "variant_group": "over_engineering"
+    },
+    {
+      "kp": "agent.multi.hierarchical",
+      "type": "single_choice",
+      "question": "在一个多层级的智能体（Agent）系统中，顶层 Agent 的主要职责通常是什么？",
+      "options": [
+        "直接执行所有底层工具调用",
+        "负责将任务分解并分派给下层子 Agent，同时汇总结果",
+        "只负责记录日志，不参与决策",
+        "替代所有子 Agent 完成推理"
+      ],
+      "answer": 1,
+      "explanation": "分层多智能体结构中，顶层 Agent 通常承担任务分解、协调分派和结果汇总的职责，而非直接执行所有底层操作。",
+      "error_tag": "概念混淆",
+      "variant_group": "hierarchical_role"
+    },
+    {
+      "kp": "agent.multi.hierarchical",
+      "type": "single_choice",
+      "question": "分层多智能体架构相较于扁平（单层）多智能体架构，最突出的优势是什么？",
+      "options": [
+        "所有 Agent 之间必须两两通信，效率最高",
+        "通过层级划分降低协调复杂度，便于管理大规模 Agent 协作",
+        "完全不需要任何通信机制",
+        "每个 Agent 都必须具备完全相同的技能"
+      ],
+      "answer": 1,
+      "explanation": "分层结构通过将协调职责分层，减少了扁平结构中任意两两通信带来的复杂度，适合大规模协作。",
+      "error_tag": "概念混淆",
+      "variant_group": "hierarchical_advantage"
+    },
+    {
+      "kp": "agent.multi.hierarchical",
+      "type": "single_choice",
+      "question": "下列哪项最能体现分层多智能体系统中的「控制流」思想？",
+      "options": [
+        "所有 Agent 同时独立运行且互不干涉",
+        "高层决定总体目标，低层按分派执行并向高层反馈",
+        "只有底层 Agent 具有决策能力",
+        "控制流与 Agent 层级完全无关"
+      ],
+      "answer": 1,
+      "explanation": "分层控制流体现为高层定目标、低层执行反馈，形成自上而下与自下而上的结合。",
+      "error_tag": "概念混淆",
+      "variant_group": "hierarchical_control"
+    },
+    {
+      "kp": "agent.multi.hierarchical",
+      "type": "multi_choice",
+      "question": "关于分层多智能体架构，下列哪些说法是正确的？（多选）",
+      "options": [
+        "它通过层级组织来降低协调复杂度",
+        "顶层 Agent 常负责任务分解与结果汇总",
+        "它要求所有 Agent 必须两两直接通信",
+        "它可以支持大规模 Agent 的协作",
+        "它天然消除了所有通信开销"
+      ],
+      "answer": [
+        0,
+        1,
+        3
+      ],
+      "explanation": "分层架构降低协调复杂度、支持大规模协作，顶层常负责分解与汇总；但不需要两两全连接，也不会消除通信开销。",
+      "error_tag": "概念混淆",
+      "variant_group": "hierarchical_basics"
+    },
+    {
+      "kp": "agent.multi.hierarchical",
+      "type": "multi_choice",
+      "question": "设计分层多智能体系统时，需要考虑哪些关键问题？（多选）",
+      "options": [
+        "如何划分层级与职责",
+        "如何在层间传递消息与控制流",
+        "如何避免所有 Agent 共享同一份状态导致冲突",
+        "如何让所有 Agent 使用完全相同的实现代码",
+        "如何设计异常上报与重试机制"
+      ],
+      "answer": [
+        0,
+        1,
+        4
+      ],
+      "explanation": "层级划分、层间通信与控制流、异常上报与重试是设计要点；共享状态是否需要隔离因系统而异，而强制相同实现代码并非必要。",
+      "error_tag": "记忆缺失",
+      "variant_group": "hierarchical_design"
+    },
+    {
+      "kp": "agent.multi.hierarchical",
+      "type": "multi_choice",
+      "question": "下列哪些情形可能表明分层多智能体系统设计存在问题？（多选）",
+      "options": [
+        "任务在层间反复往返，始终无法下沉到执行的 Agent",
+        "上层把任务委派后就完全失去跟踪，导致无法汇总",
+        "系统按任务抽象层次清晰划分了职责",
+        "大量子任务被无限循环重试且无上报机制",
+        "每层都有明确的职责边界"
+      ],
+      "answer": [
+        0,
+        1,
+        3
+      ],
+      "explanation": "任务反复往返、委派后无跟踪、无限重试无上报，都是设计缺陷的信号；清晰分层和明确职责是良好设计，不是问题。",
+      "error_tag": "边界错误",
+      "variant_group": "hierarchical_antipattern"
+    },
+    {
+      "kp": "agent.multi.hierarchical",
+      "type": "multi_choice",
+      "question": "关于分层多智能体中的「上报（escalation）」机制，下列哪些说法合理？（多选）",
+      "options": [
+        "当子任务超出当前层能力时可向上层上报",
+        "上报有助于避免任务被静默丢弃",
+        "上报机制应配合超时或重试策略",
+        "上报意味着所有任务都必须返回到顶层处理",
+        "上报后上层可决定转交、补充信息或降级处理"
+      ],
+      "answer": [
+        0,
+        1,
+        2,
+        4
+      ],
+      "explanation": "上报用于处理超能力或异常情况，避免静默丢弃，并常配合超时重试；但不需要所有任务都回到顶层。",
+      "error_tag": "概念混淆",
+      "variant_group": "hierarchical_escalation"
+    },
+    {
+      "kp": "agent.multi.hierarchical",
+      "type": "fill_blank",
+      "question": "在分层多智能体系统中，上层将子任务交给下层处理的过程通常称为________。",
+      "options": [],
+      "answer": [
+        "委派",
+        "delegation",
+        "任务委派"
+      ],
+      "explanation": "上层把子任务交给下层处理的过程一般称为委派（delegation）。",
+      "error_tag": "记忆缺失",
+      "variant_group": "hierarchical_delegation"
+    },
+    {
+      "kp": "agent.multi.hierarchical",
+      "type": "fill_blank",
+      "question": "分层多智能体系统通常按照任务的________程度来组织层级，上层处理高层目标，下层处理具体执行。",
+      "options": [],
+      "answer": [
+        "抽象",
+        "抽象层次",
+        "抽象程度",
+        "abstraction"
+      ],
+      "explanation": "分层通常按任务抽象程度组织，上层偏高层目标，下层偏具体执行。",
+      "error_tag": "记忆缺失",
+      "variant_group": "hierarchical_design"
+    },
+    {
+      "kp": "agent.multi.hierarchical",
+      "type": "code_reading",
+      "question": "阅读下面的伪代码，说明输出结果体现了分层多智能体系统的什么行为：\n\nclass Agent:\n    def __init__(self, name, subordinates=None):\n        self.name = name\n        self.subordinates = subordinates or []\n\n    def handle(self, task):\n        if not self.subordinates:\n            return f\"{self.name} executed {task}\"\n        parts = task.split(\"+\")\n        return [s.handle(p) for s, p in zip(self.subordinates, parts)]\n\ntop = Agent(\"top\", [Agent(\"a\"), Agent(\"b\")])\nprint(top.handle(\"x+y\"))\n",
+      "options": [],
+      "answer": "输出为 ['a executed x', 'b executed y']，体现了顶层 Agent 将任务分解为子任务并分派给下层 Agent 执行的分层委派行为。",
+      "explanation": "顶层把 'x+y' 拆成 x 和 y 分派给两个下属，下属分别执行，体现了任务分解与分层委派。",
+      "error_tag": "概念混淆",
+      "variant_group": "hierarchical_flow"
+    },
+    {
+      "kp": "agent.multi.hierarchical",
+      "type": "code_reading",
+      "question": "阅读下面的伪代码，指出其中可能存在的分层多智能体设计缺陷：\n\nclass Agent:\n    def __init__(self, name, parent=None):\n        self.name = name\n        self.parent = parent\n\n    def handle(self, task):\n        if task == \"hard\":\n            return self.parent.handle(task)\n        if not self.parent:\n            return \"unhandled\"\n        return self.parent.handle(task)\n",
+      "options": [],
+      "answer": "缺陷在于：当下属无法处理任务时无条件地向上层上交，若上层也把任务交回或没有终止条件，任务可能在层间无限往返而无法被真正执行或丢弃，缺少有效的终止、兜底或上报终止机制。",
+      "explanation": "该伪代码在所有情况下都向上层转移，缺少终止条件和真正的执行逻辑，可能造成层间无限循环。",
+      "error_tag": "边界错误",
+      "variant_group": "hierarchical_antipattern"
+    },
+    {
+      "kp": "agent.multi.hierarchical",
+      "type": "scenario",
+      "question": "某团队要构建一个能够处理「撰写研究报告」的多智能体系统，任务包括资料检索、内容撰写和校对。请说明为什么采用分层多智能体架构比所有 Agent 平级协作更合适，并指出顶层 Agent 应承担哪些职责。",
+      "options": [],
+      "answer": null,
+      "explanation": "报告撰写任务可自然分解为检索、撰写、校对等子任务，分层结构便于顶层分解与分派、下层执行，顶层再协调与汇总，从而降低协调复杂度。",
+      "error_tag": "概念混淆",
+      "variant_group": "hierarchical_scenario",
+      "required_keywords": [
+        "复杂度",
+        "分层"
+      ]
+    },
+    {
+      "kp": "agent.multi.hierarchical",
+      "type": "single_choice",
+      "question": "以下哪种情形最适合采用分层多智能体架构？",
+      "options": [
+        "只有一个简单任务需要单个 Agent 完成",
+        "任务可以自然分解为多个子任务，且子任务之间需要协调配合",
+        "任务完全不需要任何推理",
+        "只要求输出一段固定的静态文本"
+      ],
+      "answer": 1,
+      "explanation": "当任务具有可分解性且子任务之间存在协调需求时，分层架构能有效组织协作。",
+      "error_tag": "概念混淆",
+      "variant_group": "hierarchical_when"
+    },
+    {
+      "kp": "agent.multi.hierarchical",
+      "type": "scenario",
+      "question": "在一个分层多智能体系统中，底层某个执行 Agent 执行一个子任务时长时间没有返回，也未能上报错误。作为架构设计者，你会如何改进系统以避免任务被静默卡住？",
+      "options": [],
+      "answer": null,
+      "explanation": "应引入超时机制、失败上报、有限重试与监控告警，并在必要时提供兜底处理，避免子任务静默卡住导致整体无法汇总。",
+      "error_tag": "边界错误",
+      "variant_group": "hierarchical_scenario",
+      "required_keywords": [
+        "重试",
+        "监控",
+        "告警"
+      ]
+    },
+    {
+      "kp": "agent.multi.hierarchical",
+      "type": "single_choice",
+      "question": "在分层多智能体系统中，若某个中间层 Agent 收到无法处理的子任务，合理的做法通常是什么？",
+      "options": [
+        "直接丢弃该子任务并结束",
+        "将其上报给上层，或转交给同层其他更合适的 Agent",
+        "伪造一个结果返回",
+        "无限循环重试直到超时"
+      ],
+      "answer": 1,
+      "explanation": "分层结构的意义之一就是支持上报与转交机制，使任务能得到恰当处理，而不是丢弃或伪造结果。",
+      "error_tag": "边界错误",
+      "variant_group": "hierarchical_escalation"
+    },
+    {
+      "kp": "agent.multi.hierarchical",
+      "type": "single_choice",
+      "question": "关于分层多智能体中的通信，下列描述正确的是？",
+      "options": [
+        "所有 Agent 必须与所有其他 Agent 直接通信",
+        "通信通常沿层级进行，但也可允许受控的跨层通信",
+        "通信只能在最底层 Agent 之间发生",
+        "分层结构中不允许任何消息传递"
+      ],
+      "answer": 1,
+      "explanation": "分层结构通常以层级通信为主，但实际系统常允许受控的跨层或横向通信以提高灵活性。",
+      "error_tag": "概念混淆",
+      "variant_group": "hierarchical_communication"
+    },
+    {
+      "kp": "agent.multi.hierarchical",
+      "type": "single_choice",
+      "question": "设计分层多智能体系统时，划分层级的一个常见依据是什么？",
+      "options": [
+        "按照字母顺序排列 Agent 名称",
+        "按照任务抽象程度或职责范围，上层处理高层目标，下层处理具体执行",
+        "按照 Agent 创建时间的先后",
+        "按照随机方式分配"
+      ],
+      "answer": 1,
+      "explanation": "分层通常按任务抽象层次或职责范围划分，上层聚焦高层目标与协调，下层聚焦具体执行。",
+      "error_tag": "概念混淆",
+      "variant_group": "hierarchical_design"
+    },
+    {
+      "kp": "agent.multi.hierarchical",
+      "type": "single_choice",
+      "question": "在分层多智能体系统中，下列关于「委派（delegation）」的说法正确的是？",
+      "options": [
+        "委派意味着上层完全放弃对任务的跟踪",
+        "委派是上层将子任务交给下层处理，但仍可能保留协调与汇总职责",
+        "委派后上层不再需要接收任何反馈",
+        "委派只能发生在同一层内部"
+      ],
+      "answer": 1,
+      "explanation": "委派是向下分配任务，但上层通常仍需协调、跟踪进度并汇总结果。",
+      "error_tag": "概念混淆",
+      "variant_group": "hierarchical_delegation"
+    },
+    {
+      "kp": "agent.multi.hierarchical",
+      "type": "single_choice",
+      "question": "分层多智能体架构可能带来的一项潜在缺点是？",
+      "options": [
+        "完全无法扩展",
+        "层级增多可能引入额外通信延迟和协调开销",
+        "无法处理任何复杂任务",
+        "所有 Agent 必须使用同一编程语言"
+      ],
+      "answer": 1,
+      "explanation": "层级越多，消息在层间传递的路径可能越长，从而带来延迟和协调开销，是该架构的权衡之一。",
+      "error_tag": "概念混淆",
+      "variant_group": "hierarchical_tradeoff"
+    },
+    {
+      "kp": "agent.multi.hierarchical",
+      "type": "single_choice",
+      "question": "在一个多层 Agent 系统中，顶层接收用户请求后，下列哪一项最符合规范的处理流程？",
+      "options": [
+        "立即把所有细节一次性交给最底层",
+        "先解析和分解任务，形成子任务计划，再按计划分派",
+        "跳过分解直接返回用户请求原文",
+        "只把请求保存到日志"
+      ],
+      "answer": 1,
+      "explanation": "规范流程通常是先解析分解任务并形成计划，再分派给下层，而非盲目下放或跳过处理。",
+      "error_tag": "概念混淆",
+      "variant_group": "hierarchical_flow"
+    },
+    {
+      "kp": "agent.multi.hierarchical",
+      "type": "single_choice",
+      "question": "关于分层多智能体系统中「结果汇总」，下列说法正确的是？",
+      "options": [
+        "只需返回最底层第一个完成的结果即可",
+        "通常由上层收集并整合下层各子任务的结果，形成统一输出",
+        "汇总必须由最底层 Agent 完成",
+        "无需汇总，直接丢弃下层结果"
+      ],
+      "answer": 1,
+      "explanation": "结果汇总一般由上层负责，将各子任务产出整合为一致的最终输出。",
+      "error_tag": "概念混淆",
+      "variant_group": "hierarchical_aggregation"
+    }
+  ]
+}

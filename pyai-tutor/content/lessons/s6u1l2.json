@@ -1,0 +1,654 @@
+{
+  "id": "s6u1l2",
+  "title": "s6u1l2",
+  "kps": [
+    "ai.torch.tensor",
+    "ai.torch.autograd"
+  ],
+  "theory": "## ai.torch.tensor\n\n# PyTorch 张量（Tensor）入门：从零到工程级\n\n> **一句话直觉**：PyTorch 张量就是“能跑在 GPU 上、会自动求导、还能像 NumPy 一样做数值计算的多维数组”。深度学习里的一切数据（图片、文本、参数、梯度）最终都会变成张量。\n\n---\n\n## 1. 为什么需要张量（Tensor）？\n\n在深度学习（Deep Learning）中，我们几乎总在处理**多维数组**：\n\n- 一张灰度图：`(H, W)`（高、宽）\n- 一批彩色图：`(N, C, H, W)`（批量、通道、高、宽）\n- 一个词向量：`(embedding_dim,)`\n- 一个线性层权重：`(out_features, in_features)`\n\nNumPy 的 `ndarray` 已经能做多维数组，但它有两个关键缺口：\n\n1. **没有 GPU 加速**：深度学习训练需要大量矩阵乘法，CPU 太慢。\n2. **没有自动求导（autograd）**：反向传播（backpropagation）需要自动计算梯度。\n\nPyTorch 的 `torch.Tensor` 同时补齐了这两点，并且 API 与 NumPy 高度相似，学习成本很低。\n\n---\n\n## 2. 创建张量：从 Python 列表到设备（device）\n\n张量创建的常见方式：\n\n- `torch.tensor(data)`：从 Python 列表/NumPy 数组复制数据创建。\n- `torch.zeros/ones/empty`：按形状创建。\n- `torch.randn/rand`：随机初始化。\n- `torch.arange/linspace`：序列生成。\n\n关键属性：\n\n- `shape` / `size()`：形状\n- `dtype`：数据类型（如 `torch.float32`）\n- `device`：所在设备（`cpu` 或 `cuda`）\n- `requires_grad`：是否需要求导\n\n**工程要点**：模型和数据必须在**同一设备**上，否则会报错。\n\n```python\nimport torch\n\n# 从列表创建\nx = torch.tensor([[1, 2], [3, 4]])\nprint(x.shape, x.dtype, x.device)  # torch.Size([2, 2]) torch.int64 cpu\n\n# 指定浮点类型与设备\nx = torch.tensor([[1.0, 2.0]], dtype=torch.float32, device='cpu')\n\n# 常用工厂函数\na = torch.zeros(2, 3)\nb = torch.ones(2, 3)\nc = torch.randn(2, 3)          # 标准正态分布\nd = torch.arange(0, 10, 2)     # [0, 2, 4, 6, 8]\n```\n\n---\n\n## 3. 形状操作：reshape、view、permute、squeeze\n\n形状（shape）操作是张量使用中最频繁、也最容易出错的部分。\n\n- `reshape`：改变形状，必要时复制数据，最通用。\n- `view`：要求内存连续（contiguous），否则报错；否则与 reshape 等价。\n- `permute`：交换维度顺序，常用于 `(N,H,W,C) -> (N,C,H,W)`。\n- `squeeze/unsqueeze`：删除/增加大小为 1 的维度。\n- `transpose`：交换两个维度。\n\n**工程要点**：遇到 `view` 报错时，先用 `.contiguous()`，或直接改用 `.reshape()`。\n\n```python\nx = torch.arange(12).reshape(2, 6)\nprint(x.shape)                 # torch.Size([2, 6])\n\n# 增加/删除维度\ny = x.unsqueeze(0)             # (1, 2, 6)\nz = y.squeeze(0)               # (2, 6)\n\n# 交换维度\nimg = torch.randn(2, 3, 32, 32)     # (N, C, H, W)\nimg_hwc = img.permute(0, 2, 3, 1)   # (N, H, W, C)\nprint(img_hwc.shape)                # torch.Size([2, 32, 32, 3])\n```\n\n---\n\n## 4. 自动求导（autograd）：requires_grad 与 backward\n\nPyTorch 的自动求导机制会记录所有对 `requires_grad=True` 张量的操作，构建计算图（computation graph）。调用 `backward()` 后，梯度会累积到叶子张量的 `.grad` 属性。\n\n关键概念：\n\n- **叶子张量（leaf tensor）**：用户直接创建的张量，默认是叶子。\n- **非叶子张量**：由运算产生。\n- **梯度累积**：多次 `backward()` 会累加，通常每步要 `optimizer.zero_grad()` 或 `x.grad.zero_()`。\n- **detach()**：从计算图中脱离，不参与求导。\n- **with torch.no_grad()**：推理时关闭梯度，节省显存。\n\n```python\nx = torch.tensor([2.0, 3.0], requires_grad=True)\ny = x ** 2 + 3 * x   # y = x^2 + 3x\ny.sum().backward()\nprint(x.grad)        # dy/dx = 2x + 3 => [7., 9.]\n\n# 推理时关闭梯度\nwith torch.no_grad():\n    z = x * 2\nprint(z.requires_grad)  # False\n```\n\n---\n\n## 5. 设备与 NumPy 互操作：进入真实工程\n\n工程中经常需要在 CPU/GPU、NumPy/PyTorch 之间转换：\n\n- `tensor.to('cuda')` / `.cpu()`：迁移设备。\n- `tensor.numpy()`：转 NumPy（共享内存，仅限 CPU）。\n- `torch.from_numpy(arr)`：NumPy 转张量（共享内存）。\n- `tensor.item()`：取标量值（Python 数字）。\n\n**工程要点**：\n\n- GPU 张量不能直接 `.numpy()`，需先 `.cpu()`。\n- 共享内存意味着修改一方会影响另一方。\n- 训练循环里常见写法：`data = data.to(device)`。\n\n```python\nimport numpy as np\n\narr = np.array([1.0, 2.0, 3.0])\nt = torch.from_numpy(arr)\nt[0] = 100\nprint(arr)   # [100.   2.   3.]  共享内存\n\ndevice = 'cuda' if torch.cuda.is_available() else 'cpu'\nt2 = torch.randn(3).to(device)\nprint(t2.device)\n\n# 标量提取\nprint(t2.sum().item())\n```\n\n---\n\n## 结尾：动手练习\n\n**任务：手写一个线性回归的“一步”前向+反向**\n\n1. 用 `torch.randn` 生成 100 个样本，真实关系为 `y = 3x + 2 + 噪声`。\n2. 定义可学习参数 `w = torch.randn(1, requires_grad=True)`、`b = torch.zeros(1, requires_grad=True)`。\n3. 计算预测 `y_pred = w * x + b`，损失用均方误差 `loss = ((y_pred - y) ** 2).mean()`。\n4. 调用 `loss.backward()`，打印 `w.grad` 和 `b.grad`。\n5. 用 `with torch.no_grad(): w -= 0.01 * w.grad; b -= 0.01 * b.grad` 做一步梯度下降。\n6. 重复 100 次，观察 `w` 是否接近 3、`b` 是否接近 2。\n\n**提示**：每步更新前记得 `w.grad.zero_()`、`b.grad.zero_()`，否则梯度会累积。\n\n## ai.torch.autograd\n\n# ai.torch.autograd：让 PyTorch 自动帮你算梯度\n\n## 一句话直觉\n\n`autograd`（自动微分，automatic differentiation）是 PyTorch 的\"自动求导引擎\"：你只要用 `Tensor`（张量）把前向计算写出来，它就能沿着计算图（computation graph）反向自动算出每个参数的梯度（gradient），你无需手推导数公式。这是所有深度学习训练循环的地基。\n\n---\n\n## 1. 为什么需要 autograd：从手算导数到自动反向传播\n\n神经网络的训练本质是：定义损失（loss），然后对每个参数求偏导 `∂loss/∂w`，再用梯度下降更新参数 `w ← w − lr · ∂loss/∂w`。\n\n手算导数对几十亿参数的模型是不可能的。`autograd` 的做法是：**记录你每一步的运算**，反向时按链式法则（chain rule）自动回放。\n\n```python\nimport torch\n\n# 创建一个需要梯度的张量：requires_grad=True 是关键开关\nx = torch.tensor(2.0, requires_grad=True)\ny = x ** 2 + 3 * x + 1          # 前向：y = x^2 + 3x + 1\n\n# 反向传播：自动求 dy/dx = 2x + 3，在 x=2 处应为 7\ny.backward()\nprint(x.grad)                    # 输出: tensor(7.)\n```\n\n结论：**`requires_grad=True` 让张量进入\"计算图\"，`.backward()` 触发反向自动求导，结果存在 `.grad` 里。**\n\n---\n\n## 2. 计算图与叶子张量：谁有梯度，谁没有\n\nAutograd 内部维护一张有向无环图（DAG，Directed Acyclic Graph）：\n\n- **叶子张量（leaf tensor）**：由用户直接创建的（如 `torch.tensor(..., requires_grad=True)` 或 `nn.Parameter`）。反向传播结束后，梯度只保存在叶子的 `.grad` 上。\n- **非叶子张量**：由运算产生的中间结果，默认反向结束时梯度会被释放（除非调用 `.retain_grad()`）。\n\n```python\nimport torch\n\na = torch.tensor(2.0, requires_grad=True)   # 叶子\nb = a * 3                                    # 非叶子中间量\nc = b ** 2                                   # 最终输出\n\nc.backward()\nprint(a.grad)                                 # tensor(36.)  因为 dc/da = 2*(3a)*3 = 18a = 36\nprint(b.grad)                                 # None（默认不保留）\nprint(b.is_leaf, a.is_leaf)                   # False True\n```\n\n结论：**只有叶子张量默认保留梯度；中间张量想拿梯度需要 `retain_grad()`。**\n\n---\n\n## 3. 梯度累积、清零与 `torch.no_grad()`\n\n默认 `.backward()` 是**累加**到 `.grad`，不是覆盖。所以训练循环里必须手动清零，否则梯度会越加越大。另外，推理（inference）阶段不需要计算图，应使用 `torch.no_grad()` 关闭以省显存。\n\n```python\nimport torch\n\nw = torch.tensor(1.0, requires_grad=True)\n\n# 第一次反向\n(w * 2).backward()\nprint(w.grad)                    # tensor(2.)\n\n# 第二次反向 —— 梯度会累加，变成 4\n(w * 2).backward()\nprint(w.grad)                    # tensor(4.)\n\n# 手动清零\nw.grad.zero_()\nprint(w.grad)                    # tensor(0.)\n\n# 推理阶段：不构建计算图，节省内存\nwith torch.no_grad():\n    out = w * 2\n    print(out.requires_grad)     # False\n```\n\n结论：**每步 `optimizer.zero_grad()`（等价于把各 `param.grad` 置零）是训练循环的标准动作；纯推理用 `torch.no_grad()`。**\n\n---\n\n## 4. 实战：用 autograd 手动实现一次梯度下降\n\n不用 optimizer，我们完全靠 autograd 更新一个线性回归参数，感受\"反向传播 + 参数更新\"的完整闭环。\n\n```python\nimport torch\n\n# 目标：拟合 y = 3x + 2\nX = torch.tensor([[1.0], [2.0], [3.0], [4.0]])\nY = 3 * X + 2\n\nw = torch.tensor([[0.0]], requires_grad=True)\nb = torch.tensor([[0.0]], requires_grad=True)\n\nlr = 0.01\nfor step in range(200):\n    pred = X @ w + b\n    loss = ((pred - Y) ** 2).mean()   # MSE 损失\n\n    loss.backward()                    # 反向自动求 grad\n\n    with torch.no_grad():              # 更新时不参与图构建\n        w -= lr * w.grad\n        b -= lr * b.grad\n\n    w.grad.zero_()                     # 清空梯度，避免累加\n    b.grad.zero_()\n\nprint(w.item(), b.item())              # 接近 3.0 和 2.0\n```\n\n结论：**`loss.backward()` → `param -= lr * param.grad` → `grad.zero_()` 三步，就是整个训练引擎的最小原型。**\n\n---\n\n## 5. 进阶要点：`detach`、高阶梯度与 `nn.Module` 的关系\n\n- `t.detach()`：从计算图剥离，返回一个共享数据但 `requires_grad=False` 的新张量。常用于把张量当\"常量\"用。\n- 高阶梯度：对 `.grad` 再求导，需要 `create_graph=True`。\n- `nn.Parameter` 的 `requires_grad` 默认为 `True`，`loss.backward()` 会自动填充它们的 `.grad`，这就是 `optimizer.step()` 背后的机制。\n\n```python\nimport torch\n\n# detach 示例\nx = torch.tensor(2.0, requires_grad=True)\ny = x ** 2\nz = y.detach()                 # z 与 y 共享数值，但脱离图\nprint(z.requires_grad)         # False\n\n# 高阶梯度示例\nt = torch.tensor(2.0, requires_grad=True)\nf = t ** 3                     # f = t^3\n\n# 一阶导\n(g1,) = torch.autograd.grad(f, t, create_graph=True)\nprint(g1)                       # 3*t^2 = 12\n\n# 二阶导\n(g2,) = torch.autograd.grad(g1, t)\nprint(g2)                       # 6*t = 12\n```\n\n结论：**`detach()` 用于切断梯度流；`create_graph=True` 支持求高阶导；autograd 是 `nn.Module` 与各种优化器工作的底层协议。**\n\n---\n\n## 动手练习（本地完成）\n\n**任务：用 autograd 从零拟合一条二次曲线，并在图上观察损失下降。**\n\n1. 构造数据：`X = torch.linspace(-2, 2, 100).unsqueeze(1)`，令 `Y = 2*X**2 - 3*X + 1 + 0.1*torch.randn_like(X)`（加一点噪声）。\n2. 定义参数 `a, b, c`，均为 `nn.Parameter` 或带 `requires_grad=True` 的张量，初值 0。\n3. 前向：`pred = a*X**2 + b*X + c`；损失：`((pred - Y)**2).mean()`。\n4. 训练 500 步，学习率自选，每 100 步打印一次 loss；训练后打印 `a, b, c`，应接近 `2, -3, 1`。\n5. 额外挑战：把 `loss.backward()` 外部套上 `torch.autograd.grad(loss, [a,b,c])` 手动取梯度，与用 `.backward()` 的方式对比输出。\n\n**验收标准**：训练结束后 `a≈2, b≈-3, c≈1`，且 loss 明显下降。\n",
+  "quiz": [
+    {
+      "kp": "ai.torch.tensor",
+      "type": "single_choice",
+      "question": "关于 PyTorch 中张量（Tensor）与 NumPy 数组的关系，下列说法正确的是？",
+      "options": [
+        "张量不能与 NumPy 数组进行转换",
+        "CPU 上的张量可以通过 .numpy() 转为 NumPy 数组，NumPy 数组也可通过 torch.from_numpy() 转成张量",
+        "tensor.numpy() 会复制一份数据，修改数组不会影响原张量",
+        "GPU 上的张量可以直接调用 .numpy()"
+      ],
+      "answer": 1,
+      "explanation": "CPU 张量与 NumPy 数组可以互相转换：tensor.numpy() 得到数组，torch.from_numpy() 得到张量，且二者常共享内存。GPU 张量必须先 .cpu() 才能转 numpy。选项 C 错误，因为它通常共享内存而非复制。",
+      "error_tag": "概念混淆",
+      "variant_group": "tensor_numpy_interop"
+    },
+    {
+      "kp": "ai.torch.tensor",
+      "type": "single_choice",
+      "question": "执行以下代码后，变量 y 的 dtype 最可能是什么？\nimport torch\nx = torch.tensor([1, 2, 3])\ny = x / 2",
+      "options": [
+        "torch.int64",
+        "torch.float32",
+        "torch.int32",
+        "torch.bool"
+      ],
+      "answer": 1,
+      "explanation": "整数张量参与真除法 / 时会进行类型提升，结果变为浮点类型，默认浮点 dtype 为 torch.float32。整除 // 才会保持整数类型。",
+      "error_tag": "概念混淆",
+      "variant_group": "tensor_dtype_promotion"
+    },
+    {
+      "kp": "ai.torch.tensor",
+      "type": "single_choice",
+      "question": "以下代码的输出形状是？\nimport torch\nx = torch.arange(12)\ny = x.reshape(3, 4)\nz = y.T",
+      "options": [
+        "(3, 4)",
+        "(4, 3)",
+        "(12,)",
+        "(1, 12)"
+      ],
+      "answer": 1,
+      "explanation": ".T 对二维张量进行转置，形状 (3,4) 变为 (4,3)。需注意 .T 是维度反转，对非连续转置后张量可能不连续。",
+      "error_tag": "边界错误",
+      "variant_group": "tensor_transpose"
+    },
+    {
+      "kp": "ai.torch.tensor",
+      "type": "single_choice",
+      "question": "关于张量的 .detach()，下列说法正确的是？",
+      "options": [
+        "detach 会从计算图中分离张量，返回共享数据但不需要梯度的新张量",
+        "detach 会复制数据，与原张量完全独立",
+        "detach 会删除原张量",
+        "detach 会停止原张量的梯度追踪，使其 requires_grad 变为 False"
+      ],
+      "answer": 0,
+      "explanation": "detach 返回一个与计算图断开的新张量，二者共享底层数据，对新张量的原地修改会影响原张量。它不改变原张量自身的 requires_grad。",
+      "error_tag": "概念混淆",
+      "variant_group": "tensor_autograd_detach"
+    },
+    {
+      "kp": "ai.torch.tensor",
+      "type": "single_choice",
+      "question": "张量 x 形状为 (2, 3)，执行 x.unsqueeze(0) 后形状是？",
+      "options": [
+        "(2, 3)",
+        "(1, 2, 3)",
+        "(2, 1, 3)",
+        "(2, 3, 1)"
+      ],
+      "answer": 1,
+      "explanation": "unsqueeze(0) 在第 0 维前插入一个大小为 1 的维度，形状变为 (1, 2, 3)。squeeze 则移除大小为 1 的维度。",
+      "error_tag": "边界错误",
+      "variant_group": "tensor_squeeze_unsqueeze"
+    },
+    {
+      "kp": "ai.torch.tensor",
+      "type": "multi_choice",
+      "question": "关于张量的 dtype，以下哪些说法正确？（多选）",
+      "options": [
+        "torch.tensor([1.0, 2.0]) 的 dtype 是 torch.float32",
+        "可以使用 .to(torch.float64) 显式转换张量 dtype",
+        "整数张量与浮点张量相加会报错",
+        "torch.tensor([True, False]) 的 dtype 是 torch.bool",
+        "dtype 转换一定会复制数据，且不可逆"
+      ],
+      "answer": [
+        0,
+        1,
+        3
+      ],
+      "explanation": "A 正确，浮点默认 float32；B 正确，.to 可转 dtype；D 正确，布尔输入得到 bool 张量。C 错误，类型提升会自动发生；E 错误，dtype 转换可逆且不一定总复制。",
+      "error_tag": "概念混淆",
+      "variant_group": "tensor_dtype"
+    },
+    {
+      "kp": "ai.torch.tensor",
+      "type": "multi_choice",
+      "question": "以下哪些操作会返回与原张量共享内存（视图）而非拷贝？（多选）",
+      "options": [
+        "x.view(...)（在内存连续时）",
+        "x.reshape(...)（在可能时）",
+        "x.clone()",
+        "x.transpose(0, 1)",
+        "x + 1"
+      ],
+      "answer": [
+        0,
+        1,
+        3
+      ],
+      "explanation": "view 和可兼容的 reshape 返回视图；transpose 返回共享数据的视图，但通常不连续。clone 和算术运算 x+1 都产生新数据。",
+      "error_tag": "概念混淆",
+      "variant_group": "tensor_view_copy"
+    },
+    {
+      "kp": "ai.torch.tensor",
+      "type": "multi_choice",
+      "question": "关于张量的创建函数，以下哪些说法正确？（多选）",
+      "options": [
+        "torch.zeros(2, 3) 创建全 0 浮点张量",
+        "torch.ones_like(x) 创建与 x 形状相同的全 1 张量，dtype 与 x 一致",
+        "torch.arange(5) 得到 [0,1,2,3,4]",
+        "torch.randn(2, 2) 产生均匀分布 [0,1) 的随机数",
+        "torch.full((2,), 7) 创建元素全为 7 的张量"
+      ],
+      "answer": [
+        0,
+        1,
+        2,
+        4
+      ],
+      "explanation": "A、B、C、E 均正确。D 错误，randn 产生标准正态分布，均匀分布是 torch.rand。",
+      "error_tag": "记忆缺失",
+      "variant_group": "tensor_creation_funcs"
+    },
+    {
+      "kp": "ai.torch.tensor",
+      "type": "multi_choice",
+      "question": "关于张量形状变换，以下哪些说法正确？（多选）",
+      "options": [
+        "x.flatten() 将张量展平为一维",
+        "x.squeeze() 会移除所有大小为 1 的维度",
+        "x.permute(1, 0) 与 x.transpose(0, 1) 对二维张量效果相同",
+        "x.repeat(2, 3) 与 x.expand(2, 3) 都会复制数据",
+        "unsqueeze 只能插入大小为 1 的维度"
+      ],
+      "answer": [
+        0,
+        1,
+        2,
+        4
+      ],
+      "explanation": "A、B、C、E 正确。D 错误：repeat 复制数据，expand 仅创建视图不复制（要求原维度为 1 或被广播）。",
+      "error_tag": "概念混淆",
+      "variant_group": "tensor_shape_ops"
+    },
+    {
+      "kp": "ai.torch.tensor",
+      "type": "fill_blank",
+      "question": "张量 x 形状为 (6,)，调用 x.________(2, 3) 可将其变为形状 (2, 3) 的二维张量（要求写出可同时兼容连续与非连续张量的方法名）。",
+      "options": [],
+      "answer": [
+        "reshape",
+        "torch.reshape",
+        "reshape(2, 3)"
+      ],
+      "explanation": "reshape 在内存可行时返回视图，不可行时会复制，能同时处理连续和非连续张量，因此适用范围比 view 更广。答案为 reshape。",
+      "error_tag": "记忆缺失",
+      "variant_group": "tensor_reshape_view"
+    },
+    {
+      "kp": "ai.torch.tensor",
+      "type": "fill_blank",
+      "question": "要让张量 a（形状 (3,)）与张量 b（形状 (1,)）逐元素相乘得到形状 (3,) 的结果，PyTorch 会通过 ________ 机制自动对齐形状。",
+      "options": [],
+      "answer": [
+        "广播",
+        "broadcasting",
+        "广播机制",
+        "Broadcasting"
+      ],
+      "explanation": "PyTorch 的广播机制会在维度兼容时自动扩展较小张量进行逐元素运算，形状 (3,) 与 (1,) 可广播为 (3,)。",
+      "error_tag": "概念混淆",
+      "variant_group": "tensor_broadcasting"
+    },
+    {
+      "kp": "ai.torch.tensor",
+      "type": "code_reading",
+      "question": "阅读代码，写出输出结果及原因：\nimport torch\nx = torch.tensor([1, 2, 3])\ny = x\ny[0] = 100\nprint(x)",
+      "options": [],
+      "answer": "输出 tensor([100, 2, 3])。因为 y = x 只是让两个变量指向同一个张量对象，通过 y 修改元素会反映到 x；要得到独立副本应使用 x.clone()。",
+      "explanation": "张量赋值不复制数据，y 和 x 引用同一对象，故原地修改相互可见。",
+      "error_tag": "概念混淆",
+      "variant_group": "tensor_alias_copy"
+    },
+    {
+      "kp": "ai.torch.tensor",
+      "type": "single_choice",
+      "question": "关于张量的 .view() 和 .reshape()，下列说法正确的是？",
+      "options": [
+        "两者都要求张量在内存中连续，否则报错",
+        "view 只能用于非连续张量，reshape 只能用于连续张量",
+        "reshape 在可能时返回视图，在无法保持连续时返回拷贝；view 对非连续张量会报错",
+        "两者总返回拷贝，不会与原张量共享内存"
+      ],
+      "answer": 2,
+      "explanation": "view 要求张量内存布局兼容，非连续时抛错；reshape 更灵活，可行时返回视图，否则复制数据后返回新张量。这是常见易错点。",
+      "error_tag": "概念混淆",
+      "variant_group": "tensor_reshape_view"
+    },
+    {
+      "kp": "ai.torch.tensor",
+      "type": "scenario",
+      "question": "某工程场景：你在训练一个模型，某层输出的张量形状为 (batch, seq, hidden)。为了对每个样本的 hidden 维度做归一化，需要把 batch 和 seq 维度展平以便批量处理，处理后还需恢复原形状继续后续计算。你会如何用张量操作实现？并说明为什么选择该方式。",
+      "options": [],
+      "answer": null,
+      "explanation": "应先用 reshape 或（在内存连续时）view 将 (batch, seq, hidden) 展平为 (batch*seq, hidden) 进行计算，再用 reshape 恢复为 (batch, seq, hidden)。选择 reshape 更稳妥，因其兼容非连续张量，不能保证连续时才做拷贝。",
+      "error_tag": "边界错误",
+      "variant_group": "tensor_shape_ops",
+      "required_keywords": [
+        "兼容",
+        "内存"
+      ]
+    },
+    {
+      "kp": "ai.torch.tensor",
+      "type": "single_choice",
+      "question": "张量 a 的形状为 (3, 4, 5)，执行 a[1] 后得到的张量形状是？",
+      "options": [
+        "(4, 5)",
+        "(3, 4)",
+        "(1, 4, 5)",
+        "(3, 5)"
+      ],
+      "answer": 0,
+      "explanation": "用整数下标索引会移除该维度，因此 a[1] 形状为 (4, 5)。若用切片 a[1:2] 则保留维度，形状为 (1, 4, 5)。",
+      "error_tag": "边界错误",
+      "variant_group": "tensor_indexing"
+    },
+    {
+      "kp": "ai.torch.tensor",
+      "type": "single_choice",
+      "question": "关于张量的广播（broadcasting）规则，下列说法正确的是？",
+      "options": [
+        "只有形状完全相同的张量才能进行逐元素运算",
+        "从最后一维开始比较，维度相等或其中一方为 1 时才可广播",
+        "广播只适用于加法，不适用于乘法",
+        "形状 (3, 1) 与 (3,) 不能广播"
+      ],
+      "answer": 1,
+      "explanation": "广播从尾部维度对齐，逐个比较：相等或其中一个为 1 则兼容，否则报错。形状 (3,1) 与 (3,) 会对齐为 (3,1) 与 (1,3)，无法广播，故 D 说法虽对但非规则描述。",
+      "error_tag": "概念混淆",
+      "variant_group": "tensor_broadcasting"
+    },
+    {
+      "kp": "ai.torch.tensor",
+      "type": "single_choice",
+      "question": "执行以下代码，b 的值是？\nimport torch\na = torch.tensor([[1, 2], [3, 4]])\nb = a.sum(dim=0)",
+      "options": [
+        "tensor([4, 6])",
+        "tensor([3, 7])",
+        "tensor(10)",
+        "tensor([6, 4])"
+      ],
+      "answer": 0,
+      "explanation": "dim=0 表示沿第 0 维（行方向）求和，即对每列求和：1+3=4，2+4=6，得到 [4, 6]。dim=1 才是行内求和得到 [3, 7]。",
+      "error_tag": "边界错误",
+      "variant_group": "tensor_reduction_dim"
+    },
+    {
+      "kp": "ai.torch.tensor",
+      "type": "single_choice",
+      "question": "关于张量的 in-place 操作（如 add_、mul_），下列说法正确的是？",
+      "options": [
+        "in-place 操作不会改变原张量的数据",
+        "in-place 操作会返回一个新张量，原张量不变",
+        "in-place 操作直接修改原张量数据，可能影响依赖该张量的计算图",
+        "in-place 操作只能用于 GPU 张量"
+      ],
+      "answer": 2,
+      "explanation": "带下划线后缀的方法（如 add_）原地修改张量并返回自身，可能与自动求导的图产生冲突，导致反向传播报错，使用需谨慎。",
+      "error_tag": "概念混淆",
+      "variant_group": "tensor_inplace"
+    },
+    {
+      "kp": "ai.torch.tensor",
+      "type": "single_choice",
+      "question": "以下哪项最能说明 torch.tensor() 与 torch.Tensor() 的区别？",
+      "options": [
+        "两者完全等价，没有区别",
+        "torch.tensor() 从数据推断 dtype，torch.Tensor() 是默认浮点类型的别名，传入数据会被当作 float 处理",
+        "torch.Tensor() 总是创建整数张量",
+        "torch.tensor() 只能创建标量"
+      ],
+      "answer": 1,
+      "explanation": "torch.tensor() 是推荐的工厂函数，依据输入推断 dtype；torch.Tensor() 是默认浮点类型（float32）的别名，传入列表会被转成浮点，可能导致意外的类型。",
+      "error_tag": "概念混淆",
+      "variant_group": "tensor_creation"
+    },
+    {
+      "kp": "ai.torch.tensor",
+      "type": "single_choice",
+      "question": "张量 t 的 device 为 'cuda'，执行 t + torch.ones(3)（后者在 CPU 上）会怎样？",
+      "options": [
+        "自动把 CPU 张量搬到 GPU 后运算",
+        "自动把 GPU 张量搬到 CPU 后运算",
+        "抛出 RuntimeError，提示设备不一致",
+        "结果是一个 CPU 张量"
+      ],
+      "answer": 2,
+      "explanation": "PyTorch 不会自动跨设备搬运数据，参与运算的张量必须处于同一设备，否则抛出运行时错误。需要显式 .to(device) 或 .cuda()/.cpu()。",
+      "error_tag": "概念混淆",
+      "variant_group": "tensor_device"
+    },
+    {
+      "kp": "ai.torch.tensor",
+      "type": "single_choice",
+      "question": "关于张量的布尔索引（mask 索引），下列说法正确的是？",
+      "options": [
+        "布尔索引要求 mask 与原张量形状完全一致，返回一维张量",
+        "布尔索引只能用于一维张量",
+        "布尔索引返回的张量与 mask 形状相同",
+        "布尔索引中 True 的位置会被丢弃"
+      ],
+      "answer": 0,
+      "explanation": "布尔 mask 需与原张量形状一致，结果是一维张量，元素为 mask 中 True 对应位置的值。False 位置被丢弃。",
+      "error_tag": "概念混淆",
+      "variant_group": "tensor_boolean_index"
+    },
+    {
+      "kp": "ai.torch.autograd",
+      "type": "single_choice",
+      "question": "在 PyTorch 中，默认情况下张量参与计算时是否会记录梯度信息？",
+      "options": [
+        "所有张量默认都记录梯度",
+        "只有 requires_grad=True 的张量才记录梯度",
+        "只有浮点型张量默认记录梯度",
+        "只有 CUDA 张量默认记录梯度"
+      ],
+      "answer": 1,
+      "explanation": "PyTorch 中只有显式设置 requires_grad=True 的张量才会在计算图中被追踪并计算梯度；默认创建的新张量 requires_grad=False。",
+      "error_tag": "概念混淆",
+      "variant_group": "requires_grad_basics"
+    },
+    {
+      "kp": "ai.torch.autograd",
+      "type": "single_choice",
+      "question": "执行以下代码后，x.grad 的值是什么？\n\nimport torch\nx = torch.tensor([2.0], requires_grad=True)\ny = x ** 2\ny.backward()\nprint(x.grad)",
+      "options": [
+        "tensor([2.])",
+        "tensor([4.])",
+        "tensor([1.])",
+        "None"
+      ],
+      "answer": 1,
+      "explanation": "y = x²，对 x 求导为 2x，当 x=2 时导数为 4，因此 x.grad 为 tensor([4.])。",
+      "error_tag": "计算错误",
+      "variant_group": "backward_grad_value"
+    },
+    {
+      "kp": "ai.torch.autograd",
+      "type": "multi_choice",
+      "question": "关于 autograd 中 requires_grad 的说法，以下哪些是正确的？（多选）",
+      "options": [
+        "requires_grad=True 的浮点张量参与运算会构建计算图",
+        "requires_grad=False 的张量参与运算不会出现在计算图中",
+        "requires_grad 可以在创建张量时通过参数指定",
+        "requires_grad 只能在创建张量时指定，之后无法修改",
+        "只有 requires_grad=True 的叶子张量才会在 backward 后保存 .grad"
+      ],
+      "answer": [
+        0,
+        1,
+        2,
+        4
+      ],
+      "explanation": "requires_grad 可在创建时设定，也可通过 requires_grad_() 或 .requires_grad 属性修改；选项 D 的说法错误。其余描述符合 autograd 的行为。",
+      "error_tag": "概念混淆",
+      "variant_group": "requires_grad_basics"
+    },
+    {
+      "kp": "ai.torch.autograd",
+      "type": "multi_choice",
+      "question": "以下哪些属于使用 autograd 时常见的注意事项？（多选）",
+      "options": [
+        "推理阶段可使用 no_grad 上下文节省显存",
+        "对需要多次反传的图应设置 retain_graph=True",
+        "累积梯度时需要在合适时机手动清零 .grad",
+        "为避免 in-place 报错，应尽量避免在有梯度路径上原地修改张量",
+        "只要张量是 float 类型就一定会被 autograd 追踪"
+      ],
+      "answer": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "explanation": "float 类型并不意味着自动追踪，仍需 requires_grad=True。其余选项均为使用 autograd 时的常见注意事项。",
+      "error_tag": "概念混淆",
+      "variant_group": "autograd_pitfalls"
+    },
+    {
+      "kp": "ai.torch.autograd",
+      "type": "multi_choice",
+      "question": "关于 backward() 的 gradient 参数，以下说法正确的有？（多选）",
+      "options": [
+        "当对非标量输出调用 backward() 时必须提供 gradient 参数",
+        "gradient 参数的形状应与被求导输出的形状一致",
+        "gradient 参数表示对输出各分量施加的权重",
+        "对非标量输出调用 backward() 无论如何都不需要 gradient 参数",
+        "gradient 参数可以省略，此时自动按 1 填充"
+      ],
+      "answer": [
+        0,
+        1,
+        2
+      ],
+      "explanation": "对非标量输出必须传入形状匹配的 gradient 作为各分量的权重；不能省略，也不会自动填充。",
+      "error_tag": "边界错误",
+      "variant_group": "backward_scalar_rule"
+    },
+    {
+      "kp": "ai.torch.autograd",
+      "type": "multi_choice",
+      "question": "以下哪些做法可以避免计算被 autograd 追踪？（多选）",
+      "options": [
+        "使用 with torch.no_grad(): 包裹计算",
+        "对输入张量使用 detach() 后再计算",
+        "将张量的 requires_grad 设置为 False",
+        "改用 with torch.enable_grad():",
+        "对中间张量调用 retain_grad()"
+      ],
+      "answer": [
+        0,
+        1,
+        2
+      ],
+      "explanation": "no_grad 上下文、detach() 以及设置 requires_grad=False 都能避免追踪；enable_grad 与 retain_grad 反而与追踪相关，不用于屏蔽。",
+      "error_tag": "概念混淆",
+      "variant_group": "no_grad_context"
+    },
+    {
+      "kp": "ai.torch.autograd",
+      "type": "fill_blank",
+      "question": "在训练循环中，为了避免上一次 backward() 的梯度累积到本次迭代，通常会在每次参数更新前调用优化器的 ______ 方法（写方法名即可）。",
+      "options": [],
+      "answer": [
+        "zero_grad",
+        "zero_grad()",
+        "optimizer.zero_grad()"
+      ],
+      "explanation": "optimizer.zero_grad() 用于把优化器管理的所有参数的 .grad 清零，是训练循环中的标准做法。",
+      "error_tag": "记忆缺失",
+      "variant_group": "grad_accumulation"
+    },
+    {
+      "kp": "ai.torch.autograd",
+      "type": "fill_blank",
+      "question": "当需要在同一张计算图上进行多次 backward() 时，应在调用 backward() 时设置参数 ______=True，以保留中间缓存。",
+      "options": [],
+      "answer": [
+        "retain_graph",
+        "retain_graph=True"
+      ],
+      "explanation": "retain_graph=True 会让 backward() 不释放中间缓存，从而支持在相同图上再次反传。",
+      "error_tag": "记忆缺失",
+      "variant_group": "retain_graph"
+    },
+    {
+      "kp": "ai.torch.autograd",
+      "type": "code_reading",
+      "question": "阅读下面的代码，说明输出结果以及原因：\n\nimport torch\nx = torch.tensor([1.0, 2.0, 3.0], requires_grad=True)\ny = (x ** 2).sum()\ny.backward()\nprint(x.grad)",
+      "options": [],
+      "answer": "输出 tensor([2., 4., 6.])。因为 y = Σx_i²，对每个 x_i 求导为 2x_i，故梯度为 [2, 4, 6]。",
+      "explanation": "标量 y 可以直接 backward()，梯度为对每个元素求导得到的向量，即 2x。",
+      "error_tag": "计算错误",
+      "variant_group": "backward_grad_value"
+    },
+    {
+      "kp": "ai.torch.autograd",
+      "type": "code_reading",
+      "question": "阅读下面的代码，指出问题并说明原因：\n\nimport torch\nx = torch.tensor([1.0, 2.0, 3.0], requires_grad=True)\ny = x * 2\ny.backward()",
+      "options": [],
+      "answer": "代码会报错，因为 y 是非标量张量，调用 backward() 时必须传入 gradient 参数以指定各分量的权重，否则无法直接反传。",
+      "explanation": "非标量输出需要 gradient 参数（与输出同形状）来指定回传权重的加权和。",
+      "error_tag": "边界错误",
+      "variant_group": "backward_scalar_rule"
+    },
+    {
+      "kp": "ai.torch.autograd",
+      "type": "scenario",
+      "question": "在模型推理阶段，你不需要对任何参数求梯度，但发现显存占用偏高。请简述一种降低显存占用的做法及其原理。",
+      "options": [],
+      "answer": null,
+      "explanation": "在推理时使用 with torch.no_grad(): 上下文关闭梯度记录，避免构建计算图并保存中间激活，从而降低显存与计算开销。",
+      "error_tag": "概念混淆",
+      "variant_group": "no_grad_context",
+      "required_keywords": [
+        "torch.no_grad",
+        "梯度记录",
+        "计算图",
+        "中间激活",
+        "显存占用"
+      ]
+    },
+    {
+      "kp": "ai.torch.autograd",
+      "type": "scenario",
+      "question": "你在实现一个带有梯度惩罚或对抗性损失的网络时，需要针对同一张前向计算图进行两次反向传播。请说明需要注意的关键点以及可能出现的错误。",
+      "options": [],
+      "answer": null,
+      "explanation": "默认 backward() 会释放中间缓存，第二次反传会因缺少缓存而报错；需要设置 retain_graph=True 保留计算图，或在必要时重建前向图。",
+      "error_tag": "边界错误",
+      "variant_group": "retain_graph",
+      "required_keywords": [
+        "retain_graph",
+        "计算图",
+        "反向传播",
+        "中间缓存",
+        "梯度惩罚"
+      ]
+    },
+    {
+      "kp": "ai.torch.autograd",
+      "type": "single_choice",
+      "question": "关于标量与非标量调用 backward()，下列说法正确的是？",
+      "options": [
+        "任何张量都可以直接调用 backward() 而不需要参数",
+        "非标量张量调用 backward() 必须传入 gradient 参数指定各分量权重",
+        "标量张量调用 backward() 必须传入 gradient 参数",
+        "non-scalar 张量不能调用 backward()"
+      ],
+      "answer": 1,
+      "explanation": "backward() 对标量输出可直接调用；对非标量输出必须通过 gradient 参数提供与输出同形状的权重张量（相当于对输出做加权求和后再反传）。",
+      "error_tag": "概念混淆",
+      "variant_group": "backward_scalar_rule"
+    },
+    {
+      "kp": "ai.torch.autograd",
+      "type": "single_choice",
+      "question": "以下哪种做法可以正确阻止某段计算被 autograd 记录？",
+      "options": [
+        "在计算时使用 with torch.no_grad():",
+        "在计算时使用 with torch.enable_grad():",
+        "在计算前调用 tensor.detach_() 对输入张量",
+        "把中间张量的 dtype 改为 int"
+      ],
+      "answer": 0,
+      "explanation": "with torch.no_grad(): 上下文会临时关闭梯度记录，常用于推理或参数更新；enable_grad 反而是开启。detach_ 会原地分离但并非通用屏蔽手段，改 dtype 也不是正确方式。",
+      "error_tag": "概念混淆",
+      "variant_group": "no_grad_context"
+    },
+    {
+      "kp": "ai.torch.autograd",
+      "type": "single_choice",
+      "question": "在同一个计算图上，第一次调用 backward() 之后若不再设置 retain_graph，第二次调用 backward() 会发生什么？",
+      "options": [
+        "依然可以正常计算梯度",
+        "会报错，因为中间缓存已被释放",
+        "自动重新构建计算图并继续",
+        "只会返回第一次的梯度"
+      ],
+      "answer": 1,
+      "explanation": "默认 backward() 会释放计算图中间缓存，第二次调用会因缺少所需缓存而报错；如确需多次反传，应设置 retain_graph=True。",
+      "error_tag": "边界错误",
+      "variant_group": "retain_graph"
+    },
+    {
+      "kp": "ai.torch.autograd",
+      "type": "single_choice",
+      "question": "下列关于 detach() 与 no_grad() 的描述，哪一项正确？",
+      "options": [
+        "detach() 返回一个与原张量共享数据但不再需要梯度的新张量",
+        "detach() 会复制数据并保留梯度历史",
+        "no_grad() 会影响整个程序后续所有计算，无法局部恢复",
+        "detach() 与 data 属性完全等价，没有任何差别"
+      ],
+      "answer": 0,
+      "explanation": "detach() 返回共享底层存储但不带梯度历史的新张量；no_grad() 是上下文级开关；.data 属性虽共享数据但绕过版本检查，通常不建议使用。",
+      "error_tag": "概念混淆",
+      "variant_group": "detach_vs_no_grad"
+    },
+    {
+      "kp": "ai.torch.autograd",
+      "type": "single_choice",
+      "question": "关于叶子张量与非叶子张量的梯度保存，下列说法正确的是？",
+      "options": [
+        "非叶子张量默认不会保存 grad，只有叶子张量默认保留 grad",
+        "所有张量调用 backward 后都会保存 grad",
+        "叶子张量一定是 requires_grad=False 的张量",
+        "非叶子张量只要设置了 requires_grad=True 就一定会保留 grad"
+      ],
+      "answer": 0,
+      "explanation": "默认情况下只有叶子张量（如模型参数、输入）会累积 grad；非叶子中间结果不会保存 grad，若要保存需要通过 retain_grad() 显式指定。",
+      "error_tag": "概念混淆",
+      "variant_group": "leaf_vs_nonleaf"
+    },
+    {
+      "kp": "ai.torch.autograd",
+      "type": "single_choice",
+      "question": "关于梯度累积，下列说法正确的是？",
+      "options": [
+        "每次 backward() 都会清空之前的 grad 并重新赋值",
+        "多次 backward() 会把梯度累加到 grad 上，通常需要在合适时手动清零",
+        "梯度累积只对 CUDA 张量有效",
+        "调用 backward() 会自动清零并写入新值"
+      ],
+      "answer": 1,
+      "explanation": "PyTorch 的 grad 会在多次 backward 调用间累积；在训练循环中通常在每次迭代开始前调用 optimizer.zero_grad() 或手动将 grad 置零。",
+      "error_tag": "边界错误",
+      "variant_group": "grad_accumulation"
+    },
+    {
+      "kp": "ai.torch.autograd",
+      "type": "single_choice",
+      "question": "关于 in-place 操作对 autograd 的影响，下列说法正确的是？",
+      "options": [
+        "任何时候 in-place 操作都能被 autograd 正确支持",
+        "当某个张量被用于计算梯度且随后被 in-place 修改时，可能抛出错误或产生不正确梯度",
+        "in-place 操作会自动克隆一份新的计算图",
+        "只要张量不是叶子张量就一定能安全地 in-place 修改"
+      ],
+      "answer": 1,
+      "explanation": "in-place 操作若破坏了反向传播所需的中间值会报 version mismatch 等错误；因此要注意避免在需要梯度追踪的路径上原地修改张量。",
+      "error_tag": "边界错误",
+      "variant_group": "inplace_safety"
+    },
+    {
+      "kp": "ai.torch.autograd",
+      "type": "single_choice",
+      "question": "关于 torch.autograd.grad() 与 tensor.backward() 的差异，下列说法正确的是？",
+      "options": [
+        "torch.autograd.grad() 会把结果累加到输入的 .grad 上",
+        "torch.autograd.grad() 返回梯度但不自动写入 .grad，而 backward() 会写入叶子张量的 .grad",
+        "两者完全等价，没有区别",
+        "torch.autograd.grad() 不能指定对哪些输入求导"
+      ],
+      "answer": 1,
+      "explanation": "torch.autograd.grad() 用于直接获取指定输入的梯度并返回，不修改 .grad；而 backward() 会把梯度累积到叶子张量的 .grad 属性上。",
+      "error_tag": "概念混淆",
+      "variant_group": "grad_api_vs_backward"
+    }
+  ]
+}

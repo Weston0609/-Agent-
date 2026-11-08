@@ -1,0 +1,636 @@
+{
+  "id": "s1u4l6",
+  "title": "s1u4l6",
+  "kps": [
+    "py.type.nested_container",
+    "py.type.copy_shallow_deep"
+  ],
+  "theory": "## py.type.nested_container\n\n# 嵌套容器类型注解（Nested Container Types）\n\n> 一句话直觉：当数据结构里“装着”另一层数据结构时，普通类型注解就不够用了，我们需要**嵌套容器类型注解**来精确描述“列表里的字典里还有列表”这种结构。\n\n---\n\n## 1. 为什么需要“嵌套容器”注解？\n\n在 Python 中，我们常用 `list`、`dict`、`tuple`、`set` 等**容器类型（container type）**来装东西。但现实数据往往是“层层包裹”的：\n\n```python\nusers = [\n    {\"name\": \"Alice\", \"scores\": [90, 85]},\n    {\"name\": \"Bob\",   \"scores\": [78, 92]},\n]\n```\n\n这里的 `users` 是一个**列表**，列表的每个元素是**字典**，字典里的 `\"scores\"` 又对应一个**列表**。  \n如果只写 `users: list`，类型检查器完全不知道里面装了啥。\n\n**嵌套容器类型注解**就是让我们写出：  \n“这是一个列表，元素是字典，键是 str，值是 int 或 list[int]”。\n\n> 注意：Python 运行时**不强制执行**类型注解，它只是给类型检查器（type checker）、IDE、linter 看的元信息。\n\n---\n\n## 2. 最基础的嵌套：`list[dict[str, int]]`\n\nPython 3.9 起，内置容器支持**下标语法（subscription）**直接写泛型（generic）：\n\n```python\n# 一个列表，里面每个元素都是「键为 str、值为 int」的字典\nrecords: list[dict[str, int]] = [\n    {\"alice\": 90},\n    {\"bob\": 85},\n]\n\n# 错误示例（类型检查器会报错，但运行时不会）：\n# records.append({\"carol\": \"good\"})  # 值应该是 int，不是 str\n```\n\n要点：\n- `list[X]` 表示“元素类型为 X 的列表”。\n- `dict[K, V]` 表示“键为 K、值为 V 的字典”。\n- 嵌套就是把内层类型直接放到外层的中括号里。\n\n---\n\n## 3. 多层嵌套：描述“列表里的字典里还有列表”\n\n来看更贴近真实的例子——用户详情：\n\n```python\n# 结构：list[ dict[str, str | list[int]] ]\n# 即：一个列表，元素是字典，字典的键是 str，值可能是 str 或 list[int]\n\nuser_data: list[dict[str, str | list[int]]] = [\n    {\"name\": \"Alice\", \"scores\": [90, 85, 88]},\n    {\"name\": \"Bob\",   \"scores\": [78, 92]},\n]\n\nfor user in user_data:\n    print(user[\"name\"], user[\"scores\"])\n```\n\n这里出现了三层：\n1. 外层 `list`\n2. 中间 `dict[str, ...]`\n3. 内层值类型的**联合类型（union type）**：`str | list[int]`\n\n> `X | Y` 是 Python 3.10 引入的**联合类型**写法，等价于 `typing.Union[X, Y]`。\n\n---\n\n## 4. 元组与不定长：`tuple[int, str]` 与 `tuple[int, ...]`\n\n元组的嵌套写法很特别，因为它有两种含义：\n\n### 4.1 固定长度元组\n\n```python\n# 一个长度为 2 的元组：第一个是 int，第二个是 str\npoint: tuple[int, str] = (1, \"hello\")\n\n# 一个二元组，元素是「address 元组」和「options 字典」\n# 结构：tuple[ tuple[str, int], dict[str, str] ]\nserver: tuple[tuple[str, int], dict[str, str]] = (\n    (\"127.0.0.1\", 8080),\n    {\"timeout\": \"30s\"},\n)\n```\n\n### 4.2 不定长元组（同类型）\n\n```python\n# 用字面量省略号 ... 表示“任意长度，但元素都是 int”\nnums: tuple[int, ...] = (1, 2, 3, 4, 5)\n\n# 空元组\nempty: tuple[()] = ()\n```\n\n> 注意：`tuple[int]` 表示**长度为 1** 的元组，而不是“任意长度的 int 元组”。这是常见误区。\n\n---\n\n## 5. 工程级技巧：用类型别名拆解复杂结构\n\n当嵌套超过两层，注解会变得很难读。用 `type` 语句（Python 3.12+）或 `TypeAlias` 抽出来：\n\n```python\nfrom collections.abc import Sequence\n\n# Python 3.12+ 写法\ntype ConnectionOptions = dict[str, str]\ntype Address = tuple[str, int]\ntype Server = tuple[Address, ConnectionOptions]\n\ndef broadcast_message(message: str, servers: Sequence[Server]) -> None:\n    ...\n\n# 等一下——Server 里嵌套了 Address 和 ConnectionOptions，\n# 传进去的参数其实是：list[tuple[tuple[str, int], dict[str, str]]]\n```\n\n对于 Python < 3.12，用赋值或 `TypeAlias` 标注也一样有效：\n\n```python\nfrom typing import TypeAlias\n\nVector: TypeAlias = list[float]\n\ndef scale(scalar: float, vector: Vector) -> Vector:\n    return [scalar * n for n in vector]\n\nprint(scale(2.0, [1.0, -4.2, 5.4]))  # [2.0, -8.4, 10.8]\n```\n\n类型别名让复杂嵌套结构的**含义**清晰，类型检查器也会把别名等价视为展开后的结构。\n\n---\n\n## 6. 动手练习\n\n**任务**：定义一个描述“学生成绩表”的嵌套类型别名，并写一个函数用它。\n\n要求：\n1. 结构为：`list[dict[str, list[int]]]`，表示“多个学生，每个学生对应一个『科目名 → 分数列表』的字典”。\n2. 用 `type` 语句（或 `TypeAlias`）命名为 `ScoreTable`。\n3. 实现 `average_per_subject(table: ScoreTable) -> dict[str, float]`，返回每个科目的平均分。\n4. 用一组示例数据调用，打印结果。\n\n示例输入：\n\n```python\ntable = [\n    {\"math\": [90, 80], \"english\": [70, 75]},\n    {\"math\": [100], \"english\": [60, 65, 70]},\n]\n```\n\n预期输出：`{\"math\": 90.0, \"english\": 68.0}` 左右的结果。\n\n```python\nfrom typing import TypeAlias\n\n# 1) 用类型别名描述嵌套容器\n# 含义：list[ dict[科目名: str, 分数列表: list[int]] ]\nScoreTable: TypeAlias = list[dict[str, list[int]]]\n\n\ndef average_per_subject(table: ScoreTable) -> dict[str, float]:\n    \"\"\"计算每个科目的平均分。\"\"\"\n    # 收集每个科目的所有分数\n    buckets: dict[str, list[int]] = {}\n    for student in table:\n        for subject, scores in student.items():\n            buckets.setdefault(subject, []).extend(scores)\n\n    # 求平均\n    return {subj: sum(vals) / len(vals) for subj, vals in buckets.items()}\n\n\nif __name__ == \"__main__\":\n    table: ScoreTable = [\n        {\"math\": [90, 80], \"english\": [70, 75]},\n        {\"math\": [100],   \"english\": [60, 65, 70]},\n    ]\n    print(average_per_subject(table))\n    # 预期输出形如: {'math': 90.0, 'english': 68.0}\n```\n\n## py.type.copy_shallow_deep\n\n# 浅拷贝与深拷贝（Shallow Copy vs Deep Copy）\n\n## 一句话直觉\n\n学它，是因为你复制一个对象时，Python 默认往往只复制“外壳”，里面的嵌套对象仍然共享，改一个会牵连另一个。\n\n---\n\n## 1. 为什么复制会出问题：赋值不是复制\n\n在 Python 里，`b = a` 不是复制对象，而是让 `b` 和 `a` 指向同一个对象。\n\n```python\n# 赋值：a 和 b 指向同一个列表对象\na = [1, 2, 3]\nb = a\nb.append(4)\nprint(a)  # [1, 2, 3, 4]\nprint(a is b)  # True\n```\n\n关键结论：\n- 赋值（assignment）只是增加引用（reference），不是复制（copy）。\n- 想知道两个名字是否指向同一对象，用 `is`。\n\n---\n\n## 2. 浅拷贝：只复制最外层\n\n浅拷贝（shallow copy）会创建一个新对象，但里面包含的元素仍然引用原来的子对象。\n\n```python\nimport copy\n\n# 嵌套列表：外层里面还有内层列表\noriginal = [[1, 2], [3, 4]]\nshallow = copy.copy(original)\n\n# 外层是新对象\nprint(original is shallow)          # False\nprint(original[0] is shallow[0])    # True，内层仍然共享\n\n# 改内层，会互相影响\nshallow[0][0] = 99\nprint(original)  # [[99, 2], [3, 4]]\n```\n\n关键结论：\n- 浅拷贝只复制当前这一层。\n- 如果元素是可变对象（mutable object），它们仍被共享。\n- 列表、字典、集合也有自己的浅拷贝写法，例如 `list.copy()`、`dict.copy()`、`x[:]`。\n\n---\n\n## 3. 深拷贝：递归复制到底\n\n深拷贝（deep copy）会递归复制对象内部的所有子对象，得到一个完全独立的新对象。\n\n```python\nimport copy\n\noriginal = [[1, 2], [3, 4]]\ndeep = copy.deepcopy(original)\n\n# 外层和内层都不是同一个对象\nprint(original is deep)          # False\nprint(original[0] is deep[0])    # False\n\n# 改深拷贝，不影响原对象\ndeep[0][0] = 99\nprint(original)  # [[1, 2], [3, 4]]\nprint(deep)      # [[99, 2], [3, 4]]\n```\n\n关键结论：\n- 深拷贝真正独立，适合嵌套结构。\n- 深拷贝成本更高，可能更慢、更占内存。\n- 如果对象里有文件句柄、网络连接、锁等资源，深拷贝通常不合适。\n\n---\n\n## 4. 工程中怎么选：看“共享是否安全”\n\n选择浅拷贝还是深拷贝，核心不是“哪个高级”，而是“内部对象能不能共享”。\n\n```python\nimport copy\n\n# 元素都是不可变对象时，浅拷贝通常就够\nconfig = {\"host\": \"localhost\", \"port\": 8080}\nnew_config = copy.copy(config)\nnew_config[\"port\"] = 9090\nprint(config)      # {'host': 'localhost', 'port': 8080}\nprint(new_config)  # {'host': 'localhost', 'port': 9090}\n\n# 嵌套结构要独立修改时，用深拷贝\nteam = {\"members\": [\"Alice\", \"Bob\"]}\nteam_copy = copy.deepcopy(team)\nteam_copy[\"members\"].append(\"Carol\")\nprint(team)       # {'members': ['Alice', 'Bob']}\nprint(team_copy)  # {'members': ['Alice', 'Bob', 'Carol']}\n```\n\n关键结论：\n- 不可变对象（immutable object）如 `int`、`str`、`tuple`，浅拷贝往往足够。\n- 嵌套可变结构，且要独立修改，优先考虑 `deepcopy()`。\n- 性能敏感时，先判断能否用浅拷贝或重新构造，而不是无脑深拷贝。\n\n---\n\n## 5. 自定义类里发生了什么\n\n浅拷贝和深拷贝也适用于自定义对象。默认情况下，Python 会复制实例的 `__dict__`，但里面的属性对象是否共享，取决于拷贝方式。\n\n```python\nimport copy\n\nclass Box:\n    def __init__(self, items):\n        self.items = items\n\nbox1 = Box([1, 2, 3])\nbox2 = copy.copy(box1)\nbox3 = copy.deepcopy(box1)\n\nprint(box1 is box2)        # False\nprint(box1.items is box2.items)  # True，浅拷贝共享 items\nprint(box1.items is box3.items)  # False，深拷贝复制了 items\n```\n\n关键结论：\n- `copy.copy()` 创建新实例，但属性引用可能共享。\n- `copy.deepcopy()` 会递归复制属性。\n- 如果自定义类需要控制拷贝行为，可以实现 `__copy__()` 和 `__deepcopy__()`。\n\n---\n\n## 动手练习\n\n任务：实现一个“学生成绩表”的安全复制。\n\n要求：\n1. 创建一个字典 `student = {\"name\": \"Tom\", \"scores\": [80, 90]}`。\n2. 用浅拷贝复制一份，修改复制后的 `scores` 列表，观察原数据是否变化。\n3. 用深拷贝复制一份，修改复制后的 `scores` 列表，观察原数据是否变化。\n4. 写一个函数 `safe_copy(data)`，对包含嵌套列表或字典的数据返回深拷贝，并说明为什么。\n\n参考代码：\n\n```python\nimport copy\n\nstudent = {\"name\": \"Tom\", \"scores\": [80, 90]}\n\nshallow = copy.copy(student)\nshallow[\"scores\"].append(100)\nprint(student)  # 原数据会被影响\n\ndeep = copy.deepcopy(student)\ndeep[\"scores\"].append(95)\nprint(student)  # 原数据不受影响\n\ndef safe_copy(data):\n    return copy.deepcopy(data)\n```\n\n完成后请回答：为什么浅拷贝修改 `scores` 会影响原字典？\n\n```python\nimport copy\n\n# 赋值：共享同一个对象\na = [1, 2, 3]\nb = a\nb.append(4)\nprint(\"赋值:\", a, a is b)\n\n# 浅拷贝：外层新对象，内层共享\noriginal = [[1, 2], [3, 4]]\nshallow = copy.copy(original)\nprint(\"浅拷贝外层是否相同:\", original is shallow)\nprint(\"浅拷贝内层是否相同:\", original[0] is shallow[0])\nshallow[0][0] = 99\nprint(\"浅拷贝修改后 original:\", original)\n\n# 深拷贝：完全独立\noriginal2 = [[1, 2], [3, 4]]\ndeep = copy.deepcopy(original2)\nprint(\"深拷贝外层是否相同:\", original2 is deep)\nprint(\"深拷贝内层是否相同:\", original2[0] is deep[0])\ndeep[0][0] = 99\nprint(\"深拷贝修改后 original2:\", original2)\nprint(\"深拷贝修改后 deep:\", deep)\n```\n",
+  "quiz": [
+    {
+      "kp": "py.type.nested_container",
+      "type": "single_choice",
+      "question": "执行以下代码后，x 的值是什么？\n\nx = [[1, 2], [3, 4]]\ny = x[:]\ny[0][0] = 99",
+      "options": [
+        "[[99, 2], [3, 4]]",
+        "[[1, 2], [3, 4]]",
+        "[[99, 2], [99, 4]]",
+        "报错"
+      ],
+      "answer": 0,
+      "explanation": "浅拷贝只复制外层列表，内层列表仍被共享，因此修改 y[0][0] 会影响 x。",
+      "error_tag": "浅拷贝理解错误",
+      "variant_group": "nested_copy"
+    },
+    {
+      "kp": "py.type.nested_container",
+      "type": "single_choice",
+      "question": "以下代码的输出是什么？\n\na = [(1, 2), (3, 4)]\nb = a[:]\nb[0] = (9, 9)\nprint(a)",
+      "options": [
+        "[(1, 2), (3, 4)]",
+        "[(9, 9), (3, 4)]",
+        "[(1, 2), (9, 9)]",
+        "报错"
+      ],
+      "answer": 0,
+      "explanation": "外层列表被浅拷贝，且元组是不可变的，直接替换 b[0] 只改变 b，不影响 a。",
+      "error_tag": "可变性混淆",
+      "variant_group": "nested_copy"
+    },
+    {
+      "kp": "py.type.nested_container",
+      "type": "single_choice",
+      "question": "想要把嵌套列表 [[1, 2], [3, 4]] 展平为 [1, 2, 3, 4]，以下哪个表达式正确？",
+      "options": [
+        "[x for row in data for x in row]",
+        "[x for x in row for row in data]",
+        "[row for row in data]",
+        "[x for x in data]"
+      ],
+      "answer": 0,
+      "explanation": "嵌套列表推导式的外层 for 先遍历行，内层 for 再遍历元素，顺序不能颠倒。",
+      "error_tag": "推导式顺序错误",
+      "variant_group": "nested_flatten"
+    },
+    {
+      "kp": "py.type.nested_container",
+      "type": "single_choice",
+      "question": "以下代码的输出是什么？\n\nd = {}\nd.setdefault('a', []).append(1)\nd.setdefault('a', []).append(2)\nprint(d)",
+      "options": [
+        "{'a': [1, 2]}",
+        "{'a': [1]}",
+        "{'a': [2]}",
+        "{'a': []}"
+      ],
+      "answer": 0,
+      "explanation": "setdefault 在键存在时返回已有列表，因此两次 append 作用于同一个列表。",
+      "error_tag": "setdefault 语义误解",
+      "variant_group": "nested_dict_list"
+    },
+    {
+      "kp": "py.type.nested_container",
+      "type": "single_choice",
+      "question": "以下代码的输出是什么？\n\nd = {'x': {'y': 1}}\ne = d.copy()\ne['x']['y'] = 2\nprint(d['x']['y'])",
+      "options": [
+        "1",
+        "2",
+        "报错",
+        "None"
+      ],
+      "answer": 1,
+      "explanation": "浅拷贝只复制外层字典，内层字典仍被共享，因此修改 e 的内层字典会影响 d。",
+      "error_tag": "浅拷贝理解错误",
+      "variant_group": "nested_dict_list"
+    },
+    {
+      "kp": "py.type.nested_container",
+      "type": "single_choice",
+      "question": "以下关于嵌套容器的说法，哪一项是正确的？",
+      "options": [
+        "嵌套容器只能用列表和字典组合",
+        "嵌套容器中的内层对象可以被外层容器共享",
+        "嵌套容器总是深拷贝",
+        "嵌套容器无法被遍历"
+      ],
+      "answer": 1,
+      "explanation": "嵌套容器只是引用的组合，多个外层位置可能共享同一个内层对象。",
+      "error_tag": "嵌套概念混淆",
+      "variant_group": "nested_concept"
+    },
+    {
+      "kp": "py.type.nested_container",
+      "type": "single_choice",
+      "question": "以下代码的输出是什么？\n\na = [[1], [2]]\nb = a\nb.append([3])\nprint(len(a))",
+      "options": [
+        "2",
+        "3",
+        "报错",
+        "1"
+      ],
+      "answer": 1,
+      "explanation": "b = a 只是把同一个列表的引用赋给 b，没有创建新列表，所以 a 也增加了一个元素。",
+      "error_tag": "引用赋值误解",
+      "variant_group": "nested_reference"
+    },
+    {
+      "kp": "py.type.nested_container",
+      "type": "single_choice",
+      "question": "执行以下代码后，result 的值是什么？\n\nnested = [[1, 2], [3, 4]]\nresult = [x * 2 for row in nested for x in row]",
+      "options": [
+        "[2, 4, 6, 8]",
+        "[[2, 4], [6, 8]]",
+        "[2, 4, 3, 8]",
+        "报错"
+      ],
+      "answer": 0,
+      "explanation": "推导式先展平再对每个元素乘以 2，得到一维列表 [2, 4, 6, 8]。",
+      "error_tag": "推导式语义错误",
+      "variant_group": "nested_flatten"
+    },
+    {
+      "kp": "py.type.nested_container",
+      "type": "single_choice",
+      "question": "以下哪种方式可以安全地深拷贝嵌套列表？",
+      "options": [
+        "list(lst)",
+        "lst[:]",
+        "copy.deepcopy(lst)",
+        "lst.copy()"
+      ],
+      "answer": 2,
+      "explanation": "前三者都是浅拷贝，只有 copy.deepcopy 会递归复制所有嵌套层级。",
+      "error_tag": "拷贝方式混淆",
+      "variant_group": "nested_copy"
+    },
+    {
+      "kp": "py.type.nested_container",
+      "type": "single_choice",
+      "question": "以下代码的输出是什么？\n\nt = (1, [2, 3])\nt[1] += [4]\nprint(t)",
+      "options": [
+        "(1, [2, 3, 4])",
+        "报错",
+        "(1, [2, 3][4])",
+        "(1, [2, 3])"
+      ],
+      "answer": 0,
+      "explanation": "+= 对列表是原地扩展（extend），不会替换元组元素，因此元组引用不变但列表内容改变。",
+      "error_tag": "元组不可变误解",
+      "variant_group": "nested_immutable"
+    },
+    {
+      "kp": "py.type.nested_container",
+      "type": "single_choice",
+      "question": "以下代码是否可以正常运行？\n\nd = {[1, 2]: 'a'}",
+      "options": [
+        "可以，键是列表",
+        "不可以，列表不可哈希",
+        "可以，但键会被转换为元组",
+        "不可以，字典键必须是字符串"
+      ],
+      "answer": 1,
+      "explanation": "字典键必须可哈希，列表是可变对象，不可哈希，因此会抛 TypeError。",
+      "error_tag": "可哈希性混淆",
+      "variant_group": "nested_hashable"
+    },
+    {
+      "kp": "py.type.nested_container",
+      "type": "single_choice",
+      "question": "以下代码的输出是什么？\n\nmatrix = [[i * 3 + j for j in range(3)] for i in range(3)]\nprint(matrix[1][2])",
+      "options": [
+        "5",
+        "6",
+        "3",
+        "2"
+      ],
+      "answer": 0,
+      "explanation": "matrix[1] 是 [3, 4, 5]，其索引 2 的元素是 5。",
+      "error_tag": "嵌套索引计算错误",
+      "variant_group": "nested_index"
+    },
+    {
+      "kp": "py.type.nested_container",
+      "type": "single_choice",
+      "question": "要创建一个 3×3 的独立二维列表（修改一个格子不影响其他行），以下哪种写法正确？",
+      "options": [
+        "[[0] * 3] * 3",
+        "[[0] * 3 for _ in range(3)]",
+        "[0] * 9",
+        "[[0, 0, 0]] * 3"
+      ],
+      "answer": 1,
+      "explanation": "列表推导式每次迭代都会创建新的内层列表；而乘法复制的是同一对象的引用。",
+      "error_tag": "列表乘法引用共享",
+      "variant_group": "nested_create"
+    },
+    {
+      "kp": "py.type.nested_container",
+      "type": "single_choice",
+      "question": "关于嵌套容器的遍历，以下说法正确的是？",
+      "options": [
+        "嵌套容器不能被嵌套 for 遍历",
+        "嵌套 for 遍历时必须使用索引",
+        "嵌套 for 遍历时内外层顺序可以任意交换而不影响结果",
+        "嵌套 for 遍历时需按层级顺序依次进入每一层"
+      ],
+      "answer": 3,
+      "explanation": "遍历嵌套结构需要按层级依次进入，外层对应上层容器，内层对应下层容器。",
+      "error_tag": "遍历顺序错误",
+      "variant_group": "nested_iterate"
+    },
+    {
+      "kp": "py.type.nested_container",
+      "type": "single_choice",
+      "question": "执行以下代码后，matrix 的值是什么？\n\nmatrix = [[0] * 3] * 3\nmatrix[0][0] = 1",
+      "options": [
+        "[[1, 0, 0], [0, 0, 0], [0, 0, 0]]",
+        "[[1, 0, 0], [1, 0, 0], [1, 0, 0]]",
+        "[[1, 1, 1], [1, 1, 1], [1, 1, 1]]",
+        "报错"
+      ],
+      "answer": 1,
+      "explanation": "乘法创建的三行指向同一个内层列表，因此修改一行会影响所有行。",
+      "error_tag": "列表乘法引用共享",
+      "variant_group": "nested_create"
+    },
+    {
+      "kp": "py.type.nested_container",
+      "type": "single_choice",
+      "question": "已知 d = {'a': [1, 2], 'b': [3, 4]}，执行 e = d.copy() 后，e['a'].append(5)，则 d['a'] 的值是？",
+      "options": [
+        "[1, 2]",
+        "[1, 2, 5]",
+        "[5]",
+        "报错"
+      ],
+      "answer": 1,
+      "explanation": "dict.copy() 是浅拷贝，内层列表仍被共享，因此 append 会同时反映到 d。",
+      "error_tag": "浅拷贝理解错误",
+      "variant_group": "nested_copy"
+    },
+    {
+      "kp": "py.type.nested_container",
+      "type": "single_choice",
+      "question": "以下哪个表达式可以访问嵌套列表中第二行第三列的元素？\n\ngrid = [[1, 2, 3], [4, 5, 6], [7, 8, 9]]",
+      "options": [
+        "grid[2][3]",
+        "grid[1][2]",
+        "grid[3][2]",
+        "grid[2, 3]"
+      ],
+      "answer": 1,
+      "explanation": "Python 列表下标从 0 开始，第二行是索引 1，第三列是索引 2。",
+      "error_tag": "下标越界/从1开始",
+      "variant_group": "nested_index"
+    },
+    {
+      "kp": "py.type.nested_container",
+      "type": "single_choice",
+      "question": "以下代码的输出是什么？\n\nt = ([1, 2], [3, 4])\nt[0][0] = 9\nprint(t)",
+      "options": [
+        "([9, 2], [3, 4])",
+        "([1, 2], [3, 4])",
+        "报错，元组不可变",
+        "([9, 2], [9, 4])"
+      ],
+      "answer": 0,
+      "explanation": "元组本身不可变，但其中包含的列表是可变的，可以修改列表内部元素。",
+      "error_tag": "元组不可变误解",
+      "variant_group": "nested_immutable"
+    },
+    {
+      "kp": "py.type.nested_container",
+      "type": "single_choice",
+      "question": "以下代码的输出是什么？\n\ns = {(1, 2), (3, 4)}\nprint(len(s))",
+      "options": [
+        "2",
+        "4",
+        "报错，集合不能包含元组",
+        "1"
+      ],
+      "answer": 0,
+      "explanation": "元组是可哈希的，可以作为集合元素；集合包含两个不同的元组。",
+      "error_tag": "可哈希性混淆",
+      "variant_group": "nested_hashable"
+    },
+    {
+      "kp": "py.type.nested_container",
+      "type": "single_choice",
+      "question": "以下哪种数据结构不能作为字典的键？",
+      "options": [
+        "(1, 2)",
+        "frozenset({1, 2})",
+        "[1, 2]",
+        "'abc'"
+      ],
+      "answer": 2,
+      "explanation": "列表是可变的、不可哈希的，不能作为字典键；元组、frozenset 和字符串都可以。",
+      "error_tag": "可哈希性混淆",
+      "variant_group": "nested_hashable"
+    },
+    {
+      "kp": "py.type.nested_container",
+      "type": "single_choice",
+      "question": "以下代码的输出是什么？\n\nmatrix = [[1, 2], [3, 4]]\nfor row in matrix:\n    for x in row:\n        print(x, end=' ')",
+      "options": [
+        "1 2 3 4 ",
+        "1 3 2 4 ",
+        "1 2 3 4",
+        "报错"
+      ],
+      "answer": 0,
+      "explanation": "外层循环遍历行，内层循环遍历每行元素，按行优先顺序输出。",
+      "error_tag": "遍历顺序错误",
+      "variant_group": "nested_iterate"
+    },
+    {
+      "kp": "py.type.copy_shallow_deep",
+      "type": "single_choice",
+      "question": "执行以下代码后，输出是什么？\n\na = [1, 2, [3, 4]]\nb = a.copy()\nb[0] = 99\nb[2][0] = 88\nprint(a)",
+      "options": [
+        "[1, 2, [3, 4]]",
+        "[99, 2, [88, 4]]",
+        "[1, 2, [88, 4]]",
+        "[99, 2, [3, 4]]"
+      ],
+      "answer": 2,
+      "explanation": "list.copy() 是浅拷贝：新列表的顶层元素被独立复制，所以修改 b[0] 不影响 a。但嵌套的可变对象（内层列表）仍被共享引用，因此修改 b[2][0] 会同时改变 a 的内层列表，结果是 [1, 2, [88, 4]]。",
+      "error_tag": "概念混淆",
+      "variant_group": "浅拷贝嵌套可变对象"
+    },
+    {
+      "kp": "py.type.copy_shallow_deep",
+      "type": "single_choice",
+      "question": "以下哪种方式得到的是深拷贝（deep copy），即嵌套的可变对象也被完全复制、与原对象互不影响？",
+      "options": [
+        "b = a.copy()",
+        "b = list(a)",
+        "b = copy.copy(a)",
+        "b = copy.deepcopy(a)"
+      ],
+      "answer": 3,
+      "explanation": "copy.deepcopy 会递归复制对象图中的所有对象。a.copy()、list(a) 和 copy.copy(a) 都只做浅拷贝，嵌套可变对象仍被共享。",
+      "error_tag": "概念混淆",
+      "variant_group": "深浅拷贝方式辨析"
+    },
+    {
+      "kp": "py.type.copy_shallow_deep",
+      "type": "multi_choice",
+      "question": "在工程中需要复制一个嵌套的配置字典 config，且希望修改副本不影响原配置。以下哪些做法可以达到目的？（多选）",
+      "options": [
+        "copied = config.copy()",
+        "copied = copy.deepcopy(config)",
+        "copied = dict(config)",
+        "copied = json.loads(json.dumps(config))（config 可被 JSON 序列化时）"
+      ],
+      "answer": [
+        1,
+        3
+      ],
+      "explanation": "config.copy() 和 dict(config) 都是浅拷贝，嵌套的可变对象仍被共享，修改会影响原配置。copy.deepcopy 完全独立；json 往返序列化对可 JSON 化的结构也能得到独立副本。",
+      "error_tag": "边界错误",
+      "variant_group": "深拷贝应用选择"
+    },
+    {
+      "kp": "py.type.copy_shallow_deep",
+      "type": "multi_choice",
+      "question": "以下关于 copy.copy 与 copy.deepcopy 的说法，正确的有哪些？（多选）",
+      "options": [
+        "copy.copy 对不可变对象可能直接返回原对象",
+        "copy.deepcopy 使用 memo 字典处理已复制对象，从而支持循环引用",
+        "copy.copy 一定返回与原对象不同的新对象",
+        "copy.deepcopy 可以复制自定义类的实例（默认按 __dict__ 递归复制）",
+        "copy.copy 与 copy.deepcopy 对同一对象总是返回相同结果"
+      ],
+      "answer": [
+        0,
+        1,
+        3
+      ],
+      "explanation": "A 正确（如元组）；B 正确（deepcopy 的 memo 机制）；D 正确（默认递归复制实例属性）。C 错误，copy.copy 对元组等不可变对象可能返回原对象；E 错误，二者语义不同，结果常不同。",
+      "error_tag": "概念混淆",
+      "variant_group": "copy 模块机制"
+    },
+    {
+      "kp": "py.type.copy_shallow_deep",
+      "type": "fill_blank",
+      "question": "在 Python 中，要对一个嵌套列表进行完全独立的复制，使修改副本不影响原列表，应调用 copy 模块中的哪个函数？（填写函数名，不含括号）",
+      "options": [],
+      "answer": [
+        "deepcopy"
+      ],
+      "explanation": "copy.deepcopy 会递归复制整个对象图，产生完全独立的副本；copy.copy 只是浅拷贝。",
+      "error_tag": "记忆缺失",
+      "variant_group": "深拷贝 API"
+    },
+    {
+      "kp": "py.type.copy_shallow_deep",
+      "type": "fill_blank",
+      "question": "已知 a = [[1, 2], [3, 4]]，执行 b = a.copy() 后，b[0][0] = 100，此时 a[0][0] 的值是____。",
+      "options": [],
+      "answer": [
+        "100"
+      ],
+      "explanation": "a.copy() 是浅拷贝，内层列表被 a 和 b 共享，修改 b[0][0] 会同时改变 a[0][0]，所以为 100。",
+      "error_tag": "边界错误",
+      "variant_group": "浅拷贝嵌套可变对象"
+    },
+    {
+      "kp": "py.type.copy_shallow_deep",
+      "type": "fill_blank",
+      "question": "若要导入 copy 模块中的深拷贝函数，常用的 import 语句是：____ 。（填写完整 import 语句）",
+      "options": [],
+      "answer": [
+        "import copy",
+        "from copy import deepcopy"
+      ],
+      "explanation": "既可以 import copy 后使用 copy.deepcopy，也可以 from copy import deepcopy 直接使用 deepcopy。",
+      "error_tag": "记忆缺失",
+      "variant_group": "深拷贝导入"
+    },
+    {
+      "kp": "py.type.copy_shallow_deep",
+      "type": "code_reading",
+      "question": "阅读以下代码，指出 print 的输出，并解释原因。\n\nimport copy\na = [1, 2, [3, 4]]\nb = copy.deepcopy(a)\nb[2][0] = 99\nprint(a)",
+      "options": [],
+      "answer": "输出 [1, 2, [3, 4]]。因为 deepcopy 递归复制了内层列表，b 的内层列表与 a 的内层列表完全独立，修改 b 不影响 a。",
+      "explanation": "深拷贝会递归复制所有嵌套可变对象，副本与原对象完全独立。若换成 copy.copy 或 a.copy()，则输出会变成 [1, 2, [99, 4]]。",
+      "error_tag": "概念混淆",
+      "variant_group": "深拷贝独立性验证"
+    },
+    {
+      "kp": "py.type.copy_shallow_deep",
+      "type": "code_reading",
+      "question": "阅读以下代码，说明为什么最终输出的两个 inner 列表内容相同，以及如何修复使它们独立。\n\nouter = []\ninner = [1, 2]\nfor _ in range(3):\n    outer.append(inner)\nouter[0][0] = 100\nprint(outer)",
+      "options": [],
+      "answer": "输出 [[100, 2], [100, 2], [100, 2]]，因为三次 append 的是同一个 inner 列表对象，它们共享引用。修复方式：每次 append 时复制，例如 outer.append(inner.copy()) 或 outer.append(list(inner))，或使用 copy.deepcopy(inner)。",
+      "explanation": "循环中若反复追加同一可变对象，外层容器各元素会指向同一对象；修改一处会全部改变。应追加独立的浅/深拷贝副本。",
+      "error_tag": "边界错误",
+      "variant_group": "共享引用陷阱"
+    },
+    {
+      "kp": "py.type.copy_shallow_deep",
+      "type": "code_reading",
+      "question": "阅读以下代码，写出输出的 type 判断结果并解释。\n\nimport copy\nclass Node:\n    def __init__(self, value):\n        self.value = value\n        self.next = None\n\nn1 = Node(1)\nn2 = Node(2)\nn1.next = n2\nn2.next = n1  # 形成循环引用\n\ncopy1 = copy.deepcopy(n1)\nprint(copy1.next.next is copy1)",
+      "options": [],
+      "answer": "输出 True。deepcopy 会借助 memo 字典处理循环引用，正确重建循环结构，使副本中 copy1.next.next 仍然指回 copy1。",
+      "explanation": "若没有 memo 机制，循环引用会导致无限递归。copy.deepcopy 在复制过程中记录已复制对象，遇到已复制对象直接复用副本，从而支持循环引用。",
+      "error_tag": "概念混淆",
+      "variant_group": "深拷贝循环引用"
+    },
+    {
+      "kp": "py.type.copy_shallow_deep",
+      "type": "scenario",
+      "question": "在一个 Web 服务的配置加载模块中，你从一份默认配置字典 DEFAULT_CONFIG 出发，为每个请求生成本地配置副本，然后在副本中根据用户参数修改嵌套的『限流』子字典（如 config['rate_limit']['max']）。上线后发现多个请求之间互相干扰，A 请求修改的限流值影响了 B 请求。请分析最可能的原因，并给出修复方案。",
+      "options": [],
+      "answer": null,
+      "explanation": "生成副本时若只用 DEFAULT_CONFIG.copy() 或 dict(DEFAULT_CONFIG)，属于浅拷贝，嵌套的 rate_limit 子字典仍被所有请求共享，导致互相干扰。应使用 copy.deepcopy(DEFAULT_CONFIG) 为每个请求创建完全独立的副本；或在修改前对嵌套子字典单独复制。",
+      "error_tag": "边界错误",
+      "variant_group": "浅拷贝导致的状态污染",
+      "required_keywords": [
+        "DEFAULT_CONFIG.copy",
+        "copy.deepcopy",
+        "复制"
+      ]
+    },
+    {
+      "kp": "py.type.copy_shallow_deep",
+      "type": "scenario",
+      "question": "你在实现一个撤销（undo）功能，需要把用户每次编辑后的文档状态入栈保存。文档对象包含大量嵌套的列表和字典。有同事建议每次入栈前直接调用 document.copy()。请评估该建议是否可行，说明理由，并给出更可靠的方案。",
+      "options": [],
+      "answer": null,
+      "explanation": "document.copy() 只是浅拷贝，嵌套的列表/字典仍被栈中和当前文档共享；之后用户继续编辑会污染历史快照，撤销时得到错误状态。应使用 copy.deepcopy(document) 保存真正独立的快照，或者对嵌套结构逐层复制。",
+      "error_tag": "边界错误",
+      "variant_group": "浅拷贝在快照场景的缺陷",
+      "required_keywords": [
+        "document.copy",
+        "copy.deepcopy",
+        "复制"
+      ]
+    },
+    {
+      "kp": "py.type.copy_shallow_deep",
+      "type": "single_choice",
+      "question": "对于只包含不可变元素（如整数、字符串、元组）的容器，浅拷贝和深拷贝在行为上的主要区别是什么？",
+      "options": [
+        "浅拷贝会报错，深拷贝不会",
+        "两者得到的副本在此场景下行为几乎等价，因为不可变元素无法被就地修改",
+        "深拷贝一定会共享底层元素引用，浅拷贝不会",
+        "浅拷贝会把不可变元素变成可变元素"
+      ],
+      "answer": 1,
+      "explanation": "不可变对象无法被就地修改，对其元素的『修改』本质是重新绑定，因此浅拷贝和深拷贝在该场景下效果一致，这也是深拷贝在纯不可变结构上开销相对意义不大的原因。",
+      "error_tag": "概念混淆",
+      "variant_group": "不可变元素与深浅拷贝"
+    },
+    {
+      "kp": "py.type.copy_shallow_deep",
+      "type": "scenario",
+      "question": "团队中有人为了『避免深浅拷贝的麻烦』，提出在所有复制场景一律使用 copy.deepcopy。请从性能与语义角度评估该做法，并说明什么情况下应优先选择浅拷贝。",
+      "options": [],
+      "answer": null,
+      "explanation": "一律使用 deepcopy 会带来不必要的递归遍历和内存开销，尤其在对象图很大或结构纯不可变（如由元组、字符串组成）时收益为零。当嵌套内容不需要独立修改、或元素本身不可变时，应优先用浅拷贝（copy.copy/copy()）以降低开销。",
+      "error_tag": "概念混淆",
+      "variant_group": "深拷贝性能取舍",
+      "required_keywords": [
+        "copy.copy",
+        "内存"
+      ]
+    },
+    {
+      "kp": "py.type.copy_shallow_deep",
+      "type": "single_choice",
+      "question": "关于浅拷贝，下列说法正确的是？",
+      "options": [
+        "浅拷贝会递归复制所有嵌套对象",
+        "浅拷贝创建一个新容器，但容器内的元素引用与原对象相同",
+        "浅拷贝只能用于列表，不能用于字典或集合",
+        "浅拷贝后原对象与副本完全独立，任何修改互不影响"
+      ],
+      "answer": 1,
+      "explanation": "浅拷贝只复制最外层容器，元素引用被共享。它适用于列表、字典、集合等多种容器，但不能保证嵌套可变对象的独立性。",
+      "error_tag": "概念混淆",
+      "variant_group": "浅拷贝定义"
+    },
+    {
+      "kp": "py.type.copy_shallow_deep",
+      "type": "single_choice",
+      "question": "执行以下代码后，d2 的值是什么？\n\nd1 = {'x': [1, 2]}\nd2 = dict(d1)\nd2['x'].append(3)",
+      "options": [
+        "{'x': [1, 2, 3]}",
+        "{'x': [1, 2]}",
+        "{'x': 3}",
+        "抛出异常"
+      ],
+      "answer": 0,
+      "explanation": "dict(d1) 是浅拷贝，字典的键值对引用被复制，但列表对象仍被 d1 和 d2 共享。对共享列表 append 后，d2['x'] 变为 [1, 2, 3]。",
+      "error_tag": "边界错误",
+      "variant_group": "字典浅拷贝"
+    },
+    {
+      "kp": "py.type.copy_shallow_deep",
+      "type": "single_choice",
+      "question": "以下代码的输出是什么？\n\nimport copy\na = (1, 2, [3, 4])\nb = copy.copy(a)\nprint(a is b)",
+      "options": [
+        "True",
+        "False",
+        "报错",
+        "取决于 Python 版本"
+      ],
+      "answer": 0,
+      "explanation": "元组是不可变对象，copy.copy 对元组的浅拷贝通常直接返回原对象本身（因为无法就地修改），因此 a is b 为 True。注意元组内部若含可变对象，修改该可变对象仍会影响双方。",
+      "error_tag": "边界错误",
+      "variant_group": "不可变容器浅拷贝"
+    },
+    {
+      "kp": "py.type.copy_shallow_deep",
+      "type": "single_choice",
+      "question": "以下关于深拷贝的说法，哪一项是错误的？",
+      "options": [
+        "深拷贝会递归复制嵌套对象",
+        "深拷贝后的副本与原对象完全独立，修改互不影响",
+        "深拷贝一定比浅拷贝快，所以应优先使用",
+        "深拷贝可能因为对象间存在循环引用而需要额外处理"
+      ],
+      "answer": 2,
+      "explanation": "深拷贝需要递归遍历并复制整个对象图，通常比浅拷贝慢、开销大。它并非总是更快，也不应无条件优先使用；通常在需要完全独立副本时才用。",
+      "error_tag": "概念混淆",
+      "variant_group": "深拷贝代价"
+    },
+    {
+      "kp": "py.type.copy_shallow_deep",
+      "type": "single_choice",
+      "question": "代码 a = [[0] * 3] * 3 创建了一个二维列表，随后执行 a[0][0] = 1，print(a) 的输出是什么？",
+      "options": [
+        "[[1, 0, 0], [0, 0, 0], [0, 0, 0]]",
+        "[[1, 0, 0], [1, 0, 0], [1, 0, 0]]",
+        "[[0, 0, 0], [0, 0, 0], [0, 0, 0]]",
+        "报错"
+      ],
+      "answer": 1,
+      "explanation": "[[0] * 3] * 3 中，外层列表的三个元素引用同一个内层列表对象。因此修改任意一行的元素会同时影响所有行，输出为 [[1,0,0],[1,0,0],[1,0,0]]。这是浅拷贝/共享引用的常见陷阱。",
+      "error_tag": "边界错误",
+      "variant_group": "共享引用陷阱"
+    },
+    {
+      "kp": "py.type.copy_shallow_deep",
+      "type": "multi_choice",
+      "question": "以下哪些操作得到的是浅拷贝（shallow copy）？（多选）",
+      "options": [
+        "b = a.copy()，其中 a 是列表",
+        "b = copy.copy(a)",
+        "b = copy.deepcopy(a)",
+        "b = a[:]，其中 a 是列表",
+        "b = dict(a)，其中 a 是字典"
+      ],
+      "answer": [
+        0,
+        1,
+        3,
+        4
+      ],
+      "explanation": "列表的 copy()、copy.copy()、切片 a[:]、dict(a) 都是浅拷贝；copy.deepcopy(a) 是深拷贝。",
+      "error_tag": "概念混淆",
+      "variant_group": "深浅拷贝方式辨析"
+    },
+    {
+      "kp": "py.type.copy_shallow_deep",
+      "type": "multi_choice",
+      "question": "关于深拷贝，以下说法正确的有哪些？（多选）",
+      "options": [
+        "深拷贝会递归复制嵌套的可变对象",
+        "深拷贝后的对象与原对象之间通常不存在共享的可变子对象",
+        "深拷贝总是比浅拷贝执行更快",
+        "深拷贝能够正确处理对象间的循环引用",
+        "深拷贝对纯不可变对象结构也会产生明显的额外价值"
+      ],
+      "answer": [
+        0,
+        1,
+        3
+      ],
+      "explanation": "深拷贝递归复制并处理循环引用（借助 memo 机制），因此 A、B、D 正确。C 错误，深拷贝通常更慢；E 错误，纯不可变结构下深浅拷贝效果等价，深拷贝无显著额外价值。",
+      "error_tag": "概念混淆",
+      "variant_group": "深拷贝特性"
+    }
+  ]
+}

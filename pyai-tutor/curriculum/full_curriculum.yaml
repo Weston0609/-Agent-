@@ -1,0 +1,952 @@
+# 完整 8 学期课程树（由 curriculum.json 转换，权威源）
+meta:
+  title: Python & AI 架构师离线学习系统 · 完整课程知识图谱
+  version: '1.0'
+  pass_threshold: 0.75
+  lesson_minutes: 40
+  semester_unlock_rule: 学期 N 解锁条件：学期 N-1 所有单元考试 >= 75% 且 期末考 >= 75% 且 无挂起补强项
+semesters:
+- id: s1
+  name: Python 入门：从零到能写程序
+  units:
+  - id: s1u1
+    name: 环境与第一个程序
+    lessons:
+    - id: s1u1l1
+      kps:
+      - py.env.install
+      - py.env.venv
+      - py.env.pip
+      - py.hello.print
+    - id: s1u1l2
+      kps:
+      - py.syntax.comment
+      - py.syntax.indent
+      - py.syntax.var
+    - id: s1u1l3
+      kps:
+      - py.io.input
+      - py.io.print_format
+      - py.io.fstring
+  - id: s1u2
+    name: 数据类型基础
+    lessons:
+    - id: s1u2l1
+      kps:
+      - py.type.int
+      - py.type.float
+      - py.type.bool
+      - py.type.none
+    - id: s1u2l2
+      kps:
+      - py.op.arith
+      - py.op.compare
+      - py.op.logic
+    - id: s1u2l3
+      kps:
+      - py.type.str_basic
+      - py.type.str_index
+      - py.type.str_method
+    - id: s1u2l4
+      kps:
+      - py.type.str_format
+      - py.type.str_escape
+  - id: s1u3
+    name: 流程控制
+    lessons:
+    - id: s1u3l1
+      kps:
+      - py.flow.if
+      - py.flow.elif_else
+    - id: s1u3l2
+      kps:
+      - py.flow.while
+      - py.flow.break_continue
+    - id: s1u3l3
+      kps:
+      - py.flow.for_range
+      - py.flow.enumerate
+    - id: s1u3l4
+      kps:
+      - py.flow.nested
+      - py.flow.pass
+  - id: s1u4
+    name: 容器类型
+    lessons:
+    - id: s1u4l1
+      kps:
+      - py.type.list_basic
+      - py.type.list_method
+    - id: s1u4l2
+      kps:
+      - py.type.list_slice
+      - py.type.list_comprehension
+    - id: s1u4l3
+      kps:
+      - py.type.tuple
+      - py.type.tuple_unpack
+    - id: s1u4l4
+      kps:
+      - py.type.dict_basic
+      - py.type.dict_method
+    - id: s1u4l5
+      kps:
+      - py.type.set
+      - py.type.set_ops
+    - id: s1u4l6
+      kps:
+      - py.type.nested_container
+      - py.type.copy_shallow_deep
+  - id: s1u5
+    name: 函数
+    lessons:
+    - id: s1u5l1
+      kps:
+      - py.func.def
+      - py.func.return
+      - py.func.scope
+    - id: s1u5l2
+      kps:
+      - py.func.args_positional
+      - py.func.args_keyword
+    - id: s1u5l3
+      kps:
+      - py.func.args_default
+      - py.func.args_star
+      - py.func.args_kwargs
+    - id: s1u5l4
+      kps:
+      - py.func.lambda
+      - py.func.higher_order
+    - id: s1u5l5
+      kps:
+      - py.func.closure
+      - py.func.legb
+  - id: s1u6
+    name: 模块与包
+    lessons:
+    - id: s1u6l1
+      kps:
+      - py.module.import
+      - py.module.from_import
+    - id: s1u6l2
+      kps:
+      - py.module.if_main
+      - py.module.name
+    - id: s1u6l3
+      kps:
+      - py.module.package
+      - py.module.init
+    - id: s1u6l4
+      kps:
+      - py.module.stdlib_intro
+      - py.module.third_party
+  - id: s1u7
+    name: 异常处理
+    lessons:
+    - id: s1u7l1
+      kps:
+      - py.exc.try_except
+      - py.exc.multiple
+      - py.exc.finally
+    - id: s1u7l2
+      kps:
+      - py.exc.raise
+      - py.exc.custom
+      - py.exc.else
+  - id: s1u8
+    name: 文件与 IO
+    lessons:
+    - id: s1u8l1
+      kps:
+      - py.io.file_open
+      - py.io.file_read_write
+    - id: s1u8l2
+      kps:
+      - py.io.with
+      - py.io.pathlib
+      - py.io.os_path
+    - id: s1u8l3
+      kps:
+      - py.io.json
+      - py.io.csv
+  - id: s1u9
+    name: 项目实战（命令行工具）
+    lessons:
+    - id: s1u9l1
+      kps:
+      - py.proj.structure
+      - py.proj.argparse
+    - id: s1u9l2
+      kps:
+      - py.proj.logging
+      - py.proj.error_handling
+- id: s2
+  name: Python 进阶：写出工程级代码
+  units:
+  - id: s2u1
+    name: 面向对象
+    lessons:
+    - id: s2u1l1
+      kps:
+      - py.oop.class_basic
+      - py.oop.instance
+      - py.oop.init
+    - id: s2u1l2
+      kps:
+      - py.oop.method
+      - py.oop.classmethod
+      - py.oop.staticmethod
+    - id: s2u1l3
+      kps:
+      - py.oop.inherit
+      - py.oop.super
+      - py.oop.mro
+    - id: s2u1l4
+      kps:
+      - py.oop.property
+      - py.oop.slots
+    - id: s2u1l5
+      kps:
+      - py.oop.dunder_intro
+      - py.oop.repr_str
+      - py.oop.eq_hash
+    - id: s2u1l6
+      kps:
+      - py.oop.dataclass
+      - py.oop.namedtuple
+    - id: s2u1l7
+      kps:
+      - py.oop.abstract
+      - py.oop.protocol
+      - py.oop.duck_typing
+    - id: s2u1l8
+      kps:
+      - py.oop.composition
+      - py.oop.design_patterns_basic
+  - id: s2u2
+    name: 迭代器与生成器
+    lessons:
+    - id: s2u2l1
+      kps:
+      - py.iter.protocol
+      - py.iter.iter_next
+    - id: s2u2l2
+      kps:
+      - py.iter.generator
+      - py.iter.yield
+    - id: s2u2l3
+      kps:
+      - py.iter.yield_from
+      - py.iter.send
+    - id: s2u2l4
+      kps:
+      - py.iter.itertools
+      - py.iter.lazy_eval
+  - id: s2u3
+    name: 装饰器与元编程
+    lessons:
+    - id: s2u3l1
+      kps:
+      - py.deco.basic
+      - py.deco.args
+      - py.deco.functools_wraps
+    - id: s2u3l2
+      kps:
+      - py.deco.class_deco
+      - py.deco.param_deco
+    - id: s2u3l3
+      kps:
+      - py.meta.metaclass
+      - py.meta.descriptor
+    - id: s2u3l4
+      kps:
+      - py.meta.dynamic_attr
+      - py.meta.getattr
+  - id: s2u4
+    name: 类型系统
+    lessons:
+    - id: s2u4l1
+      kps:
+      - py.typehint.basic
+      - py.typehint.optional_union
+    - id: s2u4l2
+      kps:
+      - py.typehint.generic
+      - py.typehint.typevar
+    - id: s2u4l3
+      kps:
+      - py.typehint.literal
+      - py.typehint.overload
+    - id: s2u4l4
+      kps:
+      - py.typehint.mypy
+      - py.typehint.pyright
+    - id: s2u4l5
+      kps:
+      - py.typehint.pydantic_basic
+  - id: s2u5
+    name: 上下文管理器与 with
+    lessons:
+    - id: s2u5l1
+      kps:
+      - py.ctx.protocol
+      - py.ctx.contextlib
+    - id: s2u5l2
+      kps:
+      - py.ctx.async_ctx
+  - id: s2u6
+    name: 函数式与标准库精髓
+    lessons:
+    - id: s2u6l1
+      kps:
+      - py.fp.map_filter_reduce
+      - py.fp.functools
+    - id: s2u6l2
+      kps:
+      - py.stdlib.collections
+      - py.stdlib.heapq
+      - py.stdlib.bisect
+    - id: s2u6l3
+      kps:
+      - py.stdlib.re
+      - py.stdlib.datetime
+      - py.stdlib.uuid
+    - id: s2u6l4
+      kps:
+      - py.stdlib.subprocess
+      - py.stdlib.shutil
+  - id: s2u7
+    name: 测试与质量
+    lessons:
+    - id: s2u7l1
+      kps:
+      - py.test.pytest_basic
+      - py.test.fixture
+    - id: s2u7l2
+      kps:
+      - py.test.mock
+      - py.test.parametrize
+    - id: s2u7l3
+      kps:
+      - py.test.coverage
+      - py.test.hypothesis
+    - id: s2u7l4
+      kps:
+      - py.quality.lint
+      - py.quality.ruff
+      - py.quality.precommit
+  - id: s2u8
+    name: 打包与依赖管理
+    lessons:
+    - id: s2u8l1
+      kps:
+      - py.pkg.pyproject
+      - py.pkg.uv_poetry
+      - py.pkg.wheel
+- id: s3
+  name: 异步与并发：构建高吞吐系统
+  units:
+  - id: s3u1
+    name: 并发模型全景
+    lessons:
+    - id: s3u1l1
+      kps:
+      - py.concur.model_overview
+      - py.concur.gil_intro
+    - id: s3u1l2
+      kps:
+      - py.concur.io_bound
+      - py.concur.cpu_bound
+  - id: s3u2
+    name: 多线程
+    lessons:
+    - id: s3u2l1
+      kps:
+      - py.thread.thread_basic
+      - py.thread.lock
+    - id: s3u2l2
+      kps:
+      - py.thread.rlock_semaphore
+      - py.thread.queue
+    - id: s3u2l3
+      kps:
+      - py.thread.threadpool
+      - py.thread.concurrent_futures
+    - id: s3u2l4
+      kps:
+      - py.thread.gil_detail
+      - py.thread.thread_safety
+  - id: s3u3
+    name: 多进程
+    lessons:
+    - id: s3u3l1
+      kps:
+      - py.mp.process_basic
+      - py.mp.pool
+    - id: s3u3l2
+      kps:
+      - py.mp.ipc
+      - py.mp.shared_memory
+    - id: s3u3l3
+      kps:
+      - py.mp.pickling
+      - py.mp.spawn_fork
+  - id: s3u4
+    name: asyncio 基础
+    lessons:
+    - id: s3u4l1
+      kps:
+      - py.async.event_loop
+      - py.async.coroutine
+    - id: s3u4l2
+      kps:
+      - py.async.await
+      - py.async.task
+    - id: s3u4l3
+      kps:
+      - py.async.gather
+      - py.async.wait
+    - id: s3u4l4
+      kps:
+      - py.async.sleep
+      - py.async.run
+    - id: s3u4l5
+      kps:
+      - py.async.future
+      - py.async.callback
+  - id: s3u5
+    name: asyncio 进阶
+    lessons:
+    - id: s3u5l1
+      kps:
+      - py.async.taskgroup
+      - py.async.structured_concurrency
+    - id: s3u5l2
+      kps:
+      - py.async.cancel
+      - py.async.timeout
+    - id: s3u5l3
+      kps:
+      - py.async.queue
+      - py.async.event
+      - py.async.lock
+    - id: s3u5l4
+      kps:
+      - py.async.semaphore
+      - py.async.sync_primitives
+    - id: s3u5l5
+      kps:
+      - py.async.aiohttp
+      - py.async.httpx_async
+    - id: s3u5l6
+      kps:
+      - py.async.aiofiles
+      - py.async.async_iter
+    - id: s3u5l7
+      kps:
+      - py.async.async_gen
+      - py.async.async_comprehension
+  - id: s3u6
+    name: 异步陷阱与模式
+    lessons:
+    - id: s3u6l1
+      kps:
+      - py.async.blocking_call
+      - py.async.run_in_executor
+    - id: s3u6l2
+      kps:
+      - py.async.backpressure
+      - py.async.rate_limit
+    - id: s3u6l3
+      kps:
+      - py.async.graceful_shutdown
+- id: s4
+  name: 底层原理与性能工程
+  units:
+  - id: s4u1
+    name: CPython 内部
+    lessons:
+    - id: s4u1l1
+      kps:
+      - py.cpy.object_model
+      - py.cpy.refcount
+      - py.cpy.gc
+    - id: s4u1l2
+      kps:
+      - py.cpy.bytecode
+      - py.cpy.dis
+    - id: s4u1l3
+      kps:
+      - py.cpy.import_system
+      - py.cpy.frame
+  - id: s4u2
+    name: 性能优化
+    lessons:
+    - id: s4u2l1
+      kps:
+      - py.perf.profiling_cprofile
+      - py.perf.py_spy
+    - id: s4u2l2
+      kps:
+      - py.perf.memory_profiler
+      - py.perf.tracemalloc
+    - id: s4u2l3
+      kps:
+      - py.perf.algorithm_first
+      - py.perf.cache_lru
+    - id: s4u2l4
+      kps:
+      - py.perf.numpy_vector
+      - py.perf.cython
+      - py.perf.numba
+    - id: s4u2l5
+      kps:
+      - py.perf.rust_pyo3
+      - py.perf.c_extension
+  - id: s4u3
+    name: 内存与生命周期
+    lessons:
+    - id: s4u3l1
+      kps:
+      - py.mem.weakref
+      - py.mem.cycle
+      - py.mem.leak_debug
+- id: s5
+  name: 服务化与数据工程
+  units:
+  - id: s5u1
+    name: Web 框架
+    lessons:
+    - id: s5u1l1
+      kps:
+      - py.web.http_basic
+      - py.web.fastapi_basic
+    - id: s5u1l2
+      kps:
+      - py.web.fastapi_async
+      - py.web.fastapi_depends
+    - id: s5u1l3
+      kps:
+      - py.web.pydantic_v2
+      - py.web.openapi
+    - id: s5u1l4
+      kps:
+      - py.web.middleware
+      - py.web.auth_jwt
+  - id: s5u2
+    name: 数据库
+    lessons:
+    - id: s5u2l1
+      kps:
+      - py.db.sql_basic
+      - py.db.sqlalchemy
+    - id: s5u2l2
+      kps:
+      - py.db.async_db
+      - py.db.alembic
+    - id: s5u2l3
+      kps:
+      - py.db.redis
+      - py.db.mongo
+    - id: s5u2l4
+      kps:
+      - py.db.postgres_index
+      - py.db.tx_isolation
+    - id: s5u2l5
+      kps:
+      - py.db.neo4j
+      - py.db.cypher
+  - id: s5u3
+    name: 消息与流
+    lessons:
+    - id: s5u3l1
+      kps:
+      - py.mq.kafka
+      - py.mq.rabbitmq
+    - id: s5u3l2
+      kps:
+      - py.mq.celery
+      - py.mq.arq
+  - id: s5u4
+    name: 数据工程
+    lessons:
+    - id: s5u4l1
+      kps:
+      - py.data.numpy
+      - py.data.pandas
+    - id: s5u4l2
+      kps:
+      - py.data.polars
+      - py.data.arrow
+    - id: s5u4l3
+      kps:
+      - py.data.parquet
+      - py.data.etl_patterns
+- id: s6
+  name: AI 基础：从张量到 Transformer
+  units:
+  - id: s6u1
+    name: 数学与张量
+    lessons:
+    - id: s6u1l1
+      kps:
+      - ai.math.linear_algebra
+      - ai.math.prob
+    - id: s6u1l2
+      kps:
+      - ai.torch.tensor
+      - ai.torch.autograd
+    - id: s6u1l3
+      kps:
+      - ai.torch.device
+      - ai.torch.dtype
+  - id: s6u2
+    name: 神经网络
+    lessons:
+    - id: s6u2l1
+      kps:
+      - ai.nn.linear
+      - ai.nn.activation
+      - ai.nn.loss
+    - id: s6u2l2
+      kps:
+      - ai.nn.optim
+      - ai.nn.sgd_adam
+    - id: s6u2l3
+      kps:
+      - ai.nn.dropout
+      - ai.nn.batchnorm
+    - id: s6u2l4
+      kps:
+      - ai.nn.cnn_basic
+      - ai.nn.rnn_lstm
+    - id: s6u2l5
+      kps:
+      - ai.nn.training_loop
+      - ai.nn.overfit_debug
+  - id: s6u3
+    name: Transformer 与 LLM
+    lessons:
+    - id: s6u3l1
+      kps:
+      - ai.llm.attention
+      - ai.llm.multihead
+    - id: s6u3l2
+      kps:
+      - ai.llm.position_encoding
+      - ai.llm.layer_norm
+    - id: s6u3l3
+      kps:
+      - ai.llm.gpt_arch
+      - ai.llm.tokenizer
+    - id: s6u3l4
+      kps:
+      - ai.llm.pretrain_sft_rlhf
+      - ai.llm.lora_qlora
+    - id: s6u3l5
+      kps:
+      - ai.llm.quantization
+      - ai.llm.inference_opt
+    - id: s6u3l6
+      kps:
+      - ai.llm.vllm
+      - ai.llm.tgi
+      - ai.llm.ollama
+  - id: s6u4
+    name: 嵌入与向量检索
+    lessons:
+    - id: s6u4l1
+      kps:
+      - ai.embed.word2vec
+      - ai.embed.sentence_transformer
+    - id: s6u4l2
+      kps:
+      - ai.embed.bge_m3
+      - ai.embed.reranker
+    - id: s6u4l3
+      kps:
+      - ai.vec.faiss
+      - ai.vec.qdrant
+      - ai.vec.milvus
+    - id: s6u4l4
+      kps:
+      - ai.vec.hybrid_search
+      - ai.vec.bm25
+    - id: s6u4l5
+      kps:
+      - ai.embed.clip
+      - ai.embed.multimodal
+  - id: s6u5
+    name: 多模态模型
+    lessons:
+    - id: s6u5l1
+      kps:
+      - ai.mm.vlm
+      - ai.mm.vision_encoder
+    - id: s6u5l2
+      kps:
+      - ai.mm.doc_understanding
+      - ai.mm.video_understanding
+- id: s7
+  name: AI Agent 工程
+  units:
+  - id: s7u1
+    name: LLM 应用基础
+    lessons:
+    - id: s7u1l1
+      kps:
+      - agent.llm.prompt_engineering
+      - agent.llm.few_shot
+    - id: s7u1l2
+      kps:
+      - agent.llm.cot
+      - agent.llm.tot
+      - agent.llm.react
+    - id: s7u1l3
+      kps:
+      - agent.llm.structured_output
+      - agent.llm.json_mode
+    - id: s7u1l4
+      kps:
+      - agent.llm.function_calling
+      - agent.llm.tool_use
+  - id: s7u2
+    name: RAG 全栈
+    lessons:
+    - id: s7u2l1
+      kps:
+      - agent.rag.pipeline
+      - agent.rag.chunking
+    - id: s7u2l2
+      kps:
+      - agent.rag.embedding_choice
+      - agent.rag.rerank
+    - id: s7u2l3
+      kps:
+      - agent.rag.query_rewrite
+      - agent.rag.hyde
+    - id: s7u2l4
+      kps:
+      - agent.rag.hybrid
+      - agent.rag.parent_doc
+    - id: s7u2l5
+      kps:
+      - agent.rag.eval_ragas
+      - agent.rag.hallucination_guard
+    - id: s7u2l6
+      kps:
+      - agent.rag.graphrag
+      - agent.rag.community_summary
+  - id: s7u3
+    name: Agent 核心模式
+    lessons:
+    - id: s7u3l1
+      kps:
+      - agent.pattern.react
+      - agent.pattern.plan_execute
+    - id: s7u3l2
+      kps:
+      - agent.pattern.reflexion
+      - agent.pattern.self_consistency
+    - id: s7u3l3
+      kps:
+      - agent.pattern.tool_router
+      - agent.pattern.multi_tool
+    - id: s7u3l4
+      kps:
+      - agent.pattern.memory_short
+      - agent.pattern.memory_long
+    - id: s7u3l5
+      kps:
+      - agent.pattern.workflow
+      - agent.pattern.state_machine
+    - id: s7u3l6
+      kps:
+      - agent.pattern.browser_agent
+      - agent.pattern.generative_ui
+  - id: s7u4
+    name: 主流框架
+    lessons:
+    - id: s7u4l1
+      kps:
+      - agent.fw.langchain_basic
+      - agent.fw.langchain_lcel
+    - id: s7u4l2
+      kps:
+      - agent.fw.langgraph_state
+      - agent.fw.langgraph_checkpoint
+    - id: s7u4l3
+      kps:
+      - agent.fw.llamaindex
+      - agent.fw.autogen
+    - id: s7u4l4
+      kps:
+      - agent.fw.crewai
+      - agent.fw.mcp_protocol
+    - id: s7u4l5
+      kps:
+      - agent.fw.openai_agents_sdk
+      - agent.fw.anthropic_sdk
+  - id: s7u5
+    name: 多 Agent 协作
+    lessons:
+    - id: s7u5l1
+      kps:
+      - agent.multi.supervisor
+      - agent.multi.hierarchical
+    - id: s7u5l2
+      kps:
+      - agent.multi.debate
+      - agent.multi.voting
+    - id: s7u5l3
+      kps:
+      - agent.multi.handoff
+      - agent.multi.shared_memory
+  - id: s7u6
+    name: 记忆与状态
+    lessons:
+    - id: s7u6l1
+      kps:
+      - agent.mem.buffer
+      - agent.mem.summary
+    - id: s7u6l2
+      kps:
+      - agent.mem.vector_store
+      - agent.mem.knowledge_graph
+    - id: s7u6l3
+      kps:
+      - agent.mem.episodic
+      - agent.mem.semantic
+  - id: s7u7
+    name: Agent 评估与可观测
+    lessons:
+    - id: s7u7l1
+      kps:
+      - agent.eval.trajectory
+      - agent.eval.tool_accuracy
+    - id: s7u7l2
+      kps:
+      - agent.eval.cost_latency
+      - agent.eval.llm_as_judge
+    - id: s7u7l3
+      kps:
+      - agent.obs.langsmith
+      - agent.obs.langfuse
+      - agent.obs.opentelemetry
+  - id: s7u8
+    name: Agent 工程化
+    lessons:
+    - id: s7u8l1
+      kps:
+      - agent.eng.prompt_versioning
+      - agent.eng.eval_ci
+    - id: s7u8l2
+      kps:
+      - agent.eng.guardrails
+      - agent.eng.pii_redact
+    - id: s7u8l3
+      kps:
+      - agent.eng.caching
+      - agent.eng.rate_limit
+- id: s8
+  name: AI 架构师：系统设计与规模化
+  units:
+  - id: s8u1
+    name: 分布式训练
+    lessons:
+    - id: s8u1l1
+      kps:
+      - arch.dist.ddp
+      - arch.dist.fsdp
+    - id: s8u1l2
+      kps:
+      - arch.dist.deepspeed
+      - arch.dist.megatron
+    - id: s8u1l3
+      kps:
+      - arch.dist.ray
+      - arch.dist.checkpoint
+  - id: s8u2
+    name: 推理服务架构
+    lessons:
+    - id: s8u2l1
+      kps:
+      - arch.serve.batch
+      - arch.serve.streaming
+    - id: s8u2l2
+      kps:
+      - arch.serve.kv_cache
+      - arch.serve.paged_attention
+    - id: s8u2l3
+      kps:
+      - arch.serve.multi_lora
+      - arch.serve.speculative
+    - id: s8u2l4
+      kps:
+      - arch.serve.gateway
+      - arch.serve.router
+    - id: s8u2l5
+      kps:
+      - arch.edge.on_device
+      - arch.edge.collaboration
+  - id: s8u3
+    name: MLOps / LLMOps
+    lessons:
+    - id: s8u3l1
+      kps:
+      - arch.mlops.pipeline
+      - arch.mlops.data_version
+    - id: s8u3l2
+      kps:
+      - arch.mlops.model_registry
+      - arch.mlops.ab_test
+    - id: s8u3l3
+      kps:
+      - arch.mlops.monitor_drift
+      - arch.mlops.feedback_loop
+  - id: s8u4
+    name: 云原生与规模化
+    lessons:
+    - id: s8u4l1
+      kps:
+      - arch.cloud.k8s
+      - arch.cloud.gpu_scheduling
+    - id: s8u4l2
+      kps:
+      - arch.cloud.istio
+      - arch.cloud.autoscale
+    - id: s8u4l3
+      kps:
+      - arch.cloud.cost_optim
+      - arch.cloud.multi_region
+  - id: s8u5
+    name: 系统设计实战
+    lessons:
+    - id: s8u5l1
+      kps:
+      - arch.sys.chat_app
+      - arch.sys.rag_platform
+    - id: s8u5l2
+      kps:
+      - arch.sys.agent_platform
+      - arch.sys.eval_platform
+    - id: s8u5l3
+      kps:
+      - arch.sys.data_platform
+      - arch.sys.cost_control
+  - id: s8u6
+    name: 安全与合规
+    lessons:
+    - id: s8u6l1
+      kps:
+      - arch.sec.prompt_injection
+      - arch.sec.jailbreak
+    - id: s8u6l2
+      kps:
+      - arch.sec.data_privacy
+      - arch.sec.compliance
+    - id: s8u6l3
+      kps:
+      - arch.sec.indirect_injection
+      - arch.sec.agent_sandbox

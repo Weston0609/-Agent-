@@ -1,0 +1,922 @@
+{
+  "id": "s2u1l3",
+  "title": "s2u1l3",
+  "kps": [
+    "py.oop.inherit",
+    "py.oop.super",
+    "py.oop.mro"
+  ],
+  "theory": "## py.oop.inherit\n\n# 继承（Inheritance）：让代码复用与扩展的基石\n\n> **一句话直觉**：继承让你把“已经写好的类”当作地基，在上面盖新楼，而不是每次从零挖土。\n\n---\n\n## 1. 为什么需要继承？——从“复制粘贴”说起\n\n假设你要写一个程序管理动物园的动物。没有继承时，你可能会这样写：\n\n```python\nclass Dog:\n    def __init__(self, name):\n        self.name = name\n\n    def eat(self):\n        print(f\"{self.name} 正在吃东西\")\n\n    def speak(self):\n        print(f\"{self.name} 汪汪叫\")\n\n\nclass Cat:\n    def __init__(self, name):\n        self.name = name\n\n    def eat(self):\n        print(f\"{self.name} 正在吃东西\")\n\n    def speak(self):\n        print(f\"{self.name} 喵喵叫\")\n```\n\n`eat` 方法在两个类里一模一样，这就是重复代码。继承的核心思想是：**把共同的部分抽到一个“父类”（parent class / base class）里，让“子类”（child class / derived class）去复用并定制**。\n\n---\n\n## 2. 第一个继承示例：语法与 `super()`\n\n```python\nclass Animal:\n    \"\"\"所有动物的共同父类\"\"\"\n    def __init__(self, name):\n        self.name = name\n\n    def eat(self):\n        print(f\"{self.name} 正在吃东西\")\n\n\nclass Dog(Animal):          # Dog 继承 Animal\n    def speak(self):\n        print(f\"{self.name} 汪汪叫\")\n\n\nclass Cat(Animal):          # Cat 继承 Animal\n    def speak(self):\n        print(f\"{self.name} 喵喵叫\")\n\n\nd = Dog(\"旺财\")\nd.eat()      # 继承自 Animal\nd.speak()    # Dog 自己定义\n\nc = Cat(\"咪咪\")\nc.eat()\nc.speak()\n```\n\n**关键点**：\n- `class Dog(Animal):` 表示 `Dog` 继承 `Animal`。\n- `Dog` 自动拥有 `Animal` 的 `__init__` 和 `eat`。\n- 如果子类要扩展父类的 `__init__`，应使用 `super().__init__(...)`，而不是手动调用 `Animal.__init__(self, ...)`。\n\n```python\nclass GuideDog(Animal):\n    def __init__(self, name, owner):\n        super().__init__(name)   # 调用父类构造器\n        self.owner = owner\n\n    def guide(self):\n        print(f\"{self.name} 正在为 {self.owner} 导盲\")\n\n\ng = GuideDog(\"小黑\", \"张三\")\ng.eat()\ng.guide()\n```\n\n---\n\n## 3. 方法重写（Override）与多态（Polymorphism）\n\n子类可以“覆盖”父类的方法，给出自己的实现：\n\n```python\nclass Animal:\n    def __init__(self, name):\n        self.name = name\n\n    def speak(self):\n        print(f\"{self.name} 发出某种声音\")\n\n\nclass Dog(Animal):\n    def speak(self):\n        print(f\"{self.name} 汪汪叫\")\n\n\nclass Cat(Animal):\n    def speak(self):\n        print(f\"{self.name} 喵喵叫\")\n\n\n# 多态：同一个函数，接受不同子类对象，产生不同行为\ndef make_it_speak(animal: Animal):\n    animal.speak()\n\n\nmake_it_speak(Dog(\"旺财\"))\nmake_it_speak(Cat(\"咪咪\"))\n```\n\n**多态** 的含义是：调用方只关心“这是一个 Animal”，不关心具体是 Dog 还是 Cat；具体行为由运行时对象的真实类型决定。\n\n---\n\n## 4. `isinstance`、`issubclass` 与继承链\n\n继承关系可以用两个内置函数检查：\n\n```python\nclass Animal: pass\nclass Dog(Animal): pass\n\nprint(issubclass(Dog, Animal))   # True，Dog 是 Animal 的子类\nprint(isinstance(Dog(), Animal)) # True，Dog 实例也是 Animal 的实例\nprint(isinstance(Dog(), Dog))    # True\n```\n\n**常见误区**：不要用 `type(obj) is Animal` 判断类型，因为它不考虑继承。\n\n```python\nclass Animal: pass\nclass Dog(Animal): pass\n\nd = Dog()\nprint(type(d) is Animal)        # False：type 精确匹配，不认继承\nprint(isinstance(d, Animal))    # True：isinstance 认继承\n```\n\n所以工程规范推荐：**类型判断用 `isinstance()`，不要直接比较 `type()`**。\n\n---\n\n## 5. 多重继承与 MRO（Method Resolution Order）\n\nPython 允许一个类继承多个父类：\n\n```python\nclass A:\n    def hello(self):\n        print(\"A.hello\")\n\n\nclass B(A):\n    def hello(self):\n        print(\"B.hello\")\n\n\nclass C(A):\n    def hello(self):\n        print(\"C.hello\")\n\n\nclass D(B, C):\n    pass\n\n\nd = D()\nd.hello()          # 输出 B.hello\nprint(D.__mro__)   # 查看方法解析顺序\n```\n\n**MRO（方法解析顺序）** 决定了当多个父类都有同名方法时，Python 按什么顺序查找。规则简单说就是：**从左到右，深度优先，但子类优先于父类**。可以用 `类名.__mro__` 或 `类名.mro()` 查看。\n\n**工程建议**：多重继承很强大，但也容易让代码难以理解。常见用法是“混入”（Mixin）——一个只提供额外方法的轻量父类。\n\n```python\nclass JsonMixin:\n    def to_json(self):\n        import json\n        return json.dumps(self.__dict__)\n\n\nclass User(JsonMixin):\n    def __init__(self, name, age):\n        self.name = name\n        self.age = age\n\n\nu = User(\"Alice\", 30)\nprint(u.to_json())   # {\"name\": \"Alice\", \"age\": 30}\n```\n\n---\n\n## 6. 继承 vs 组合：什么时候不该用继承？\n\n继承表达的是 **“is-a”** 关系：狗是动物。\n组合表达的是 **“has-a”** 关系：汽车有引擎。\n\n如果两个类只是“用到了对方的功能”，优先用组合：\n\n```python\n# 不推荐：为了复用功能而继承\nclass Engine:\n    def start(self):\n        print(\"引擎启动\")\n\n\nclass Car(Engine):   # 汽车“是”引擎？逻辑不通\n    pass\n\n\n# 推荐：组合\nclass Car:\n    def __init__(self):\n        self.engine = Engine()\n\n    def start(self):\n        self.engine.start()\n        print(\"汽车启动\")\n\n\nCar().start()\n```\n\n**判断原则**：\n- 子类确实是父类的一种 → 用继承。\n- 子类只是需要父类的某些能力 → 用组合或 Mixin。\n\n---\n\n## 7. 小结\n\n| 概念 | 作用 |\n|------|------|\n| 继承 | 子类复用父类的属性和方法 |\n| `super()` | 调用父类方法，常用于 `__init__` |\n| 方法重写 | 子类提供自己的实现 |\n| 多态 | 同一接口，不同对象有不同行为 |\n| `isinstance` | 判断对象是否属于某类（含继承） |\n| MRO | 多重继承时的方法查找顺序 |\n| 组合 | “has-a”关系，通常比继承更灵活 |\n\n继承是面向对象编程的入口。掌握它之后，你就能读懂绝大多数 Python 库的类结构，也能设计出可扩展的代码。\n\n---\n\n## 动手练习\n\n**任务：设计一个“员工管理系统”的类层次**\n\n1. 创建父类 `Employee`，包含属性 `name`、`salary`，方法 `work()` 打印“{name} 正在工作”，方法 `get_salary()` 返回薪水。\n2. 创建子类 `Manager`，额外属性 `team_size`，重写 `work()` 打印“{name} 正在管理 {team_size} 人的团队”。\n3. 创建子类 `Developer`，额外属性 `language`，重写 `work()` 打印“{name} 正在用 {language} 写代码”。\n4. 创建一个列表，放入 `Manager` 和 `Developer` 实例，遍历调用 `work()` 和 `get_salary()`，观察多态效果。\n5. 用 `isinstance` 判断每个对象是否都是 `Employee` 的实例。\n\n**提示**：\n- 子类的 `__init__` 里用 `super().__init__(name, salary)`。\n- 运行后打印 `Manager.__mro__` 看看继承链。\n\n```python\nclass Animal:\n    \"\"\"所有动物的共同父类\"\"\"\n    def __init__(self, name):\n        self.name = name\n\n    def eat(self):\n        print(f\"{self.name} 正在吃东西\")\n\n    def speak(self):\n        print(f\"{self.name} 发出某种声音\")\n\n\nclass Dog(Animal):\n    \"\"\"狗：继承 Animal，重写 speak\"\"\"\n    def speak(self):\n        print(f\"{self.name} 汪汪叫\")\n\n\nclass Cat(Animal):\n    \"\"\"猫：继承 Animal，重写 speak\"\"\"\n    def speak(self):\n        print(f\"{self.name} 喵喵叫\")\n\n\nclass GuideDog(Animal):\n    \"\"\"导盲犬：扩展 __init__，新增 guide 方法\"\"\"\n    def __init__(self, name, owner):\n        super().__init__(name)   # 调用父类构造器\n        self.owner = owner\n\n    def guide(self):\n        print(f\"{self.name} 正在为 {self.owner} 导盲\")\n\n\ndef make_it_speak(animal: Animal):\n    \"\"\"多态：接收任意 Animal 子类实例\"\"\"\n    animal.speak()\n\n\n# --- 演示 ---\nd = Dog(\"旺财\")\nc = Cat(\"咪咪\")\ng = GuideDog(\"小黑\", \"张三\")\n\nd.eat()        # 继承自 Animal\nd.speak()      # Dog 自己的实现\n\nc.eat()\nc.speak()\n\ng.eat()        # 继承自 Animal\ng.guide()      # GuideDog 新增方法\n\n# 多态：同一个函数，不同行为\nmake_it_speak(d)\nmake_it_speak(c)\n\n# 类型检查\nprint(isinstance(d, Animal))      # True\nprint(issubclass(Dog, Animal))    # True\n\n# 查看 MRO\nprint(Dog.__mro__)\n```\n\n## py.oop.super\n\n# Python 中的 `super()`：从零到工程级\n\n## 一句话直觉\n\n**`super()` 让你在子类里“借用”父类已经写好的代码，而不用复制粘贴或写死父类名字——它是多重继承（multiple inheritance）与方法解析顺序（MRO, Method Resolution Order）的入口。**\n\n只要你想在子类中“先做父类的事，再做自己的事”，或者处理菱形继承（diamond inheritance），`super()` 就是那把钥匙。\n\n---\n\n## 1. 为什么需要 `super()`？\n\n先看不使用 `super()` 的写法：\n\n```python\nclass Animal:\n    def __init__(self, name):\n        self.name = name\n        print(f\"Animal.init({name})\")\n\nclass Dog(Animal):\n    def __init__(self, name, breed):\n        Animal.__init__(self, name)   # 直接写父类名\n        self.breed = breed\n        print(f\"Dog.init({name}, {breed})\")\n```\n\n这能跑，但有三个问题：\n\n1. **硬编码父类名**：如果 `Dog` 的父类从 `Animal` 改成 `Pet`，你必须改一行行调用。\n2. **不兼容多重继承**：`Animal.__init__` 不会继续向上调用，菱形继承时会断链。\n3. **不符合协作式继承（cooperative inheritance）惯例**。\n\n`super()` 就是官方推荐的解决方式。\n\n---\n\n## 2. `super()` 到底是什么？\n\n`super()` 返回一个**代理对象（proxy object）**，它不是“父类对象”，而是“**按 MRO 顺序排在当前类之后的下一个类**”的代理。\n\n理解这句话是核心：**`super()` 不是“父类”，而是“MRO 中的下一个”。**\n\n```python\nclass A:\n    def hello(self):\n        print(\"A.hello\")\n\nclass B(A):\n    def hello(self):\n        super().hello()   # 等价于 A.hello(self)\n        print(\"B.hello\")\n\nB().hello()\n# 输出:\n# A.hello\n# B.hello\n```\n\nPython 3 里 `super()` 不带参数也能工作，因为编译器会通过 `__class__` 闭包（closure）自动传入当前类与 `self`。\n\n---\n\n## 3. MRO：`super()` 的导航地图\n\n每个类都有一张 MRO 表，由 C3 线性化算法（C3 linearization）生成。可以用 `Class.__mro__` 或 `Class.mro()` 查看。\n\n```python\nclass A: pass\nclass B(A): pass\nclass C(A): pass\nclass D(B, C): pass\n\nfor cls in D.__mro__:\n    print(cls.__name__)\n# D\n# B\n# C\n# A\n# object\n```\n\n在 `B` 的方法里调用 `super()`，下一个是 `C`，**不是 `A`**！这就是“MRO 中下一个”的真正含义。\n\n---\n\n## 4. 协作式多重继承：为什么要一直向上调\n\n下面演示标准的**协作式初始化模式**：每个 `__init__` 都调用 `super().__init__(...)`，参数一路透传。\n\n```python\nclass Base:\n    def __init__(self, **kwargs):\n        print(f\"Base got {kwargs}\")\n        super().__init__()   # 最终到 object\n\nclass A(Base):\n    def __init__(self, a, **kwargs):\n        self.a = a\n        print(f\"A: a={a}\")\n        super().__init__(**kwargs)\n\nclass B(Base):\n    def __init__(self, b, **kwargs):\n        self.b = b\n        print(f\"B: b={b}\")\n        super().__init__(**kwargs)\n\nclass C(A, B):\n    def __init__(self, a, b):\n        super().__init__(a=a, b=b)\n\nc = C(a=1, b=2)\nprint(c.a, c.b)\n```\n\n输出顺序由 MRO 决定（`C -> A -> B -> Base -> object`），每个 `__init__` 负责自己那部分，参数用 `**kwargs` 一路收集与透传。这是 Django、PyTorch `nn.Module` 等大型框架的子类化基础。\n\n---\n\n## 5. 工程级要点速查\n\n- **`super()` 不带参数**（Python 3）优先使用；只有在类体外部（如动态生成方法）才需要 `super(CurrentClass, self)`。\n- **`__init_subclass__`、`__set_name__`** 等机制也与 `super()` 协作，共同构成类生命周期钩子。\n- **不要在 `__init__` 里只调 `super().__init__()` 而不传参**——多层协作时容易丢参数。\n- **`super()` 只能用于新式类（new-style class）**，Python 3 所有类都是新式类，这点已无历史负担。\n- **`super()` 不能用于 `NamedTuple` 子类的方法中**（Python 3.14 起会直接抛 `TypeError`），因为 `NamedTuple` 生成的类不支持 `__class__` 闭包机制。\n\n---\n\n## 结尾：动手练习\n\n在本地新建 `shape.py`，实现一个形状层级：\n\n1. 定义 `Shape`，`__init__(self, name)`，保存 `self.name`，并打印 `Shape({name})`。\n2. 定义 `Colored`，`__init__(self, color)`，保存 `self.color`，并打印 `Colored({color})`。\n3. 定义 `Square(Shape, Colored)`，`__init__(self, name, color, side)`，保存 `self.side`，并通过 `super().__init__(name=name, color=color)` 走协作式初始化。\n4. 打印 `Square.__mro__`，并创建 `s = Square(\"sq\", \"red\", 3)`。\n5. 观察输出顺序与 `s.name / s.color / s.side`，解释为什么 `Shape` 和 `Colored` 都会打印。\n\n**加分**：给三个类各写一个 `describe(self)`，都用 `super().describe()` 串起来，返回一段描述字符串，验证 MRO 顺序。\n\n```python\nclass Base:\n    def __init__(self, **kwargs):\n        print(f\"Base got {kwargs}\")\n        super().__init__()  # 最终到达 object\n\nclass A(Base):\n    def __init__(self, a, **kwargs):\n        self.a = a\n        print(f\"A: a={a}\")\n        super().__init__(**kwargs)\n\nclass B(Base):\n    def __init__(self, b, **kwargs):\n        self.b = b\n        print(f\"B: b={b}\")\n        super().__init__(**kwargs)\n\nclass C(A, B):\n    def __init__(self, a, b):\n        super().__init__(a=a, b=b)\n\nc = C(a=1, b=2)\nprint(\"MRO:\", [cls.__name__ for cls in C.__mro__])\nprint(\"c.a =\", c.a, \"| c.b =\", c.b)\n# 输出:\n# A: a=1\n# B: b=2\n# Base got {}\n# MRO: ['C', 'A', 'B', 'Base', 'object']\n# c.a = 1 | c.b = 2\n```\n\n## py.oop.mro\n\n# Python MRO（方法解析顺序）：从直觉到工程\n\n## 一句话直觉\n\n当一个对象调用方法时，Python 需要沿着一条确定的“查找路线”在继承树里找到该方法——这条路线就是 **MRO（Method Resolution Order，方法解析顺序）**。不懂 MRO，多继承就会变成“玄学”；懂了 MRO，你就能精确预测和设计类的行为。\n\n---\n\n## 1. 什么是 MRO？为什么需要它？\n\nPython 支持 **多继承（multiple inheritance）**：一个类可以同时继承多个父类。当多个父类都定义了同名方法时，Python 必须有一套规则决定“先用谁的”。这套规则就是 MRO。\n\nPython 3 采用 **C3 线性化算法（C3 linearization）** 生成 MRO，保证：\n\n1. **子类优先于父类**；\n2. **多个父类按声明顺序优先**；\n3. **单调性**：不会出现“父类排在子类前面”的矛盾。\n\n每个类都有一个 `__mro__` 属性，它是一个元组，记录方法查找顺序。\n\n```python\nclass A:\n    def who(self):\n        return \"A\"\n\nclass B(A):\n    def who(self):\n        return \"B\"\n\nclass C(A):\n    def who(self):\n        return \"C\"\n\nclass D(B, C):\n    pass\n\nprint(D.__mro__)\nprint(D().who())\n```\n\n输出：\n\n```\n(<class '__main__.D'>, <class '__main__.B'>, <class '__main__.C'>, <class '__main__.A'>, <class 'object'>)\nB\n```\n\n直觉：`D` 自己没有 `who`，按 MRO 先找 `B`，命中，返回 `B`。\n\n---\n\n## 2. C3 算法：MRO 是怎么算出来的？\n\nC3 的合并规则可以简化为：\n\n- 对类 `C(B1, B2, ..., Bn)`，取 `L[C] = C + merge(L[B1], L[B2], ..., L[Bn], [B1, B2, ..., Bn])`；\n- `merge` 每次从列表头部取一个“不出现在其他列表尾部”的候选，加入结果，否则跳到下一个列表。\n\n对上面的例子：\n\n```\nL[A] = [A, object]\nL[B] = [B, A, object]\nL[C] = [C, A, object]\nL[D] = D + merge([B,A,object], [C,A,object], [B,C])\n     = [D, B, C, A, object]\n```\n\n验证：\n\n```python\nprint([c.__name__ for c in D.__mro__])\n# ['D', 'B', 'C', 'A', 'object']\n```\n\n注意：**`object` 永远是 MRO 的最后一个**，因为所有类最终都继承自它。\n\n---\n\n## 3. super()：沿 MRO 前进，而不是“调用父类”\n\n`super()` 的常见误解是“调用父类方法”。更准确的说法是：**从当前类在 MRO 中的下一个位置继续查找**。\n\n```python\nclass A:\n    def greet(self):\n        return \"A\"\n\nclass B(A):\n    def greet(self):\n        return \"B -> \" + super().greet()\n\nclass C(A):\n    def greet(self):\n        return \"C -> \" + super().greet()\n\nclass D(B, C):\n    def greet(self):\n        return \"D -> \" + super().greet()\n\nprint(D().greet())\n# D -> B -> C -> A\n```\n\n关键点：`B.greet` 里的 `super()` 并不是跳到 `A`，而是跳到 `D.__mro__` 中 `B` 的**下一个**：`C`。这就是 **协作式多继承（cooperative multiple inheritance）** 的基础。\n\n---\n\n## 4. 经典陷阱：菱形继承与“不一致的 MRO”\n\n菱形继承（diamond inheritance）是最常见的多继承形态：`D(B, C)`，而 `B` 和 `C` 都继承 `A`。C3 能优雅地处理它。\n\n但如果继承顺序本身矛盾，Python 会在定义类时直接报 `TypeError`：\n\n```python\nclass A: pass\nclass B(A): pass\n\n# 下面这行会报错：无法为 X 创建一致的 MRO\n# class X(A, B): pass\n```\n\n原因：`A` 是 `B` 的父类，却想排在 `B` 前面，违反“子类优先”的单调性。\n\n工程建议：\n\n- 多继承尽量用于 **Mixin（混入类）**：只提供小功能，不持有状态；\n- 所有 `__init__` 都用 `super().__init__(**kwargs)` 协作传递；\n- 用 `ClassName.__mro__` 或 `help(ClassName)` 排查顺序。\n\n---\n\n## 5. 工程级用法：Mixin 与协作式初始化\n\n```python\nclass LogMixin:\n    def __init__(self, **kwargs):\n        super().__init__(**kwargs)\n        print(f\"[log] {type(self).__name__} created\")\n\nclass TimestampMixin:\n    def __init__(self, **kwargs):\n        super().__init__(**kwargs)\n        self.created = \"2025-01-01\"\n\nclass Base:\n    def __init__(self, name, **kwargs):\n        super().__init__(**kwargs)\n        self.name = name\n\nclass Service(LogMixin, TimestampMixin, Base):\n    pass\n\ns = Service(name=\"api\")\nprint(s.name, s.created)\nprint([c.__name__ for c in Service.__mro__])\n```\n\n输出：\n\n```\n[log] Service created\napi 2025-01-01\n['Service', 'LogMixin', 'TimestampMixin', 'Base', 'object']\n```\n\n每个 `__init__` 都调用 `super().__init__(**kwargs)`，于是所有父类都会被按 MRO 顺序调用一次。\n\n---\n\n## 动手练习\n\n完成下面的小任务，巩固 MRO：\n\n1. 定义类 `A`、`B(A)`、`C(A)`、`D(B, C)`、`E(C, B)`。\n2. 分别打印 `D.__mro__` 和 `E.__mro__` 的类名列表，观察 `B`、`C` 的顺序差异。\n3. 在 `A`、`B`、`C` 中各定义一个 `tag()` 方法，返回包含类名的字符串；在 `D` 中调用 `tag()`，预测并验证输出。\n4. 尝试定义 `class F(A, B): pass`，解释为什么 Python 会报 `TypeError`。\n\n提交形式：一段可运行的 `.py` 文件 + 你对 `D.__mro__` 和 `E.__mro__` 差异的一句话解释。\n\n```python\nclass A:\n    def who(self):\n        return \"A\"\n\nclass B(A):\n    def who(self):\n        return \"B -> \" + super().who()\n\nclass C(A):\n    def who(self):\n        return \"C -> \" + super().who()\n\nclass D(B, C):\n    def who(self):\n        return \"D -> \" + super().who()\n\n# 打印 MRO\nprint([c.__name__ for c in D.__mro__])\n# 输出: ['D', 'B', 'C', 'A', 'object']\n\n# super() 沿 MRO 前进：D -> B -> C -> A\nprint(D().who())\n# 输出: D -> B -> C -> A\n\n# 协作式初始化\nclass LogMixin:\n    def __init__(self, **kwargs):\n        super().__init__(**kwargs)\n        print(f\"[log] {type(self).__name__} created\")\n\nclass TimestampMixin:\n    def __init__(self, **kwargs):\n        super().__init__(**kwargs)\n        self.created = \"2025-01-01\"\n\nclass Base:\n    def __init__(self, name, **kwargs):\n        super().__init__(**kwargs)\n        self.name = name\n\nclass Service(LogMixin, TimestampMixin, Base):\n    pass\n\ns = Service(name=\"api\")\nprint(s.name, s.created)\n# 输出:\n# [log] Service created\n# api 2025-01-01\n```\n",
+  "quiz": [
+    {
+      "kp": "py.oop.inherit",
+      "type": "single_choice",
+      "question": "以下代码的输出是什么？\nclass A:\n    def show(self):\n        print('A')\nclass B(A):\n    pass\nB().show()",
+      "options": [
+        "A",
+        "B",
+        "报错：B 没有 show",
+        "输出为空"
+      ],
+      "answer": 0,
+      "explanation": "B 继承自 A，未定义自己的 show，因此沿 MRO 找到 A.show，输出 A。",
+      "error_tag": "对继承查找机制理解不足",
+      "variant_group": "inherit_basic_lookup"
+    },
+    {
+      "kp": "py.oop.inherit",
+      "type": "single_choice",
+      "question": "以下代码的输出是什么？\nclass A:\n    def f(self):\n        print('A.f')\nclass B(A):\n    def f(self):\n        print('B.f')\nB().f()",
+      "options": [
+        "A.f",
+        "B.f",
+        "先 A.f 再 B.f",
+        "报错"
+      ],
+      "answer": 1,
+      "explanation": "子类重写 f，调用时优先使用子类的定义。",
+      "error_tag": "误以为父类方法总先执行",
+      "variant_group": "inherit_override"
+    },
+    {
+      "kp": "py.oop.inherit",
+      "type": "single_choice",
+      "question": "以下代码的输出是什么？\nclass A:\n    def f(self):\n        print('A')\nclass B(A): pass\nclass C(A): pass\nB().f()\nC().f()",
+      "options": [
+        "A A",
+        "A C",
+        "B C",
+        "报错"
+      ],
+      "answer": 0,
+      "explanation": "B 和 C 都未重写 f，都继承 A.f。",
+      "error_tag": "误以为不同子类会各自复制方法",
+      "variant_group": "inherit_multiple_children"
+    },
+    {
+      "kp": "py.oop.inherit",
+      "type": "single_choice",
+      "question": "关于多重继承中 MRO 的说法正确的是？",
+      "options": [
+        "MRO 保证每个类只出现一次，并遵循子类在前父类在后",
+        "MRO 按类定义顺序任意排列",
+        "Python 不支持多重继承",
+        "MRO 只对单继承有意义"
+      ],
+      "answer": 0,
+      "explanation": "C3 线性化算法保证单调性与局部优先顺序。",
+      "error_tag": "对多重继承 MRO 规则理解不足",
+      "variant_group": "inherit_multiple_mro"
+    },
+    {
+      "kp": "py.oop.inherit",
+      "type": "single_choice",
+      "question": "以下代码输出什么？\nclass A:\n    def __init__(self):\n        self.x = 'A'\nclass B(A):\n    def __init__(self):\n        super().__init__()\n        self.y = 'B'\nb = B()\nprint(b.x, b.y)",
+      "options": [
+        "A B",
+        "A A",
+        "B B",
+        "报错：缺少 x"
+      ],
+      "answer": 0,
+      "explanation": "super().__init__() 设置了 x，随后 B 设置 y。",
+      "error_tag": "对 super 初始化顺序理解错误",
+      "variant_group": "inherit_init_order"
+    },
+    {
+      "kp": "py.oop.inherit",
+      "type": "single_choice",
+      "question": "以下代码执行后输出什么？\nclass A:\n    def f(self):\n        print('A')\nclass B(A):\n    def f(self):\n        print('B')\nclass C(B):\n    pass\nC().f()",
+      "options": [
+        "A",
+        "B",
+        "C",
+        "报错"
+      ],
+      "answer": 1,
+      "explanation": "C 未定义 f，沿 MRO 找到 B.f。",
+      "error_tag": "对多层继承查找不熟",
+      "variant_group": "inherit_multilevel"
+    },
+    {
+      "kp": "py.oop.inherit",
+      "type": "single_choice",
+      "question": "以下哪种情况会导致 AttributeError？",
+      "options": [
+        "子类实例访问父类定义的方法",
+        "父类实例访问子类新增的方法",
+        "子类实例访问子类自己定义的方法",
+        "通过 super() 调用父类方法"
+      ],
+      "answer": 1,
+      "explanation": "父类实例不知道子类扩展的方法。",
+      "error_tag": "对继承方向理解错误",
+      "variant_group": "inherit_attribute_error"
+    },
+    {
+      "kp": "py.oop.inherit",
+      "type": "single_choice",
+      "question": "以下代码输出什么？\nclass A:\n    def f(self):\n        return 'A'\nclass B(A):\n    def f(self):\n        return 'B'\nclass C(B):\n    def f(self):\n        return super().f() + 'C'\nprint(C().f())",
+      "options": [
+        "A",
+        "B",
+        "BC",
+        "CB"
+      ],
+      "answer": 2,
+      "explanation": "C.f 调用 super().f() 得到 B，再拼接 'C'。",
+      "error_tag": "super 链式调用理解错误",
+      "variant_group": "inherit_super_chain"
+    },
+    {
+      "kp": "py.oop.inherit",
+      "type": "single_choice",
+      "question": "以下代码中，如果删除 B 类里的 f 方法，输出会变成什么？\nclass A:\n    def f(self):\n        print('A')\nclass B(A):\n    def f(self):\n        print('B')\nB().f()",
+      "options": [
+        "A",
+        "B",
+        "报错",
+        "无输出"
+      ],
+      "answer": 0,
+      "explanation": "删除后 B 继承 A.f，输出 A。",
+      "error_tag": "对方法解析顺序不熟悉",
+      "variant_group": "inherit_remove_override"
+    },
+    {
+      "kp": "py.oop.inherit",
+      "type": "single_choice",
+      "question": "以下关于继承中属性查找顺序的说法正确的是？",
+      "options": [
+        "实例属性优先于类属性，子类优先于父类",
+        "类属性优先于实例属性",
+        "父类属性优先于子类属性",
+        "查找顺序与继承无关"
+      ],
+      "answer": 0,
+      "explanation": "属性查找先实例后类，类中沿 MRO 从子到父。",
+      "error_tag": "属性查找顺序理解错误",
+      "variant_group": "inherit_attr_lookup"
+    },
+    {
+      "kp": "py.oop.inherit",
+      "type": "single_choice",
+      "question": "以下代码的输出是什么？\nclass A:\n    def __init__(self, v):\n        self.v = v\nclass B(A):\n    def __init__(self, v, extra):\n        super().__init__(v)\n        self.extra = extra\nb = B(1, 2)\nprint(b.v, b.extra)",
+      "options": [
+        "1 2",
+        "1 1",
+        "2 1",
+        "报错"
+      ],
+      "answer": 0,
+      "explanation": "B 通过 super 把 v 传给 A 初始化，然后设置 extra。",
+      "error_tag": "对父类初始化参数传递理解错误",
+      "variant_group": "inherit_init_args"
+    },
+    {
+      "kp": "py.oop.inherit",
+      "type": "single_choice",
+      "question": "以下代码为什么可以运行？\nclass A:\n    def greet(self):\n        return 'hi'\nclass B(A): pass\nb = B()\nprint(b.greet())",
+      "options": [
+        "B 继承了 A 的 greet 方法",
+        "B 自动复制了 A 的方法",
+        "Python 会自动为 B 生成 greet 方法",
+        "B 与 A 是同一个类"
+      ],
+      "answer": 0,
+      "explanation": "继承使子类可以直接使用父类方法，无需复制。",
+      "error_tag": "对继承本质理解错误",
+      "variant_group": "inherit_method_available"
+    },
+    {
+      "kp": "py.oop.inherit",
+      "type": "single_choice",
+      "question": "以下代码中 super() 调用的是哪个方法？\nclass A:\n    def f(self):\n        print('A')\nclass B(A):\n    def f(self):\n        super().f()\n        print('B')",
+      "options": [
+        "B.f",
+        "A.f",
+        "object.f",
+        "无输出"
+      ],
+      "answer": 1,
+      "explanation": "super() 按 MRO 查找下一个类的方法，这里找到 A.f。",
+      "error_tag": "混淆 super 查找目标",
+      "variant_group": "inherit_super"
+    },
+    {
+      "kp": "py.oop.inherit",
+      "type": "single_choice",
+      "question": "以下代码输出什么？\nclass A:\n    x = 1\nclass B(A): pass\nb = B()\nprint(b.x)",
+      "options": [
+        "1",
+        "0",
+        "报错",
+        "None"
+      ],
+      "answer": 0,
+      "explanation": "B 继承 A 的类属性 x。",
+      "error_tag": "对类属性继承理解不足",
+      "variant_group": "inherit_class_attr_lookup"
+    },
+    {
+      "kp": "py.oop.inherit",
+      "type": "single_choice",
+      "question": "以下代码的执行结果是？\nclass A:\n    def __init__(self):\n        self.x = 1\nclass B(A):\n    def __init__(self):\n        self.y = 2\nb = B()\nprint(hasattr(b, 'x'), hasattr(b, 'y'))",
+      "options": [
+        "True True",
+        "True False",
+        "False True",
+        "False False"
+      ],
+      "answer": 2,
+      "explanation": "B 重写了 __init__ 且未调用 super().__init__，因此 x 没有被设置。",
+      "error_tag": "忽略子类构造函数未调用父类构造函数",
+      "variant_group": "inherit_init"
+    },
+    {
+      "kp": "py.oop.inherit",
+      "type": "single_choice",
+      "question": "想要在 B 的 __init__ 中设置 B 自己的属性同时保证父类 A 的属性也被初始化，正确写法是？",
+      "options": [
+        "在 B.__init__ 中先 super().__init__() 再设置自己的属性",
+        "省略 B 的 __init__，Python 会自动合并 A 的初始化",
+        "在 B.__init__ 中直接写 self.__init__()",
+        "在类体里写 A.__init__(self)"
+      ],
+      "answer": 0,
+      "explanation": "super().__init__() 按 MRO 调用父类初始化；直接 A.__init__(self) 虽可运行但绕过 MRO，通常不推荐。",
+      "error_tag": "对初始化父类方式理解错误",
+      "variant_group": "inherit_init_super"
+    },
+    {
+      "kp": "py.oop.inherit",
+      "type": "single_choice",
+      "question": "以下关于 isinstance 的说法正确的是？",
+      "options": [
+        "isinstance(b, A) 对子类实例返回 True",
+        "isinstance(a, B) 对父类实例返回 True",
+        "isinstance 只比较 type 是否完全相同",
+        "isinstance 不能用于继承层次"
+      ],
+      "answer": 0,
+      "explanation": "isinstance 会沿继承链判断，子类实例也是父类实例。",
+      "error_tag": "混淆 isinstance 与 type",
+      "variant_group": "inherit_isinstance"
+    },
+    {
+      "kp": "py.oop.inherit",
+      "type": "single_choice",
+      "question": "以下代码输出什么？\nclass A: pass\nclass B(A): pass\nprint(issubclass(B, A), issubclass(A, B))",
+      "options": [
+        "True True",
+        "True False",
+        "False True",
+        "False False"
+      ],
+      "answer": 1,
+      "explanation": "B 是 A 的子类，A 不是 B 的子类。",
+      "error_tag": "对 issubclass 方向理解错误",
+      "variant_group": "inherit_issubclass"
+    },
+    {
+      "kp": "py.oop.inherit",
+      "type": "single_choice",
+      "question": "以下代码中 B 的 MRO 顺序是？\nclass A: pass\nclass B(A): pass",
+      "options": [
+        "B, A, object",
+        "A, B, object",
+        "B, object, A",
+        "A, object, B"
+      ],
+      "answer": 0,
+      "explanation": "MRO 从类本身开始，再到父类，最后 object。",
+      "error_tag": "MRO 顺序理解错误",
+      "variant_group": "inherit_mro_order"
+    },
+    {
+      "kp": "py.oop.inherit",
+      "type": "single_choice",
+      "question": "以下代码的输出是什么？\nclass A:\n    def f(self):\n        return 'A'\nclass B(A):\n    def f(self):\n        return 'B' + super().f()\nprint(B().f())",
+      "options": [
+        "A",
+        "B",
+        "BA",
+        "AB"
+      ],
+      "answer": 2,
+      "explanation": "B.f 先返回 'B'，再拼接 super().f() 的结果 'A'。",
+      "error_tag": "对 super 返回值拼接顺序理解错误",
+      "variant_group": "inherit_super_return"
+    },
+    {
+      "kp": "py.oop.inherit",
+      "type": "single_choice",
+      "question": "以下代码说明了什么？\nclass A:\n    value = 10\nclass B(A): pass\nB.value = 20\nprint(A.value, B.value)",
+      "options": [
+        "10 20",
+        "20 20",
+        "10 10",
+        "20 10"
+      ],
+      "answer": 0,
+      "explanation": "给 B.value 赋值只影响 B 自己的命名空间，不修改 A.value。",
+      "error_tag": "误以为子类修改类属性会改父类",
+      "variant_group": "inherit_class_attr"
+    },
+    {
+      "kp": "py.oop.super",
+      "type": "single_choice",
+      "question": "关于 super() 在 Python 中的作用，下列说法正确的是？",
+      "options": [
+        "super() 返回的是当前类的父类对象，因此只能用于单继承",
+        "super() 返回一个代理对象，按 MRO 顺序调用下一个类的方法，可用于单继承和多继承",
+        "super() 只能用在 __init__ 方法中，其他地方使用会报错",
+        "super() 会直接实例化父类并返回父类实例"
+      ],
+      "answer": 1,
+      "explanation": "super() 返回的是一个代理对象，它按照类的方法解析顺序（MRO）查找下一个类的方法，而不是简单地指向父类，因此在多继承和菱形继承中都有效，也不限于 __init__。",
+      "error_tag": "概念混淆",
+      "variant_group": "super_basic_semantics"
+    },
+    {
+      "kp": "py.oop.super",
+      "type": "single_choice",
+      "question": "阅读以下代码，输出是什么？\n\nclass A:\n    def greet(self):\n        return 'A'\n\nclass B(A):\n    def greet(self):\n        return 'B' + super().greet()\n\nprint(B().greet())",
+      "options": [
+        "'BA'",
+        "'AB'",
+        "'B'",
+        "报错 AttributeError"
+      ],
+      "answer": 0,
+      "explanation": "B().greet() 返回 'B' + super().greet()，super() 按 MRO 找到 A.greet，返回 'A'，因此结果是 'BA'。",
+      "error_tag": "记忆缺失",
+      "variant_group": "super_call_chain"
+    },
+    {
+      "kp": "py.oop.super",
+      "type": "fill_blank",
+      "question": "在 Python 3 中，若要在子类方法中调用父类的同名方法并继续沿 MRO 传递，应使用内置函数 ______。",
+      "options": [],
+      "answer": [
+        "super",
+        "super()",
+        "super()"
+      ],
+      "explanation": "super() 是 Python 内置函数，返回按 MRO 查找下一个类的代理对象，是协作式多继承中调用父类方法的标准方式。",
+      "error_tag": "记忆缺失",
+      "variant_group": "super_basic_semantics"
+    },
+    {
+      "kp": "py.oop.super",
+      "type": "fill_blank",
+      "question": "阅读代码补全：\n\nclass A:\n    def __init__(self):\n        self.tag = 'A'\n\nclass B(A):\n    def __init__(self):\n        ______\n        self.extra = 'B'\n\n请填入正确语句，使 B 的实例既有 tag='A' 又有 extra='B'。",
+      "options": [],
+      "answer": [
+        "super().__init__()",
+        "super(B, self).__init__()"
+      ],
+      "explanation": "在子类 __init__ 中应调用 super().__init__() 以初始化父类，写入 tag 属性，然后再设置自身的 extra 属性。",
+      "error_tag": "记忆缺失",
+      "variant_group": "super_init_chain"
+    },
+    {
+      "kp": "py.oop.super",
+      "type": "fill_blank",
+      "question": "在 Python 中，super() 查找方法时依据的顺序结构称为 ______（英文缩写，三个字母）。",
+      "options": [],
+      "answer": [
+        "MRO",
+        "mro"
+      ],
+      "explanation": "MRO 即 Method Resolution Order（方法解析顺序），由 C3 线性化算法生成，super() 正是沿着 MRO 向后查找下一个类。",
+      "error_tag": "记忆缺失",
+      "variant_group": "super_diamond_mro"
+    },
+    {
+      "kp": "py.oop.super",
+      "type": "code_reading",
+      "question": "阅读代码，写出输出结果：\n\nclass A:\n    def f(self):\n        return 'A'\n\nclass B(A):\n    def f(self):\n        return 'B->' + super().f()\n\nclass C(B):\n    def f(self):\n        return 'C->' + super().f()\n\nprint(C().f())",
+      "options": [],
+      "answer": "C->B->A",
+      "explanation": "C().f() 返回 'C->' + super().f()，super() 按 MRO 找到 B.f，返回 'B->' + super().f()，再找到 A.f 返回 'A'，拼接后为 'C->B->A'。",
+      "error_tag": "记忆缺失",
+      "variant_group": "super_call_chain"
+    },
+    {
+      "kp": "py.oop.super",
+      "type": "scenario",
+      "question": "工程场景：你用 Python 设计了一个插件框架，基类 BasePlugin 提供 setup() 方法，多个插件类通过多重继承组合了日志、缓存等 mixin。现在某个插件重写了 setup()，测试发现缓存的清理逻辑被执行了两次，怀疑是继承链调用没走统一路径。请说明你如何排查并修复，使每个祖先的 setup 只执行一次。",
+      "options": [],
+      "answer": null,
+      "explanation": "排查时查看类.__mro__ 确认顺序，检查是否有类直接写父类名调用而不是用 super()。修复方式是让所有相关类统一用 super() 沿 MRO 传递调用，保持方法签名兼容，从而保证每个祖先方法只执行一次。",
+      "error_tag": "概念混淆",
+      "variant_group": "super_cooperative",
+      "required_keywords": [
+        "MRO",
+        "兼容"
+      ]
+    },
+    {
+      "kp": "py.oop.super",
+      "type": "scenario",
+      "question": "工程场景：同事在重构时把子类里的 super().__init__() 改成了直接写 BaseClass.__init__(self)，认为“效果一样还更清楚”。在一个存在菱形继承的类层次里，这个改法导致某个祖先的初始化被执行了多次，产生状态覆盖 bug。请解释原因，并给出正确的改写建议。",
+      "options": [],
+      "answer": null,
+      "explanation": "直接写 BaseClass.__init__ 会跳过 MRO 中位于该类之后的其他类，且当多条继承路径都指向同一祖先时会重复执行。正确做法是使用 super().__init__(...) 沿 MRO 传递，确保祖先初始化只执行一次。",
+      "error_tag": "概念混淆",
+      "variant_group": "super_vs_explicit",
+      "required_keywords": [
+        "super().__init__",
+        "MRO",
+        "多重继承",
+        "菱形继承",
+        "初始化"
+      ]
+    },
+    {
+      "kp": "py.oop.super",
+      "type": "scenario",
+      "question": "工程场景：某 Python 项目在类外定义了一个辅助函数，函数体里写了 super().do_something()，运行时抛出 RuntimeError，提示 super(): no arguments。请分析报错原因，并给出两种可行的修改方案。",
+      "options": [],
+      "answer": null,
+      "explanation": "零参数 super() 依赖编译器在类体内方法中注入的 __class__ 单元，类外函数没有该单元。可改为在类体内的方法中调用，或使用显式形式 super(当前类, 实例) 手动指定起点。",
+      "error_tag": "边界错误",
+      "variant_group": "super_zero_arg",
+      "required_keywords": [
+        "零参数 super",
+        "__class__ 单元",
+        "类体外函数",
+        "显式 super",
+        "当前类 实例"
+      ]
+    },
+    {
+      "kp": "py.oop.super",
+      "type": "single_choice",
+      "question": "关于 super() 的查找起点，下面哪个描述最准确？",
+      "options": [
+        "总是从实例所属类的直接父类开始查找",
+        "从当前方法定义所在类在 MRO 中的下一个类开始查找",
+        "总是从 object 开始查找，然后反向遍历 MRO",
+        "从第一个继承了目标方法的类开始查找，与定义位置无关"
+      ],
+      "answer": 1,
+      "explanation": "super() 的起点是方法定义所在类在 MRO 中的下一个类，而非实例的直接父类，这正是在菱形继承中行为正确的关键。",
+      "error_tag": "概念混淆",
+      "variant_group": "super_basic_semantics"
+    },
+    {
+      "kp": "py.oop.super",
+      "type": "single_choice",
+      "question": "在 Python 3 中，类内部的方法里调用 super() 不带参数时，Python 如何确定从哪个类开始查找？",
+      "options": [
+        "总是从 object 开始查找",
+        "根据调用栈动态推断，可能出错",
+        "根据当前方法定义所在的类以及实例的 __class__ 确定 MRO 起点",
+        "总是从当前实例的直接父类开始，与定义位置无关"
+      ],
+      "answer": 2,
+      "explanation": "Python 3 中零参数 super() 依赖编译器注入的 __class__ 单元（cell），它指向方法定义所在的类，再结合 self 的实例类型计算 MRO，从定义类的下一个类开始查找。",
+      "error_tag": "概念混淆",
+      "variant_group": "super_zero_arg"
+    },
+    {
+      "kp": "py.oop.super",
+      "type": "single_choice",
+      "question": "阅读以下菱形继承代码：\n\nclass A:\n    def f(self):\n        return ['A']\n\nclass B(A):\n    def f(self):\n        return ['B'] + super().f()\n\nclass C(A):\n    def f(self):\n        return ['C'] + super().f()\n\nclass D(B, C):\n    pass\n\nprint(D().f())",
+      "options": [
+        "['B', 'C', 'A']",
+        "['B', 'A', 'C', 'A']",
+        "['B', 'A']",
+        "['B', 'C', 'A', 'A']"
+      ],
+      "answer": 0,
+      "explanation": "D 的 MRO 是 D→B→C→A→object。B.f 调用 super().f() 按 MRO 找到 C.f，C.f 再调用 super().f() 找到 A.f。因此结果是 ['B','C','A']，A 只被调用一次。",
+      "error_tag": "边界错误",
+      "variant_group": "super_diamond_mro"
+    },
+    {
+      "kp": "py.oop.super",
+      "type": "single_choice",
+      "question": "关于 super() 与 MRO（方法解析顺序），下列说法错误的是？",
+      "options": [
+        "super() 的查找起点由当前类在 MRO 中的位置决定",
+        "使用 super() 可以保证协作式多继承中每个方法只被调用一次",
+        "super() 等价于直接写父类名调用父类方法，二者效果完全相同",
+        "MRO 由 C3 线性化算法生成，可以通过类名.__mro__ 查看"
+      ],
+      "answer": 2,
+      "explanation": "super() 按 MRO 调用下一个类，而直接写父类名会跳过 MRO 中位于父类之后的其他类，在多重继承中两者效果不同，因此说“完全相同”是错误的。",
+      "error_tag": "概念混淆",
+      "variant_group": "super_vs_explicit"
+    },
+    {
+      "kp": "py.oop.super",
+      "type": "single_choice",
+      "question": "以下哪个场景中不使用 super() 而直接写父类名调用，最可能导致问题？",
+      "options": [
+        "单继承中 init 调用父类初始化",
+        "菱形继承中希望父类初始化只执行一次",
+        "没有任何继承关系的独立类",
+        "只继承 object 的简单类"
+      ],
+      "answer": 1,
+      "explanation": "在菱形继承中若直接写父类名，同一个祖先类的初始化会被多次调用，而使用 super() 配合协作式设计能保证沿 MRO 每个初始化只执行一次。",
+      "error_tag": "概念混淆",
+      "variant_group": "super_diamond_mro"
+    },
+    {
+      "kp": "py.oop.super",
+      "type": "multi_choice",
+      "question": "关于 super() 的使用，以下说法正确的有哪些？",
+      "options": [
+        "super() 可以出现在类外定义的函数中（前提是正确传入参数）",
+        "零参数 super() 只能在类体内定义的方法中使用",
+        "super().__init__() 常用于子类初始化中调用父类初始化",
+        "super() 返回的对象本身不是类的实例，而是代理对象",
+        "super() 可以用于调用父类的类方法或静态方法"
+      ],
+      "answer": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "explanation": "零参数 super() 依赖编译器注入的 __class__，只能在类体内方法中使用；带参数的 super(类, 实例) 可以在类外使用，所以 A 表述过于绝对（它也可以，但选项 A 说“可以出现”其实正确，见解析）。super() 返回代理对象，可调用 __init__、类方法、静态方法。修正：所有选项表述的机制都成立，正确项为 B、C、D、E。",
+      "error_tag": "概念混淆",
+      "variant_group": "super_usage_rules"
+    },
+    {
+      "kp": "py.oop.super",
+      "type": "multi_choice",
+      "question": "以下哪些情况会导致零参数 super() 报错？",
+      "options": [
+        "在模块级别的普通函数中调用 super()",
+        "在类中定义的普通实例方法里调用 super()",
+        "在类的静态方法（@staticmethod）中调用零参数 super()",
+        "在类外部定义的、没有 __class__ 单元的函数中调用零参数 super()"
+      ],
+      "answer": [
+        0,
+        2,
+        3
+      ],
+      "explanation": "零参数 super() 依赖编译器在类体内方法中注入的 __class__ 单元。模块级函数、静态方法、类外函数都没有这个单元，因此运行时会报 RuntimeError: super(): no arguments。",
+      "error_tag": "边界错误",
+      "variant_group": "super_zero_arg"
+    },
+    {
+      "kp": "py.oop.super",
+      "type": "multi_choice",
+      "question": "关于 super() 在协作式多继承（cooperative multiple inheritance）中的角色，正确的是？",
+      "options": [
+        "每个子类应通过 super() 继续沿 MRO 传递调用，而不是直接调用具体父类",
+        "协作式设计要求所有相关方法的签名尽量兼容，避免参数不匹配",
+        "如果不使用 super()，菱形继承中祖先方法可能被重复调用",
+        "super() 会自动去重，即使父类不协作也能保证只调用一次"
+      ],
+      "answer": [
+        0,
+        1,
+        2
+      ],
+      "explanation": "协作式多继承要求每个类都通过 super() 把调用传递下去，且方法签名兼容；若某个类直接调用具体父类，就会破坏传递链，导致祖先方法重复执行。super() 并不会自动去重。",
+      "error_tag": "概念混淆",
+      "variant_group": "super_cooperative"
+    },
+    {
+      "kp": "py.oop.super",
+      "type": "multi_choice",
+      "question": "阅读代码：\n\nclass Base:\n    def __init__(self, x):\n        self.x = x\n\nclass Mid(Base):\n    def __init__(self, x, y):\n        super().__init__(x)\n        self.y = y\n\n以下关于 Mid 初始化的说法正确的有？",
+      "options": [
+        "Mid(1, 2).x 的值是 1",
+        "Mid(1, 2).y 的值是 2",
+        "super().__init__(x) 按照 MRO 调用 Base.__init__",
+        "Mid 的实例不会拥有 x 属性，因为 super() 不生效"
+      ],
+      "answer": [
+        0,
+        1,
+        2
+      ],
+      "explanation": "super().__init__(x) 沿 MRO 调用 Base.__init__，将 x 写入实例；随后设置 y。因此实例同时拥有 x=1 和 y=2。",
+      "error_tag": "记忆缺失",
+      "variant_group": "super_init_chain"
+    },
+    {
+      "kp": "py.oop.mro",
+      "type": "single_choice",
+      "question": "关于 Python 的方法解析顺序（MRO），下列说法正确的是？",
+      "options": [
+        "MRO 是类在定义时按继承列表中的书写顺序简单拼接而成的列表",
+        "MRO 是 Python 为每个类计算出的方法查找顺序，且满足子类先于父类、多个父类按声明顺序的线性化规则",
+        "MRO 只对单继承有意义，多继承时 Python 会随机选择一个父类的方法",
+        "MRO 是实例属性的查找顺序，与类方法无关"
+      ],
+      "answer": 1,
+      "explanation": "MRO 是 Python 为每个类计算的线性化顺序（C3 线性化），保证子类先于父类被查找，并且在多继承时尊重基类的声明顺序与一致性约束；它不是简单拼接，也不是随机选择，更不是实例属性的查找顺序。",
+      "error_tag": "概念混淆",
+      "variant_group": "mro_basic_concept"
+    },
+    {
+      "kp": "py.oop.mro",
+      "type": "single_choice",
+      "question": "阅读下面代码，输出结果是什么？\n\nclass A:\n    def f(self):\n        return 'A'\n\nclass B(A):\n    def f(self):\n        return 'B'\n\nclass C(A):\n    def f(self):\n        return 'C'\n\nclass D(B, C):\n    pass\n\nprint(D().f())",
+      "options": [
+        "A",
+        "B",
+        "C",
+        "报错"
+      ],
+      "answer": 1,
+      "explanation": "D 的 MRO 为 [D, B, C, A, object]，方法查找按该顺序进行，最先找到 B.f，因此返回 'B'。这正是多继承中「左侧基类优先」的体现。",
+      "error_tag": "概念混淆",
+      "variant_group": "mro_lookup_order"
+    },
+    {
+      "kp": "py.oop.mro",
+      "type": "multi_choice",
+      "question": "关于协作式多继承中 super() 的行为，以下正确的有？",
+      "options": [
+        "super() 查找的是 MRO 中当前类之后的下一个类的方法",
+        "在多个类都通过 super() 调用同名方法时，可以形成一条沿 MRO 的调用链",
+        "super() 只能用于单继承，多继承下会报错",
+        "super() 的查找起点由第一个参数（类）和实例共同决定"
+      ],
+      "answer": [
+        0,
+        1,
+        3
+      ],
+      "explanation": "super() 依据实例所属类型（或其类）的 MRO 与指定的起始类来定位「下一个」方法，因此多继承下能形成沿 MRO 的调用链（如各 __init__ 都通过 super() 调用）。选项 C 错误：super() 恰恰是为多继承协作设计的。",
+      "error_tag": "概念混淆",
+      "variant_group": "mro_super"
+    },
+    {
+      "kp": "py.oop.mro",
+      "type": "multi_choice",
+      "question": "以下哪些继承声明会在 Python 中引发「无法创建一致的方法解析顺序」错误？",
+      "options": [
+        "class A: pass\nclass B(A): pass\nclass C(A, B): pass",
+        "class A: pass\nclass B: pass\nclass C(A, B): pass",
+        "class A: pass\nclass B(A): pass\nclass C(B): pass\nclass D(C, A): pass",
+        "class A: pass\nclass B: pass\nclass C(A, B): pass\nclass D(B, A): pass"
+      ],
+      "answer": [
+        0,
+        3
+      ],
+      "explanation": "选项 A：C(A, B) 与 B 继承 A 冲突（A 要求排在 B 前，而 B 自身又要求 A 在其后）。选项 D：D(B, A) 与 C(A, B) 冲突（B 与 A 的先后顺序矛盾）。选项 B、C 都能构造出合法 MRO。",
+      "error_tag": "边界错误",
+      "variant_group": "mro_consistency_error"
+    },
+    {
+      "kp": "py.oop.mro",
+      "type": "fill_blank",
+      "question": "要查看类 MyClass 的方法解析顺序，可以访问属性 MyClass.________（填一个下划线命名的属性名，只需填写属性名本身）。",
+      "options": [],
+      "answer": [
+        "__mro__",
+        "mro"
+      ],
+      "explanation": "MyClass.__mro__ 返回表示方法解析顺序的元组；也可以调用 MyClass.mro() 得到列表。两者都反映 C3 线性化结果。",
+      "error_tag": "记忆缺失",
+      "variant_group": "mro_introspection"
+    },
+    {
+      "kp": "py.oop.mro",
+      "type": "fill_blank",
+      "question": "在下面的类定义中，若要使 D 的方法解析顺序为 [D, B, C, A, object]，横线处应填入的基类顺序是 class D(________)。\n\nclass A: pass\nclass B(A): pass\nclass C(A): pass\nclass D(________): pass",
+      "options": [],
+      "answer": [
+        "B, C",
+        "B,C",
+        "(B, C)",
+        "(B,C)"
+      ],
+      "explanation": "C3 线性化下，D 先按声明顺序处理直接基类，B 在 C 之前、A 在两者之后，因此应写成 class D(B, C)，结果为 [D, B, C, A, object]。",
+      "error_tag": "逻辑错误",
+      "variant_group": "mro_linearization_result"
+    },
+    {
+      "kp": "py.oop.mro",
+      "type": "fill_blank",
+      "question": "每个类用于表示其方法解析顺序的元组属性名是 ________（填写完整的属性名，含前后下划线）。",
+      "options": [],
+      "answer": [
+        "__mro__"
+      ],
+      "explanation": "Python 为每个类提供 __mro__ 属性，值为元组，表示方法查找顺序。这是查看 MRO 最直接的方式之一。",
+      "error_tag": "记忆缺失",
+      "variant_group": "mro_introspection"
+    },
+    {
+      "kp": "py.oop.mro",
+      "type": "code_reading",
+      "question": "阅读代码，写出打印结果，并简要说明 D 的 MRO：\n\nclass A:\n    def go(self):\n        return 'A'\n    def tag(self):\n        return 'tag-A'\n\nclass B(A):\n    def go(self):\n        return 'B' + super().go()\n\nclass C(A):\n    def go(self):\n        return 'C' + super().go()\n\nclass D(B, C):\n    def go(self):\n        return 'D' + super().go()\n\nprint(D().go())\nprint([c.__name__ for c in D.__mro__])",
+      "options": [],
+      "answer": "输出第一行是 DBCA；第二行是 ['D', 'B', 'C', 'A', 'object']。D 的 MRO 为 [D, B, C, A, object]，各 go 通过 super() 依次沿 MRO 调用，最终 A.go() 返回 'A'，故拼接结果为 'D'+'B'+'C'+'A' = 'DBCA'。",
+      "explanation": "D.go 用 super() 调用 MRO 中下一个类 B.go，B.go 再 super() 到 C.go，C.go 再 super() 到 A.go，从而形成协作式调用链。打印 MRO 名称列表即为 [D, B, C, A, object]。",
+      "error_tag": "逻辑错误",
+      "variant_group": "mro_super"
+    },
+    {
+      "kp": "py.oop.mro",
+      "type": "code_reading",
+      "question": "阅读代码，写出打印结果：\n\nclass X: pass\nclass Y: pass\nclass Z(X, Y): pass\n\nprint(Z.mro() == list(Z.__mro__))",
+      "options": [],
+      "answer": "True",
+      "explanation": "Z.mro() 返回一个列表，Z.__mro__ 是一个元组，两者表示的顺序相同；将 __mro__ 转换为列表后与 mro() 相等，因此打印 True。",
+      "error_tag": "概念混淆",
+      "variant_group": "mro_introspection"
+    },
+    {
+      "kp": "py.oop.mro",
+      "type": "code_reading",
+      "question": "阅读代码，判断运行结果并说明原因：\n\nclass A: pass\nclass B(A): pass\nclass C(B, A): pass",
+      "options": [],
+      "answer": "运行到 class C(B, A) 时抛出 TypeError: Cannot create a consistent method resolution order (MRO) for bases A, B。因为 B 已经继承 A，A 必须排在 B 之后，但 C 的声明要求在 B 之前，约束矛盾，无法构造合法 MRO。",
+      "explanation": "Python 用 C3 线性化组合各基类的 MRO，若出现无法满足的先后约束就会报 TypeError。这题考查对 MRO 一致性约束的理解。",
+      "error_tag": "边界错误",
+      "variant_group": "mro_consistency_error"
+    },
+    {
+      "kp": "py.oop.mro",
+      "type": "scenario",
+      "question": "工程场景：某电商系统用多继承建模，类结构如下：BaseView 定义 render，LoggedView 继承 BaseView，ApiView 继承 BaseView，OrderView(LoggedView, ApiView) 重写了 render。开发者发现 OrderView 的 render 只调用了 ApiView 的逻辑，忽略了 LoggedView 的日志处理。经过排查发现 LoggedView.render 和 ApiView.render 都直接写死了调用 BaseView.render，而不是用协作式调用。请说明应如何修改设计，使得两个父类的处理逻辑都能生效，并解释其原理。",
+      "options": [],
+      "answer": null,
+      "explanation": "应让各层 render 都用 super().render(...) 而不是硬编码 BaseView.render，这样调用会沿 MRO（OrderView -> LoggedView -> ApiView -> BaseView）依次传递，把各父类的逻辑串起来。这正是协作式多继承的用法，super() 通过 MRO 定位下一个定义该方法的类。硬编码父类会破坏调用链，导致某个分支被跳过。",
+      "error_tag": "概念混淆",
+      "variant_group": "mro_cooperative_design",
+      "required_keywords": [
+        "BaseView.render",
+        "MRO"
+      ]
+    },
+    {
+      "kp": "py.oop.mro",
+      "type": "scenario",
+      "question": "工程场景：某开发者在多继承时遇到 TypeError: Cannot create a consistent method resolution order。他提供了如下继承声明：class A: pass; class B(A): pass; class C(A): pass; class D(B, A, C): pass。请解释报错原因，并给出一种可行的修改方案，同时说明修改后的 MRO 大致顺序。",
+      "options": [],
+      "answer": null,
+      "explanation": "报错原因是 D 的声明把 A 排在 C 之前，但 C 继承 A 要求 C 在 A 之前，约束冲突，C3 线性化失败。可行的做法是去掉冗余的直接基类 A，写成 class D(B, C)，得到的 MRO 为 [D, B, C, A, object]。由于 B 和 C 都已包含 A，直接再列出 A 只会带来矛盾。",
+      "error_tag": "边界错误",
+      "variant_group": "mro_consistency_error",
+      "required_keywords": [
+        "C3 线性化",
+        "方法解析顺序",
+        "MRO",
+        "基类顺序",
+        "继承约束"
+      ]
+    },
+    {
+      "kp": "py.oop.mro",
+      "type": "single_choice",
+      "question": "下列哪种继承结构会导致 Python 在创建类时直接抛出 TypeError？",
+      "options": [
+        "class A: pass\nclass B(A): pass",
+        "class A: pass\nclass B(A): pass\nclass C(A): pass\nclass D(B, C): pass",
+        "class A: pass\nclass B(A): pass\nclass C(B, A): pass",
+        "class A: pass\nclass B: pass\nclass C(A, B): pass"
+      ],
+      "answer": 2,
+      "explanation": "选项 C 中 B 已经继承 A，C(B, A) 会要求 A 既在 B 之后又直接在 B 之前出现，无法构造出一致的方法解析顺序（MRO），因此 Python 在定义 C 时报 TypeError: Cannot create a consistent method resolution order。",
+      "error_tag": "边界错误",
+      "variant_group": "mro_consistency_error"
+    },
+    {
+      "kp": "py.oop.mro",
+      "type": "scenario",
+      "question": "工程场景：一个序列化框架中，类声明为 class D(B, C)，其中 B 和 C 都定义了 to_dict，且 D 没有定义。运行 D().to_dict() 时只调用了 B 的实现，C 的逻辑丢失。开发者想同时执行 B 和 C 的逻辑。请说明 Python 的方法查找是按什么顺序进行的，并给出一种改造思路使两个父类的逻辑都能被走到。",
+      "options": [],
+      "answer": null,
+      "explanation": "方法查找按 D 的 MRO 顺序进行，即 [D, B, C, A, object]，最先命中 B.to_dict 后就返回，不会自动调用 C。要让两者都执行，需在 B 和 C 的 to_dict 中使用 super().to_dict(...)（协作式调用），并让 D 不覆盖或覆盖时也调用 super()，使调用沿 MRO 链式传递，最终把 C 的逻辑也执行到。",
+      "error_tag": "概念混淆",
+      "variant_group": "mro_cooperative_design",
+      "required_keywords": [
+        "MRO",
+        "super",
+        "协作式调用",
+        "方法查找顺序"
+      ]
+    },
+    {
+      "kp": "py.oop.mro",
+      "type": "single_choice",
+      "question": "下面代码中，C().f() 会调用哪个方法？\n\nclass A:\n    def f(self): return 'A'\n\nclass B(A):\n    pass\n\nclass C(B):\n    def f(self): return 'C'\n\nprint(C().f())",
+      "options": [
+        "A",
+        "B",
+        "C",
+        "AttributeError"
+      ],
+      "answer": 2,
+      "explanation": "C 自身定义了 f，方法查找从实例类型 C 开始，沿 MRO 最先命中 C.f，因此返回 'C'。子类自身的方法总在父类之前被找到。",
+      "error_tag": "概念混淆",
+      "variant_group": "mro_lookup_order"
+    },
+    {
+      "kp": "py.oop.mro",
+      "type": "single_choice",
+      "question": "关于「菱形继承」，即 class D(B, C) 而 B、C 都继承自 A，下列说法正确的是？",
+      "options": [
+        "A 的方法在 D 的 MRO 中会出现两次，因此会被调用两次",
+        "A 在 MRO 中只出现一次，且位于 B 和 C 之后",
+        "Python 禁止这种继承结构，会报错",
+        "A 会被自动提升到 MRO 的最前面"
+      ],
+      "answer": 1,
+      "explanation": "C3 线性化保证每个类在 MRO 中只出现一次。在菱形继承中 A 会排在 B 和 C 之后、object 之前，例如 D 的 MRO 为 [D, B, C, A, object]。这避免了重复调用和歧义，也不会被禁止。",
+      "error_tag": "记忆缺失",
+      "variant_group": "mro_diamond"
+    },
+    {
+      "kp": "py.oop.mro",
+      "type": "single_choice",
+      "question": "在类中通过 super() 调用父类方法时，Python 是如何确定「下一个要调用的方法」的？",
+      "options": [
+        "总是调用直接父类的方法",
+        "根据当前实例所属类型的 MRO，调用排在当前类之后的下一个定义了该方法的方法",
+        "调用继承列表中第一个父类的方法",
+        "根据被调用方法的 self 参数的 class 属性确定"
+      ],
+      "answer": 1,
+      "explanation": "super() 依据实例所属类型的 MRO 以及当前类在 MRO 中的位置，去寻找「排在当前类之后的那个类」上的方法，而不是简单地调用直接父类。这使得协作式多继承能正确链式调用。",
+      "error_tag": "概念混淆",
+      "variant_group": "mro_super"
+    },
+    {
+      "kp": "py.oop.mro",
+      "type": "single_choice",
+      "question": "类属性 __mro__ 返回的是什么类型的对象？",
+      "options": [
+        "列表 list",
+        "元组 tuple",
+        "字典 dict",
+        "集合 set"
+      ],
+      "answer": 1,
+      "explanation": "每个类都有一个 __mro__ 属性，它是一个元组，元素按方法查找顺序排列。通过 SomeClass.__mro__ 可以查看，也可以用 SomeClass.mro() 得到列表。",
+      "error_tag": "记忆缺失",
+      "variant_group": "mro_introspection"
+    },
+    {
+      "kp": "py.oop.mro",
+      "type": "single_choice",
+      "question": "下面代码运行后，D.__mro__ 中类的排列顺序是？\n\nclass A: pass\nclass B(A): pass\nclass C(A): pass\nclass D(B, C): pass",
+      "options": [
+        "[D, B, A, C, object]",
+        "[D, B, C, A, object]",
+        "[D, A, B, C, object]",
+        "[D, C, B, A, object]"
+      ],
+      "answer": 1,
+      "explanation": "C3 线性化的结果：D 在本类之后先处理继承列表里靠左的 B，B 继承 A，但 C 也需要在 A 之前出现，因此顺序为 D -> B -> C -> A -> object。",
+      "error_tag": "逻辑错误",
+      "variant_group": "mro_linearization_result"
+    },
+    {
+      "kp": "py.oop.mro",
+      "type": "multi_choice",
+      "question": "关于 MRO（方法解析顺序），以下说法正确的有？",
+      "options": [
+        "它定义了查找方法和属性时沿着类的继承结构遍历的顺序",
+        "每个类的 MRO 中，子类一定排在其祖先类之前",
+        "MRO 的构造遵循 C3 线性化算法，保证单调性和一致性",
+        "当多个直接父类的排列顺序无法满足所有约束时，Python 会抛出 TypeError",
+        "MRO 只影响类方法的查找，不影响实例属性的查找"
+      ],
+      "answer": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "explanation": "MRO 决定方法（以及通过类访问属性的）查找顺序，子类必须排在祖先之前，用 C3 线性化保证单调性，冲突时抛 TypeError。选项 E 错误：实例属性通常先查实例 __dict__，但类属性及方法都沿 MRO 查找，所以 MRO 也会影响属性的查找结果。",
+      "error_tag": "概念混淆",
+      "variant_group": "mro_basic_concept"
+    },
+    {
+      "kp": "py.oop.mro",
+      "type": "multi_choice",
+      "question": "下面哪些做法能得到某个类的方法解析顺序？",
+      "options": [
+        "访问类的 __mro__ 属性",
+        "调用类的 mro() 方法",
+        "调用该类的实例的 mro() 方法",
+        "使用内置函数 help() 查看类信息时一般也能看到 MRO"
+      ],
+      "answer": [
+        0,
+        1,
+        3
+      ],
+      "explanation": "类有 __mro__ 属性和 mro() 方法；help() 通常会展示类的 MRO。选项 C 错误：mro() 是类方法风格的接口，通常通过类调用，而且即便通过实例访问它也返回类的 MRO，但题目问的是「做法」，实例调用并非标准写法。此处按标准做法判断。",
+      "error_tag": "记忆缺失",
+      "variant_group": "mro_introspection"
+    }
+  ]
+}

@@ -1,0 +1,611 @@
+{
+  "id": "s1u5l4",
+  "title": "s1u5l4",
+  "kps": [
+    "py.func.lambda",
+    "py.func.higher_order"
+  ],
+  "theory": "## py.func.lambda\n\n# 40 分钟教学讲义：`py.func.lambda`（Python 匿名函数）\n\n## 一句话直觉\n\n**当你只想把“一小段计算逻辑”当作参数塞进另一个函数（例如 `map`、`filter`、`sorted` 的 `key`）时，`lambda`（匿名函数）能让你不用 `def` 就把它就地写出来。**\n\n---\n\n## 第 1 节：什么是 lambda？——一行的匿名函数\n\n`lambda` 是 Python 的关键字，用来创建**匿名函数**（anonymous function），也叫 lambda 表达式（lambda expression）。语法只有一种形式：\n\n```\nlambda 参数列表: 表达式\n```\n\n- 只能有**一个表达式**（expression），它的求值结果就是返回值。\n- 没有 `return`，没有语句（statement），不能写多行逻辑。\n- 结果是一个**函数对象**（function object），可以直接调用，也可以作为参数传递。\n\n```python\n# 定义一个普通函数\nadd = lambda x, y: x + y\nprint(add(2, 3))  # 5\n\n# 等价于\ndef add_def(x, y):\n    return x + y\n```\n\n**关键结论**：`lambda` 不是“更快的函数”，它只是 `def` 的表达式版本，专门用于**就地嵌入**。如果只是给函数起个名字，请用 `def`（PEP 8 明确建议）。\n\n---\n\n## 第 2 节：lambda 的真正价值——嵌入到表达式中\n\n`lambda` 的唯一优势是：它本身是一个**表达式**，所以可以出现在 `def` 语句无法出现的地方——比如函数调用的参数里。\n\n```python\nnums = [1, -2, 3, -4, 5]\n\n# 用 key 指定排序依据：按绝对值排序\nsorted_nums = sorted(nums, key=lambda x: abs(x))\nprint(sorted_nums)  # [1, -2, 3, -4, 5]\n\n# 用 map 做批量变换：每个元素加 10\nadded = list(map(lambda x: x + 10, nums))\nprint(added)  # [11, 8, 13, 6, 15]\n\n# 用 filter 筛选正数\npositives = list(filter(lambda x: x > 0, nums))\nprint(positives)  # [1, 3, 5]\n```\n\n**关键结论**：`lambda` 出现频率最高的三个场景是 `sorted(..., key=...)`、`map`、`filter`。\n\n---\n\n## 第 3 节：闭包与捕获——lambda 会记住外层变量\n\nlambda 作为函数对象，会**捕获（capture）**定义它时所在作用域的变量，这叫**闭包**（closure）。但要注意：它捕获的是**变量本身**，而不是变量的值。\n\n```python\ndef make_multiplier(n):\n    # lambda 捕获了外层参数 n\n    return lambda x: x * n\n\ntimes3 = make_multiplier(3)\nprint(times3(10))  # 30\n```\n\n下面的例子暴露了“捕获变量而非值”的坑：\n\n```python\nfuncs = []\nfor i in range(3):\n    funcs.append(lambda: i)\n\nprint([f() for f in funcs])  # [2, 2, 2] 而不是 [0, 1, 2]\n\n# 正确做法：用默认参数把当前值“冻结”\nfuncs2 = []\nfor i in range(3):\n    funcs2.append(lambda i=i: i)\n\nprint([f() for f in funcs2])  # [0, 1, 2]\n```\n\n**关键结论**：闭包捕获的是**变量引用**（late binding，延迟绑定）。要立刻定格当前值，用**默认参数**。\n\n---\n\n## 第 4 节：lambda 的边界——什么时候不要用\n\nlambda 不是万能的。工程中要遵守几条硬规则：\n\n1. **不要用 `lambda` 给函数命名**（PEP 8）：\n\n```python\n# 错误：丧失了 lambda 的唯一优势，且函数名显示为 <lambda>\nf = lambda x: 2 * x\n\n# 正确：用 def\ndef f(x):\n    return 2 * x\n```\n\n2. **lambda 体内不能写语句**（`if` 语句、`try`、`for` 循环都不行）。可以写**条件表达式**，但复杂了就难读：\n\n```python\n# 可以，但可读性差\nf = lambda x: x * 2 if x > 0 else 0\n\n# 更工程化的写法\ndef f(x):\n    return x * 2 if x > 0 else 0\n```\n\n3. **lambda 没有类型注解（annotation）**。大型项目中用 `def` 配合 PEP 484 注解更清晰。\n\n**关键结论**：lambda 适合“用一次、就一行、就地传入”。超过一行、需要命名、需要复用——一律用 `def`。\n\n---\n\n## 第 5 节：lambda 在工程级代码中的正确位置\n\n工程级代码中，lambda 通常只出现在下面这几类“回调式”位置：\n\n```python\n# 1. sorted 的 key\nusers = [{'name': 'Al', 'age': 22}, {'name': 'Bo', 'age': 19}]\nby_age = sorted(users, key=lambda u: u['age'])\n\n# 2. 默认字典/回调\ndef on_error(msg):\n    print('ERR:', msg)\n\nhandlers = {'error': on_error}\nhandlers.get('error', lambda m: print('ignore:', m))('boom')\n\n# 3. 简单映射\ncache = {}\nget_len = lambda s: cache.setdefault(s, len(s))\n```\n\n但不推荐的做法包括：\n\n- 把 lambda 赋给变量去复用（用 `def`）。\n- 在 lambda 里写多分支逻辑（用 `def`）。\n- 用 lambda 代替 `operator.itemgetter` / `operator.attrgetter`（性能更差、可读性也不一定更好）：\n\n```python\nfrom operator import itemgetter\n\nusers = [{'name': 'Al', 'age': 22}, {'name': 'Bo', 'age': 19}]\n# 好：sorted(users, key=itemgetter('age'))\n# 一般：sorted(users, key=lambda u: u['age'])\n```\n\n**关键结论**：工程里 lambda 只做“小、临时、就地”的回调；凡是可命名、可复用、可测试的逻辑，一律升级为 `def`。\n\n---\n\n## 动手练习\n\n**任务**：给定一个字符串列表，写一段代码完成以下事情（要求至少使用 2 个 lambda）：\n\n1. 用 `sorted` + `lambda` 按字符串长度从短到长排序；长度相同时按字母序。\n2. 用 `filter` + `lambda` 过滤掉所有以 `\"x\"` 开头的字符串。\n3. 用 `map` + `lambda` 把剩下的字符串全部转成大写。\n\n输入：\n\n```python\nwords = ['banana', 'xray', 'apple', 'xenon', 'cat', 'xylophone', 'dog']\n```\n\n预期输出（示意）：\n\n```\n['CAT', 'DOG', 'APPLE', 'BANANA']\n```\n\n**提示**：可以用 `str.startswith` 判断前缀（PEP 8 也建议用 `startswith`/`endswith` 而不是切片比较）。写出你的代码，然后比对结果。\n\n---\n\n## 参考来源\n\n- PEP 8 – Style Guide for Python Code（关于 `lambda` 与 `def` 的选择规则）\n- Python 官方文档：`lambda` 表达式与函数式编程工具（`filter`、`map`、`sorted`）\n\n```python\n# 可运行示例：lambda 在排序、过滤、映射中的典型用法\nwords = ['banana', 'xray', 'apple', 'xenon', 'cat', 'xylophone', 'dog']\n\n# 1. 按长度升序，长度相同按字母序\nsorted_words = sorted(words, key=lambda w: (len(w), w))\n\n# 2. 过滤掉以 x 开头的字符串\nfiltered = filter(lambda w: not w.startswith('x'), sorted_words)\n\n# 3. 全部转大写\nresult = list(map(lambda w: w.upper(), filtered))\n\nprint(result)\n# 输出: ['CAT', 'DOG', 'APPLE', 'BANANA']\n\n# 附加：闭包捕获演示\nfuncs = [(lambda i=i: i) for i in range(3)]\nprint([f() for f in funcs])  # [0, 1, 2]\n```\n\n## py.func.higher_order\n\n# 高阶函数（Higher-Order Function）\n\n> **一句话直觉**：函数不仅可以被调用，还可以像数字、字符串一样被当作“数据”传来传去。高阶函数就是“接收函数作为参数”或“把函数作为返回值”的函数。它是 Python 抽象能力的第一块基石，也是之后学装饰器、`map/filter/reduce`、PyTorch 的 `DataLoader(collate_fn=...)`、`Optimizer` 回调等一切工程技巧的地基。\n\n---\n\n## 1. 函数是“一等公民”（First-Class Citizen）\n\n在很多语言里，函数只是“定义好就被固定”的代码块。但在 Python 中，**函数是对象**：可以赋值给变量、放进列表、当参数传、当返回值返回。\n\n```python\n# 函数可以赋值给变量\ndef greet(name: str) -> str:\n    return f\"Hello, {name}\"\n\nsay_hi = greet          # say_hi 现在指向同一个函数对象\nprint(say_hi(\"Alice\"))  # Hello, Alice\n\n# 函数可以放进容器\nfuncs = [greet, len, str.upper]\nprint(funcs[0](\"Bob\"))  # Hello, Bob\n\n# 函数甚至可以有属性\ngreet.lang = \"en\"\nprint(greet.lang)       # en\n```\n\n只要理解了“函数名只是一个指向函数的变量”，后面所有高阶函数的写法都会顺理成章。\n\n---\n\n## 2. 把函数当参数：最经典的高阶函数\n\n**定义**：如果一个函数 `f` 的参数里包含另一个函数 `g`，那么 `f` 就是高阶函数。\n\n最常见的例子是 Python 内置的 `sorted`：它接收一个 `key` 函数，让调用者决定“按什么排序”。\n\n```python\nwords = [\"apple\", \"pie\", \"banana\", \"kiwi\"]\n\n# key 是一个函数：按字符串长度排序\nprint(sorted(words, key=len))\n# ['pie', 'kiwi', 'apple', 'banana']\n\n# 按最后一个字母排序\nprint(sorted(words, key=lambda w: w[-1]))\n# ['banana', 'apple', 'pie', 'kiwi']\n```\n\n这里 `len` 和 `lambda w: w[-1]` 都是“函数对象”，被传进 `sorted`。`sorted` 不关心你按什么规则排，它只负责把参数 `key` 对每个元素调用一次——这就是高阶函数的核心思想：**把“变化的部分”抽出来交给调用者。**\n\n我们再手写一个高阶函数，加深理解：\n\n```python\ndef apply_twice(func, x):\n    \"\"\"把 func 连续应用两次\"\"\"\n    return func(func(x))\n\ndef add_one(n: int) -> int:\n    return n + 1\n\nprint(apply_twice(add_one, 10))  # 12\nprint(apply_twice(lambda s: s * 2, \"ab\"))  # abababab\n```\n\n---\n\n## 3. 把函数当返回值：工厂函数的起点\n\n高阶函数不仅能“吃”函数，还能“吐”函数。这种写法常用于“根据配置生成不同的行为”。\n\n```python\ndef make_multiplier(factor: int):\n    \"\"\"返回一个新函数，它会把输入乘以 factor\"\"\"\n    def multiplier(x: int) -> int:\n        return x * factor\n    return multiplier\n\ndouble = make_multiplier(2)\ntriple = make_multiplier(3)\n\nprint(double(10))  # 20\nprint(triple(10))  # 30\n```\n\n注意：内层函数 `multiplier` “记住了”外层变量 `factor`，即使外层函数已经返回。这种机制叫**闭包（Closure）**，是高阶函数能把“配置”封装进新函数的关键。\n\n---\n\n## 4. 标准库里的三件套：`map` / `filter` / `functools.reduce`\n\n这三个是最典型的“把函数当参数”的高阶函数。虽然现在很多场景可以用列表推导替代，但在函数式风格和流式处理里仍然常见。\n\n```python\nfrom functools import reduce\n\nnums = [1, 2, 3, 4, 5]\n\n# map：对每个元素施加一个函数\nsquares = list(map(lambda x: x * x, nums))\nprint(squares)  # [1, 4, 9, 16, 25]\n\n# filter：保留让函数返回 True 的元素\nevens = list(filter(lambda x: x % 2 == 0, nums))\nprint(evens)  # [2, 4]\n\n# reduce：从左到右累积\ntotal = reduce(lambda acc, x: acc + x, nums, 0)\nprint(total)  # 15\n```\n\n**工程建议**：简单变换优先用列表推导（可读性更好）；当函数已经存在（如 `str.strip`、`int`）或流水线很长时，`map/filter` 更自然。\n\n```python\n# 列表推导 vs map：都正确，看场景\nupper1 = [s.upper() for s in [\"a\", \"b\"]]\nupper2 = list(map(str.upper, [\"a\", \"b\"]))\nprint(upper1, upper2)  # ['A', 'B'] ['A', 'B']\n```\n\n---\n\n## 5. 类型提示（Type Hints）：让高阶函数也“可读”\n\n高阶函数的参数是函数，类型怎么写？用 `Callable[[参数类型], 返回类型]`。\n\n```python\nfrom typing import Callable\n\ndef transform(items: list[int],\n              func: Callable[[int], int]) -> list[int]:\n    \"\"\"对 items 中每个元素调用 func，返回新列表\"\"\"\n    return [func(x) for x in items]\n\nprint(transform([1, 2, 3], lambda x: x * 10))  # [10, 20, 30]\n```\n\n说明：\n- `Callable` 来自 `typing` 模块；\n- `Callable[[int], int]` 表示“接收一个 int、返回一个 int 的函数”；\n- 类型提示**不会在运行时强制检查**，但 IDE、mypy、pyright 等工具会用它抓 bug。工程级代码应当写类型提示。\n\n复杂一点：函数可能接收多个参数、返回任意类型：\n\n```python\nfrom typing import Callable, Any\n\nReducer = Callable[[Any, Any], Any]  # 类型别名\n\ndef fold(xs: list, init: Any, op: Reducer) -> Any:\n    acc = init\n    for x in xs:\n        acc = op(acc, x)\n    return acc\n\nprint(fold([1, 2, 3, 4], 0, lambda a, b: a + b))  # 10\n```\n\n---\n\n## 6. 工程视角：为什么大项目离不开高阶函数\n\n在 PyTorch 这类框架里，高阶函数无处不在：\n\n- `DataLoader(dataset, collate_fn=my_collate)`：把“如何拼 batch”这个策略作为函数传入；\n- `optimizer.step()` 背后的 `param_groups` 里，可以挂 `lr_lambda`（按 epoch 调整学习率的函数）；\n- `model.apply(fn)`：把 `fn` 递归地作用到每个子模块上（初始化权重、迁移设备等都依赖这个模式）。\n\n```python\n# 伪代码，展示风格：把“策略”作为函数传入\ndef run_epoch(model, loader, loss_fn, step_fn):\n    for x, y in loader:\n        loss = loss_fn(model(x), y)\n        step_fn(loss)\n```\n\n只要策略可能变化，就把它做成参数——这就是高阶函数在工程里的价值。\n\n---\n\n## 动手练习\n\n**任务**：实现一个小型“数据清洗管道”。\n\n要求：\n1. 编写一个高阶函数 `build_pipeline(*steps)`，它接收任意多个“单参数函数”，返回一个新函数；\n2. 新函数接收一个字符串，依次把每个 step 作用上去，返回最终结果；\n3. 用下面 3 个 step 组装管道并测试：\n   - `strip_spaces`：去掉首尾空格；\n   - `to_lower`：转成小写；\n   - `remove_punct`：去掉英文标点 `.,!?`。\n\n示例骨架：\n\n```python\ndef build_pipeline(*steps):\n    def pipeline(text: str) -> str:\n        for step in steps:\n            text = step(text)\n        return text\n    return pipeline\n\n# TODO: 定义三个 step 函数，组装，并测试：\n# clean(\"  Hello, World!!  \")  -> \"hello world\"\n```\n\n**进阶挑战**：给 `build_pipeline` 加上类型提示，并用 `functools.reduce` 重写内部循环。完成后，你就掌握了 Python 高阶函数的核心：**把函数当数据，把变化的部分参数化。**\n\n```python\nfrom functools import reduce\nfrom typing import Callable\n\n\ndef build_pipeline(*steps: Callable[[str], str]) -> Callable[[str], str]:\n    \"\"\"把多个单参数函数串成一个管道，返回组合后的新函数\"\"\"\n    def pipeline(text: str) -> str:\n        return reduce(lambda acc, step: step(acc), steps, text)\n    return pipeline\n\n\ndef strip_spaces(s: str) -> str:\n    return s.strip()\n\n\ndef to_lower(s: str) -> str:\n    return s.lower()\n\n\ndef remove_punct(s: str) -> str:\n    for ch in \".,!?\":\n        s = s.replace(ch, \"\")\n    return s\n\n\nclean = build_pipeline(strip_spaces, to_lower, remove_punct)\n\nprint(clean(\"  Hello, World!!  \"))   # hello world\nprint(clean(\"  PyTorch, Rocks!  \"))  # pytorch rocks\n\n# 额外：演示 key 作为高阶函数参数\nprint(sorted([\"apple\", \"pie\", \"banana\"], key=len))  # ['pie', 'apple', 'banana']\n```\n",
+  "quiz": [
+    {
+      "kp": "py.func.lambda",
+      "type": "single_choice",
+      "question": "执行以下代码后，变量 f 引用的对象类型最准确地描述是：\nf = lambda x: x + 1",
+      "options": [
+        "一个函数对象",
+        "一个整数对象",
+        "一个字符串对象",
+        "一个语法错误，lambda 不能赋值"
+      ],
+      "answer": 0,
+      "explanation": "lambda 表达式的结果是一个函数对象，可以像普通函数一样被赋值给变量并调用。",
+      "error_tag": "lambda本质理解错误",
+      "variant_group": "lambda_basic_type"
+    },
+    {
+      "kp": "py.func.lambda",
+      "type": "single_choice",
+      "question": "以下代码的输出是：\nprint((lambda a, b: a * b)(3, 4))",
+      "options": [
+        "12",
+        "34",
+        "7",
+        "报错，lambda 不能立即调用"
+      ],
+      "answer": 0,
+      "explanation": "lambda 表达式可以直接在定义后用括号传参调用，返回 3 * 4 = 12。",
+      "error_tag": "lambda调用方式错误",
+      "variant_group": "lambda_call"
+    },
+    {
+      "kp": "py.func.lambda",
+      "type": "single_choice",
+      "question": "以下关于 lambda 与 def 定义函数的说法，正确的是：",
+      "options": [
+        "lambda 函数体可以包含多条语句",
+        "lambda 函数不能有默认参数",
+        "lambda 函数可以像普通函数一样作为参数传递",
+        "lambda 函数必须赋值给变量才能创建"
+      ],
+      "answer": 2,
+      "explanation": "lambda 的本质是匿名函数对象，可以作为参数传递；其函数体只能是一个表达式，不能包含多条语句，且支持默认参数，也可以不赋值直接使用。",
+      "error_tag": "lambda与def混淆",
+      "variant_group": "lambda_vs_def"
+    },
+    {
+      "kp": "py.func.lambda",
+      "type": "single_choice",
+      "question": "以下代码的输出是：\nf = lambda x: x\nprint(type(f).__name__)",
+      "options": [
+        "function",
+        "lambda",
+        "int",
+        "NoneType"
+      ],
+      "answer": 0,
+      "explanation": "lambda 创建的对象类型是 function，与 def 定义的函数类型相同。",
+      "error_tag": "lambda本质理解错误",
+      "variant_group": "lambda_basic_type"
+    },
+    {
+      "kp": "py.func.lambda",
+      "type": "single_choice",
+      "question": "以下代码的输出是：\nf = lambda x, y: x - y\nprint(f(y=3, x=10))",
+      "options": [
+        "7",
+        "-7",
+        "13",
+        "报错，lambda 不支持关键字参数"
+      ],
+      "answer": 0,
+      "explanation": "lambda 支持关键字参数，x=10、y=3，返回 10 - 3 = 7。",
+      "error_tag": "lambda参数特性误解",
+      "variant_group": "lambda_keyword_arg"
+    },
+    {
+      "kp": "py.func.lambda",
+      "type": "single_choice",
+      "question": "要让以下代码输出 [2, 4, 6]，横线处应填入：\nf = lambda x: x * 2\nprint(____)",
+      "options": [
+        "[1, 2, 3].map(f)",
+        "list(map(f, [1, 2, 3]))",
+        "f([1, 2, 3])",
+        "list(f([1, 2, 3]))"
+      ],
+      "answer": 1,
+      "explanation": "Python 中 map 返回迭代器，需要用 list 转换；列表没有 map 方法，f 也不能直接接收列表。",
+      "error_tag": "lambda与高阶函数配合错误",
+      "variant_group": "lambda_with_map"
+    },
+    {
+      "kp": "py.func.lambda",
+      "type": "single_choice",
+      "question": "以下代码的输出是：\nf = lambda x: x > 0\nprint(f(0), f(1))",
+      "options": [
+        "False True",
+        "True False",
+        "0 1",
+        "报错，lambda 不能返回布尔值"
+      ],
+      "answer": 0,
+      "explanation": "lambda 可返回比较表达式的结果，f(0) 为 False，f(1) 为 True。",
+      "error_tag": "lambda返回值理解错误",
+      "variant_group": "lambda_expr_body"
+    },
+    {
+      "kp": "py.func.lambda",
+      "type": "single_choice",
+      "question": "以下代码的输出是：\na = 5\nf = lambda x: x + a\nprint(f(3))",
+      "options": [
+        "3",
+        "5",
+        "8",
+        "报错，lambda 不能访问外部变量"
+      ],
+      "answer": 2,
+      "explanation": "lambda 函数体可以访问外层作用域变量 a，因此返回 3 + 5 = 8。",
+      "error_tag": "lambda闭包理解错误",
+      "variant_group": "lambda_closure_scope"
+    },
+    {
+      "kp": "py.func.lambda",
+      "type": "single_choice",
+      "question": "以下代码的输出是：\nf = lambda x: x + 1\ng = f\nprint(g(2))",
+      "options": [
+        "2",
+        "3",
+        "1",
+        "报错，lambda 不能被赋值给其他变量"
+      ],
+      "answer": 1,
+      "explanation": "g 和 f 引用同一个函数对象，g(2) 等同于 f(2)，返回 3。",
+      "error_tag": "lambda本质理解错误",
+      "variant_group": "lambda_basic_type"
+    },
+    {
+      "kp": "py.func.lambda",
+      "type": "single_choice",
+      "question": "以下场景中，最适合使用 lambda 的是：",
+      "options": [
+        "定义一个包含多步处理逻辑的复杂函数",
+        "需要多次递归调用的函数",
+        "作为 sorted 的 key 参数提供一个简单的排序依据",
+        "需要文档字符串详细说明的函数"
+      ],
+      "answer": 2,
+      "explanation": "lambda 适合作为简短的一次性函数传给高阶函数，如 sorted 的 key；复杂逻辑、递归、文档字符串更适合用 def。",
+      "error_tag": "lambda适用场景混淆",
+      "variant_group": "lambda_use_case"
+    },
+    {
+      "kp": "py.func.lambda",
+      "type": "single_choice",
+      "question": "以下代码的输出是：\nwords = ['bb', 'a', 'ccc']\nprint(sorted(words, key=lambda s: len(s)))",
+      "options": [
+        "['a', 'bb', 'ccc']",
+        "['ccc', 'bb', 'a']",
+        "['bb', 'a', 'ccc']",
+        "['a', 'ccc', 'bb']"
+      ],
+      "answer": 0,
+      "explanation": "按长度升序排序，'a'(1)、'bb'(2)、'ccc'(3)。",
+      "error_tag": "lambda与高阶函数配合错误",
+      "variant_group": "lambda_sorted_key"
+    },
+    {
+      "kp": "py.func.lambda",
+      "type": "single_choice",
+      "question": "以下代码中，lambda 捕获变量 i 的行为说明正确的是：\nfuncs = [lambda: i for i in range(3)]\nprint([f() for f in funcs])",
+      "options": [
+        "[0, 1, 2]",
+        "[2, 2, 2]",
+        "[0, 0, 0]",
+        "报错，lambda 不能出现在列表推导中"
+      ],
+      "answer": 1,
+      "explanation": "lambda 在调用时才查找 i，循环结束后 i = 2，因此三个函数都返回 2。",
+      "error_tag": "lambda闭包延迟绑定",
+      "variant_group": "lambda_late_binding"
+    },
+    {
+      "kp": "py.func.lambda",
+      "type": "single_choice",
+      "question": "以下代码的输出是：\nf = lambda x: x if x > 0 else -x\nprint(f(-5))",
+      "options": [
+        "5",
+        "-5",
+        "0",
+        "报错，lambda 中不能使用条件表达式"
+      ],
+      "answer": 0,
+      "explanation": "lambda 函数体可以是条件表达式，x = -5 时条件为假，返回 -(-5) = 5。",
+      "error_tag": "lambda语法限制误解",
+      "variant_group": "lambda_expr_body"
+    },
+    {
+      "kp": "py.func.lambda",
+      "type": "single_choice",
+      "question": "下列代码中，哪一项会导致语法错误？",
+      "options": [
+        "f = lambda x: x + 1",
+        "f = lambda x, y: x + y",
+        "f = lambda x: return x + 1",
+        "f = lambda: 42"
+      ],
+      "answer": 2,
+      "explanation": "lambda 的函数体必须是表达式，不能使用 return 语句，因此 lambda x: return x + 1 不合法。",
+      "error_tag": "lambda语法限制误解",
+      "variant_group": "lambda_no_return"
+    },
+    {
+      "kp": "py.func.lambda",
+      "type": "single_choice",
+      "question": "执行以下代码后，输出结果是：\nfuncs = [lambda x: x + i for i in range(3)]\nprint(funcs[1](10))",
+      "options": [
+        "11",
+        "12",
+        "13",
+        "10"
+      ],
+      "answer": 2,
+      "explanation": "列表推导中的 lambda 捕获变量 i 本身而非当时的值，循环结束后 i = 2，因此 funcs[1](10) 返回 10 + 2 = 12。",
+      "error_tag": "lambda闭包延迟绑定",
+      "variant_group": "lambda_late_binding"
+    },
+    {
+      "kp": "py.func.lambda",
+      "type": "single_choice",
+      "question": "以下代码的输出是：\nf = lambda x, y=10: x + y\nprint(f(5))",
+      "options": [
+        "5",
+        "10",
+        "15",
+        "报错，lambda 不支持默认参数"
+      ],
+      "answer": 2,
+      "explanation": "lambda 支持默认参数，y 未传入时取默认值 10，因此返回 5 + 10 = 15。",
+      "error_tag": "lambda参数特性误解",
+      "variant_group": "lambda_default_arg"
+    },
+    {
+      "kp": "py.func.lambda",
+      "type": "single_choice",
+      "question": "以下代码的输出是：\nf = lambda *args: sum(args)\nprint(f(1, 2, 3))",
+      "options": [
+        "6",
+        "123",
+        "报错，lambda 不支持可变参数",
+        "None"
+      ],
+      "answer": 0,
+      "explanation": "lambda 支持 *args 可变位置参数，args 为 (1, 2, 3)，sum 结果为 6。",
+      "error_tag": "lambda参数特性误解",
+      "variant_group": "lambda_varargs"
+    },
+    {
+      "kp": "py.func.lambda",
+      "type": "single_choice",
+      "question": "以下代码的输出是：\nf = lambda x: (lambda y: x + y)\ng = f(10)\nprint(g(5))",
+      "options": [
+        "5",
+        "10",
+        "15",
+        "报错，lambda 不能返回 lambda"
+      ],
+      "answer": 2,
+      "explanation": "外层 lambda 返回内层 lambda，内层闭包捕获 x = 10，因此 g(5) 返回 15。",
+      "error_tag": "lambda闭包理解错误",
+      "variant_group": "lambda_nested"
+    },
+    {
+      "kp": "py.func.lambda",
+      "type": "single_choice",
+      "question": "以下代码的输出是：\nf = lambda x: x ** 2\nprint(list(map(f, [1, 2, 3])))",
+      "options": [
+        "[1, 4, 9]",
+        "[1, 2, 3]",
+        "[2, 4, 6]",
+        "报错，map 不能接收 lambda"
+      ],
+      "answer": 0,
+      "explanation": "map 将 lambda 应用于每个元素，分别得到 1、4、9。",
+      "error_tag": "lambda与高阶函数配合错误",
+      "variant_group": "lambda_with_map"
+    },
+    {
+      "kp": "py.func.lambda",
+      "type": "single_choice",
+      "question": "以下代码的输出是：\nf = lambda x: x % 2 == 0\nprint(list(filter(f, range(6))))",
+      "options": [
+        "[0, 1, 2, 3, 4, 5]",
+        "[0, 2, 4]",
+        "[1, 3, 5]",
+        "[True, False, True, False, True, False]"
+      ],
+      "answer": 1,
+      "explanation": "filter 保留使 lambda 返回 True 的元素，即偶数 0、2、4。",
+      "error_tag": "lambda与高阶函数配合错误",
+      "variant_group": "lambda_with_filter"
+    },
+    {
+      "kp": "py.func.higher_order",
+      "type": "single_choice",
+      "question": "以下代码的输出是？\n\ndef apply_twice(f, x):\n    return f(f(x))\n\nprint(apply_twice(lambda n: n + 3, 4))",
+      "options": [
+        "10",
+        "7",
+        "11",
+        "4"
+      ],
+      "answer": 0,
+      "explanation": "apply_twice 把 f 应用两次：先 f(4)=7，再 f(7)=10，lambda 是普通函数对象，可以被当作参数传递。",
+      "error_tag": "概念混淆",
+      "variant_group": "接受函数作为参数"
+    },
+    {
+      "kp": "py.func.higher_order",
+      "type": "single_choice",
+      "question": "下列哪个内置函数接受一个函数和一个可迭代对象，并返回一个新的迭代器，其中每个元素都是将该函数应用到原元素的结果？",
+      "options": [
+        "filter",
+        "map",
+        "reduce",
+        "zip"
+      ],
+      "answer": 1,
+      "explanation": "map(func, iterable) 对每个元素应用 func；filter 用于按谓词筛选，reduce 在 functools 中做累积归约，zip 用于并行聚合。",
+      "error_tag": "记忆缺失",
+      "variant_group": "map/filter 区分"
+    },
+    {
+      "kp": "py.func.higher_order",
+      "type": "multi_choice",
+      "question": "下列哪些写法是把函数对象（而不是函数调用结果）作为参数传递？（多选）",
+      "options": [
+        "sorted(words, key=len)",
+        "map(str.upper, words)",
+        "result = len(words)",
+        "list(filter(is_valid, items))",
+        "print(abs(-3))"
+      ],
+      "answer": [
+        0,
+        1,
+        3
+      ],
+      "explanation": "key=len 传函数对象，map 与 filter 的第一个参数也应是函数对象；len(words) 和 abs(-3) 是立即调用求值，传递的是结果而非函数。",
+      "error_tag": "概念混淆",
+      "variant_group": "传递函数对象 vs 调用"
+    },
+    {
+      "kp": "py.func.higher_order",
+      "type": "multi_choice",
+      "question": "关于闭包，下列说法正确的有？（多选）",
+      "options": [
+        "闭包可以记住定义时所在作用域的变量",
+        "在循环中创建的多个闭包可能共享同一个变量引用",
+        "闭包捕获的变量在函数被调用时读取其当前值",
+        "闭包只能捕获全局变量，不能捕获外层函数的局部变量"
+      ],
+      "answer": [
+        0,
+        1,
+        2
+      ],
+      "explanation": "闭包捕获外层局部变量并按调用时读取当前值，这既让闭包记住环境，也导致循环变量共享的延迟绑定问题。",
+      "error_tag": "概念混淆",
+      "variant_group": "闭包延迟绑定"
+    },
+    {
+      "kp": "py.func.higher_order",
+      "type": "multi_choice",
+      "question": "以下哪些是高阶函数的例子？（多选）",
+      "options": [
+        "接受一个比较函数并用于排序的函数",
+        "返回一个配置好的回调函数的工厂函数",
+        "把两个数相加并返回其和的普通函数",
+        "用 map 将转换函数应用于序列每个元素的代码"
+      ],
+      "answer": [
+        0,
+        1,
+        3
+      ],
+      "explanation": "接受函数参数或返回函数都属高阶函数；两数相加不涉及函数对象，因此不是高阶函数。",
+      "error_tag": "概念混淆",
+      "variant_group": "高阶函数定义"
+    },
+    {
+      "kp": "py.func.higher_order",
+      "type": "fill_blank",
+      "question": "补全代码，使 result 为 [2, 4, 6]：\nnums = [1, 2, 3]\nresult = list(____(lambda x: x * 2, nums))",
+      "options": [],
+      "answer": [
+        "map",
+        "map()"
+      ],
+      "explanation": "map 接受一个函数和一个可迭代对象，对每个元素应用该函数并返回迭代器，list 将其转为列表 [2, 4, 6]。",
+      "error_tag": "记忆缺失",
+      "variant_group": "map/filter 区分"
+    },
+    {
+      "kp": "py.func.higher_order",
+      "type": "fill_blank",
+      "question": "补全代码，使 words 按长度升序排列：\nwords = ['python', 'c', 'java']\nwords.sort(key=____)",
+      "options": [],
+      "answer": [
+        "len",
+        "len()"
+      ],
+      "explanation": "key 参数应接收一个函数对象，len 对每个元素返回其长度，sort 据此比较；写成 len() 会立即求值并报错。",
+      "error_tag": "概念混淆",
+      "variant_group": "key 参数传函数对象"
+    },
+    {
+      "kp": "py.func.higher_order",
+      "type": "fill_blank",
+      "question": "补全代码，使 add3(7) 返回 10：\ndef make_adder(n):\n    return ____ x: x + n\n\nadd3 = make_adder(3)",
+      "options": [],
+      "answer": [
+        "lambda",
+        "lambda "
+      ],
+      "explanation": "返回一个 lambda 表达式即可形成闭包，捕获外层参数 n；make_adder(3) 返回 add3，add3(7) 计算 7+3=10。",
+      "error_tag": "记忆缺失",
+      "variant_group": "闭包与返回函数"
+    },
+    {
+      "kp": "py.func.higher_order",
+      "type": "code_reading",
+      "question": "阅读代码，写出输出：\n\ndef multiplier(factor):\n    def inner(x):\n        return x * factor\n    return inner\n\ndouble = multiplier(2)\ntriple = multiplier(3)\nprint(double(5), triple(5))",
+      "options": [],
+      "answer": "10 15",
+      "explanation": "每次调用 multiplier 都创建一个独立的闭包环境，double 捕获 factor=2，triple 捕获 factor=3，因此分别得到 10 和 15。",
+      "error_tag": "概念混淆",
+      "variant_group": "闭包与返回函数"
+    },
+    {
+      "kp": "py.func.higher_order",
+      "type": "code_reading",
+      "question": "阅读代码，写出输出：\n\nfrom functools import reduce\nnums = [5, 1, 4, 2]\nprint(reduce(lambda a, b: a if a > b else b, nums))",
+      "options": [],
+      "answer": "5",
+      "explanation": "reduce 用二元函数依次归约：max(5,1)=5，max(5,4)=5，max(5,2)=5，最终返回列表最大值 5。",
+      "error_tag": "边界错误",
+      "variant_group": "reduce 归约"
+    },
+    {
+      "kp": "py.func.higher_order",
+      "type": "scenario",
+      "question": "工程场景：日志模块需要支持不同格式（纯文本、JSON、彩色终端）。团队希望调用方传入一个格式化函数，日志类在运行时可替换该格式化函数而无需修改日志类本身。请说明这种设计用到了什么函数式特性，以及为什么它让代码更易扩展。",
+      "options": [],
+      "answer": null,
+      "explanation": "把格式化函数作为参数传入日志类，就是让类接受函数对象并按需调用；这本质上是策略模式，用函数替代继承层级，新增格式只需传入新函数，符合开闭原则。",
+      "error_tag": "概念混淆",
+      "variant_group": "高阶函数工程应用",
+      "required_keywords": [
+        "函数对象",
+        "策略模式",
+        "开闭原则",
+        "高阶函数"
+      ]
+    },
+    {
+      "kp": "py.func.higher_order",
+      "type": "scenario",
+      "question": "工程场景：某个循环里创建了一批回调函数并存入列表，稍后统一调用。执行时发现所有回调读到的都是循环变量的最终值，而不是各自迭代时的值。请解释原因并给出至少一种修复方案。",
+      "options": [],
+      "answer": null,
+      "explanation": "闭包捕获的是变量引用，回调在稍后被调用时才读取循环变量的当前值，此时循环已结束。修复可用默认参数绑定当前值（如 lambda x, i=i: ...），或用一个工厂函数为每次迭代生成独立作用域。",
+      "error_tag": "边界错误",
+      "variant_group": "闭包延迟绑定",
+      "required_keywords": [
+        "闭包",
+        "变量引用",
+        "延迟绑定",
+        "默认参数",
+        "工厂函数"
+      ]
+    },
+    {
+      "kp": "py.func.higher_order",
+      "type": "single_choice",
+      "question": "以下代码的输出是？\n\nnums = [1, 2, 3, 4]\nresult = list(filter(lambda x: x % 2 == 0, nums))\nprint(result)",
+      "options": [
+        "[1, 3]",
+        "[2, 4]",
+        "[True, False]",
+        "[1, 2, 3, 4]"
+      ],
+      "answer": 1,
+      "explanation": "filter 保留谓词为真的元素，即偶数 2 和 4；它不会把谓词结果本身作为元素返回，因此不会得到布尔列表。",
+      "error_tag": "概念混淆",
+      "variant_group": "map/filter 区分"
+    },
+    {
+      "kp": "py.func.higher_order",
+      "type": "single_choice",
+      "question": "关于返回函数的函数，下列说法正确的是？",
+      "options": [
+        "返回的函数无法访问外层函数的局部变量",
+        "外层函数每次调用都会创建新的闭包，绑定当次的局部变量",
+        "只有用 def 定义的函数才能返回函数，lambda 不能返回",
+        "返回函数会导致外层函数的局部变量被立即销毁，闭包无法使用"
+      ],
+      "answer": 1,
+      "explanation": "闭包捕获的是每次调用创建的环境，所以每次外层调用互不影响，这是高阶函数产生多个独立函数对象的基础。",
+      "error_tag": "概念混淆",
+      "variant_group": "闭包与返回函数"
+    },
+    {
+      "kp": "py.func.higher_order",
+      "type": "single_choice",
+      "question": "以下代码的输出是？\n\ndef make_adder(n):\n    return lambda x: x + n\n\nadd5 = make_adder(5)\nprint(add5(10))",
+      "options": [
+        "10",
+        "15",
+        "5",
+        "报错：n 未定义"
+      ],
+      "answer": 1,
+      "explanation": "返回的 lambda 形成闭包，捕获了 make_adder 调用时的局部变量 n=5，因此 add5(10) 返回 15。",
+      "error_tag": "概念混淆",
+      "variant_group": "闭包与返回函数"
+    },
+    {
+      "kp": "py.func.higher_order",
+      "type": "single_choice",
+      "question": "要让列表按字符串长度排序，下列写法正确的是？",
+      "options": [
+        "words.sort(key=len)",
+        "words.sort(len)",
+        "words.sort(key=len())",
+        "words.sort(key=lambda: len)"
+      ],
+      "answer": 0,
+      "explanation": "key 参数接收一个函数对象，sort 会对每个元素调用它；key=len 传递函数本身，而 len() 会立即调用并报错。",
+      "error_tag": "概念混淆",
+      "variant_group": "key 参数传函数对象"
+    },
+    {
+      "kp": "py.func.higher_order",
+      "type": "single_choice",
+      "question": "以下代码的输出是？\n\nfuncs = [lambda x: x + i for i in range(3)]\nprint([f(0) for f in funcs])",
+      "options": [
+        "[0, 1, 2]",
+        "[2, 2, 2]",
+        "[3, 3, 3]",
+        "[0, 0, 0]"
+      ],
+      "answer": 1,
+      "explanation": "闭包捕获变量 i 的引用而非当前值，循环结束时 i=2，因此每个 lambda 调用时都取到 2。若要固定值需用默认参数或额外工厂函数。",
+      "error_tag": "边界错误",
+      "variant_group": "闭包延迟绑定"
+    },
+    {
+      "kp": "py.func.higher_order",
+      "type": "single_choice",
+      "question": "关于 functools.reduce，下列描述正确的是？",
+      "options": [
+        "reduce 是内置函数，无需导入即可使用",
+        "reduce 需要一个二元函数、一个可迭代对象，可选提供初始值",
+        "reduce 只能作用于数字列表",
+        "reduce 返回一个列表"
+      ],
+      "answer": 1,
+      "explanation": "reduce 位于 functools 模块，签名约为 reduce(func, iterable[, initial])，func 接受两个参数，最终返回一个累积结果而非列表。",
+      "error_tag": "记忆缺失",
+      "variant_group": "reduce 归约"
+    },
+    {
+      "kp": "py.func.higher_order",
+      "type": "single_choice",
+      "question": "以下代码的输出是？\n\nfrom functools import reduce\nresult = reduce(lambda a, b: a * b, [1, 2, 3, 4])\nprint(result)",
+      "options": [
+        "10",
+        "24",
+        "16",
+        "1234"
+      ],
+      "answer": 1,
+      "explanation": "reduce 依次累积：1*2=2，2*3=6，6*4=24，返回单一标量 24。",
+      "error_tag": "概念混淆",
+      "variant_group": "reduce 归约"
+    },
+    {
+      "kp": "py.func.higher_order",
+      "type": "single_choice",
+      "question": "下面关于高阶函数的说法，哪一项是错误的？",
+      "options": [
+        "高阶函数可以接受函数作为参数",
+        "高阶函数可以返回函数作为结果",
+        "内置函数 map、filter、sorted 都可以接受函数作为参数",
+        "高阶函数必须同时既接受函数参数又返回函数"
+      ],
+      "answer": 3,
+      "explanation": "高阶函数的定义是「接受函数作为参数或返回函数」，满足其一即可，并不要求两者兼备；map 只接受函数参数也是高阶函数。",
+      "error_tag": "概念混淆",
+      "variant_group": "高阶函数定义"
+    }
+  ]
+}

@@ -1,0 +1,615 @@
+{
+  "id": "s1u6l4",
+  "title": "s1u6l4",
+  "kps": [
+    "py.module.stdlib_intro",
+    "py.module.third_party"
+  ],
+  "theory": "## py.module.stdlib_intro\n\n# Python 标准库入门：从「导入」到「读懂一个模块」\n\n> 一句话直觉：你写 Python 时 90% 的时间不是发明新东西，而是学会「站在标准库（Standard Library）的肩膀上」——它是 Python 自带的一整箱现成工具，学它就像学用手机自带的 App，而不是每次都自己造。\n\n本讲义假设你**没有任何** Python 导入与模块的背景知识，从零建立三个核心能力：\n\n1. 知道 `import` 到底做了什么；\n2. 会读一个标准库模块的「门面」（`__all__`、`__version__`、docstring 等）；\n3. 能区分「运行时真的导入」和「只给类型检查器看的导入」。\n\n—— 40 分钟，走完这三步，你就拥有阅读任何标准库模块最基础的「读心术」。\n\n---\n\n## 1. 什么是「模块」与「标准库」\n\n**模块（module）**：一个 `.py` 文件，里面装着一堆变量、函数、类，可以被别的程序「导入」使用。\n**标准库（standard library）**：Python 官方随解释器一起发布的模块集合，不需要 `pip install` 就能用，比如 `math`、`os`、`json`、`typing`。\n\n`import` 发生时，Python 会：\n\n1. 找到对应的 `.py` 文件或内建模块；\n2. **执行**该文件里的顶层代码（所以模块顶层不要写耗时操作）；\n3. 把结果放进 `sys.modules` 缓存，后续 `import` 直接复用。\n\n```python\nimport sys\nimport math\n\n# 模块被缓存到 sys.modules 里，第二次 import 不会再执行一次\nprint(\"math\" in sys.modules)        # True\nprint(math.sqrt(16))                # 4.0\n\n# 模块对象也是一个「普通对象」，它的属性就是里面定义的名字\nprint(math.pi)\n```\n\n> 结论：**导入 = 执行一次 + 缓存**。理解这一点，后面所有「懒导入」、「只在类型检查时导入」才有意义。\n\n---\n\n## 2. 一个模块的「门面」：docstring、`__all__`、`__version__`\n\n打开任何一个标准库源文件，最上面常常看到这样的结构（这是官方推荐的写法）：\n\n```python\n\"\"\"This module does stuff.\"\"\"\n\n__all__ = ['a', 'b', 'c']\n__version__ = '0.1'\n__author__ = 'Cardinal Biggles'\n```\n\n逐个解释：\n\n- **docstring**：模块最顶部的字符串，用 `help(模块)` 或 `模块.__doc__` 读到。\n- **`__all__`**：一个字符串列表，告诉 `from m import *` 应该导出哪些名字。**没有 `__all__`** 时，`import *` 会导出所有不以 `_` 开头的名字。\n- **`__version__` / `__author__`**：社区约定俗成的元数据，方便使用者了解版本和作者。\n\n```python\n# 假设模块 my_mod.py 内容为：\n# \"\"\"Demo module.\"\"\"\n# __all__ = ['a']\n# a = 1\n# b = 2\n# _c = 3\n\nfrom my_mod import *\nprint(a)     # 1\n# print(b)   # NameError：b 不在 __all__ 中，不会被 * 导入\n# print(_c)  # NameError：下划线开头的名字默认不被导出\n```\n\n> 结论：**`__all__` 是模块的公开 API 声明**。阅读陌生模块时，先看 `__all__` 和 docstring，就知道「作者想让你用什么」。\n\n---\n\n## 3. 命名约定：一眼看出「公开 / 内部 / 魔法」\n\n看完门面，再看里面的名字。Python 用**下划线**来编码「可见性」：\n\n| 写法 | 含义 |\n|---|---|\n| `name` | 公开 |\n| `_name` | 弱内部：`from m import *` 不会导入 |\n| `__name`（类属性） | 会触发名字改写（name mangling），如 `_Class__name` |\n| `__name__` | 魔法（magic / dunder）名字，由 Python 自己使用 |\n\n命名风格：\n\n- 模块/包：`lower_case`（小写下划线）；\n- 类：`CapWords`（驼峰）；\n- 函数/变量：`lower_case`；\n- 常量：`UPPER_CASE`；\n- 类型变量：`T`、`AnyStr` 等简短 `CapWords`。\n\n```python\nclass FooBar:\n    def __init__(self):\n        self.__boo = 1        # 实际名字变成 _FooBar__boo\n\nfb = FooBar()\nprint(fb._FooBar__boo)        # 1，能读但不该读写\n# print(fb.__boo)             # AttributeError\n```\n\n> 结论：**不要创造 `__xxx__` 风格的名字**，那是留给 Python 的；对内部实现，用单个下划线前缀就够。\n\n---\n\n## 4. 一个容易被忽略的高级技巧：`TYPE_CHECKING`\n\n有些模块只在「类型注解」里被引用，运行时其实不需要真的导入（例如它会拉一大堆依赖、拖慢启动）。`typing.TYPE_CHECKING` 就是为这种情况准备的：\n\n- 运行时它是 `False`；\n- 静态类型检查器（mypy、pyright 等）分析时把它当作 `True`。\n\n所以你可以在 `if TYPE_CHECKING:` 下写导入，运行时被跳过，检查器却能看到类型。\n\n```python\nfrom typing import TYPE_CHECKING\n\nif TYPE_CHECKING:\n    import expensive_mod  # 只给静态分析看，运行时不真的导入\n\ndef fun(arg: \"expensive_mod.SomeType\") -> None:\n    ...\n```\n\n注意：注解用引号包成字符串（或使用 PEP 649 的延迟求值）才安全，否则运行时求值会报 `NameError`。\n\n> 结论：**`TYPE_CHECKING` 是「只在类型世界导入」的开关**，能显著减少重依赖模块的启动开销。\n\n---\n\n## 5. 一点点关于 `typing` 的现状（为什么你会在源文件里看到一堆 `typing.List`）\n\n早期想给 `list`、`dict` 加泛型参数时只能写 `typing.List[int]`。从 Python 3.9（PEP 585）开始，内建容器自己就支持 `list[int]`、`dict[str, int]`，于是 `typing.Dict`、`typing.List`、`typing.Set`、`typing.FrozenSet` 成为**已弃用别名（deprecated alias）**——仍能用，但新代码推荐直接写内建类型，或在需要抽象时用 `collections.abc.Mapping` / `Sequence`。\n\n```python\n# 旧写法（仍可用，但不推荐）\nfrom typing import List, Dict\n\ndef f1(x: List[int]) -> Dict[str, int]: ...\n\n# 新写法（Python 3.9+）\ndef f2(x: list[int]) -> dict[str, int]: ...\n\n# 更抽象、更推荐（接受任何映射/序列）\nfrom collections.abc import Mapping, Sequence\n\ndef f3(x: Sequence[int]) -> Mapping[str, int]: ...\n```\n\n> 结论：**看到 `typing.List` 不要慌，那只是历史遗产**；新代码优先用 `list[int]` 或 `collections.abc` 里的抽象类型。\n\n```python\n\"\"\"演示：读一个模块的门面 + `__all__` + `TYPE_CHECKING`。\n运行：python example.py\n\"\"\"\n\n# ---------- 第一步：看门面 ----------\nimport json\n\nprint(\"json.__doc__ 开头:\", (json.__doc__ or \"\").strip().splitlines()[0])\nprint(\"json.__all__ 前 5 个:\", json.__all__[:5])\n\n# ---------- 第二步：__all__ 控制 import * ----------\n# 用一个临时模块演示\nimport textwrap, sys, types\n\nmod_src = textwrap.dedent('''\n    \"\"\"Demo module.\"\"\"\n    __all__ = [\"a\"]\n    a = 1\n    b = 2\n    _c = 3\n''')\nmod = types.ModuleType(\"demo_mod\")\nexec(mod_src, mod.__dict__)\nsys.modules[\"demo_mod\"] = mod\n\nns = {}\nexec(\"from demo_mod import *\", ns)\nprint(\"通过 * 拿到的名字:\", [k for k in ns if not k.startswith('__')])\n\n# ---------- 第三步：TYPE_CHECKING ----------\nfrom typing import TYPE_CHECKING\n\nprint(\"运行时 TYPE_CHECKING =\", TYPE_CHECKING)  # False\n\nif TYPE_CHECKING:\n    import decimal  # 只在类型检查器眼里存在\n\ndef price(x: \"decimal.Decimal\") -> str:\n    # 注意：注解是字符串，运行时不会真的去找 decimal\n    return f\"{x:.2f}\"\n\nprint(\"price(3.14159):\", price(3.14159))\n```\n\n## py.module.third_party\n\n# 第三方模块（Third-Party Module）入门到工程实践\n\n> 一句话直觉：标准库只是 Python 自带的口袋工具，而第三方模块（third-party module）是全世界的开发者已经造好的「零件库」—— 学会找到、安装、使用并管理它们，是你从「会写 Python」迈向「能用 Python 造东西」的关键一步。\n\n---\n\n## 一、什么是第三方模块，为什么必须学它\n\nPython 的代码组织单元从大到小依次是：包（package）→ 模块（module）→ 函数/类。\n\n- **标准库（standard library）**：Python 官方随解释器一起发布的模块，例如 `os`、`json`、`typing`。安装 Python 就有了。\n- **第三方模块（third-party module）**：由社区、公司或个人发布，需要**额外安装**才能使用的模块，例如 `requests`、`numpy`、`pandas`、`flask`。\n- **本地模块（local module）**：你自己项目里写的 `.py` 文件。\n\n为什么必须学？因为你 90% 的实际项目都不会从零造轮子：发 HTTP 请求用 `requests`，处理表格用 `pandas`，做深度学习用 `torch`。**你的生产力 = 标准库 + 第三方模块 + 少量自研代码**。\n\n---\n\n## 二、认识一个模块：`__name__`、`__all__`、`__version__`\n\n一个写好的模块，通常会在文件开头声明一些「元信息（metadata）」，让使用者知道它是谁、怎么用。\n\n```python\n# mymodule.py\n\"\"\"This module does stuff.\n\nOptional plotz says to frobnicate the bizbaz first.\n\"\"\"\n\n__all__ = ['a', 'b', 'c']        # 声明 from mymodule import * 时导出哪些名字\n__version__ = '0.1'              # 版本号，方便排查兼容问题\n__author__ = 'Cardinal Biggles'  # 作者信息\n\na, b, c = 1, 2, 3\nd = 999  # 不出现在 __all__ 里，不会被打包导出\n```\n\n记住两条工程习惯：\n\n- `__all__` 决定 `from mod import *` 时暴露的公共接口（public API）。\n- `__version__` 让使用者能判断自己用的是哪个版本，出问题时能定位。\n\n---\n\n## 三、安装第三方模块：pip 与虚拟环境（virtual environment）\n\n第三方模块的生态中枢是 **PyPI（Python Package Index，Python 包索引）**。安装工具是 `pip`。\n\n最小可用流程（命令行执行）：\n\n```bash\npython -m venv .venv              # 为当前项目创建独立虚拟环境\nsource .venv/bin/activate         # macOS/Linux 激活\n# .venv\\Scripts\\activate          # Windows 激活\npython -m pip install requests    # 安装第三方模块\npython -m pip freeze > requirements.txt  # 冻结依赖清单\n```\n\n为什么必须用虚拟环境？因为不同项目可能依赖同一个库的不同版本，全局安装会互相污染。虚拟环境让**每个项目有自己独立的依赖（dependency）**。\n\n---\n\n## 四、使用第三方模块：import 的三种姿势与命名空间\n\n导入模块时，命名空间（namespace）的写法决定代码是否可读：\n\n```python\nimport requests                       # 推荐：前缀清晰\nimport numpy as np                    # 约定俗成的别名\nfrom collections import OrderedDict    # 只取一个名字\n```\n\n工程建议：\n\n- 优先 `import x` 或 `import x as y`，避免 `from x import *`，否则命名空间被污染，很难看出名字来自哪个模块。\n- 别名要遵循社区惯例（`numpy as np`、`pandas as pd`、`matplotlib.pyplot as plt`），别人才能秒懂。\n- 模块名本身遵守社区命名约定：**包和模块短小写，类名 CapWords，常量 UPPER_CASE**。\n\n---\n\n## 五、工程级技巧：延迟导入与 `typing.TYPE_CHECKING`\n\n大型项目中，有些模块导入成本很高（例如加载 C 扩展），但只用来做**类型注解（type annotation）**。这时可以用 `TYPE_CHECKING`：静态检查器认为它是 `True`，运行时是 `False`，从而**避免运行时真正导入**。\n\n```python\nfrom typing import TYPE_CHECKING\n\nif TYPE_CHECKING:\n    import expensive_mod  # 静态分析时会导入；运行时不会\n\ndef fun(arg: \"expensive_mod.SomeType\") -> None:\n    ...\n```\n\n这是一个把「类型安全」和「启动速度」同时兼顾的模式，是资深工程师常用技巧。\n\n---\n\n## 小结\n\n1. 第三方模块 = 别人写好、发布到 PyPI、你通过 pip 安装后即可使用的模块。\n2. 元信息 `__all__ / __version__ / __author__` 是一个模块对外的「名片」。\n3. 使用虚拟环境隔离依赖，用 `requirements.txt` 复现环境。\n4. 导入要用清晰命名空间；只做类型注解的重型模块可用 `TYPE_CHECKING` 延迟导入。\n\n下次遇到「这个功能好像应该有人写过」，先想到 PyPI，再想到虚拟环境，再想到 `import`。\n",
+  "quiz": [
+    {
+      "kp": "py.module.stdlib_intro",
+      "type": "single_choice",
+      "question": "下列关于 Python 标准库的说法，哪一项最准确？",
+      "options": [
+        "标准库是随 Python 解释器一起安装、无需额外下载即可导入使用的模块集合",
+        "标准库是需要通过 pip 单独安装后才能使用的第三方模块集合",
+        "标准库只包含用 C 语言实现的底层模块，不包含纯 Python 模块",
+        "标准库中的所有模块在任何平台上都必须显式 import 才能生效，且无法禁用"
+      ],
+      "answer": 0,
+      "explanation": "Python 标准库随解释器一同分发，属于安装即得的模块集合，因此选项 A 正确。选项 B 描述的是第三方包的分发方式；选项 C 忽略了标准库中大量纯 Python 模块；选项 D 的『无法禁用』说法错误，且并非所有模块都需要显式导入才『生效』（如 builtins 已默认加载）。",
+      "error_tag": "概念混淆",
+      "variant_group": "stdlib_definition"
+    },
+    {
+      "kp": "py.module.stdlib_intro",
+      "type": "single_choice",
+      "question": "执行以下代码时，最可能发生什么？\n\nimport math\nprint(math.sqrt(16))",
+      "options": [
+        "输出 4.0，因为 math 是标准库模块，可直接导入",
+        "报错 ModuleNotFoundError，因为 math 需要先 pip install",
+        "输出 4，因为 sqrt 返回整数",
+        "报错 SyntaxError，因为 import 不能单独成行"
+      ],
+      "answer": 0,
+      "explanation": "math 是 Python 标准库模块，无需安装即可 import，sqrt(16) 返回浮点数 4.0，因此 A 正确。B 把第三方安装流程误用到标准库；C 错在 sqrt 返回 float；D 错在 import 语句完全合法。",
+      "error_tag": "语法/概念误用",
+      "variant_group": "stdlib_import"
+    },
+    {
+      "kp": "py.module.stdlib_intro",
+      "type": "single_choice",
+      "question": "关于标准库中的 json 模块，下列说法正确的是：",
+      "options": [
+        "json.dumps 把 Python 对象序列化为 JSON 字符串，json.loads 把 JSON 字符串解析为 Python 对象",
+        "json.dumps 把 Python 对象直接写入文件，json.loads 从文件读取",
+        "json.dumps 只能处理字符串，json.loads 只能处理数字",
+        "json.dumps 与 json.loads 分别是第三方库的方法，标准库中不存在"
+      ],
+      "answer": 0,
+      "explanation": "json.dumps/loads 分别负责序列化到字符串与从字符串反序列化，A 正确。B 描述的是 json.dump/load（操作文件）而非 dumps/loads；C 错误地限制了数据类型；D 错在 json 是标准库模块。",
+      "error_tag": "API 混淆",
+      "variant_group": "stdlib_json"
+    },
+    {
+      "kp": "py.module.stdlib_intro",
+      "type": "single_choice",
+      "question": "在代码中看到 `if __name__ == \"__main__\":`，这一写法的主要作用是：",
+      "options": [
+        "让代码块只在文件被直接运行时执行，被当作模块导入时不执行",
+        "让代码块只在文件被导入时执行",
+        "让代码块被自动执行两次",
+        "判断当前文件是否是标准库模块"
+      ],
+      "answer": 0,
+      "explanation": "当文件被直接运行时 __name__ 为 '__main__'，被导入时则等于模块名，因此该判断用于区分直接运行与导入，A 正确。B 与事实相反；C 无依据；D 混淆了 __name__ 的含义。",
+      "error_tag": "主模块概念不清",
+      "variant_group": "stdlib_main"
+    },
+    {
+      "kp": "py.module.stdlib_intro",
+      "type": "single_choice",
+      "question": "以下哪个模块最适合用来处理命令行参数，而无需安装第三方库？",
+      "options": [
+        "argparse",
+        "click",
+        "requests",
+        "pandas"
+      ],
+      "answer": 0,
+      "explanation": "argparse 是标准库中处理命令行参数的模块，A 正确。click 是第三方命令行库；requests 用于 HTTP；pandas 用于数据分析，三者都需要额外安装。",
+      "error_tag": "标准库/第三方库混淆",
+      "variant_group": "stdlib_module_purpose"
+    },
+    {
+      "kp": "py.module.stdlib_intro",
+      "type": "single_choice",
+      "question": "关于标准库模块和内置函数（built-in functions）的关系，下列说法正确的是：",
+      "options": [
+        "内置函数如 len、print 无需 import 即可直接使用；标准库模块通常需要 import",
+        "内置函数如 len、print 需要先 import builtins 才能使用",
+        "标准库模块中的函数也全部无需 import 即可使用",
+        "内置函数和标准库模块是同一概念，没有任何区别"
+      ],
+      "answer": 0,
+      "explanation": "内置函数来自 builtins 命名空间，默认可用；标准库模块需要显式 import，因此 A 正确。B 错在默认已可用；C 忽略了需要导入这一事实；D 混淆了两个概念。",
+      "error_tag": "概念混淆",
+      "variant_group": "stdlib_definition"
+    },
+    {
+      "kp": "py.module.stdlib_intro",
+      "type": "single_choice",
+      "question": "下面代码最可能发生什么？\n\nimport os.path\nprint(os.path.basename('/tmp/a.txt'))",
+      "options": [
+        "输出 a.txt",
+        "报错，因为 os.path 不能单独 import",
+        "输出 /tmp/a.txt",
+        "输出 tmp/a.txt"
+      ],
+      "answer": 0,
+      "explanation": "os.path 是真实存在的子模块，可以单独导入，basename 返回路径最后一部分 a.txt，因此 A 正确。B 与事实相反；C、D 混淆了 basename 与 dirname 或其它函数的行为。",
+      "error_tag": "标准库行为误判",
+      "variant_group": "stdlib_ospath"
+    },
+    {
+      "kp": "py.module.stdlib_intro",
+      "type": "single_choice",
+      "question": "关于标准库的版本兼容性，下列说法最合理的是：",
+      "options": [
+        "不同 Python 版本的标准库可能有增减或行为变化，写代码时应查阅对应版本文档",
+        "标准库在所有 Python 版本中完全一致，永远不会变化",
+        "标准库只在主版本号变化时才更新，次版本号变化时不会更新",
+        "标准库一旦发布就冻结，新增功能只能通过第三方库实现"
+      ],
+      "answer": 0,
+      "explanation": "标准库会随 Python 版本演进，存在新增、弃用与行为调整，因此需查阅对应版本文档，A 正确。B、D 与事实相反；C 忽略了次版本中也可能有标准库变化。",
+      "error_tag": "版本意识缺失",
+      "variant_group": "stdlib_versioning"
+    },
+    {
+      "kp": "py.module.stdlib_intro",
+      "type": "single_choice",
+      "question": "以下关于 `from math import *` 的说法，哪一项最合理？",
+      "options": [
+        "它会导入 math 中所有不以单下划线开头的公开名称，可能污染命名空间，通常不推荐在大型代码中使用",
+        "它会导入 math 模块对象本身，并绑定为 *",
+        "它会导入 math 中所有名称，包括以下划线开头的私有名称",
+        "它会报 SyntaxError，因为标准库模块不允许使用 * 导入"
+      ],
+      "answer": 0,
+      "explanation": "通配符导入会引入公开名称，容易造成命名冲突，因此通常不推荐，A 正确。B 完全误解语法；C 忽略了 __all__ 与下划线约定；D 与事实相反，语法是合法的。",
+      "error_tag": "导入最佳实践",
+      "variant_group": "stdlib_import"
+    },
+    {
+      "kp": "py.module.stdlib_intro",
+      "type": "single_choice",
+      "question": "下面哪一项最能说明『标准库让 Python 具备开箱即用的广泛能力』？",
+      "options": [
+        "无需安装即可使用 re 做正则匹配、使用 datetime 处理日期时间、使用 collections 提供额外容器类型",
+        "必须安装后才可使用 re、datetime、collections",
+        "标准库只能处理文本，无法处理日期时间和容器类型",
+        "标准库只提供数学计算能力，其它能力均需第三方库"
+      ],
+      "answer": 0,
+      "explanation": "re、datetime、collections 均为标准库模块，覆盖文本、时间与容器等常见需求，A 正确。B 错在需要安装；C、D 都严重低估了标准库范围。",
+      "error_tag": "标准库范围不清",
+      "variant_group": "stdlib_scope"
+    },
+    {
+      "kp": "py.module.stdlib_intro",
+      "type": "single_choice",
+      "question": "某同学在 Windows 上写了 `import winreg`，在 Linux 上运行报 ModuleNotFoundError。最合理的解释是：",
+      "options": [
+        "winreg 是平台相关的标准库模块，只在 Windows 上可用",
+        "winreg 是第三方库，在 Linux 上未安装",
+        "winreg 是标准库模块，Linux 上报错说明 Python 安装损坏",
+        "winreg 是标准库模块，需要先 import os 才能加载"
+      ],
+      "answer": 0,
+      "explanation": "标准库中部分模块具有平台相关性，winreg 仅 Windows 提供，因此 A 正确。B 忽略了它属于标准库但平台受限；C、D 都是对标准库平台差异的常见误解。",
+      "error_tag": "平台相关标准库误判",
+      "variant_group": "stdlib_platform"
+    },
+    {
+      "kp": "py.module.stdlib_intro",
+      "type": "single_choice",
+      "question": "关于标准库与第三方库在『依赖管理』上的差异，下列说法正确的是：",
+      "options": [
+        "标准库不需要在依赖清单中声明，第三方库通常需要记录在 requirements.txt 或类似清单中",
+        "标准库与第三方库都必须在 requirements.txt 中声明",
+        "标准库必须声明，第三方库因为是全局安装所以不需要声明",
+        "两者都不需要声明，Python 会自动处理所有依赖"
+      ],
+      "answer": 0,
+      "explanation": "标准库随解释器提供，不进入第三方依赖清单；第三方库通常需要显式记录以便复现环境，因此 A 正确。B、C 混淆了两类库的管理方式；D 忽略了依赖管理的必要性。",
+      "error_tag": "依赖管理混淆",
+      "variant_group": "stdlib_vs_thirdparty"
+    },
+    {
+      "kp": "py.module.stdlib_intro",
+      "type": "single_choice",
+      "question": "关于下面两种导入方式，说法正确的是：\n\nimport os\nfrom os import path",
+      "options": [
+        "前者把 os 模块对象绑定到当前命名空间的 os 名称；后者只把 os.path 子模块绑定到 path 名称",
+        "两者完全等价，都会把 os 下所有名称导入当前命名空间",
+        "前者会执行 os 模块代码两次，后者只执行一次",
+        "后者会报错，因为 os.path 不是模块"
+      ],
+      "answer": 0,
+      "explanation": "import os 绑定模块名 os；from os import path 只引入 os.path 子模块并绑定为 path，因此 A 正确。B 误以为 from ... import * 才是等价；C 错在模块只会执行一次；D 错在 os.path 是真实存在的子模块。",
+      "error_tag": "导入语义不清",
+      "variant_group": "stdlib_import"
+    },
+    {
+      "kp": "py.module.stdlib_intro",
+      "type": "single_choice",
+      "question": "在 Python 中，如果要获取当前工作目录，常使用哪个标准库模块？",
+      "options": [
+        "os",
+        "sys",
+        "math",
+        "json"
+      ],
+      "answer": 0,
+      "explanation": "os 模块提供 os.getcwd() 等与操作系统交互的能力，因此 A 正确。sys 主要用于解释器相关信息与运行时参数；math 提供数学函数；json 处理 JSON 序列化，均不直接提供获取当前工作目录的常用接口。",
+      "error_tag": "模块职责混淆",
+      "variant_group": "stdlib_module_purpose"
+    },
+    {
+      "kp": "py.module.stdlib_intro",
+      "type": "single_choice",
+      "question": "小明写了一个脚本，运行后报错：ModuleNotFoundError: No module named 'requests'。下列哪种解释最合理？",
+      "options": [
+        "requests 不是 Python 标准库模块，需要先安装才能使用",
+        "requests 是标准库模块，报错说明 Python 安装损坏",
+        "requests 是标准库模块，但必须先 import json 才能加载",
+        "requests 是标准库模块，报错说明代码中拼写错误，应该是 request"
+      ],
+      "answer": 0,
+      "explanation": "requests 是流行的第三方 HTTP 库，不属于标准库，因此需要 pip 安装后使用，A 正确。B、C、D 都错误地把 requests 当作标准库，属于常见误解。",
+      "error_tag": "标准库/第三方库混淆",
+      "variant_group": "stdlib_vs_thirdparty"
+    },
+    {
+      "kp": "py.module.stdlib_intro",
+      "type": "single_choice",
+      "question": "关于标准库模块的导入与执行，下列说法正确的是：",
+      "options": [
+        "同一个模块在一次程序运行中即使被多次 import，也只会执行一次模块顶层代码",
+        "每次 import 同一个模块都会重新执行一遍模块顶层代码",
+        "标准库模块无法被重复导入，第二次 import 会抛异常",
+        "只有使用 importlib.reload 才能让模块顶层代码首次执行"
+      ],
+      "answer": 0,
+      "explanation": "Python 的导入系统会缓存已导入模块，后续 import 直接复用缓存，因此顶层代码只执行一次，A 正确。B 与缓存机制矛盾；C 与事实相反；D 混淆了 reload 的用途，reload 是重新执行已加载模块，而不是首次执行。",
+      "error_tag": "导入机制误解",
+      "variant_group": "stdlib_import"
+    },
+    {
+      "kp": "py.module.stdlib_intro",
+      "type": "single_choice",
+      "question": "下面代码运行时最可能输出什么？\n\nimport random\nrandom.seed(0)\nprint(random.randint(1, 1))",
+      "options": [
+        "1",
+        "0",
+        "每次运行结果不同",
+        "报错，因为 randint 的上下界不能相同"
+      ],
+      "answer": 0,
+      "explanation": "random.randint(a, b) 在闭区间内返回整数，当 a=b=1 时必然返回 1，因此 A 正确。B 把下界误当结果；C 忽略了参数使取值唯一；D 错在 randint 允许区间退化为单点。",
+      "error_tag": "标准库行为误判",
+      "variant_group": "stdlib_random"
+    },
+    {
+      "kp": "py.module.stdlib_intro",
+      "type": "single_choice",
+      "question": "以下哪段代码最能体现『标准库无需安装、开箱即用』这一特点？",
+      "options": [
+        "import statistics; print(statistics.mean([1, 2, 3]))",
+        "import numpy; print(numpy.mean([1, 2, 3]))",
+        "import pandas; print(pandas.Series([1, 2, 3]).mean())",
+        "import flask; print(flask.__version__)"
+      ],
+      "answer": 0,
+      "explanation": "statistics 是标准库模块，导入即可用，符合开箱即用，A 正确。numpy、pandas、flask 都是第三方库，必须先安装，因此 B、C、D 不符合题意。",
+      "error_tag": "标准库/第三方库混淆",
+      "variant_group": "stdlib_vs_thirdparty"
+    },
+    {
+      "kp": "py.module.stdlib_intro",
+      "type": "single_choice",
+      "question": "关于『模块搜索路径』，下列说法正确的是：",
+      "options": [
+        "import 模块时，Python 会按 sys.path 中的顺序查找模块文件",
+        "import 模块时，Python 只在当前工作目录查找，找不到就报错",
+        "import 模块时，Python 会先在网络上搜索，再查本地",
+        "import 模块时，Python 会从标准库目录开始查找，并忽略 sys.path"
+      ],
+      "answer": 0,
+      "explanation": "sys.path 是一个路径列表，导入系统会按顺序在其中查找模块，因此 A 正确。B 忽略了标准库与 site-packages 等路径；C 与事实相反；D 忽略了 sys.path 的作用，标准库目录通常也在其中。",
+      "error_tag": "导入路径误解",
+      "variant_group": "stdlib_import"
+    },
+    {
+      "kp": "py.module.stdlib_intro",
+      "type": "single_choice",
+      "question": "下面代码的输出最可能是：\n\nimport sys\nprint(type(sys.argv))",
+      "options": [
+        "<class 'list'>",
+        "<class 'str'>",
+        "<class 'tuple'>",
+        "<class 'dict'>"
+      ],
+      "answer": 0,
+      "explanation": "sys.argv 是命令行参数列表，类型为 list，因此 A 正确。B 是单个参数的类型；C 常见误解为元组；D 与事实不符。",
+      "error_tag": "标准库对象类型误判",
+      "variant_group": "stdlib_sys"
+    },
+    {
+      "kp": "py.module.third_party",
+      "type": "single_choice",
+      "question": "关于在 Python 中引入第三方库，下列说法正确的是？",
+      "options": [
+        "第三方库必须放在标准库目录下才能被 import",
+        "第三方库不是 Python 语言自带的，需通过包管理工具安装后使用",
+        "第三方库只能用 C 语言编写",
+        "第三方库无法通过 import 语句引入"
+      ],
+      "answer": 1,
+      "explanation": "第三方库是由社区或组织开发、独立于 Python 标准库分发的库，通常需要先安装（如用 pip）再通过 import 使用，并非放在标准库目录下，也不限于 C 语言编写。",
+      "error_tag": "概念混淆",
+      "variant_group": "third_party_basic"
+    },
+    {
+      "kp": "py.module.third_party",
+      "type": "single_choice",
+      "question": "小明在命令行执行安装命令后，在代码中 `import requests` 报错 ModuleNotFoundError。最可能的原因是？",
+      "options": [
+        "requests 是标准库，不需要安装，写法有误",
+        "安装到了另一个 Python 环境，而当前运行环境未安装",
+        "import 语句必须放在文件最后一行",
+        "requests 只能通过 from requests import * 引入"
+      ],
+      "answer": 1,
+      "explanation": "最常见的坑是 pip 安装的 Python 环境与运行脚本的环境不是同一个（如系统 Python 与虚拟环境），导致当前环境缺失该包。",
+      "error_tag": "环境混淆",
+      "variant_group": "third_party_env"
+    },
+    {
+      "kp": "py.module.third_party",
+      "type": "single_choice",
+      "question": "关于第三方库的许可证与使用，正确的是？",
+      "options": [
+        "所有第三方库都可随意用于闭源商业项目",
+        "使用第三方库应关注其许可证条款，并遵守相应要求",
+        "第三方库没有许可证",
+        "只要安装了就自动取得版权"
+      ],
+      "answer": 1,
+      "explanation": "不同第三方库使用不同开源或商业许可证，使用前应了解并遵守其条款（如署名、开源传染等）。",
+      "error_tag": "概念混淆",
+      "variant_group": "third_party_license"
+    },
+    {
+      "kp": "py.module.third_party",
+      "type": "multi_choice",
+      "question": "下列哪些属于「第三方库」而非 Python 标准库？（选出所有正确项）",
+      "options": [
+        "requests",
+        "json",
+        "numpy",
+        "os"
+      ],
+      "answer": [
+        0,
+        2
+      ],
+      "explanation": "requests 和 numpy 是典型的第三方库，需安装；json 和 os 属于标准库，随 Python 提供。",
+      "error_tag": "概念混淆",
+      "variant_group": "third_party_basic"
+    },
+    {
+      "kp": "py.module.third_party",
+      "type": "multi_choice",
+      "question": "关于 pip 安装第三方包，下列说法正确的有哪些？",
+      "options": [
+        "可以指定版本进行安装",
+        "安装时可能自动安装其依赖包",
+        "可以卸载已安装的包",
+        "pip 安装的包一定只在当前目录有效",
+        "未安装的包在 import 时会报错"
+      ],
+      "answer": [
+        0,
+        1,
+        2,
+        4
+      ],
+      "explanation": "pip 支持版本约束、自动解析依赖、卸载包；未安装的包 import 会报 ModuleNotFoundError。包安装到环境而非「只在当前目录有效」，故 D 错误。",
+      "error_tag": "概念混淆",
+      "variant_group": "third_party_pip"
+    },
+    {
+      "kp": "py.module.third_party",
+      "type": "multi_choice",
+      "question": "使用虚拟环境来管理第三方库，能带来哪些好处？",
+      "options": [
+        "隔离不同项目的依赖，避免版本冲突",
+        "便于用 requirements.txt 复现环境",
+        "让所有项目共享同一套包版本",
+        "减少对系统级全局环境的污染"
+      ],
+      "answer": [
+        0,
+        1,
+        3
+      ],
+      "explanation": "虚拟环境提供依赖隔离、环境可复现、避免污染全局环境；恰恰不是让所有项目共享同一套版本，那样反而会引发冲突。",
+      "error_tag": "概念混淆",
+      "variant_group": "third_party_env"
+    },
+    {
+      "kp": "py.module.third_party",
+      "type": "multi_choice",
+      "question": "以下哪些做法有助于保证第三方依赖的可复现性？",
+      "options": [
+        "在 requirements.txt 中固定版本号",
+        "把本地虚拟环境目录提交到仓库",
+        "记录明确的环境与依赖清单",
+        "使用不同开发者随机升级依赖"
+      ],
+      "answer": [
+        0,
+        2
+      ],
+      "explanation": "固定版本、维护依赖清单可提升可复现性；提交整个虚拟环境目录通常不推荐，随机升级依赖会破坏可复现性。",
+      "error_tag": "概念混淆",
+      "variant_group": "third_party_version"
+    },
+    {
+      "kp": "py.module.third_party",
+      "type": "fill_blank",
+      "question": "要在代码中引入第三方库 requests，应使用的语句是 `____ requests`。",
+      "options": [],
+      "answer": [
+        "import",
+        "import:"
+      ],
+      "explanation": "import 语句用于引入模块，`import requests` 即可在安装后使用该第三方库。",
+      "error_tag": "记忆缺失",
+      "variant_group": "third_party_import"
+    },
+    {
+      "kp": "py.module.third_party",
+      "type": "fill_blank",
+      "question": "把项目依赖导出到文件时，常用的命令是 `pip ____ > requirements.txt`，它能列出当前环境中已安装包及版本。",
+      "options": [],
+      "answer": [
+        "freeze",
+        "freeze --all"
+      ],
+      "explanation": "`pip freeze` 输出当前环境中已安装的包及其精确版本，常用于生成 requirements.txt。",
+      "error_tag": "记忆缺失",
+      "variant_group": "third_party_version"
+    },
+    {
+      "kp": "py.module.third_party",
+      "type": "code_reading",
+      "question": "阅读代码：\n```python\nimport math\nprint(math.sqrt(9))\n```\n该代码可以不安装任何第三方库就运行吗？为什么？",
+      "options": [],
+      "answer": "可以。因为 math 是 Python 标准库，随解释器一起提供，无需额外安装即可 import 使用，输出 3.0。",
+      "explanation": "判断是否需要安装取决于该模块是标准库还是第三方库；math 属于标准库，因此可直接使用。",
+      "error_tag": "概念混淆",
+      "variant_group": "third_party_basic"
+    },
+    {
+      "kp": "py.module.third_party",
+      "type": "code_reading",
+      "question": "阅读代码：\n```python\nfrom datetime import datetime\nprint(type(datetime.now()).__name__)\n```\n这段代码依赖第三方库吗？请说明理由。",
+      "options": [],
+      "answer": "不依赖。datetime 是 Python 标准库模块，可直接导入使用，因此无需安装第三方库，输出为 datetime。",
+      "explanation": "datetime 属于标准库，与第三方库无关；此题用于区分标准库与第三方库的安装需求。",
+      "error_tag": "概念混淆",
+      "variant_group": "third_party_basic"
+    },
+    {
+      "kp": "py.module.third_party",
+      "type": "scenario",
+      "question": "团队新成员克隆项目后运行脚本，出现 `ModuleNotFoundError: No module named 'pandas'`，而你本地运行正常。请说明最可能的原因，并给出排查与解决思路。",
+      "options": [],
+      "answer": null,
+      "explanation": "典型的环境不一致问题：新成员所在环境未安装 pandas，或未激活项目对应虚拟环境。应先确认使用的 Python 环境与项目一致，再依据依赖清单安装缺失的第三方库。",
+      "error_tag": "环境混淆",
+      "variant_group": "third_party_env",
+      "required_keywords": [
+        "虚拟环境",
+        "依赖清单",
+        "Python 解释器",
+        "第三方库",
+        "环境不一致"
+      ]
+    },
+    {
+      "kp": "py.module.third_party",
+      "type": "single_choice",
+      "question": "下列关于 `pip` 的描述，哪一项正确？",
+      "options": [
+        "pip 是 Python 标准库中的一个模块，无需安装",
+        "pip 是常用的 Python 包管理工具，用于安装、卸载和查看第三方包",
+        "pip 只能安装，不能卸载包",
+        "pip 安装的包只能被 pip 自己使用"
+      ],
+      "answer": 1,
+      "explanation": "pip 是 Python 的包管理工具，支持安装、卸载、升级、列出第三方包等操作，是使用第三方库的主要途径。",
+      "error_tag": "概念混淆",
+      "variant_group": "third_party_pip"
+    },
+    {
+      "kp": "py.module.third_party",
+      "type": "single_choice",
+      "question": "阅读代码：\n```python\nimport numpy as np\narr = np.array([1, 2, 3])\nprint(arr.sum())\n```\n该代码运行时最需要的前提是？",
+      "options": [
+        "numpy 属于标准库，直接可运行",
+        "需先安装第三方库 numpy，否则 import 会失败",
+        "需把文件命名为 numpy.py",
+        "需将 numpy 放入标准库目录"
+      ],
+      "answer": 1,
+      "explanation": "numpy 是第三方库，未安装时 import numpy 会抛出 ModuleNotFoundError；安装后即可正常使用。",
+      "error_tag": "记忆缺失",
+      "variant_group": "third_party_import"
+    },
+    {
+      "kp": "py.module.third_party",
+      "type": "single_choice",
+      "question": "某第三方库提供了命令行入口 `mytool`，安装后如何在命令行运行它？",
+      "options": [
+        "python mytool",
+        "import mytool",
+        "直接执行 mytool（需该脚本在 PATH 中）",
+        "python -c mytool"
+      ],
+      "answer": 2,
+      "explanation": "许多第三方库安装时会注册命令行脚本到可执行目录，安装后可直接在命令行调用该命令（前提是脚本目录在 PATH 中）。",
+      "error_tag": "概念混淆",
+      "variant_group": "third_party_cli"
+    },
+    {
+      "kp": "py.module.third_party",
+      "type": "single_choice",
+      "question": "关于虚拟环境与第三方库，说法正确的是？",
+      "options": [
+        "虚拟环境之间共享已安装的第三方库",
+        "每个虚拟环境有独立的 site-packages，安装互不影响",
+        "虚拟环境只能安装标准库",
+        "虚拟环境不能使用 pip"
+      ],
+      "answer": 1,
+      "explanation": "虚拟环境的核心作用就是隔离依赖，每个虚拟环境有独立的第三方包安装目录，避免不同项目间版本冲突。",
+      "error_tag": "概念混淆",
+      "variant_group": "third_party_env"
+    },
+    {
+      "kp": "py.module.third_party",
+      "type": "single_choice",
+      "question": "执行 `pip install packageA==1.2.0` 的含义是？",
+      "options": [
+        "安装 packageA 的最新版本",
+        "安装不低于 1.2.0 的版本",
+        "安装指定版本 1.2.0",
+        "卸载 packageA 的 1.2.0 版本"
+      ],
+      "answer": 2,
+      "explanation": "`==` 是精确版本约束，会安装指定的 1.2.0 版本；`>=` 才表示不低于该版本。",
+      "error_tag": "边界错误",
+      "variant_group": "third_party_version"
+    },
+    {
+      "kp": "py.module.third_party",
+      "type": "single_choice",
+      "question": "想要把项目当前依赖的第三方包及其精确版本导出，常用做法是？",
+      "options": [
+        "pip list --outdated",
+        "pip freeze > requirements.txt",
+        "python -m venv .",
+        "pip download requirements"
+      ],
+      "answer": 1,
+      "explanation": "`pip freeze` 会输出当前已安装包及版本，重定向到 requirements.txt 便于他人用 `pip install -r` 复现环境。",
+      "error_tag": "记忆缺失",
+      "variant_group": "third_party_version"
+    },
+    {
+      "kp": "py.module.third_party",
+      "type": "single_choice",
+      "question": "下列关于标准库与第三方库的对比，哪项正确？",
+      "options": [
+        "标准库需要额外安装，第三方库不需要",
+        "标准库随 Python 一起提供，第三方库通常需要单独安装",
+        "两者都必须编译，无法直接用 import",
+        "第三方库一旦安装就无法卸载"
+      ],
+      "answer": 1,
+      "explanation": "标准库随 Python 解释器一同分发，开箱即用；第三方库由外部提供，通常需借助包管理工具安装，且可卸载。",
+      "error_tag": "概念混淆",
+      "variant_group": "third_party_basic"
+    },
+    {
+      "kp": "py.module.third_party",
+      "type": "single_choice",
+      "question": "代码：\n```python\ntry:\n    import some_third_party_lib\nexcept ImportError:\n    print('missing')\n```\n下面的说法正确的是？",
+      "options": [
+        "未安装该库时会打印 missing，程序可继续执行",
+        "无论是否安装都会打印 missing",
+        "ImportError 无法被捕获",
+        "导入失败会导致解释器崩溃"
+      ],
+      "answer": 0,
+      "explanation": "当第三方库缺失时，import 会抛出 ImportError（或其子类 ModuleNotFoundError），被 except 捕获后可优雅降级或提示用户安装。",
+      "error_tag": "概念混淆",
+      "variant_group": "third_party_import"
+    }
+  ]
+}

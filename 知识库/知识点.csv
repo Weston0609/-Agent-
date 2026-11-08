@@ -1,0 +1,386 @@
+﻿kp_id,中文标题,所属课,难度,前置,权重,题数
+agent.eng.caching,Agent 工程中的缓存（Caching）,s7u8l3,5,[],3,20
+agent.eng.eval_ci,如果你把一个 AI Agent（智能体）改了一行提示词就,s7u8l1,5,[],3,18
+agent.eng.guardrails,Agent 会调用工具、访问数据库、发邮件、下单、写文件,s7u8l2,5,[],3,20
+agent.eng.pii_redact,在 AI Agent（智能体）把用户输入发给大模型之前，,s7u8l2,5,[],3,20
+agent.eng.prompt_versioning,Agent 工程中的 Prompt 版本化（Prompt Versioning）,s7u8l1,5,[],3,21
+agent.eng.rate_limit,Agent 的典型工作模式是：**思考 → 调工具 →,s7u8l3,5,[],3,19
+agent.eval.cost_latency,做 AI Agent（智能体）就像开出租车：乘客不仅关心,s7u7l2,5,[],3,21
+agent.eval.llm_as_judge,当你测试一个 AI Agent（智能体）时，输出往往是一,s7u7l2,5,[],3,20
+agent.eval.tool_accuracy,一个 Agent 通常由三部分组成：,s7u7l1,5,[],3,20
+agent.eval.trajectory,比如你让 Agent 帮你订机票，它最后确实订到了，但中,s7u7l1,5,[],3,20
+agent.fw.anthropic_sdk,Anthropic SDK 的核心类是 `Anthrop,s7u4l5,5,[],3,21
+agent.fw.autogen,学它的价值在于：当你需要“规划 + 执行 + 审查 +,s7u4l3,5,[],3,18
+agent.fw.crewai,单个 Agent（例如只用一个 LLM 加几个工具）在处,s7u4l4,5,[],3,21
+agent.fw.langchain_basic,一堂课讲透 LangChain 基础：从“调用大模型”到“编排 AI 应用”,s7u4l1,5,[],3,21
+agent.fw.langchain_lcel,LangChain LCEL 入门：从零到工程级,s7u4l1,5,[],3,21
+agent.fw.langgraph_checkpoint,LangGraph Checkpoint：给 AI 工作流装上「存档读档」能力,s7u4l2,5,[],3,19
+agent.fw.langgraph_state,LangGraph State：状态驱动的智能体编排,s7u4l2,5,[],3,20
+agent.fw.llamaindex,40 分钟掌握 LlamaIndex：从零到工程级 Agent 框架,s7u4l3,5,[],3,20
+agent.fw.mcp_protocol,智能体框架中的模型上下文协议,s7u4l4,5,[],3,20
+agent.fw.openai_agents_sdk,Python 与 AI 架构师：OpenAI Agents SDK 入门 40 分钟讲义,s7u4l5,5,[],3,21
+agent.llm.cot,LLM 本质是在预测下一个 token（词元）,s7u1l2,5,[],3,20
+agent.llm.few_shot,少样本提示（Few-Shot Prompting）：让大模型学会“照葫芦画瓢”,s7u1l1,5,[],3,22
+agent.llm.function_calling,agent.llm.function_calling 教学讲义（40 分钟）,s7u1l4,5,[],3,20
+agent.llm.json_mode,让大模型输出结构化 JSON 的工程化方法,s7u1l3,5,[],3,20
+agent.llm.prompt_engineering,智能体提示工程（Prompt Engineering）,s7u1l1,5,"[""ai.math.linear_algebra"", ""ai.math.prob"", ""ai.torch.tensor"", ""ai.torch.autograd"", ""ai.torch.device"", ""ai.torch.dtype"", ""ai.nn.linear"", ""ai.nn.activation"", ""ai.nn.loss"", ""ai.nn.optim"", ""ai.nn.sgd_adam"", ""ai.nn.dropout"", ""ai.nn.batchnorm"", ""ai.nn.cnn_basic"", ""ai.nn.rnn_lstm"", ""ai.nn.training_loop"", ""ai.nn.overfit_debug"", ""ai.llm.attention"", ""ai.llm.multihead"", ""ai.llm.position_encoding"", ""ai.llm.layer_norm"", ""ai.llm.gpt_arch"", ""ai.llm.tokenizer"", ""ai.llm.pretrain_sft_rlhf"", ""ai.llm.lora_qlora"", ""ai.llm.quantization"", ""ai.llm.inference_opt"", ""ai.llm.vllm"", ""ai.llm.tgi"", ""ai.llm.ollama"", ""ai.embed.word2vec"", ""ai.embed.sentence_transformer"", ""ai.embed.bge_m3"", ""ai.embed.reranker"", ""ai.vec.faiss"", ""ai.vec.qdrant"", ""ai.vec.milvus"", ""ai.vec.hybrid_search"", ""ai.vec.bm25""]",3,21
+agent.llm.react,让大模型学会“边想边做”,s7u1l2,5,[],3,20
+agent.llm.structured_output,让大模型输出“能直接进程序”的数据,s7u1l3,5,[],3,20
+agent.llm.tool_use,LLM（大语言模型）本身只会“说话”，不会查天气、算账、,s7u1l4,5,[],3,21
+agent.llm.tot,传统调用 LLM 时，我们常用**思维链（Chain o,s7u1l2,5,[],3,20
+agent.mem.buffer,给智能体装一个「短期记忆缓冲区」,s7u6l1,5,[],3,21
+agent.mem.episodic,没有它，Agent 每次对话都像失忆；有了它，Agent,s7u6l3,5,[],3,21
+agent.mem.knowledge_graph,为什么学它,s7u6l2,5,[],3,20
+agent.mem.semantic,让智能体记住“意思”，而不是“字面”,s7u6l3,5,[],3,19
+agent.mem.summary,把长对话压成可复用的记忆摘要,s7u6l1,5,[],3,19
+agent.mem.vector_store,传统数据库擅长精确匹配：`WHERE name = 'A,s7u6l2,5,[],3,21
+agent.multi.debate,智能体多辩论：让多个 Agent 互相争论，得出更靠谱的答案,s7u5l2,5,[],3,20
+agent.multi.handoff,"多智能体协作中的""交接棒""",s7u5l3,5,[],3,20
+agent.multi.hierarchical,多智能体分层架构 (Hierarchical Multi-Agent Architecture),s7u5l1,5,[],3,21
+agent.multi.shared_memory,多个 Agent（智能体）协作时，需要一,s7u5l3,5,[],3,20
+agent.multi.supervisor,`agent.multi.supervisor` 教学讲义,s7u5l1,5,[],3,20
+agent.multi.voting,多智能体投票,s7u5l2,5,[],3,21
+agent.obs.langfuse,用 Langfuse 给 Agent 装上“黑匣子”：从零到工程级,s7u7l3,5,[],3,20
+agent.obs.langsmith,Agent 可观测性（Observability）与 LangSmith：从零到工程级,s7u7l3,5,[],3,22
+agent.obs.opentelemetry,AI Agent 通常由 **LLM（大语言模型）调用*,s7u7l3,5,[],3,20
+agent.pattern.memory_long,"让 Agent 拥有""长期记忆""",s7u3l4,5,[],3,20
+agent.pattern.memory_short,让 Agent 记住刚才发生了什么,s7u3l4,5,[],3,20
+agent.pattern.multi_tool,`agent.pattern.multi_tool`：让智能体学会同时使用多把工具,s7u3l3,5,[],3,18
+agent.pattern.plan_execute,Agent 设计模式：Plan-Execute（先规划，后执行）,s7u3l1,5,[],3,21
+agent.pattern.react,Agent 模式之 ReAct：让模型学会「边想边做」,s7u3l1,5,[],3,21
+agent.pattern.reflexion,Agent 设计模式之反思（Reflexion）：让智能体学会“复盘”,s7u3l2,5,[],3,20
+agent.pattern.self_consistency,让 Agent 自己投票，答案更稳,s7u3l2,5,[],3,20
+agent.pattern.state_machine,"Agent 状态机模式（State Machine）：让 AI 智能体拥有""记忆""与""流程""",s7u3l5,5,[],3,21
+agent.pattern.tool_router,让 Agent 知道「该用哪个工具」,s7u3l3,5,[],3,20
+agent.pattern.workflow,Agent 工作流模式（agent.pattern.workflow）：从直觉到工程,s7u3l5,5,[],3,21
+agent.rag.chunking,Agent RAG 分块（Chunking）：让检索更聪明的第一步,s7u2l1,5,[],3,20
+agent.rag.embedding_choice,向量嵌入选择：Agent 的 RAG 起点,s7u2l2,5,[],3,21
+agent.rag.eval_ragas,用 RAGAS 评估 RAG 系统,s7u2l5,5,[],3,21
+agent.rag.hallucination_guard,幻觉护栏（Hallucination Guard）：给 RAG 代理系上安全带,s7u2l5,5,[],3,21
+agent.rag.hybrid,它是 **RAG（Retrieval-Augmented,s7u2l4,5,[],3,20
+agent.rag.hyde,在检索增强生成（Retrieval-Augmented,s7u2l3,5,[],3,20
+agent.rag.parent_doc,父文档检索（Parent Document Retrieval）,s7u2l4,5,[],3,21
+agent.rag.pipeline,从零搭建一条可运行的 RAG 流水线,s7u2l1,5,[],3,20
+agent.rag.query_rewrite,40 分钟教学讲义：agent.rag.query_rewrite,s7u2l3,5,[],3,20
+agent.rag.rerank,agent.rag.rerank 教学讲义,s7u2l2,5,[],3,21
+ai.embed.bge_m3,40 分钟教学讲义：`ai.embed.bge_m3`,s6u4l2,5,[],3,20
+ai.embed.reranker,在检索增强生成（RAG，Retrieval-Augmen,s6u4l2,5,[],3,21
+ai.embed.sentence_transformer,Sentence Transformer：让句子变成向量,s6u4l1,5,[],3,20
+ai.embed.word2vec,从词到向量：理解 Word2Vec,s6u4l1,5,[],3,22
+ai.llm.attention,注意力机制（Attention）：LLM 的“聚焦能力”,s6u3l1,5,[],3,20
+ai.llm.gpt_arch,GPT 架构（Generative Pre-traine,s6u3l3,5,[],3,20
+ai.llm.inference_opt,你训练了一个大语言模型（LLM，Large Langua,s6u3l5,5,[],3,20
+ai.llm.layer_norm,层归一化（Layer Normalization）：从直觉到工程实现,s6u3l2,5,[],3,19
+ai.llm.lora_qlora,从 LoRA 到 QLoRA：大模型微调的“够用就行”指南,s6u3l4,5,[],3,21
+ai.llm.multihead,多头注意力（Multi-Head Attention）40 分钟讲义,s6u3l1,5,[],3,21
+ai.llm.ollama,学 Ollama 就像学“在自己电脑上装一个可编程的 C,s6u3l6,5,[],3,21
+ai.llm.position_encoding,Transformer（变换器）本身像“同时看所有词”的,s6u3l2,5,[],3,20
+ai.llm.pretrain_sft_rlhf,LLM 训练三阶段：预训练、SFT 与 RLHF,s6u3l4,5,[],3,21
+ai.llm.quantization,大语言模型量化（LLM Quantization）入门：从零基础到工程级,s6u3l5,5,[],3,20
+ai.llm.tgi,一、一句话直觉,s6u3l6,5,[],3,21
+ai.llm.tokenizer,计算机只认识数字，而 LLM 的输入必须是**整数 ID,s6u3l3,5,[],3,18
+ai.llm.vllm,把大模型推理做成高吞吐服务,s6u3l6,5,[],3,20
+ai.math.linear_algebra,课程讲义：AI 数学之线性代数（Linear Algebra）,s6u1l1,5,"[""py.web.http_basic"", ""py.web.fastapi_basic"", ""py.web.fastapi_async"", ""py.web.fastapi_depends"", ""py.web.pydantic_v2"", ""py.web.openapi"", ""py.web.middleware"", ""py.web.auth_jwt"", ""py.db.sql_basic"", ""py.db.sqlalchemy"", ""py.db.async_db"", ""py.db.alembic"", ""py.db.redis"", ""py.db.mongo"", ""py.db.postgres_index"", ""py.db.tx_isolation"", ""py.mq.kafka"", ""py.mq.rabbitmq"", ""py.mq.celery"", ""py.mq.arq"", ""py.data.numpy"", ""py.data.pandas"", ""py.data.polars"", ""py.data.arrow"", ""py.data.parquet"", ""py.data.etl_patterns""]",3,20
+ai.math.prob,概率（Probability）入门：AI 的随机世界观,s6u1l1,5,[],3,21
+ai.nn.activation,神经网络的一层通常写成：,s6u2l1,5,[],3,20
+ai.nn.batchnorm,深度神经网络训练时，每一层的输入分布会随着前面层参数更新,s6u2l3,5,[],3,20
+ai.nn.cnn_basic,卷积神经网络基础（CNN Basic）,s6u2l4,5,[],3,20
+ai.nn.dropout,40 分钟教学讲义：`ai.nn.dropout`,s6u2l3,5,[],3,21
+ai.nn.linear,神经网络中的线性层（Linear Layer）,s6u2l1,5,[],3,20
+ai.nn.loss,损失函数（Loss Function）：让神经网络知道「错在哪、错多少」,s6u2l1,5,[],3,21
+ai.nn.optim,学它是因为：模型能不能学会、学得快不快、稳不稳，几乎都取,s6u2l2,5,[],3,20
+ai.nn.overfit_debug,直觉：模型把训练数据里的“噪声”也当成了规律,s6u2l5,5,[],3,20
+ai.nn.rnn_lstm,从「记住上文」到工程可用的序列建模,s6u2l4,5,[],3,20
+ai.nn.sgd_adam,你可以把训练神经网络想成下山：损失函数是山谷，参数是位置,s6u2l2,5,[],3,20
+ai.nn.training_loop,训练循环：从零到工程级,s6u2l5,5,[],3,20
+ai.torch.autograd,让 PyTorch 自动帮你算梯度,s6u1l2,5,[],3,20
+ai.torch.device,在 PyTorch（一个深度学习框架）里，`device,s6u1l3,5,[],3,20
+ai.torch.dtype,让张量住进正确的「数字房子」,s6u1l3,5,[],3,20
+ai.torch.tensor,PyTorch 张量（Tensor）入门：从零到工程级,s6u1l2,5,[],3,21
+ai.vec.bm25,从零理解稀疏检索的黄金基线,s6u4l4,5,[],3,20
+ai.vec.faiss,FAISS：让向量检索快如闪电,s6u4l3,5,[],3,21
+ai.vec.hybrid_search,混合检索 Hybrid Search：让关键词和语义各展所长,s6u4l4,5,[],3,20
+ai.vec.milvus,向量数据库 Milvus 入门：从零到工程级,s6u4l3,5,[],3,20
+ai.vec.qdrant,向量数据库 Qdrant 入门：为什么 AI 应用越来越离不开它,s6u4l3,5,[],3,20
+arch.cloud.autoscale,传统部署方式下，你要提前买好服务器,s8u4l2,5,[],3,20
+arch.cloud.cost_optim,云成本优化（Cloud Cost Optimization）入门到工程级,s8u4l3,5,[],3,20
+arch.cloud.gpu_scheduling,GPU 调度（GPU Scheduling）入门：从零理解云计算里的“抢显卡”艺术,s8u4l1,5,[],3,20
+arch.cloud.istio,Istio 服务网格（Service Mesh）入门：从零到工程级,s8u4l2,5,[],3,21
+arch.cloud.k8s,Kubernetes 入门：从零到工程级,s8u4l1,5,[],3,20
+arch.cloud.multi_region,1. **主动-被动（Active-Passive）**,s8u4l3,5,[],3,20
+arch.dist.checkpoint,分布式检查点（Distributed Checkpoint）：从零到工程实践,s8u1l3,5,[],3,21
+arch.dist.ddp,分布式数据并行：arch.dist.ddp,s8u1l1,5,"[""agent.llm.prompt_engineering"", ""agent.llm.few_shot"", ""agent.llm.cot"", ""agent.llm.tot"", ""agent.llm.react"", ""agent.llm.structured_output"", ""agent.llm.json_mode"", ""agent.llm.function_calling"", ""agent.llm.tool_use"", ""agent.rag.pipeline"", ""agent.rag.chunking"", ""agent.rag.embedding_choice"", ""agent.rag.rerank"", ""agent.rag.query_rewrite"", ""agent.rag.hyde"", ""agent.rag.hybrid"", ""agent.rag.parent_doc"", ""agent.rag.eval_ragas"", ""agent.rag.hallucination_guard"", ""agent.pattern.react"", ""agent.pattern.plan_execute"", ""agent.pattern.reflexion"", ""agent.pattern.self_consistency"", ""agent.pattern.tool_router"", ""agent.pattern.multi_tool"", ""agent.pattern.memory_short"", ""agent.pattern.memory_long"", ""agent.pattern.workflow"", ""agent.pattern.state_machine"", ""agent.fw.langchain_basic"", ""agent.fw.langchain_lcel"", ""agent.fw.langgraph_state"", ""agent.fw.langgraph_checkpoint"", ""agent.fw.llamaindex"", ""agent.fw.autogen"", ""agent.fw.crewai"", ""agent.fw.mcp_protocol"", ""agent.fw.openai_agents_sdk"", ""agent.fw.anthropic_sdk"", ""agent.multi.supervisor"", ""agent.multi.hierarchical"", ""agent.multi.debate"", ""agent.multi.voting"", ""agent.multi.handoff"", ""agent.multi.shared_memory"", ""agent.mem.buffer"", ""agent.mem.summary"", ""agent.mem.vector_store"", ""agent.mem.knowledge_graph"", ""agent.mem.episodic"", ""agent.mem.semantic"", ""agent.eval.trajectory"", ""agent.eval.tool_accuracy"", ""agent.eval.cost_latency"", ""agent.eval.llm_as_judge"", ""agent.obs.langsmith"", ""agent.obs.langfuse"", ""agent.obs.opentelemetry"", ""agent.eng.prompt_versioning"", ""agent.eng.eval_ci"", ""agent.eng.guardrails"", ""agent.eng.pii_redact"", ""agent.eng.caching"", ""agent.eng.rate_limit""]",3,20
+arch.dist.deepspeed,DeepSpeed：让大模型训练跑得更快、更省显存,s8u1l2,5,[],3,20
+arch.dist.fsdp,训练一个神经网络，显存被三样东西吃掉了：,s8u1l1,5,[],3,20
+arch.dist.megatron,Megatron 分布式训练架构入门,s8u1l2,5,[],3,21
+arch.dist.ray,知识点：arch.dist.ray —— 用 Ray 做分布式 AI 计算的起点,s8u1l3,5,[],3,20
+arch.mlops.ab_test,一堂 40 分钟的 MLOps A/B 测试讲义,s8u3l2,5,[],3,20
+arch.mlops.data_version,数据版本（Data Versioning）：从直觉到工程实践,s8u3l1,5,[],3,20
+arch.mlops.feedback_loop,它解决的问题是：**模型上线后不会自动变好，甚至会因数据,s8u3l3,5,[],3,20
+arch.mlops.model_registry,模型注册表（Model Registry）,s8u3l2,5,[],3,20
+arch.mlops.monitor_drift,监控数据漂移（Monitor Drift）：从直觉到工程实战,s8u3l3,5,[],3,20
+arch.mlops.pipeline,学它，是因为模型在 Notebook（交互式笔记本）里跑,s8u3l1,5,[],3,20
+arch.sec.compliance,合规（Compliance）不是“写完代码再补的文档”，,s8u6l2,5,[],3,20
+arch.sec.data_privacy,学它的原因很直接：一旦隐私设计出错，代价通常不是“功能,s8u6l2,5,[],3,20
+arch.sec.jailbreak,如果你将来要部署或调用大模型，理解越狱是为了**防御它*,s8u6l1,5,[],3,21
+arch.sec.prompt_injection,"大语言模型（Large Language Model,",s8u6l1,5,[],3,21
+arch.serve.batch,`arch.serve.batch`：批处理服务架构,s8u2l1,5,[],3,20
+arch.serve.gateway,模型服务网关,s8u2l4,5,[],3,20
+arch.serve.kv_cache,KV Cache（键值缓存）：让大模型推理从「龟速」变「飞驰」,s8u2l2,5,[],3,20
+arch.serve.multi_lora,多 LoRA 服务（Multi-LoRA Serving）：让一个基座模型同时服务多个“微调分身”,s8u2l3,5,[],3,20
+arch.serve.paged_attention,PagedAttention：让大模型推理的 KV Cache 不再浪费显存,s8u2l2,5,[],3,23
+arch.serve.router,从零理解服务路由,s8u2l4,5,[],3,20
+arch.serve.speculative,投机解码（Speculative Decoding）：让大模型推理“先猜后验”,s8u2l3,5,[],3,22
+arch.serve.streaming,流式推理服务,s8u2l1,5,[],3,21
+arch.sys.agent_platform,Agent 平台（Agent Platform）：从零到工程级,s8u5l2,5,[],3,20
+arch.sys.chat_app,架构系统：聊天应用（Chat Application）,s8u5l1,5,[],3,20
+arch.sys.cost_control,成本控制（Cost Control）：架构系统的第一道经济防线,s8u5l3,5,[],3,21
+arch.sys.data_platform,数据平台架构入门：从零到工程级,s8u5l3,5,[],3,20
+arch.sys.eval_platform,评估平台（Evaluation Platform）：从零到工程级,s8u5l2,5,[],3,20
+arch.sys.rag_platform,从零搭建一个 RAG 平台,s8u5l1,5,[],3,19
+py.async.aiofiles,py.async.aiofiles 教学讲义,s3u5l6,3,[],3,20
+py.async.aiohttp,用异步 I/O 把网络等待变成并发,s3u5l5,3,[],3,20
+py.async.async_comprehension,Python 异步推导式（async comprehension）,s3u5l7,3,[],3,20
+py.async.async_gen,异步生成器（Async Generator）：为什么你需要它,s3u5l7,3,[],3,20
+py.async.async_iter,异步迭代（Async Iteration）,s3u5l6,3,[],3,20
+py.async.await,让 Python 学会“等”的艺术,s3u4l2,3,[],3,20
+py.async.backpressure,"异步世界里的""限流器""",s3u6l2,3,[],3,20
+py.async.blocking_call,在异步代码中调用阻塞函数,s3u6l1,3,[],3,20
+py.async.callback,从事件循环到回调的异步起点,s3u4l5,3,[],3,19
+py.async.cancel,让异步任务学会“叫停”,s3u5l2,3,[],3,20
+py.async.coroutine,从零开始理解协程,s3u4l1,3,[],3,21
+py.async.event,第 5 单元 · 第 3 讲：Python 异步事件（Event）,s3u5l3,3,[],3,19
+py.async.event_loop,事件循环（Event Loop）,s3u4l1,3,[],3,20
+py.async.future,Python 异步编程之 Future（py.async.future）,s3u4l5,3,[],3,20
+py.async.gather,`asyncio.gather` 让你**同时发起多个,s3u4l3,3,[],3,21
+py.async.graceful_shutdown,Python 异步优雅关闭（Graceful Shutdown）,s3u6l3,3,[],3,20
+py.async.httpx_async,异步 HTTP 与 httpx：从 `asyncio` 到工程级并发,s3u5l5,3,[],3,20
+py.async.lock,异步锁：`asyncio.Lock`,s3u5l3,3,[],3,20
+py.async.queue,让协程之间安全地“传包裹”,s3u5l3,3,[],3,20
+py.async.rate_limit,异步限流完全入门,s3u6l2,3,[],3,22
+py.async.run,从零开始的异步入口,s3u4l4,3,[],3,20
+py.async.run_in_executor,`py.async.run_in_executor`：让异步世界里也能跑同步阻塞代码,s3u6l1,3,[],3,20
+py.async.semaphore,"异步世界的""限流阀门""",s3u5l4,3,[],3,21
+py.async.sleep,让协程「等一等」的艺术,s3u4l4,3,[],3,20
+py.async.structured_concurrency,结构化并发（Structured Concurrency）：从零到工程级,s3u5l1,3,[],3,21
+py.async.sync_primitives,asyncio 同步原语（Synchronization Primitives）,s3u5l4,3,[],3,20
+py.async.task,从零理解 asyncio 的并发任务,s3u4l2,3,[],3,20
+py.async.taskgroup,`asyncio.TaskGroup`（任务组）是 Py,s3u5l1,3,[],3,21
+py.async.timeout,py.async.timeout —— 让异步任务学会「到点就止」,s3u5l2,3,[],3,19
+py.async.wait,让协程并发但不失控,s3u4l3,3,[],3,21
+py.concur.cpu_bound,py.concur.cpu_bound —— 让 Python 真正跑满你的多核 CPU,s3u1l2,3,[],3,20
+py.concur.gil_intro,"全局解释器锁（GIL, Global Interpreter Lock）入门",s3u1l1,3,[],3,20
+py.concur.io_bound,为什么你需要懂「I/O 密集」这件事,s3u1l2,3,[],3,21
+py.concur.model_overview,Python 并发模型全景（py.concur.model_overview）,s3u1l1,3,"[""py.oop.class_basic"", ""py.oop.instance"", ""py.oop.init"", ""py.oop.method"", ""py.oop.classmethod"", ""py.oop.staticmethod"", ""py.oop.inherit"", ""py.oop.super"", ""py.oop.mro"", ""py.oop.property"", ""py.oop.slots"", ""py.oop.dunder_intro"", ""py.oop.repr_str"", ""py.oop.eq_hash"", ""py.oop.dataclass"", ""py.oop.namedtuple"", ""py.oop.abstract"", ""py.oop.protocol"", ""py.oop.duck_typing"", ""py.oop.composition"", ""py.oop.design_patterns_basic"", ""py.iter.protocol"", ""py.iter.iter_next"", ""py.iter.generator"", ""py.iter.yield"", ""py.iter.yield_from"", ""py.iter.send"", ""py.iter.itertools"", ""py.iter.lazy_eval"", ""py.deco.basic"", ""py.deco.args"", ""py.deco.functools_wraps"", ""py.deco.class_deco"", ""py.deco.param_deco"", ""py.meta.metaclass"", ""py.meta.descriptor"", ""py.meta.dynamic_attr"", ""py.meta.getattr"", ""py.typehint.basic"", ""py.typehint.optional_union"", ""py.typehint.generic"", ""py.typehint.typevar"", ""py.typehint.literal"", ""py.typehint.overload"", ""py.typehint.mypy"", ""py.typehint.pyright"", ""py.typehint.pydantic_basic"", ""py.ctx.protocol"", ""py.ctx.contextlib"", ""py.ctx.async_ctx"", ""py.fp.map_filter_reduce"", ""py.fp.functools"", ""py.stdlib.collections"", ""py.stdlib.heapq"", ""py.stdlib.bisect"", ""py.stdlib.re"", ""py.stdlib.datetime"", ""py.stdlib.uuid"", ""py.stdlib.subprocess"", ""py.stdlib.shutil"", ""py.test.pytest_basic"", ""py.test.fixture"", ""py.test.mock"", ""py.test.parametrize"", ""py.test.coverage"", ""py.test.hypothesis"", ""py.quality.lint"", ""py.quality.ruff"", ""py.quality.precommit"", ""py.pkg.pyproject"", ""py.pkg.uv_poetry"", ""py.pkg.wheel""]",3,20
+py.cpy.bytecode,Python 字节码（Bytecode）：解释器眼里的你的代码,s4u1l2,4,[],3,20
+py.cpy.dis,Python 拷贝与分发：深入理解 `__copy__` 与 `__deepcopy__`,s4u1l2,4,[],3,20
+py.cpy.frame,函数调用栈帧（Call Frame）：Python 运行时的「现场记录」,s4u1l3,4,[],3,20
+py.cpy.gc,Python 引用计数与垃圾回收,s4u1l1,4,[],3,21
+py.cpy.import_system,Python 导入系统（Import System）：从 `import` 到模块加载机制,s4u1l3,4,[],3,20
+py.cpy.object_model,Python 并发对象模型（py.cpy.object_model）教学讲义,s4u1l1,4,"[""py.concur.model_overview"", ""py.concur.gil_intro"", ""py.concur.io_bound"", ""py.concur.cpu_bound"", ""py.thread.thread_basic"", ""py.thread.lock"", ""py.thread.rlock_semaphore"", ""py.thread.queue"", ""py.thread.threadpool"", ""py.thread.concurrent_futures"", ""py.thread.gil_detail"", ""py.thread.thread_safety"", ""py.mp.process_basic"", ""py.mp.pool"", ""py.mp.ipc"", ""py.mp.shared_memory"", ""py.mp.pickling"", ""py.mp.spawn_fork"", ""py.async.event_loop"", ""py.async.coroutine"", ""py.async.await"", ""py.async.task"", ""py.async.gather"", ""py.async.wait"", ""py.async.sleep"", ""py.async.run"", ""py.async.future"", ""py.async.callback"", ""py.async.taskgroup"", ""py.async.structured_concurrency"", ""py.async.cancel"", ""py.async.timeout"", ""py.async.queue"", ""py.async.event"", ""py.async.lock"", ""py.async.semaphore"", ""py.async.sync_primitives"", ""py.async.aiohttp"", ""py.async.httpx_async"", ""py.async.aiofiles"", ""py.async.async_iter"", ""py.async.async_gen"", ""py.async.async_comprehension"", ""py.async.blocking_call"", ""py.async.run_in_executor"", ""py.async.backpressure"", ""py.async.rate_limit"", ""py.async.graceful_shutdown""]",3,20
+py.cpy.refcount,Python 引用计数（Reference Counting）,s4u1l1,4,[],3,20
+py.ctx.async_ctx,异步上下文管理器（async with）,s2u5l2,2,[],3,20
+py.ctx.contextlib,把「打开—使用—关闭」变成自动化流程,s2u5l1,2,[],3,17
+py.ctx.protocol,Python 结构化子类型协议（Protocol）入门,s2u5l1,2,[],3,20
+py.data.arrow,py.data.arrow —— 用 Arrow 做跨语言、零拷贝的列式数据交换,s5u4l2,5,[],3,21
+py.data.etl_patterns,把原始数据变成可用数据的工程套路,s5u4l3,5,[],3,21
+py.data.numpy,NumPy 入门：把 Python 变成科学计算器,s5u4l1,5,[],3,20
+py.data.pandas,pandas 入门教学讲义（py.data.pandas）,s5u4l1,5,[],3,21
+py.data.parquet,Python 数据存储：Parquet 格式入门,s5u4l3,5,[],3,20
+py.data.polars,Polars：为大数据而生的 DataFrame 库,s5u4l2,5,[],3,20
+py.db.alembic,"数据库迁移与 Alembic：让你的表结构也能""进版本控制""",s5u2l2,5,[],3,20
+py.db.async_db,异步数据库访问（Async DB）：让 I/O 等待不再卡住你的程序,s5u2l2,5,[],3,20
+py.db.mongo,用 Python 操作 MongoDB,s5u2l3,5,[],3,20
+py.db.postgres_index,PostgreSQL 索引实战：从零到工程化,s5u2l4,5,[],3,20
+py.db.redis,从零到工程级的 Redis Python 实战,s5u2l3,5,[],3,21
+py.db.sql_basic,Python 数据库与 SQL 基础入门,s5u2l1,5,[],3,20
+py.db.sqlalchemy,用 Python 对象操作数据库,s5u2l1,5,[],3,20
+py.db.tx_isolation,Python 数据库事务隔离级别（Transaction Isolation Level）40 分钟讲义,s5u2l4,5,[],3,21
+py.deco.args,`py.deco.args`：装饰器里的参数到底怎么“原样传递”？,s2u3l1,2,[],3,19
+py.deco.basic,装饰器基础（py.deco.basic）,s2u3l1,2,[],3,20
+py.deco.class_deco,类装饰器（Class Decorator）：让类也能被“函数化”地增强,s2u3l2,2,[],3,20
+py.deco.functools_wraps,让装饰器不再“毁尸灭迹”,s2u3l1,2,[],3,20
+py.deco.param_deco,带参数的装饰器（Parameterized Decorator）,s2u3l2,2,[],3,21
+py.env.install,从零搭建可复现的 Python 开发环境,s1u1l1,1,[],3,19
+py.env.pip,Python 包管理的起点,s1u1l1,1,[],3,21
+py.env.venv,Python 虚拟环境入门,s1u1l1,1,[],3,22
+py.exc.custom,自定义异常：从零基础到工程级,s1u7l2,1,[],3,19
+py.exc.else,`try / except / else` 中的 `else`：让「成功路径」显式化,s1u7l2,1,[],3,17
+py.exc.finally,`try/finally`：让清理代码一定执行,s1u7l1,1,[],3,20
+py.exc.multiple,多个异常的处理（Multiple Exceptions）,s1u7l1,1,[],3,19
+py.exc.raise,主动抛出异常,s1u7l2,1,[],3,20
+py.exc.try_except,异常处理：try / except 入门到工程实践,s1u7l1,1,[],3,20
+py.flow.break_continue,Python 中的 `break` 与 `continue`：循环流程控制,s1u3l2,1,[],3,21
+py.flow.elif_else,条件分支：`if` / `elif` / `else`,s1u3l1,1,[],3,20
+py.flow.enumerate,让循环同时拿到「第几个」和「是什么」,s1u3l3,1,[],3,20
+py.flow.for_range,40 分钟讲义：Python 的 for 循环与 range(),s1u3l3,1,[],3,21
+py.flow.if,Python 条件语句 `if`：从直觉到工程实践,s1u3l1,1,[],3,21
+py.flow.nested,Python 嵌套控制流：从缩进到工程级实践,s1u3l4,1,[],3,20
+py.flow.pass,从“什么都不做”到工程级语义锚点,s1u3l4,1,[],3,20
+py.flow.while,`while` 循环：让重复工作交给机器,s1u3l2,1,[],3,20
+py.fp.functools,`functools` 模块：把函数当作积木来用,s2u6l1,2,[],3,20
+py.fp.map_filter_reduce,函数式三件套,s2u6l1,2,[],3,20
+py.func.args_default,函数参数默认值：`py.func.args_default`,s1u5l3,1,[],3,20
+py.func.args_keyword,Python 函数的关键字参数（Keyword Arguments）,s1u5l2,1,[],3,21
+py.func.args_kwargs,让函数接受任意数量的参数,s1u5l3,1,[],3,20
+py.func.args_positional,位置参数：函数最基础也最重要的传参方式,s1u5l2,1,[],3,20
+py.func.args_star,Python 中的 `*args` 与 `**kwargs`：让函数接收任意参数,s1u5l3,1,[],3,21
+py.func.closure,闭包 (Closure)：让函数带着它的记忆一起走,s1u5l5,1,[],3,21
+py.func.def,Python 函数定义 `def`：从直觉到工程,s1u5l1,1,[],3,20
+py.func.higher_order,高阶函数（Higher-Order Function）,s1u5l4,1,[],3,20
+py.func.lambda,40 分钟教学讲义：`py.func.lambda`（Python 匿名函数）,s1u5l4,1,[],3,20
+py.func.legb,Python 函数作用域与 LEGB 规则,s1u5l5,1,[],3,20
+py.func.return,`return` 是函数把计算结果**交还给调用者**的,s1u5l1,1,[],3,20
+py.func.scope,Python 函数作用域（Function Scope）,s1u5l1,1,[],3,20
+py.hello.print,从 `print` 理解程序与世界的第一次对话,s1u1l1,1,[],3,20
+py.io.csv,把表格数据读进 Python 的第一把钥匙,s1u8l3,1,[],3,20
+py.io.file_open,文件打开与读取入门,s1u8l1,1,[],3,20
+py.io.file_read_write,Python 文件读写（File Read/Write）,s1u8l1,1,[],3,21
+py.io.fstring,Python f-string：让字符串拼接变得又快又优雅,s1u1l3,1,[],3,21
+py.io.input,Python 的输入（input）：从键盘读取数据的第一步,s1u1l3,1,[],3,20
+py.io.json,把 Python 对象变成 JSON 文本，再把文本变回对象,s1u8l3,1,[],3,20
+py.io.os_path,py.io.os_path —— 让 Python 代码在任何操作系统上都能正确读写文件路径,s1u8l2,1,[],3,19
+py.io.pathlib,路径的艺术：`pathlib` 让文件操作像说话一样自然,s1u8l2,1,[],3,21
+py.io.print_format,`py.io.print_format`：把数据“好看地”送进输出流,s1u1l3,1,[],3,21
+py.io.with,用上下文管理器优雅地管理 I/O 资源,s1u8l2,1,[],3,20
+py.iter.generator,迭代器与生成器（Iterator & Generator）,s2u2l2,2,[],3,20
+py.iter.iter_next,迭代器与 next()：Python 数据流的引擎,s2u2l1,2,[],3,20
+py.iter.itertools,用“惰性流水线”处理数据,s2u2l4,2,[],3,21
+py.iter.lazy_eval,惰性求值（Lazy Evaluation）,s2u2l4,2,[],3,19
+py.iter.protocol,Python 迭代协议（Iterator Protocol）,s2u2l1,2,[],3,21
+py.iter.send,让生成器“接收”外界输入,s2u2l3,2,[],3,22
+py.iter.yield,让函数拥有“暂停键”的魔法,s2u2l2,2,[],3,21
+py.iter.yield_from,从嵌套生成器到 `yield from`：一条语法的效率与可读性革命,s2u2l3,2,[],3,20
+py.mem.cycle,Python 中的循环引用与内存管理,s4u3l1,4,[],3,21
+py.mem.leak_debug,py.mem.leak_debug —— Python 内存泄漏调试,s4u3l1,4,[],3,19
+py.mem.weakref,弱引用（Weak Reference）：让对象“可被回收”，让缓存“不泄漏”,s4u3l1,4,[],3,20
+py.meta.descriptor,Python 描述符（Descriptor）：从属性访问到框架级抽象,s2u3l3,2,[],3,21
+py.meta.dynamic_attr,"动态属性 (Dynamic Attribute)：让对象在运行时""长""出新能力",s2u3l4,2,[],3,20
+py.meta.getattr,py.meta.getattr 教学讲义,s2u3l4,2,[],3,19
+py.meta.metaclass,元类（Metaclass）：从「类也是对象」到「控制类的创建」,s2u3l3,2,[],3,21
+py.module.from_import,`from ... import ...`：模块导入的精准手术刀,s1u6l1,1,[],3,20
+py.module.if_main,"`if __name__ == ""__main__"":` 完全指南",s1u6l2,1,[],3,21
+py.module.import,从零开始理解 Python 模块与导入,s1u6l1,1,[],3,20
+py.module.init,`py.module.init`：模块初始化与模块级元数据,s1u6l3,1,[],3,19
+py.module.name,模块的名字与身份,s1u6l2,1,[],3,19
+py.module.package,Python 模块与包：从零到工程级,s1u6l3,1,[],3,20
+py.module.stdlib_intro,Python 标准库入门：从「导入」到「读懂一个模块」,s1u6l4,1,[],3,20
+py.module.third_party,第三方模块（Third-Party Module）入门到工程实践,s1u6l4,1,[],3,20
+py.mp.ipc,用 `multiprocessing` 做进程间通信,s3u3l2,3,[],3,20
+py.mp.pickling,py.mp.pickling —— Python 多进程中的对象序列化,s3u3l3,3,[],3,21
+py.mp.pool,`multiprocessing.Pool`：让 Python 真正并行起来,s3u3l1,3,[],3,21
+py.mp.process_basic,Python 多进程编程入门,s3u3l1,3,[],3,20
+py.mp.shared_memory,`multiprocessing.shared_memory`：让多个进程共享同一块内存,s3u3l2,3,[],3,20
+py.mp.spawn_fork,多进程启动方式：spawn 与 fork,s3u3l3,3,[],3,21
+py.mq.arq,用 ARQ 构建基于 Redis 的 Python 异步任务队列,s5u3l2,5,[],3,19
+py.mq.celery,Celery 与消息队列：让 Python 任务异步飞起来,s5u3l2,5,[],3,21
+py.mq.kafka,Python 与 Kafka：分布式消息队列入门,s5u3l1,5,[],3,20
+py.mq.rabbitmq,用 RabbitMQ 打通 Python 服务之间的消息,s5u3l1,5,[],3,21
+py.oop.abstract,Python 抽象类与协议（Abstract Class & Protocol）,s2u1l7,2,[],3,20
+py.oop.class_basic,Python 类基础（class_basic）：40 分钟从零到工程级,s2u1l1,2,"[""py.env.install"", ""py.env.venv"", ""py.env.pip"", ""py.hello.print"", ""py.syntax.comment"", ""py.syntax.indent"", ""py.syntax.var"", ""py.io.input"", ""py.io.print_format"", ""py.io.fstring"", ""py.type.int"", ""py.type.float"", ""py.type.bool"", ""py.type.none"", ""py.op.arith"", ""py.op.compare"", ""py.op.logic"", ""py.type.str_basic"", ""py.type.str_index"", ""py.type.str_method"", ""py.type.str_format"", ""py.type.str_escape"", ""py.flow.if"", ""py.flow.elif_else"", ""py.flow.while"", ""py.flow.break_continue"", ""py.flow.for_range"", ""py.flow.enumerate"", ""py.flow.nested"", ""py.flow.pass"", ""py.type.list_basic"", ""py.type.list_method"", ""py.type.list_slice"", ""py.type.list_comprehension"", ""py.type.tuple"", ""py.type.tuple_unpack"", ""py.type.dict_basic"", ""py.type.dict_method"", ""py.type.set"", ""py.type.set_ops"", ""py.type.nested_container"", ""py.type.copy_shallow_deep"", ""py.func.def"", ""py.func.return"", ""py.func.scope"", ""py.func.args_positional"", ""py.func.args_keyword"", ""py.func.args_default"", ""py.func.args_star"", ""py.func.args_kwargs"", ""py.func.lambda"", ""py.func.higher_order"", ""py.func.closure"", ""py.func.legb"", ""py.module.import"", ""py.module.from_import"", ""py.module.if_main"", ""py.module.name"", ""py.module.package"", ""py.module.init"", ""py.module.stdlib_intro"", ""py.module.third_party"", ""py.exc.try_except"", ""py.exc.multiple"", ""py.exc.finally"", ""py.exc.raise"", ""py.exc.custom"", ""py.exc.else"", ""py.io.file_open"", ""py.io.file_read_write"", ""py.io.with"", ""py.io.pathlib"", ""py.io.os_path"", ""py.io.json"", ""py.io.csv"", ""py.proj.structure"", ""py.proj.argparse"", ""py.proj.logging"", ""py.proj.error_handling""]",3,20
+py.oop.classmethod,类方法 `@classmethod`：让实例创建方式更优雅,s2u1l2,2,[],3,19
+py.oop.composition,Python 组合（Composition）：让对象拥有对象，而不是继承对象,s2u1l8,2,[],3,21
+py.oop.dataclass,一句话直觉：用 `@dataclass` 只写「字段」，让 Python 自动帮你生成 `__init__`、`__repr__`、`__eq__`，把「一堆重复样板代码」压缩成几行声明。,s2u1l6,2,[],3,20
+py.oop.design_patterns_basic,设计模式基础,s2u1l8,2,[],3,21
+py.oop.duck_typing,鸭子类型（Duck Typing）：Python 动态多态的精髓,s2u1l7,2,[],3,21
+py.oop.dunder_intro,魔法方法入门（Dunder Methods）,s2u1l5,2,[],3,20
+py.oop.eq_hash,让对象“可比较、可去重、可当字典键”,s2u1l5,2,[],3,19
+py.oop.inherit,继承（Inheritance）：让代码复用与扩展的基石,s2u1l3,2,[],3,21
+py.oop.init,`__init__`：对象诞生的第一行代码,s2u1l1,2,[],3,21
+py.oop.instance,从「instance」看清 Python 面向对象的第一步,s2u1l1,2,[],3,20
+py.oop.method,面向对象里的“方法”到底是什么,s2u1l2,2,[],3,20
+py.oop.mro,Python MRO（方法解析顺序）：从直觉到工程,s2u1l3,2,[],3,21
+py.oop.namedtuple,给元组起名字,s2u1l6,2,[],3,20
+py.oop.property,Python 属性（property）：从直觉到工程级,s2u1l4,2,[],3,20
+py.oop.protocol,Python 协议（Protocol）：让鸭子类型（Duck Typing）可被静态类型检查器理解,s2u1l7,2,[],3,21
+py.oop.repr_str,Python 对象表示：`__repr__` 与 `__str__`,s2u1l5,2,[],3,20
+py.oop.slots,`__slots__` 是 Python 类里一个「省内,s2u1l4,2,[],3,20
+py.oop.staticmethod,一节课搞懂静态方法,s2u1l2,2,[],3,21
+py.oop.super,Python 中的 `super()`：从零到工程级,s2u1l3,2,[],3,18
+py.op.arith,Python 算术运算符,s1u2l2,1,[],3,21
+py.op.compare,Python 比较运算,s1u2l2,1,[],3,20
+py.op.logic,Python 逻辑运算：让程序学会“判断”,s1u2l2,1,[],3,20
+py.perf.algorithm_first,算法优先的性能优化,s4u2l3,4,[],3,20
+py.perf.c_extension,让 Python 跑出 C 的速度,s4u2l5,4,[],3,20
+py.perf.cache_lru,"py.perf.cache_lru —— 用 `functools.lru_cache` 给函数装上""记忆大脑""",s4u2l3,4,[],3,20
+py.perf.cython,Cython 入门：让 Python 代码跑出 C 的速度,s4u2l4,4,[],3,20
+py.perf.memory_profiler,看懂 Python 程序的内存开销,s4u2l2,4,[],3,20
+py.perf.numba,40 分钟教学讲义：`py.perf.numba`,s4u2l4,4,[],3,20
+py.perf.numpy_vector,向量化运算：NumPy Vectorization,s4u2l4,4,[],3,20
+py.perf.profiling_cprofile,Python 性能剖析：认识 cProfile,s4u2l1,4,[],3,20
+py.perf.py_spy,用 Python 自带的“性能侦察兵”定位热点,s4u2l1,4,[],3,20
+py.perf.rust_pyo3,用 Rust + PyO3 给 Python 提速：从直觉到工程实践,s4u2l5,4,[],3,20
+py.perf.tracemalloc,用 tracemalloc 找到 Python 内存的“元凶”,s4u2l2,4,[],3,19
+py.pkg.pyproject,pyproject：Python 项目的“总施工图”,s2u8l1,2,[],3,21
+py.pkg.uv_poetry,现代 Python 项目与依赖管理,s2u8l1,2,[],3,21
+py.pkg.wheel,Wheel：Python 包的分发格式,s2u8l1,2,[],3,21
+py.proj.argparse,用 argparse 打造专业命令行工具,s1u9l1,1,[],3,20
+py.proj.error_handling,Python 错误处理 (Error Handling) 入门到工程化,s1u9l2,1,[],3,21
+py.proj.logging,把 print 升级为可运维的日志系统,s1u9l2,1,[],3,20
+py.proj.structure,Python 项目结构（py.proj.structure）,s1u9l1,1,[],3,20
+py.quality.lint,Python 代码质量：Lint（静态代码检查）,s2u7l4,2,[],3,21
+py.quality.precommit,让代码质量检查自动发生在提交之前,s2u7l4,2,[],3,20
+py.quality.ruff,Ruff：用极快的速度守护 Python 代码质量,s2u7l4,2,[],3,20
+py.stdlib.bisect,Python `bisect` 模块：二分查找与有序列表维护,s2u6l2,2,[],3,22
+py.stdlib.collections,Python 标准库 `collections`：从直觉到工程级,s2u6l2,2,[],3,20
+py.stdlib.datetime,让程序正确记录、计算与展示时间,s2u6l3,2,[],3,20
+py.stdlib.heapq,Python 标准库 heapq 教学讲义,s2u6l2,2,[],3,20
+py.stdlib.re,Python 标准库正则表达式,s2u6l3,2,[],3,20
+py.stdlib.shutil,文件与目录操作的标准工具箱,s2u6l4,2,[],3,20
+py.stdlib.subprocess,Python `subprocess` 标准库：让你的程序会「调用」别的程序,s2u6l4,2,[],3,20
+py.stdlib.uuid,Python 标准库 uuid：为对象生成全球唯一标识,s2u6l3,2,[],3,20
+py.syntax.comment,Python 注释：让代码会说话的艺术,s1u1l2,1,[],3,21
+py.syntax.indent,Python 缩进：从直觉到工程级,s1u1l2,1,[],3,19
+py.syntax.var,Python 变量：从零基础到工程级,s1u1l2,1,[],3,21
+py.test.coverage,让测试告诉你「哪些代码从没被跑过」,s2u7l3,2,[],3,21
+py.test.fixture,让测试的“准备工作”不再重复,s2u7l1,2,[],3,20
+py.test.hypothesis,让测试自己去找 bug,s2u7l3,2,[],3,21
+py.test.mock,py.test.mock 教学讲义,s2u7l2,2,[],3,20
+py.test.parametrize,pytest.parametrize：一次写测试，多次跑数据,s2u7l2,2,[],3,21
+py.test.pytest_basic,一、一句话直觉：为什么学 pytest？,s2u7l1,2,[],3,20
+py.thread.concurrent_futures,让 Python 真正“同时跑”起来的第一把钥匙,s3u2l3,3,[],3,20
+py.thread.gil_detail,Python 线程与 GIL 深度解析,s3u2l4,3,[],3,20
+py.thread.lock,让多线程不再“撞车”,s3u2l1,3,[],3,20
+py.thread.queue,"多线程协作的""传送门""",s3u2l2,3,[],3,21
+py.thread.rlock_semaphore,线程安全三件套：RLock（可重入锁）与 Semaphore（信号量）,s3u2l2,3,[],3,20
+py.thread.thread_basic,线程基础（Thread Basics）：让程序同时做几件事,s3u2l1,3,[],3,20
+py.thread.thread_safety,Python 线程安全（Thread Safety）,s3u2l4,3,[],3,20
+py.thread.threadpool,用线程池把并发跑起来,s3u2l3,3,[],3,20
+py.type.bool,从零到工程级的布尔类型讲义,s1u2l1,1,[],3,20
+py.type.copy_shallow_deep,浅拷贝与深拷贝（Shallow Copy vs Deep Copy）,s1u4l6,1,[],3,21
+py.type.dict_basic,字典基础,s1u4l4,1,[],3,20
+py.type.dict_method,字典方法（dict methods）：从查表到工程实践,s1u4l4,1,[],3,21
+py.type.float,从零理解 Python 浮点数,s1u2l1,1,[],3,21
+py.type.int,深入理解 `int` 类型：从零基础到工程级,s1u2l1,1,[],3,20
+py.type.list_basic,Python 列表基础：从直觉到工程,s1u4l1,1,[],3,20
+py.type.list_comprehension,列表推导式与类型标注：`py.type.list_comprehension`,s1u4l2,1,[],3,20
+py.type.list_method,Python 列表方法：从零基础到工程级,s1u4l1,1,[],3,19
+py.type.list_slice,列表切片（list slice）：把序列“切开”，只取你要的那一段,s1u4l2,1,[],3,20
+py.type.nested_container,嵌套容器类型注解（Nested Container Types）,s1u4l6,1,[],3,21
+py.type.none,"`None` 与 `NoneType`：Python 里""什么都没有""的正式类型",s1u2l1,1,[],3,19
+py.type.set,Python 类型提示中的 Set：从直觉到工程实践,s1u4l5,1,[],3,20
+py.type.set_ops,集合类型注解与运算操作,s1u4l5,1,[],3,20
+py.type.str_basic,字符串基础：从直觉到工程,s1u2l3,1,[],3,20
+py.type.str_escape,Python 字符串转义（String Escape）：从直觉到工程,s1u2l4,1,[],3,20
+py.type.str_format,字符串格式化（String Formatting）：从拼接到工程化输出,s1u2l4,1,[],3,20
+py.type.str_index,字符串索引（str index）：为什么它是你 Python 之路的第一块基石,s1u2l3,1,[],3,21
+py.type.str_method,字符串是 Python 里最常用的数据类型（type），,s1u2l3,1,[],3,21
+py.type.tuple,Python 元组类型 `tuple` 完全指南,s1u4l3,1,[],3,20
+py.type.tuple_unpack,元组解包（Tuple Unpacking）：一句话直觉,s1u4l3,1,[],3,21
+py.typehint.basic,在 AI 工程里，一个训练脚本动辄几百行，`loss`、,s2u4l1,2,[],3,20
+py.typehint.generic,`py.typehint.generic` 教学讲义,s2u4l2,2,[],3,20
+py.typehint.literal,类型提示之 Literal：让「只能是这几个值」变成类型系统的一部分,s2u4l3,2,[],3,20
+py.typehint.mypy,Python 类型注解（type hint）默认只是“文,s2u4l4,2,[],3,20
+py.typehint.optional_union,Python 是动态类型语言，运行时并不强制检查你写下的,s2u4l1,2,[],3,21
+py.typehint.overload,"让一个函数拥有多个""签名""",s2u4l3,2,[],3,21
+py.typehint.pydantic_basic,类型提示与 Pydantic 入门,s2u4l5,2,[],3,20
+py.typehint.pyright,Python 类型注解（Type Hints）与 Pyright 静态检查,s2u4l4,2,[],3,21
+py.typehint.typevar,Python 类型变量 TypeVar 教学讲义,s2u4l2,2,[],3,21
+py.web.auth_jwt,py.web.auth_jwt —— 从零理解 Web 身份认证与 JWT,s5u1l4,5,[],3,21
+py.web.fastapi_async,用 async/await 写出高并发 Web 接口,s5u1l2,5,[],3,20
+py.web.fastapi_basic,FastAPI 基础入门：从 Hello World 到可上线的 API,s5u1l1,5,[],3,19
+py.web.fastapi_depends,FastAPI 依赖注入（Depends）40 分钟讲义,s5u1l2,5,[],3,21
+py.web.http_basic,Python HTTP 基础（py.web.http_basic）,s5u1l1,5,"[""py.cpy.object_model"", ""py.cpy.refcount"", ""py.cpy.gc"", ""py.cpy.bytecode"", ""py.cpy.dis"", ""py.cpy.import_system"", ""py.cpy.frame"", ""py.perf.profiling_cprofile"", ""py.perf.py_spy"", ""py.perf.memory_profiler"", ""py.perf.tracemalloc"", ""py.perf.algorithm_first"", ""py.perf.cache_lru"", ""py.perf.numpy_vector"", ""py.perf.cython"", ""py.perf.numba"", ""py.perf.rust_pyo3"", ""py.perf.c_extension"", ""py.mem.weakref"", ""py.mem.cycle"", ""py.mem.leak_debug""]",3,20
+py.web.middleware,Web 中间件教学讲义,s5u1l4,5,[],3,20
+py.web.openapi,从零理解 Python 如何调用 Web API,s5u1l3,5,[],3,20
+py.web.pydantic_v2,用类型注解守护数据的边界,s5u1l3,5,[],3,20

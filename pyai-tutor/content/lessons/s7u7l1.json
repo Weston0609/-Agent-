@@ -1,0 +1,616 @@
+{
+  "id": "s7u7l1",
+  "title": "s7u7l1",
+  "kps": [
+    "agent.eval.trajectory",
+    "agent.eval.tool_accuracy"
+  ],
+  "theory": "## agent.eval.trajectory\n\n## 一句话直觉\n\n**Agent（智能体）的评估不能只看“最终答案对不对”，还要看它“走的路对不对”——这条走过的路，就叫 trajectory（轨迹）。**\n\n比如你让 Agent 帮你订机票，它最后确实订到了，但中间偷偷把用户的钱转到了别的账户再转回来——答案对了，过程错了。trajectory 评估就是用来检查 Agent 每一步动作（action）、每一次思考（thought）、每一次工具调用（tool call）是否合理、安全、高效。\n\n---\n\n## 1. 什么是 trajectory？\n\n**Trajectory（轨迹）** 是 Agent 在一次任务中产生的**完整交互序列**，通常包含：\n\n- 用户输入（user input）\n- 模型思考（thought / reasoning）\n- 工具调用（tool call），如搜索、计算、调用 API\n- 工具返回结果（observation）\n- 最终答案（final answer）\n\n一条 trajectory 就像一个“行车记录仪”，记录了 Agent 从起点到终点的全过程。\n\n**为什么必须评估它？**\n\n- 结果对但过程错：可能是**侥幸**，换一个输入就会失败。\n- 过程里有危险动作：调用删除文件、泄露隐私、重复扣款。\n- 过程低效：绕了 20 步才完成 1 步能做的事。\n\n下面用一段最小代码模拟一条 trajectory。\n\n```python\n# 一条最小 trajectory：用 list[dict] 表示\ntrajectory = [\n    {\"step\": 0, \"type\": \"user\",        \"content\": \"北京今天适合跑步吗？\"},\n    {\"step\": 1, \"type\": \"thought\",     \"content\": \"我需要查北京今天的天气\"},\n    {\"step\": 2, \"type\": \"tool_call\",   \"tool\": \"weather\", \"args\": {\"city\": \"北京\"}},\n    {\"step\": 3, \"type\": \"observation\", \"content\": {\"temp\": 22, \"rain\": False, \"aqi\": 80}},\n    {\"step\": 4, \"type\": \"thought\",     \"content\": \"不下雨、温度适中、空气尚可，适合跑步\"},\n    {\"step\": 5, \"type\": \"final\",       \"content\": \"适合，建议傍晚去公园慢跑 30 分钟。\"},\n]\n\nfor t in trajectory:\n    print(t[\"step\"], t[\"type\"], t.get(\"content\") or t.get(\"tool\"))\n```\n\n---\n\n## 2. 结果评估 vs 轨迹评估\n\n**结果评估（outcome evaluation）**：只看 final answer 对不对。\n**轨迹评估（trajectory evaluation）**：看整条序列是否合理。\n\n两者是互补关系：\n\n| 维度 | 问的问题 | 典型指标 |\n|---|---|---|\n| Outcome | 答对了吗？ | Accuracy、Pass@1 |\n| Trajectory | 走对了吗？ | 步骤正确率、工具调用准确率、冗余步数 |\n\n**关键结论：只用结果评估会漏掉“flaky success”（侥幸成功）。** 轨迹评估能抓到它。\n\n```python\n# 对比：两个 Agent 都答对了，但轨迹质量不同\nagent_a = [\"查天气\", \"判断\", \"回答\"]                    # 3 步，简洁\nagent_b = [\"查天气\", \"查天气\", \"查天气\", \"查机票\", \"判断\", \"回答\"]  # 6 步，有冗余\n\ndef trajectory_score(traj, expected_steps):\n    \"\"\"轨迹评分：步骤越接近预期越高分（简化版）\"\"\"\n    return max(0.0, 1.0 - abs(len(traj) - expected_steps) / expected_steps)\n\nprint(\"A 轨迹分:\", trajectory_score(agent_a, expected_steps=3))  # 1.0\nprint(\"B 轨迹分:\", trajectory_score(agent_b, expected_steps=3))  # 0.0\n```\n\n---\n\n## 3. 轨迹评估的四个核心维度\n\n工程上，trajectory 评估通常拆成四个可测量的维度：\n\n1. **有效性（Validity）**：每一步动作在语法和语义上是否合法（例如工具名存在、参数类型正确）。\n2. **正确性（Correctness）**：每一步是否为达成目标做了“对的”事。\n3. **效率（Efficiency）**：步数/工具调用数是否接近最优。\n4. **安全性（Safety）**：是否有危险或越权动作。\n\n这四个维度可以各自打分，再合成一个综合分。\n\n```python\ndef eval_trajectory(traj, valid_tools, forbidden_tools, optimal_steps):\n    valid = all(\n        t.get(\"tool\") in valid_tools\n        for t in traj if t[\"type\"] == \"tool_call\"\n    )\n    safe = not any(\n        t.get(\"tool\") in forbidden_tools\n        for t in traj if t[\"type\"] == \"tool_call\"\n    )\n    steps = sum(1 for t in traj if t[\"type\"] == \"tool_call\")\n    efficiency = max(0.0, 1.0 - max(0, steps - optimal_steps) / optimal_steps)\n\n    return {\n        \"valid\": valid,\n        \"safe\": safe,\n        \"efficiency\": round(efficiency, 2),\n    }\n\ntraj = [\n    {\"type\": \"user\", \"content\": \"查北京天气\"},\n    {\"type\": \"tool_call\", \"tool\": \"weather\", \"args\": {\"city\": \"北京\"}},\n    {\"type\": \"tool_call\", \"tool\": \"weather\", \"args\": {\"city\": \"北京\"}},  # 重复\n    {\"type\": \"final\", \"content\": \"晴天\"},\n]\nprint(eval_trajectory(traj, {\"weather\"}, {\"shell\", \"delete_file\"}, optimal_steps=1))\n```\n\n---\n\n## 4. 如何自动打分：规则、模型、人工三管齐下\n\n实际工程中，trajectory 评估有三类打分器（evaluator）：\n\n- **规则打分器（rule-based）**：检查工具名、参数 schema、禁用词。快、稳、可解释。\n- **模型打分器（LLM-as-a-judge）**：用 LLM 判断每一步“是否合理”。能抓语义错误，但可能不稳定。\n- **人工打分（human-in-the-loop）**：用于构建黄金集（golden set），校准前两者。\n\n**关键结论：规则先过滤，模型再打分，人工抽样校准，是工业界主流的三层结构。**\n\n下面是规则打分器的骨架。\n\n```python\nfrom typing import Callable\n\n# 每条规则返回 (是否通过: bool, 说明: str)\nRule = Callable[[list[dict]], tuple[bool, str]]\n\ndef rule_no_forbidden_tool(forbidden: set[str]) -> Rule:\n    def _check(traj):\n        for t in traj:\n            if t.get(\"type\") == \"tool_call\" and t.get(\"tool\") in forbidden:\n                return False, f\"使用了禁用工具: {t['tool']}\"\n        return True, \"无禁用工具\"\n    return _check\n\ndef rule_has_final_answer(traj):\n    ok = any(t.get(\"type\") == \"final\" for t in traj)\n    return ok, \"包含最终回答\" if ok else \"缺少最终回答\"\n\nrules: list[Rule] = [\n    rule_no_forbidden_tool({\"shell\", \"delete_file\"}),\n    rule_has_final_answer,\n]\n\ndef score_trajectory(traj, rules):\n    results = [r(traj) for r in rules]\n    passed = sum(1 for ok, _ in results if ok)\n    return passed / len(results), results\n\ntraj = [\n    {\"type\": \"user\", \"content\": \"帮我查天气\"},\n    {\"type\": \"tool_call\", \"tool\": \"weather\", \"args\": {\"city\": \"北京\"}},\n    {\"type\": \"final\", \"content\": \"晴\"},\n]\nscore, details = score_trajectory(traj, rules)\nprint(\"综合分:\", score)\nfor ok, msg in details:\n    print(\" \", \"✅\" if ok else \"❌\", msg)\n```\n\n---\n\n## 5. 把评估接入 CI：让轨迹回归成为习惯\n\n一条 trajectory 的评估只说明“这一次 Agent 表现如何”。工程上真正重要的是：\n\n- 准备一组固定的**评测用例（benchmark cases）**。\n- 每次 Agent prompt / 模型 / 工具改动后，重跑全部用例。\n- 对轨迹指标做纵向对比，发现退化（regression）。\n\n这就是“**轨迹回归测试（trajectory regression test）**”。它和传统的单元测试思路一致：把一次成功的轨迹固化下来，作为下次的基准。\n\n```python\nBENCH = [\n    {\"input\": \"北京今天适合跑步吗？\", \"forbidden_tools\": [\"shell\"]},\n    {\"input\": \"帮我算 123*456\",       \"forbidden_tools\": [\"network\"]},\n]\n\ndef run_agent(user_input: str) -> list[dict]:\n    \"\"\"占位：真实项目里替换成你的 Agent 调用\"\"\"\n    return [\n        {\"type\": \"user\", \"content\": user_input},\n        {\"type\": \"tool_call\", \"tool\": \"weather\", \"args\": {\"city\": \"北京\"}},\n        {\"type\": \"final\", \"content\": \"晴天，适合跑步\"},\n    ]\n\ndef regression_test(bench, forbidden_tools):\n    for case in bench:\n        traj = run_agent(case[\"input\"])\n        score, details = score_trajectory(\n            traj, [rule_no_forbidden_tool(set(forbidden_tools)), rule_has_final_answer]\n        )\n        print(f\"[{case['input']}] 分数={score}\")\n\nregression_test(BENCH, forbidden_tools=[\"shell\", \"delete_file\"])\n```\n\n---\n\n## 小结\n\n- **trajectory（轨迹）** = Agent 从输入到输出的完整动作序列。\n- 只评估结果不够，轨迹能揭示**侥幸、冗余、危险**这三类隐蔽问题。\n- 轨迹评估的四个维度：**有效性、正确性、效率、安全性**。\n- 三层打分器：**规则 → 模型 → 人工**。\n- 工程上要把轨迹评估变成**回归测试**，随改动持续跑。\n\n---\n\n## 动手练习\n\n**任务：给一个“查天气 Agent”写一套最小轨迹评估脚本。**\n\n要求：\n\n1. 用 list[dict] 表示一条轨迹，至少包含 `user`、`tool_call`、`observation`、`final` 四类节点。\n2. 写三条规则：\n   - 禁止调用 `shell` 工具。\n   - 必须调用过 `weather` 工具。\n   - 必须包含 `final` 节点。\n3. 写一个 `score_trajectory(traj, rules)` 函数返回 0~1 之间的分数。\n4. 自己构造 3 条轨迹（一条完美、一条有冗余、一条违规），打印三者的分数并解释差异。\n\n**进阶（可选）**：为同一任务写一个 LLM-as-a-judge 的 prompt 模板，让模型给轨迹的“合理性”打 1~5 分，并说明理由。\n\n```python\n# trajectory_eval_demo.py\n# 运行：python trajectory_eval_demo.py\n\nfrom typing import Callable\n\nRule = Callable[[list[dict]], tuple[bool, str]]\n\ndef rule_forbid_tool(forbidden: set[str]) -> Rule:\n    def _check(traj):\n        for t in traj:\n            if t.get(\"type\") == \"tool_call\" and t.get(\"tool\") in forbidden:\n                return False, f\"使用了禁用工具: {t['tool']}\"\n        return True, \"未使用禁用工具\"\n    return _check\n\ndef rule_must_call(tool_name: str) -> Rule:\n    def _check(traj):\n        called = any(\n            t.get(\"type\") == \"tool_call\" and t.get(\"tool\") == tool_name\n            for t in traj\n        )\n        return called, f\"调用了 {tool_name}\" if called else f\"未调用 {tool_name}\"\n    return _check\n\ndef rule_has_final(traj):\n    ok = any(t.get(\"type\") == \"final\" for t in traj)\n    return ok, \"包含 final\" if ok else \"缺少 final\"\n\ndef score_trajectory(traj: list[dict], rules: list[Rule]) -> tuple[float, list[tuple[bool, str]]]:\n    results = [r(traj) for r in rules]\n    passed = sum(1 for ok, _ in results if ok)\n    return passed / len(results), results\n\n# 三条轨迹\nperfect = [\n    {\"type\": \"user\", \"content\": \"北京今天适合跑步吗？\"},\n    {\"type\": \"tool_call\", \"tool\": \"weather\", \"args\": {\"city\": \"北京\"}},\n    {\"type\": \"observation\", \"content\": {\"temp\": 22, \"rain\": False}},\n    {\"type\": \"final\", \"content\": \"适合，傍晚慢跑 30 分钟。\"},\n]\n\nredundant = [\n    {\"type\": \"user\", \"content\": \"北京今天适合跑步吗？\"},\n    {\"type\": \"tool_call\", \"tool\": \"weather\", \"args\": {\"city\": \"北京\"}},\n    {\"type\": \"tool_call\", \"tool\": \"weather\", \"args\": {\"city\": \"北京\"}},  # 重复\n    {\"type\": \"tool_call\", \"tool\": \"weather\", \"args\": {\"city\": \"北京\"}},  # 重复\n    {\"type\": \"final\", \"content\": \"适合跑步。\"},\n]\n\nunsafe = [\n    {\"type\": \"user\", \"content\": \"北京今天适合跑步吗？\"},\n    {\"type\": \"tool_call\", \"tool\": \"shell\", \"args\": {\"cmd\": \"rm -rf /\"}},  # 违规\n    {\"type\": \"final\", \"content\": \"适合跑步。\"},\n]\n\nrules: list[Rule] = [\n    rule_forbid_tool({\"shell\", \"delete_file\"}),\n    rule_must_call(\"weather\"),\n    rule_has_final,\n]\n\nfor name, traj in [(\"perfect\", perfect), (\"redundant\", redundant), (\"unsafe\", unsafe)]:\n    score, details = score_trajectory(traj, rules)\n    print(f\"\\n[{name}] score={score:.2f}\")\n    for ok, msg in details:\n        print(\"  \", \"✅\" if ok else \"❌\", msg)\n```\n\n## agent.eval.tool_accuracy\n\n## 一句话直觉\n\n**Tool Accuracy（工具调用准确率）** 衡量的是：当 AI Agent（智能体）面对一个任务时，它**是否选对了工具、传对了参数、用对了顺序**。它直接决定了 Agent 能否真正“干活”，而不只是“聊天”。\n\n---\n\n## 1. 为什么需要评测工具调用？\n\n一个 Agent 通常由三部分组成：\n\n- **LLM（大语言模型）**：负责思考与决策\n- **Tools（工具）**：真正执行动作的函数，比如查天气、发邮件、算数学\n- **Loop（循环）**：LLM 决定调用哪个工具 → 执行 → 把结果喂回 LLM → 继续\n\nLLM 可能会犯三类错误：\n\n1. **选错工具**：该查天气，却去查汇率\n2. **传错参数**：查天气时城市拼错、日期格式不对\n3. **用错顺序**：还没查订单就先退款\n\n如果只看“最终回答像不像人话”，这些问题会被掩盖。所以需要一个**结构化的评测指标**：Tool Accuracy。\n\n通常拆成三个子指标：\n\n| 指标 | 英文 | 含义 |\n|---|---|---|\n| 工具选择准确率 | Tool Selection Accuracy | 选中的工具是否等于期望工具 |\n| 参数准确率 | Argument Accuracy | 每个参数键值是否都对 |\n| 调用序列准确率 | Call Sequence Accuracy | 多次调用的顺序是否正确 |\n\n---\n\n## 2. 最小可运行的评测框架\n\n我们先用**纯 Python**（不依赖任何 LLM）实现一个评测器。核心思想：把 Agent 的每次工具调用记录成结构化数据，再和标准答案（ground truth）逐项比对。\n\n```python\nfrom dataclasses import dataclass, field\nfrom typing import Any\n\n# 1. 定义一次工具调用\n@dataclass\nclass ToolCall:\n    name: str\n    args: dict[str, Any]\n\n# 2. 一次任务中 Agent 实际调用的工具序列\n@dataclass\nclass Trace:\n    calls: list[ToolCall]\n\n# 3. 标准答案\n@dataclass\nclass Expected:\n    calls: list[ToolCall]\n\n# 4. 评测指标\ndef tool_selection_accuracy(trace: Trace, expected: Expected) -> float:\n    \"\"\"只看工具名：逐位比较，命中记 1。\"\"\"\n    n = max(len(trace.calls), len(expected.calls))\n    if n == 0:\n        return 1.0\n    hits = 0\n    for i in range(n):\n        a = trace.calls[i].name if i < len(trace.calls) else None\n        b = expected.calls[i].name if i < len(expected.calls) else None\n        if a == b:\n            hits += 1\n    return hits / n\n\ndef argument_accuracy(trace: Trace, expected: Expected) -> float:\n    \"\"\"只在工具名对齐的位置上比参数，全对才算命中。\"\"\"\n    n = max(len(trace.calls), len(expected.calls))\n    if n == 0:\n        return 1.0\n    hits = 0\n    for i in range(n):\n        if i >= len(trace.calls) or i >= len(expected.calls):\n            continue\n        if trace.calls[i].name == expected.calls[i].name \\\n           and trace.calls[i].args == expected.calls[i].args:\n            hits += 1\n    return hits / n\n\ndef sequence_accuracy(trace: Trace, expected: Expected) -> float:\n    \"\"\"整条序列完全一致才算 1，否则 0。\"\"\"\n    if len(trace.calls) != len(expected.calls):\n        return 0.0\n    for a, b in zip(trace.calls, expected.calls):\n        if a.name != b.name or a.args != b.args:\n            return 0.0\n    return 1.0\n```\n\n这就是 Tool Accuracy 的骨架，后面换成真实 LLM 输出，只要把 `ToolCall` 解析出来即可。\n\n---\n\n## 3. 从 LLM 输出解析出 ToolCall\n\n现代 Agent 一般会让 LLM 输出 **JSON**（或者用 OpenAI / Anthropic 的 Tool Use 格式）。下面是一个通用解析函数：\n\n```python\nimport json\nfrom typing import Optional\n\ndef parse_tool_calls(raw: str) -> list[ToolCall]:\n    \"\"\"\n    期望 raw 是形如：\n    [{\"name\": \"get_weather\", \"args\": {\"city\": \"Beijing\"}}]\n    实际工程中要做错误处理、兼容多种格式。\n    \"\"\"\n    try:\n        data = json.loads(raw)\n    except json.JSONDecodeError:\n        return []\n    calls = []\n    for item in data:\n        calls.append(ToolCall(name=item[\"name\"], args=item.get(\"args\", {})))\n    return calls\n```\n\n---\n\n## 4. 常见的参数匹配策略\n\n参数完全字符串相等太严格，工程上常用分级策略：\n\n- **严格相等**：`\"北京\" == \"北京\"`\n- **规范化后相等**：忽略大小写、去空格、日期统一成 ISO 格式\n- **数值容差**：`abs(a - b) < 1e-6`\n- **集合语义**：参数是无序集合时，比较 set 是否相等\n\n```python\nimport re\n\ndef normalize(s: str) -> str:\n    return re.sub(r\"\\s+\", \"\", s).lower()\n\ndef args_equal(a: dict, b: dict, numeric_tol: float = 1e-6) -> bool:\n    if set(a.keys()) != set(b.keys()):\n        return False\n    for k in a:\n        va, vb = a[k], b[k]\n        if isinstance(va, (int, float)) and isinstance(vb, (int, float)):\n            if abs(va - vb) > numeric_tol:\n                return False\n        elif isinstance(va, str) and isinstance(vb, str):\n            if normalize(va) != normalize(vb):\n                return False\n        else:\n            if va != vb:\n                return False\n    return True\n```\n\n---\n\n## 5. 把评测跑成流水线\n\n真实评测通常是一批测试用例（test case），每个用例包含：输入、期望调用、Agent 实际调用。最后汇报**通过率**（pass rate）。\n\n```python\n@dataclass\nclass Case:\n    user_input: str\n    expected: Expected\n    trace: Trace  # 由 Agent 实际执行得到\n\ndef evaluate(cases: list[Case]) -> dict[str, float]:\n    n = len(cases)\n    if n == 0:\n        return {\"selection\": 0.0, \"argument\": 0.0, \"sequence\": 0.0}\n    sel = sum(tool_selection_accuracy(c.trace, c.expected) for c in cases) / n\n    arg = sum(argument_accuracy(c.trace, c.expected) for c in cases) / n\n    seq = sum(sequence_accuracy(c.trace, c.expected) for c in cases) / n\n    return {\"selection\": sel, \"argument\": arg, \"sequence\": seq}\n```\n\n到这里，你就有了一个**完全可复现、可扩展**的 Tool Accuracy 评测器。换成真实 LLM，只要把 `trace` 换成从 LLM 输出解析出来的结果即可。\n\n---\n\n## 关键结论回顾\n\n1. Tool Accuracy 评测的是**行为**，而不是最终文本。\n2. 拆成 selection / argument / sequence 三个子指标，便于定位问题。\n3. 参数比对要有**分级策略**，不能只做字符串相等。\n4. 评测器本身要零依赖、确定性，这样可以跑 CI（持续集成），防止 Prompt 改动悄悄拉低准确率。\n\n```python\nfrom dataclasses import dataclass\nfrom typing import Any\n\n@dataclass\nclass ToolCall:\n    name: str\n    args: dict[str, Any]\n\n@dataclass\nclass Trace:\n    calls: list[ToolCall]\n\n@dataclass\nclass Expected:\n    calls: list[ToolCall]\n\ndef tool_selection_accuracy(trace: Trace, expected: Expected) -> float:\n    n = max(len(trace.calls), len(expected.calls))\n    if n == 0:\n        return 1.0\n    hits = 0\n    for i in range(n):\n        a = trace.calls[i].name if i < len(trace.calls) else None\n        b = expected.calls[i].name if i < len(expected.calls) else None\n        if a == b:\n            hits += 1\n    return hits / n\n\ndef argument_accuracy(trace: Trace, expected: Expected) -> float:\n    n = max(len(trace.calls), len(expected.calls))\n    if n == 0:\n        return 1.0\n    hits = 0\n    for i in range(n):\n        if i >= len(trace.calls) or i >= len(expected.calls):\n            continue\n        if trace.calls[i].name == expected.calls[i].name \\\n           and trace.calls[i].args == expected.calls[i].args:\n            hits += 1\n    return hits / n\n\ndef sequence_accuracy(trace: Trace, expected: Expected) -> float:\n    if len(trace.calls) != len(expected.calls):\n        return 0.0\n    for a, b in zip(trace.calls, expected.calls):\n        if a.name != b.name or a.args != b.args:\n            return 0.0\n    return 1.0\n\nif __name__ == \"__main__\":\n    # 场景：用户说\"帮我查北京天气，并给张三发邮件\"\n    expected = Expected(calls=[\n        ToolCall(\"get_weather\", {\"city\": \"Beijing\"}),\n        ToolCall(\"send_email\", {\"to\": \"zhangsan@example.com\", \"body\": \"sunny\"}),\n    ])\n\n    # Agent 实际调用：第一个对了，第二个参数写错了\n    trace = Trace(calls=[\n        ToolCall(\"get_weather\", {\"city\": \"Beijing\"}),\n        ToolCall(\"send_email\", {\"to\": \"zhangsan@example.com\", \"body\": \"Sunny\"}),\n    ])\n\n    print(\"selection :\", tool_selection_accuracy(trace, expected))  # 1.0\n    print(\"argument  :\", argument_accuracy(trace, expected))        # 0.5\n    print(\"sequence  :\", sequence_accuracy(trace, expected))        # 0.0\n```\n",
+  "quiz": [
+    {
+      "kp": "agent.eval.trajectory",
+      "type": "single_choice",
+      "question": "在评估一个 ReAct 风格智能体的轨迹（trajectory）时，以下哪一项最符合“轨迹”的含义？",
+      "options": [
+        "智能体一次运行中按时间顺序记录的思考、行动与观察序列",
+        "智能体最终返回给用户的唯一答案字符串",
+        "智能体所使用的底层大模型的参数数量",
+        "智能体在训练阶段使用过的全部数据集样本"
+      ],
+      "answer": 0,
+      "explanation": "轨迹强调过程性记录，包括思考、工具调用及环境反馈的时序序列；最终答案只是轨迹的末端产物，模型参数与训练数据都不是轨迹。",
+      "error_tag": "概念混淆",
+      "variant_group": "trajectory_definition"
+    },
+    {
+      "kp": "agent.eval.trajectory",
+      "type": "single_choice",
+      "question": "某智能体在任务中调用了一次搜索工具，返回了错误信息，随后它调整关键词再次搜索并成功。若要评估其轨迹质量，以下哪种做法最合理？",
+      "options": [
+        "只检查最终答案是否正确，忽略中间的错误搜索",
+        "检查轨迹是否包含对错误反馈的识别与策略调整，并据此评分",
+        "因为中间出现了失败，直接判定该轨迹不合格",
+        "统计工具调用总次数，次数越少轨迹越好"
+      ],
+      "answer": 1,
+      "explanation": "轨迹评估关注过程合理性，能否根据环境反馈纠错是重要维度；只看最终答案或一味惩罚失败、单纯追求调用次数少都会丢失过程信息。",
+      "error_tag": "评估维度缺失",
+      "variant_group": "trajectory_quality"
+    },
+    {
+      "kp": "agent.eval.trajectory",
+      "type": "single_choice",
+      "question": "以下哪种做法最有助于发现智能体轨迹中的“幻觉工具调用”问题？",
+      "options": [
+        "检查轨迹中每次工具调用是否对应真实存在的工具及其合法参数",
+        "统计最终答案的字符数",
+        "比较不同任务的运行时间",
+        "查看模型参数量"
+      ],
+      "answer": 0,
+      "explanation": "幻觉工具调用表现为调用了不存在的工具或使用了非法参数，需逐步检查工具调用记录；其他选项与工具调用真实性无关。",
+      "error_tag": "问题定位错误",
+      "variant_group": "trajectory_hallucination"
+    },
+    {
+      "kp": "agent.eval.trajectory",
+      "type": "single_choice",
+      "question": "在对轨迹进行标注时，以下哪项最适合作为“步骤正确性”的标注依据？",
+      "options": [
+        "该步骤的文本是否流畅",
+        "该步骤在当前状态下是否是合理且有助于任务推进的动作",
+        "该步骤是否使用了最多的 token",
+        "该步骤是否由特定模型生成"
+      ],
+      "answer": 1,
+      "explanation": "步骤正确性应基于当前状态判断动作是否合理、是否推进任务；文本流畅度、token 数量和生成模型都不是正确性的直接依据。",
+      "error_tag": "标注标准错误",
+      "variant_group": "trajectory_annotation"
+    },
+    {
+      "kp": "agent.eval.trajectory",
+      "type": "single_choice",
+      "question": "某任务中智能体轨迹的最终答案正确，但中间步骤包含大量无关工具调用。以下评价最合理的是？",
+      "options": [
+        "轨迹完全合格，因为结果正确",
+        "结果合格但轨迹效率较低，过程质量有待提升",
+        "轨迹完全不合格，因为中间步骤多余",
+        "无法评价，必须重新运行"
+      ],
+      "answer": 1,
+      "explanation": "结果正确不代表过程高效；大量无关调用说明效率低，但也不至于完全否定轨迹，应分维度评价。",
+      "error_tag": "评价片面",
+      "variant_group": "trajectory_quality"
+    },
+    {
+      "kp": "agent.eval.trajectory",
+      "type": "single_choice",
+      "question": "在设计轨迹评估 rubric 时，以下哪一组维度较为合理？",
+      "options": [
+        "颜色、字体、排版、长度",
+        "任务完成度、步骤合理性、效率、安全性",
+        "模型名称、版本号、参数量、显存",
+        "用户 ID、时间戳、文件名、路径"
+      ],
+      "answer": 1,
+      "explanation": "轨迹评估 rubric 通常围绕任务完成、过程合理、效率与安全等维度；其他选项属于元数据或无关属性。",
+      "error_tag": "评估维度缺失",
+      "variant_group": "trajectory_rubric"
+    },
+    {
+      "kp": "agent.eval.trajectory",
+      "type": "single_choice",
+      "question": "当轨迹中出现“模型声称已调用某工具但实际没有调用记录”时，最可能的原因是？",
+      "options": [
+        "轨迹日志记录不完整或模型产生了幻觉",
+        "工具本身运行速度太快",
+        "任务难度太低",
+        "用户输入太长"
+      ],
+      "answer": 0,
+      "explanation": "声称调用却无记录，可能是日志遗漏或模型幻觉；与工具速度、任务难度或输入长度无直接因果关系。",
+      "error_tag": "因果误判",
+      "variant_group": "trajectory_hallucination"
+    },
+    {
+      "kp": "agent.eval.trajectory",
+      "type": "single_choice",
+      "question": "以下哪种轨迹评估方法最能捕捉步骤之间的因果依赖？",
+      "options": [
+        "对每一步独立打分后求和",
+        "将轨迹视为序列，分析每步动作对后续状态的影响",
+        "只统计轨迹的总 token 数",
+        "只记录最终答案的对错"
+      ],
+      "answer": 1,
+      "explanation": "将轨迹作为序列并分析动作对后续状态的影响，才能体现因果依赖；独立打分、token 统计和只看结果都无法捕捉。",
+      "error_tag": "方法选择错误",
+      "variant_group": "trajectory_scoring"
+    },
+    {
+      "kp": "agent.eval.trajectory",
+      "type": "single_choice",
+      "question": "在多轮对话智能体轨迹中，以下哪项最适合用来衡量其“上下文保持”能力？",
+      "options": [
+        "每轮回复的字符数",
+        "后续轮次是否一致地引用并正确使用前面轮次提供的信息",
+        "模型加载所需时间",
+        "对话总轮数越少越好"
+      ],
+      "answer": 1,
+      "explanation": "上下文保持体现在后续轮次能否正确引用和利用先前信息；字符数、加载时间和轮数多少都不直接衡量该能力。",
+      "error_tag": "指标选择错误",
+      "variant_group": "trajectory_context"
+    },
+    {
+      "kp": "agent.eval.trajectory",
+      "type": "single_choice",
+      "question": "某团队希望自动检测轨迹中的“循环卡死”现象，以下哪种信号最有效？",
+      "options": [
+        "连续若干步的状态或动作高度相似且任务无进展",
+        "单步响应时间过长",
+        "轨迹总 token 数超过阈值",
+        "最终答案长度过短"
+      ],
+      "answer": 0,
+      "explanation": "循环卡死的典型信号是状态/动作重复且无进展；响应时间长、token 多或答案短都不必然说明卡死。",
+      "error_tag": "信号选择错误",
+      "variant_group": "trajectory_diagnosis"
+    },
+    {
+      "kp": "agent.eval.trajectory",
+      "type": "single_choice",
+      "question": "在评估轨迹安全性时，以下哪项最应被重点关注？",
+      "options": [
+        "轨迹中是否包含泄露敏感信息或执行危险操作的步骤",
+        "轨迹的总步数是否最少",
+        "轨迹的文本是否使用了正式语气",
+        "轨迹是否由最新模型生成"
+      ],
+      "answer": 0,
+      "explanation": "安全性评估关注敏感信息泄露、危险操作等风险步骤；步数、语气和模型版本不属于安全维度。",
+      "error_tag": "评估维度缺失",
+      "variant_group": "trajectory_safety"
+    },
+    {
+      "kp": "agent.eval.trajectory",
+      "type": "single_choice",
+      "question": "以下关于轨迹评估数据集的描述，哪一项最合理？",
+      "options": [
+        "只需包含最终答案正确的轨迹即可",
+        "应包含成功、失败以及部分成功的多样化轨迹，以便全面评估",
+        "应只包含最短的轨迹",
+        "应只包含由最强模型生成的轨迹"
+      ],
+      "answer": 1,
+      "explanation": "多样化轨迹（成功、失败、部分成功）能更全面地检验评估方法；只保留正确、最短或最强模型的轨迹会引入选择偏差。",
+      "error_tag": "数据集偏差",
+      "variant_group": "trajectory_dataset"
+    },
+    {
+      "kp": "agent.eval.trajectory",
+      "type": "single_choice",
+      "question": "在对多条智能体轨迹进行人工或自动评分时，以下哪项最能体现“轨迹级”评估与“结果级”评估的区别？",
+      "options": [
+        "轨迹级评估只看运行耗时，结果级评估只看准确率",
+        "轨迹级评估会考察中间步骤的合理性，结果级评估主要看最终输出",
+        "轨迹级评估必须使用人工，结果级评估必须使用程序",
+        "轨迹级评估不需要任何评价指标，结果级评估才需要"
+      ],
+      "answer": 1,
+      "explanation": "轨迹级评估关注中间推理与行动步骤是否合理，结果级评估聚焦最终输出是否正确；二者都可以自动化或人工进行，也不等同于只看耗时。",
+      "error_tag": "概念混淆",
+      "variant_group": "trajectory_vs_outcome"
+    },
+    {
+      "kp": "agent.eval.trajectory",
+      "type": "single_choice",
+      "question": "假设要比较两个智能体在相同任务集上的表现，以下哪种指标最直接地反映轨迹效率？",
+      "options": [
+        "任务成功率",
+        "完成每个任务平均所需的交互步数或工具调用次数",
+        "模型推理时的显存占用",
+        "提示词模板中的字符总数"
+      ],
+      "answer": 1,
+      "explanation": "轨迹效率通常用完成任务所需步数、工具调用次数等过程指标衡量；成功率是结果指标，显存和提示词长度不直接反映轨迹效率。",
+      "error_tag": "指标选择错误",
+      "variant_group": "trajectory_metrics"
+    },
+    {
+      "kp": "agent.eval.trajectory",
+      "type": "single_choice",
+      "question": "在记录智能体轨迹时，以下哪种信息最有助于后续分析其决策过程？",
+      "options": [
+        "仅记录最终答案的文本",
+        "记录每步的输入状态、模型输出、所选动作及环境返回结果",
+        "只记录运行开始和结束的时间戳",
+        "只记录使用的模型名称和版本号"
+      ],
+      "answer": 1,
+      "explanation": "完整的轨迹应包含每步的状态、动作与观测，才能还原决策过程；只记录答案、时间戳或模型信息都不足以分析中间决策。",
+      "error_tag": "数据记录不完整",
+      "variant_group": "trajectory_logging"
+    },
+    {
+      "kp": "agent.eval.trajectory",
+      "type": "single_choice",
+      "question": "某轨迹评估系统对每一步动作进行打分，最后取平均值作为轨迹分数。这种做法可能忽略以下哪一重要问题？",
+      "options": [
+        "动作的文本长度",
+        "步骤之间的顺序与依赖关系",
+        "模型调用的费用",
+        "工具的类型"
+      ],
+      "answer": 1,
+      "explanation": "简单平均会丢失步骤顺序和前后依赖信息，而轨迹质量往往取决于步骤是否在正确时机以正确顺序执行。",
+      "error_tag": "聚合方式不当",
+      "variant_group": "trajectory_scoring"
+    },
+    {
+      "kp": "agent.eval.trajectory",
+      "type": "single_choice",
+      "question": "以下哪种场景最适合使用轨迹评估而不是仅用最终答案评估？",
+      "options": [
+        "判断一张图片属于哪个类别",
+        "评估多步工具调用智能体在复杂任务中的规划能力",
+        "比较两个模型在单个问答上的回答长度",
+        "测量一段代码的运行时间"
+      ],
+      "answer": 1,
+      "explanation": "多步工具调用智能体的规划与决策过程主要体现在轨迹中，单步分类、回答长度或运行时间都不需要轨迹评估。",
+      "error_tag": "场景误用",
+      "variant_group": "trajectory_use_case"
+    },
+    {
+      "kp": "agent.eval.trajectory",
+      "type": "single_choice",
+      "question": "在自动评估智能体轨迹时，若使用另一个大模型作为评判者，以下哪项是合理的注意事项？",
+      "options": [
+        "评判者模型越小越好，以节省成本",
+        "需要校验评判者模型与人工评分的一致性，避免系统性偏差",
+        "评判者模型应使用与智能体完全相同的提示词",
+        "评判者模型不需要看到完整轨迹，只看最终答案即可"
+      ],
+      "answer": 1,
+      "explanation": "用模型评判轨迹时，应验证其与人工评分的一致性并控制偏差；评判者需要看到完整轨迹，提示词也应针对评判任务设计。",
+      "error_tag": "评估偏差",
+      "variant_group": "llm_as_judge"
+    },
+    {
+      "kp": "agent.eval.trajectory",
+      "type": "single_choice",
+      "question": "某智能体轨迹中连续多步都在重复同一个无效动作。从轨迹评估角度，这主要反映了什么问题？",
+      "options": [
+        "轨迹的最终答案一定错误",
+        "轨迹缺乏有效的自我纠正或状态推进",
+        "工具调用次数太少",
+        "模型的温度参数设置过低"
+      ],
+      "answer": 1,
+      "explanation": "重复无效动作表明智能体未能根据反馈调整策略、推进任务状态；这不必然意味着最终答案错误，也不直接由工具次数或温度决定。",
+      "error_tag": "过程诊断错误",
+      "variant_group": "trajectory_diagnosis"
+    },
+    {
+      "kp": "agent.eval.trajectory",
+      "type": "single_choice",
+      "question": "在对比不同智能体框架的轨迹长度时，以下哪种做法能保证比较相对公平？",
+      "options": [
+        "在完全相同的任务集和工具环境下比较平均步数",
+        "让其中一个框架使用更强的模型，另一个使用更弱的模型",
+        "只挑选每个框架表现最好的几条轨迹比较",
+        "忽略任务难度差异，直接比较总步数"
+      ],
+      "answer": 0,
+      "explanation": "公平比较要求任务集、工具环境等条件一致；使用不同模型、只挑最好样本或忽略任务难度都会引入偏差。",
+      "error_tag": "实验设计缺陷",
+      "variant_group": "trajectory_comparison"
+    },
+    {
+      "kp": "agent.eval.tool_accuracy",
+      "type": "single_choice",
+      "question": "在评估一个智能体的工具调用准确率时，以下哪一项最能直接反映“工具选择是否正确”这一指标？",
+      "options": [
+        "智能体最终回答的语言是否流畅",
+        "智能体在需要调用工具时是否选择了与任务匹配的工具",
+        "智能体调用工具的总次数",
+        "智能体生成回答所消耗的 token 数量"
+      ],
+      "answer": 1,
+      "explanation": "工具准确率关注的是工具选择与调用是否与任务需求匹配，而不是输出文本质量、调用次数或成本。只有选项 1 直接对应“选对工具”。",
+      "error_tag": "概念混淆",
+      "variant_group": "tool_accuracy_definition"
+    },
+    {
+      "kp": "agent.eval.tool_accuracy",
+      "type": "single_choice",
+      "question": "某智能体面对问题“北京现在的天气怎么样？”时，调用了“查询汇率”的工具并返回了结果。从工具准确率的角度看，这次调用属于：",
+      "options": [
+        "正确调用，因为调用了某个工具",
+        "错误调用，因为所选工具与任务意图不匹配",
+        "部分正确，因为返回了结果",
+        "无法判断，因为没有报错"
+      ],
+      "answer": 1,
+      "explanation": "工具准确率要求工具与任务意图匹配。查询天气却调用汇率工具，属于工具选择错误，即使没有报错也不算正确。",
+      "error_tag": "概念混淆",
+      "variant_group": "tool_accuracy_definition"
+    },
+    {
+      "kp": "agent.eval.tool_accuracy",
+      "type": "multi_choice",
+      "question": "关于工具调用准确率与其他指标的关系，以下说法正确的有？（多选）",
+      "options": [
+        "工具调用准确率高，最终任务成功率不一定高",
+        "最终任务成功率高，工具调用准确率不一定高",
+        "工具调用准确率可以单独反映参数是否正确",
+        "工具调用准确率通常需要结合任务成功率一起看"
+      ],
+      "answer": [
+        0,
+        1,
+        3
+      ],
+      "explanation": "工具选对但参数或后续推理出错仍可能导致任务失败，因此两者并不互相决定；工具准确率应结合任务成功率综合评估。工具选择准确率本身不一定覆盖参数正确性，故选项 2 不严谨。",
+      "error_tag": "概念混淆",
+      "variant_group": "tool_accuracy_vs_success"
+    },
+    {
+      "kp": "agent.eval.tool_accuracy",
+      "type": "fill_blank",
+      "question": "工具选择准确率的计算公式是：正确选择工具的任务数除以____。",
+      "options": [],
+      "answer": [
+        "任务总数",
+        "总任务数",
+        "任务总数量",
+        "total tasks"
+      ],
+      "explanation": "准确率是正确数占总数的比例，分母应为任务总数。",
+      "error_tag": "记忆缺失",
+      "variant_group": "tool_accuracy_metric"
+    },
+    {
+      "kp": "agent.eval.tool_accuracy",
+      "type": "fill_blank",
+      "question": "当智能体在不需要调用工具的任务中调用了工具，这种错误常被称为____调用。",
+      "options": [],
+      "answer": [
+        "多余",
+        "冗余",
+        "假阳性",
+        "false positive"
+      ],
+      "explanation": "期望不调用却调用了，称为多余调用或冗余调用，在分类视角下是假阳性。",
+      "error_tag": "记忆缺失",
+      "variant_group": "tool_accuracy_error_types"
+    },
+    {
+      "kp": "agent.eval.tool_accuracy",
+      "type": "fill_blank",
+      "question": "智能体选对了工具但传入的参数不正确，这种错误应归类为工具____错误。",
+      "options": [],
+      "answer": [
+        "参数",
+        "parameter",
+        "arguments"
+      ],
+      "explanation": "工具选对但参数不对，属于工具参数错误，是工具准确率评估中的一种细分错误。",
+      "error_tag": "记忆缺失",
+      "variant_group": "tool_accuracy_error_types"
+    },
+    {
+      "kp": "agent.eval.tool_accuracy",
+      "type": "code_reading",
+      "question": "阅读以下评估代码片段，回答问题：\n\n```python\nexpected = [\"weather\", \"weather\", \"none\", \"exchange_rate\"]\nactual   = [\"weather\", \"exchange_rate\", \"none\", \"exchange_rate\"]\ncorrect = sum(1 for e, a in zip(expected, actual) if e == a)\naccuracy = correct / len(expected)\nprint(accuracy)\n```\n\n输出的 accuracy 是多少？",
+      "options": [],
+      "answer": "0.75",
+      "explanation": "逐项比对：weather==weather 对，weather!=exchange_rate 错，none==none 对，exchange_rate==exchange_rate 对，共 3/4 = 0.75。",
+      "error_tag": "计算错误",
+      "variant_group": "tool_accuracy_code"
+    },
+    {
+      "kp": "agent.eval.tool_accuracy",
+      "type": "code_reading",
+      "question": "阅读以下代码并回答问题：\n\n```python\nexpected = [\"search\", \"none\", \"send_email\"]\nactual   = [\"search\", \"search\", \"send_email\"]\n\nfalse_positive = 0\nfalse_negative = 0\nfor e, a in zip(expected, actual):\n    if e == \"none\" and a != \"none\":\n        false_positive += 1\n    if e != \"none\" and a == \"none\":\n        false_negative += 1\n\nprint(false_positive, false_negative)\n```\n\n输出的两个数字分别是什么？",
+      "options": [],
+      "answer": "1 0",
+      "explanation": "第 2 个任务期望 none 但实际 search，属于多余调用（假阳性），false_positive=1；没有任何期望调用却实际为 none 的情况，false_negative=0。",
+      "error_tag": "边界错误",
+      "variant_group": "tool_accuracy_code"
+    },
+    {
+      "kp": "agent.eval.tool_accuracy",
+      "type": "code_reading",
+      "question": "阅读以下代码并回答问题：\n\n```python\ndef tool_accuracy(expected, actual):\n    n = len(expected)\n    hit = 0\n    for e, a in zip(expected, actual):\n        if e == a:\n            hit += 1\n    return hit / n if n > 0 else 0.0\n\nprint(tool_accuracy([], []))\n```\n\n输出是什么？为什么要这样处理？",
+      "options": [],
+      "answer": "0.0；因为当任务数为 0 时直接做除法会触发除零错误，因此返回 0.0 作为边界保护。",
+      "explanation": "空列表时 n=0，若不处理会 ZeroDivisionError；代码通过三元表达式在 n>0 时才做除法，否则返回 0.0。",
+      "error_tag": "边界错误",
+      "variant_group": "tool_accuracy_code"
+    },
+    {
+      "kp": "agent.eval.tool_accuracy",
+      "type": "scenario",
+      "question": "你正在为一个客服智能体构建工具调用准确率的评测集。该智能体可以调用“查询订单”“发起退款”“查询物流”三个工具，也可以不调用工具直接回答。请说明你会如何设计评测集与计算指标，至少覆盖：期望标注、对照任务、错误分类、指标计算。",
+      "options": [],
+      "answer": null,
+      "explanation": "合理的设计应包含对每个任务标注期望工具（包括 none）、加入无需调用工具的对照任务、记录参数正确性、并按错误类型分类统计，最后以正确数/总数计算准确率。",
+      "error_tag": "边界错误",
+      "variant_group": "tool_accuracy_scenario",
+      "required_keywords": [
+        "期望工具",
+        "参数正确性",
+        "错误分类",
+        "准确率",
+        "对照任务"
+      ]
+    },
+    {
+      "kp": "agent.eval.tool_accuracy",
+      "type": "scenario",
+      "question": "某团队发现其智能体的工具调用准确率高达 95%，但用户实际任务的完成率只有 60%。请分析可能的原因，并说明应如何改进评估方式。",
+      "options": [],
+      "answer": null,
+      "explanation": "工具选择准确率高但任务成功率低，可能是因为参数错误、多步任务中后续步骤出错、工具返回结果未被正确使用等。应补充参数级评估、多步逐步评估，并将工具准确率与任务成功率综合评估。",
+      "error_tag": "概念混淆",
+      "variant_group": "tool_accuracy_scenario",
+      "required_keywords": [
+        "参数错误",
+        "多步任务",
+        "结果未被正确使用",
+        "参数级评估",
+        "逐步评估"
+      ]
+    },
+    {
+      "kp": "agent.eval.tool_accuracy",
+      "type": "scenario",
+      "question": "你的评测脚本把“智能体调用了正确工具但传入了错误参数”的情况计为工具选择正确，从而让准确率虚高。请说明这种计法的问题，并给出修正方案。",
+      "options": [],
+      "answer": null,
+      "explanation": "把参数错误计为选择正确会掩盖真实问题。应将工具选择准确率与参数准确率区分开来统计，分别报告，才能准确反映智能体的工具调用能力。",
+      "error_tag": "概念混淆",
+      "variant_group": "tool_accuracy_scenario",
+      "required_keywords": [
+        "工具选择准确率",
+        "参数准确率",
+        "区分统计",
+        "分别报告",
+        "评测指标"
+      ]
+    },
+    {
+      "kp": "agent.eval.tool_accuracy",
+      "type": "single_choice",
+      "question": "评估工具调用准确率时，通常需要把智能体的实际调用与什么进行比对？",
+      "options": [
+        "智能体的历史调用记录",
+        "用户的口头评价",
+        "人工标注或规则定义的期望工具调用",
+        "模型的参数量"
+      ],
+      "answer": 2,
+      "explanation": "准确率是一种有监督的匹配度量，需要以期望（参考答案）为基准。期望工具调用通常来自人工标注或规则定义。",
+      "error_tag": "概念混淆",
+      "variant_group": "tool_accuracy_definition"
+    },
+    {
+      "kp": "agent.eval.tool_accuracy",
+      "type": "single_choice",
+      "question": "在一个包含 10 个任务的测试集中，智能体有 7 个任务选择了正确的工具，另外 3 个任务选错。工具选择准确率约为多少？",
+      "options": [
+        "30%",
+        "70%",
+        "100%",
+        "无法计算"
+      ],
+      "answer": 1,
+      "explanation": "工具选择准确率 = 正确选择数 / 总任务数 = 7 / 10 = 70%。",
+      "error_tag": "计算错误",
+      "variant_group": "tool_accuracy_metric"
+    },
+    {
+      "kp": "agent.eval.tool_accuracy",
+      "type": "single_choice",
+      "question": "以下哪种情况最适合被判定为“工具参数错误”而不是“工具选择错误”？",
+      "options": [
+        "任务需要查询天气，智能体调用了汇率工具",
+        "任务需要查询天气，智能体调用了天气工具但把城市名写错",
+        "任务不需要任何工具，智能体却调用了工具",
+        "任务需要两个工具，智能体只调用了一个"
+      ],
+      "answer": 1,
+      "explanation": "工具选择错误指选错工具，工具参数错误指工具选对了但参数不对。选项 1 中工具选对、城市参数写错，属于参数错误。",
+      "error_tag": "概念混淆",
+      "variant_group": "tool_accuracy_error_types"
+    },
+    {
+      "kp": "agent.eval.tool_accuracy",
+      "type": "single_choice",
+      "question": "评估工具调用准确率时，如果智能体本不需要调用任何工具却调用了工具，这通常被记为：",
+      "options": [
+        "正确调用",
+        "多余调用（假阳性）",
+        "漏调用（假阴性）",
+        "参数错误"
+      ],
+      "answer": 1,
+      "explanation": "期望是不调用却调用了，属于多余调用，也常称为假阳性。漏调用则是期望调用却未调用。",
+      "error_tag": "概念混淆",
+      "variant_group": "tool_accuracy_error_types"
+    },
+    {
+      "kp": "agent.eval.tool_accuracy",
+      "type": "single_choice",
+      "question": "某任务需要调用“发送邮件”工具，但智能体直接给出了文字答案而未调用任何工具。这属于：",
+      "options": [
+        "多余调用",
+        "漏调用（假阴性）",
+        "参数错误",
+        "工具选择正确"
+      ],
+      "answer": 1,
+      "explanation": "期望调用工具却未调用，属于漏调用，也称假阴性，是工具准确率评估中常见的一类错误。",
+      "error_tag": "概念混淆",
+      "variant_group": "tool_accuracy_error_types"
+    },
+    {
+      "kp": "agent.eval.tool_accuracy",
+      "type": "single_choice",
+      "question": "在评估多步任务中工具调用准确率时，以下哪种做法最合理？",
+      "options": [
+        "只看最后一步是否调用了工具",
+        "逐步比对每一步的工具选择是否与期望一致",
+        "只看总调用次数是否等于期望次数",
+        "只看最终答案是否包含关键词"
+      ],
+      "answer": 1,
+      "explanation": "多步任务中每一步的工具选择都可能影响结果，逐步比对才能准确反映工具选择准确率。只统计次数或只看最后一步会掩盖中间错误。",
+      "error_tag": "边界错误",
+      "variant_group": "tool_accuracy_multistep"
+    },
+    {
+      "kp": "agent.eval.tool_accuracy",
+      "type": "multi_choice",
+      "question": "以下哪些属于评估智能体工具调用准确率时常见的错误类型？（多选）",
+      "options": [
+        "工具选择错误",
+        "工具参数错误",
+        "多余调用",
+        "漏调用",
+        "输出文本错别字"
+      ],
+      "answer": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "explanation": "工具选择错误、参数错误、多余调用、漏调用都与工具调用直接相关，属于工具准确率评估范畴；输出文本错别字属于生成质量，不属于工具调用准确率。",
+      "error_tag": "概念混淆",
+      "variant_group": "tool_accuracy_error_types"
+    },
+    {
+      "kp": "agent.eval.tool_accuracy",
+      "type": "multi_choice",
+      "question": "在设计工具调用准确率的评估集时，以下哪些做法是合理的？（多选）",
+      "options": [
+        "为每个任务标注期望调用的工具",
+        "包含一些不需要调用工具的任务作为对照",
+        "只收集模型容易答对的简单任务",
+        "为需要参数的任务标注关键参数",
+        "把所有任务都设计成需要调用同一个工具"
+      ],
+      "answer": [
+        0,
+        1,
+        3
+      ],
+      "explanation": "评估集需要期望标注和参数标注作为基准，并应包含不需调用工具的对照任务以检测多余调用。只收集简单任务或全部使用同一工具会导致评估偏差，不合理。",
+      "error_tag": "边界错误",
+      "variant_group": "tool_accuracy_dataset_design"
+    }
+  ]
+}

@@ -1,0 +1,612 @@
+{
+  "id": "s2u6l4",
+  "title": "s2u6l4",
+  "kps": [
+    "py.stdlib.subprocess",
+    "py.stdlib.shutil"
+  ],
+  "theory": "## py.stdlib.subprocess\n\n# Python `subprocess` 标准库：让你的程序会「调用」别的程序\n\n> 一句话直觉：**Python 自己的代码解决不了的活儿（比如让 `ffmpeg` 转个视频、让 `git` 拉个代码、让 `pip` 装个包），都可以通过 `subprocess` 启动一个外部进程（external process）来完成，并拿到它的输出结果。**\n\n---\n\n## 1. 为什么需要 `subprocess`？——从系统调用说起\n\n操作系统（Operating System）本身提供了创建进程（process）的能力。在 Python 里我们不会直接写系统调用，而是用标准库 `subprocess` 作为「遥控器」：\n\n- 它可以启动一个新程序（比如 `ping`、`ls`、`python`）。\n- 可以给这个程序传参数（命令行参数，command-line arguments）。\n- 可以捕获它的标准输出（stdout）和标准错误（stderr）。\n- 可以等待它结束并读取退出码（exit code），判断成功或失败。\n\n最基础的入口是 `subprocess.run()`，它是官方推荐的「现代写法」。\n\n```python\nimport subprocess  # 导入标准库\n\n# 运行一个最简单的命令：让系统打印当前工作目录\nresult = subprocess.run([\"pwd\"], capture_output=True, text=True)\n\nprint(\"退出码：\", result.returncode)   # 0 表示成功\nprint(\"标准输出：\", result.stdout)     # 命令打印在屏幕上的内容\n```\n\n**关键结论**：\n\n- 命令和参数要用**列表**写（第 1 个元素是程序名，其余是参数），这样能避免空格被 shell 错误拆分。\n- `capture_output=True` 表示把 stdout/stderr 收进 Python 变量里，而不是直接打印到终端。\n- `text=True` 表示以字符串（`str`）而非字节（`bytes`）返回结果，方便中文处理。\n\n---\n\n## 2. 返回值 `CompletedProcess`：退出码、stdout 与 stderr\n\n`subprocess.run()` 返回一个 `CompletedProcess` 对象，它是我们与子进程（child process）的「沟通结果」。\n\n```python\nimport subprocess\n\n# 故意运行一个不存在的命令，看看会发生什么\nresult = subprocess.run(\n    [\"ls\", \"/root/does_not_exist\"],   # 访问不存在的目录\n    capture_output=True,\n    text=True,\n)\n\nprint(\"returncode =\", result.returncode)   # 通常是 2（非零 = 失败）\nprint(\"stdout     =\", repr(result.stdout)) # 空字符串\nprint(\"stderr     =\", result.stderr)       # 错误信息在这里\n```\n\n**关键结论**：\n\n- `returncode == 0`：命令成功执行。\n- `returncode != 0`：命令失败，原因通常在 `stderr` 里。\n- **`capture_output=True` 一定要配合 `text=True`** 才方便阅读中文；否则拿到的是 `bytes`，需要 `.decode(\"utf-8\")`。\n- `subprocess.run()` 默认不会在非零退出码时抛异常，需要的话显式加 `check=True`。\n\n---\n\n## 3. 异常处理：`check=True`、`FileNotFoundError` 与 `TimeoutExpired`\n\n工程代码里，失败是常态，所以我们必须会「接住」错误。\n\n```python\nimport subprocess\n\n# 情形 A：命令返回非零 → check=True 会抛 CalledProcessError\n try:\n    subprocess.run([\"ls\", \"/no/such/dir\"], check=True, capture_output=True, text=True)\nexcept subprocess.CalledProcessError as e:\n    print(\"命令失败，退出码 =\", e.returncode)\n    print(\"错误输出 =\", e.stderr)\n\n# 情形 B：程序本身不存在 → FileNotFoundError\ntry:\n    subprocess.run([\"this_program_does_not_exist\"], check=True)\nexcept FileNotFoundError as e:\n    print(\"找不到这个可执行程序：\", e.filename)\n\n# 情形 C：命令跑太久 → TimeoutExpired\ntry:\n    subprocess.run([\"sleep\", \"10\"], timeout=1)\nexcept subprocess.TimeoutExpired:\n    print(\"超时了，已终止子进程\")\n```\n\n**关键结论**：\n\n- `check=True`：命令返回非零时抛出 `CalledProcessError`，比自己判断 `returncode` 更工程化。\n- 常见异常三类：`CalledProcessError`（命令失败）、`FileNotFoundError`（命令不存在）、`TimeoutExpired`（超时）。\n- 生产脚本永远要写 `timeout=`，否则一个卡住的命令会拖死整个服务。\n\n---\n\n## 4. 进阶：`Popen` 与「流式」读取\n\n`subprocess.run()` 是「一次执行、一次拿结果」。如果命令会**持续输出**（比如日志、训练进度），就需要 `Popen`（process open 的缩写）。\n\n```python\nimport subprocess\n\n# 逐行读取子进程输出（实时看到 progress）\nproc = subprocess.Popen(\n    [\"python\", \"-c\", \"for i in range(3): print('step', i)\"],\n    stdout=subprocess.PIPE,\n    text=True,\n)\n\nfor line in proc.stdout:   # 边输出边读\n    print(\"子进程说：\", line.rstrip())\n\nproc.wait()                # 等它结束\nprint(\"退出码：\", proc.returncode)\n```\n\n**关键结论**：\n\n- `Popen` 让你**在命令运行期间**就能处理输出，适合长任务。\n- `stdout=subprocess.PIPE` 表示把 stdout 接到管道（pipe），由 Python 读取。\n- 记住最后调用 `.wait()`，否则会留下僵尸进程（zombie process）。\n- 简单任务用 `run()`，需要流式/交互才用 `Popen`。\n\n---\n\n## 5. 安全底线：`shell=True` 与命令注入\n\n`shell=True` 会让命令交给系统的 shell 解析，虽然写起来「像在终端里打字」，但带来严重风险（命令注入，command injection）。\n\n```python\nimport subprocess\n\n# ❌ 危险示例：文件名来自用户输入\nuser_file = \"data.txt; rm -rf ~\"   # 恶意输入\n# subprocess.run(f\"cat {user_file}\", shell=True)  # 千万不要这样写！\n\n# ✅ 安全写法：用列表，不经过 shell\nuser_file = \"data.txt\"\nsubprocess.run([\"cat\", user_file], check=True)\n```\n\n**关键结论**：\n\n- **默认不要用 `shell=True`**。除非你确实需要 shell 特性（通配符、管道、环境变量展开），并且输入完全可信。\n- 用**列表传参**是防注入的第一道防线。\n- 需要用到 shell 能力时，优先在 Python 里组合（比如用 `|` 的场景，可拆成两次 `run()` 或用 Python 处理）。\n\n---\n\n## 小结\n\n| 场景 | 推荐 API |\n|------|----------|\n| 一次性执行 + 拿结果 | `subprocess.run()` |\n| 需要流式 / 交互式输出 | `subprocess.Popen` |\n| 出错就抛异常 | `check=True` |\n| 防止卡死 | `timeout=` |\n| 安全传参 | 用列表，不用 `shell=True` |\n\n```python\nimport subprocess\n\n\ndef run_safely(cmd: list[str], timeout: float = 5.0) -> dict:\n    \"\"\"运行外部命令并返回结构化结果（不抛异常）。\n\n    Args:\n        cmd: 命令 + 参数组成的列表，例如 [\"ls\", \"-l\"]。\n        timeout: 最长等待秒数，避免卡死。\n    Returns:\n        dict，包含 ok / returncode / stdout / stderr。\n    \"\"\"\n    try:\n        proc = subprocess.run(\n            cmd,\n            capture_output=True,   # 收 stdout / stderr\n            text=True,             # 返回 str 而非 bytes\n            timeout=timeout,       # 防卡死\n        )\n        return {\n            \"ok\": proc.returncode == 0,\n            \"returncode\": proc.returncode,\n            \"stdout\": proc.stdout,\n            \"stderr\": proc.stderr,\n        }\n    except FileNotFoundError as e:\n        # 命令本身不存在\n        return {\"ok\": False, \"returncode\": None, \"stdout\": \"\", \"stderr\": f\"命令不存在: {e.filename}\"}\n    except subprocess.TimeoutExpired:\n        return {\"ok\": False, \"returncode\": None, \"stdout\": \"\", \"stderr\": \"超时\"}\n\n\nif __name__ == \"__main__\":\n    # 正常情况：列出当前目录\n    r = run_safely([\"ls\", \"-1\"])\n    print(\"ok =\", r[\"ok\"], \"| stdout 前 3 行：\")\n    print(\"\\n\".join(r[\"stdout\"].splitlines()[:3]))\n\n    # 失败情况：访问不存在的目录\n    r = run_safely([\"ls\", \"/no/such/dir\"])\n    print(\"ok =\", r[\"ok\"], \"| stderr =\", r[\"stderr\"].strip())\n\n    # 超时情况\n    r = run_safely([\"sleep\", \"2\"], timeout=0.3)\n    print(\"ok =\", r[\"ok\"], \"| stderr =\", r[\"stderr\"])\n```\n\n## py.stdlib.shutil\n\n# py.stdlib.shutil：文件与目录操作的标准工具箱\n\n## 一句话直觉\n\n> 你每天都在做「复制文件、移动目录、删除整个文件夹、打包备份」这些事——`shutil`（**sh**ell **util**ities，外壳工具集）就是 Python 标准库里专门干这些脏活累活的模块，用它一行顶十行，而且跨平台安全。\n\n`shutil` 是 Python 标准库（Standard Library）的一部分，无需 `pip install`，直接 `import shutil` 即可。它建立在更底层的 `os` 模块之上，把文件系统（File System）操作封装成高层、易读、跨平台（cross-platform）的 API。\n\n---\n\n## 第 1 节：为什么要用 shutil，而不是手写 os 循环？\n\n如果不用 `shutil`，你想「复制一个文件夹」得自己递归（recursion）遍历、判断是文件还是目录、创建目标目录、再逐个复制——代码长、易漏边界、还可能踩到符号链接（symbolic link）的坑。\n\n`shutil` 提供的核心价值：\n\n- **高层抽象**：`copy`、`copytree`、`move`、`rmtree` 一行搞定。\n- **跨平台**：自动处理 Windows / macOS / Linux 的路径分隔符（path separator）差异。\n- **元数据（metadata）保留**：可选保留权限、时间戳。\n- **安全删除**：`rmtree` 有防护机制，避免误删关键目录。\n\n```python\nimport shutil\nimport os\n\n# 复制单个文件（目标可以是文件路径或目录）\nshutil.copy(\"source.txt\", \"backup.txt\")          # 复制内容 + 权限\nshutil.copy2(\"source.txt\", \"backup2.txt\")        # copy2 = copy + 元数据(时间戳)\n\n# 复制整个目录树（directory tree）\nshutil.copytree(\"my_project\", \"my_project_backup\")\n\n# 移动文件或目录（跨磁盘也能用）\nshutil.move(\"old_name.txt\", \"new_folder/new_name.txt\")\n\n# 删除整个目录树（相当于 rm -rf，但更安全）\nshutil.rmtree(\"temp_dir\")\n```\n\n> 记忆口诀：**copy 管文件，copytree 管目录，move 管搬家，rmtree 管清场。**\n\n---\n\n## 第 2 节：copy 家族——copy / copy2 / copyfile 的区别\n\n`shutil` 里名字带 `copy` 的函数有好几个，初学者最容易混。看下面这张对照表：\n\n| 函数 | 复制内容 | 复制权限 | 复制时间戳 | 目标可以是目录 |\n|------|----------|----------|------------|----------------|\n| `copyfile(src, dst)` | ✅ | ❌ | ❌ | ❌ |\n| `copy(src, dst)` | ✅ | ✅ | ❌ | ✅ |\n| `copy2(src, dst)` | ✅ | ✅ | ✅ | ✅ |\n| `copymode(src, dst)` | ❌ | ✅ | ❌ | — |\n| `copystat(src, dst)` | ❌ | ✅ | ✅ | — |\n\n**工程建议**：默认用 `copy2`，因为它保留最多信息；只有明确不想要元数据时才用 `copy`。\n\n```python\nimport shutil\nimport os\nimport time\n\n# 准备一个源文件\nwith open(\"demo.txt\", \"w\") as f:\n    f.write(\"hello shutil\")\n\ntime.sleep(1)  # 让时间戳有差异，方便观察\n\n# copy2 会保留修改时间\nshutil.copy2(\"demo.txt\", \"demo_copy2.txt\")\n\nprint(\"源文件 mtime:\", os.path.getmtime(\"demo.txt\"))\nprint(\"copy2 mtime:\", os.path.getmtime(\"demo_copy2.txt\"))  # 两者几乎一致\n```\n\n关键点：`copyfile` 要求 `dst` 是**完整文件路径**，不能是目录；而 `copy` / `copy2` 允许 `dst` 是目录，此时同名文件会被放进该目录。\n\n---\n\n## 第 3 节：目录级操作——copytree 与 rmtree\n\n`copytree` 递归复制整个目录，`rmtree` 递归删除整个目录。这两个是最常用、也最容易出事的函数。\n\n```python\nimport shutil\nimport os\n\n# 建立测试目录结构\nos.makedirs(\"project/src\", exist_ok=True)\nos.makedirs(\"project/data\", exist_ok=True)\nwith open(\"project/src/main.py\", \"w\") as f:\n    f.write(\"print('hi')\")\nwith open(\"project/data/info.txt\", \"w\") as f:\n    f.write(\"data\")\n\n# 递归复制\nshutil.copytree(\"project\", \"project_backup\")\nprint(os.listdir(\"project_backup\"))  # ['src', 'data']\n\n# 递归删除\nshutil.rmtree(\"project_backup\")\nprint(os.path.exists(\"project_backup\"))  # False\n```\n\n**重要安全特性**：从 Python 3.12 开始，`rmtree` 默认不会删除符号链接指向的目录，也不会删除文件系统根目录（`/`）——这是防止误操作的护栏。\n\n如果目标目录已存在，`copytree` 默认会报错。这时用 `dirs_exist_ok=True`（Python 3.8+）：\n\n```python\nshutil.copytree(\"project\", \"project_backup\", dirs_exist_ok=True)\n```\n\n---\n\n## 第 4 节：磁盘空间、归档与查找\n\n除了复制/删除，`shutil` 还提供了一些「顺手小工具」：\n\n```python\nimport shutil\n\n# 1) 查询磁盘空间（单位：字节）\ntotal, used, free = shutil.disk_usage(\"/\")\nprint(f\"总: {total/1e9:.1f} GB, 已用: {used/1e9:.1f} GB, 可用: {free/1e9:.1f} GB\")\n\n# 2) 查找可执行文件（类似 which 命令）\nprint(shutil.which(\"python\"))   # 例如 /usr/bin/python\nprint(shutil.which(\"git\"))      # 例如 /usr/bin/git\n\n# 3) 打包成 zip 归档（archive）\nshutil.make_archive(\"backup\", \"zip\", root_dir=\"project\")\n\n# 4) 解包\nshutil.unpack_archive(\"backup.zip\", \"restored\")\n```\n\n`make_archive` 和 `unpack_archive` 支持 `zip`、`tar`、`gztar` 等格式，是写「一键备份脚本」的利器。\n\n> 工程级提示：归档路径若来自用户输入，务必做路径校验，防止目录穿越（directory traversal）攻击。\n\n---\n\n## 第 5 节：工程实践——一个安全的备份工具\n\n把前面知识串起来，写一个真实场景会用到的「带时间戳的备份函数」：\n\n```python\nimport shutil\nimport os\nfrom datetime import datetime\n\ndef backup(source_dir: str, backup_root: str = \"backups\") -> str:\n    \"\"\"把 source_dir 备份到 backup_root 下，目录名带时间戳。\"\"\"\n    if not os.path.isdir(source_dir):\n        raise FileNotFoundError(f\"源目录不存在: {source_dir}\")\n\n    os.makedirs(backup_root, exist_ok=True)\n    stamp = datetime.now().strftime(\"%Y%m%d_%H%M%S\")\n    target = os.path.join(backup_root, f\"{os.path.basename(source_dir)}_{stamp}\")\n\n    # 使用 copytree 并允许目标已存在（避免重复运行时崩溃）\n    shutil.copytree(source_dir, target, dirs_exist_ok=True)\n    return target\n\nprint(backup(\"project\"))\n```\n\n这段代码覆盖了 `shutil` 的核心用法（`copytree`），并体现了工程思维：**输入校验、目录创建、时间戳命名、可重复执行**。\n\n---\n\n## 动手练习\n\n**任务：写一个「项目目录快照 + 自动清理」脚本 `snapshot.py`**\n\n要求：\n\n1. 接收两个命令行参数：`source`（源目录）和 `keep`（保留的最新快照数量，整数）。\n2. 每次运行时，在 `snapshots/` 目录下创建一个名为 `快照名_YYYYMMDD_HHMMSS` 的快照目录，内容是 `source` 的完整副本（用 `copytree`）。\n3. 如果 `snapshots/` 下的快照数量超过 `keep`，删除最旧的快照（用 `rmtree`）。\n4. 如果源目录是文件而不是目录，改为复制该文件（用 `copy2`）。\n5. 运行结束后，用 `shutil.disk_usage` 打印当前磁盘剩余空间。\n\n**验收标准**：\n- 连续运行 3 次，`keep=2`，最终 `snapshots/` 下只剩 2 个快照。\n- 传入不存在的路径时，脚本给出友好报错而不是崩溃。\n- 用 `shutil.which` 提示用户当前 Python 解释器路径。\n\n**提示**：使用 `sys.argv` 读取参数；用 `datetime` 生成时间戳；用 `os.listdir` + `sorted` 找出最旧目录。\n\n```python\nimport shutil\nimport os\nfrom datetime import datetime\n\n\ndef snapshot(source: str, keep: int = 3, root: str = \"snapshots\") -> str:\n    \"\"\"对 source 创建一次带时间戳的快照，并只保留最新 keep 份。\"\"\"\n    if not os.path.exists(source):\n        raise FileNotFoundError(f\"源路径不存在: {source}\")\n\n    os.makedirs(root, exist_ok=True)\n    stamp = datetime.now().strftime(\"%Y%m%d_%H%M%S_%f\")\n    name = f\"{os.path.basename(source.rstrip(os.sep))}_{stamp}\"\n    target = os.path.join(root, name)\n\n    if os.path.isdir(source):\n        shutil.copytree(source, target)          # 目录 -> 递归复制\n    else:\n        os.makedirs(target, exist_ok=True)\n        shutil.copy2(source, target)             # 文件 -> 复制 + 元数据\n\n    # 清理旧快照\n    snaps = sorted(os.path.join(root, d) for d in os.listdir(root))\n    while len(snaps) > keep:\n        shutil.rmtree(snaps.pop(0))              # 删除最旧的\n\n    return target\n\n\nif __name__ == \"__main__\":\n    # 构造一个测试目录\n    os.makedirs(\"demo_proj/src\", exist_ok=True)\n    with open(\"demo_proj/src/app.py\", \"w\") as f:\n        f.write(\"print('hello')\")\n\n    for i in range(3):\n        path = snapshot(\"demo_proj\", keep=2)\n        print(f\"第 {i+1} 次快照: {path}\")\n\n    print(\"剩余快照:\", sorted(os.listdir(\"snapshots\")))\n\n    total, used, free = shutil.disk_usage(\"/\")\n    print(f\"磁盘可用: {free / 1e9:.2f} GB\")\n    print(\"当前 Python:\", shutil.which(\"python\") or shutil.which(\"python3\"))\n```\n",
+  "quiz": [
+    {
+      "kp": "py.stdlib.subprocess",
+      "type": "single_choice",
+      "question": "在 Python 中，运行外部命令并获取其标准输出，以下哪种做法最直接？",
+      "options": [
+        "使用 os.system() 并捕获返回值",
+        "使用 subprocess.run() 并设置 capture_output=True",
+        "使用 subprocess.Popen() 且不调用 communicate()",
+        "使用 sys.execv() 直接替换当前进程"
+      ],
+      "answer": 1,
+      "explanation": "subprocess.run() 配合 capture_output=True 能直接获取标准输出和标准错误，是最常用的方式。os.system() 只能获得退出码，无法获取输出；Popen() 需要额外调用 communicate()；sys.execv() 会替换当前进程。",
+      "error_tag": "对 subprocess 输出捕获方式混淆",
+      "variant_group": "subprocess_run_capture"
+    },
+    {
+      "kp": "py.stdlib.subprocess",
+      "type": "single_choice",
+      "question": "以下代码执行外部命令时，如果需要检查命令是否成功执行（非零退出码视为失败），应使用 subprocess.run() 的哪个参数？",
+      "options": [
+        "shell=True",
+        "check=True",
+        "capture_output=True",
+        "text=True"
+      ],
+      "answer": 1,
+      "explanation": "check=True 会在命令返回非零退出码时抛出 CalledProcessError。shell=True 是控制是否通过 shell 执行；capture_output 和 text 分别控制输出捕获与文本模式。",
+      "error_tag": "混淆 check 与 shell/capture_output 参数",
+      "variant_group": "subprocess_run_check"
+    },
+    {
+      "kp": "py.stdlib.subprocess",
+      "type": "single_choice",
+      "question": "以下哪种方式能正确地在 subprocess.run() 中通过 shell 执行一条包含管道的命令，例如 'ls | grep py'？",
+      "options": [
+        "subprocess.run(['ls | grep py'])",
+        "subprocess.run('ls | grep py', shell=True)",
+        "subprocess.run(['ls', '|', 'grep', 'py'])",
+        "subprocess.run('ls | grep py', shell=False)"
+      ],
+      "answer": 1,
+      "explanation": "shell=True 且命令作为字符串传入时，会交给系统 shell 解释，从而支持管道。传列表且 shell=False 时管道符不会被解释；传列表且 shell=True 时第一个元素被当作 shell 命令，其余作为参数。",
+      "error_tag": "shell 与管道使用错误",
+      "variant_group": "subprocess_shell_pipe"
+    },
+    {
+      "kp": "py.stdlib.subprocess",
+      "type": "single_choice",
+      "question": "以下代码：\nimport subprocess\nr = subprocess.run(['python', '-c', 'print(1/0)'], capture_output=True, text=True)\nprint(r.returncode)\n输出最可能是？",
+      "options": [
+        "0",
+        "1",
+        "None",
+        "抛出异常"
+      ],
+      "answer": 1,
+      "explanation": "子进程中的 Python 因 ZeroDivisionError 异常退出，返回非零退出码（通常为 1）。因为没有设置 check=True，不会抛出异常，r.returncode 为 1。",
+      "error_tag": "误解 returncode 与异常关系",
+      "variant_group": "subprocess_returncode"
+    },
+    {
+      "kp": "py.stdlib.subprocess",
+      "type": "single_choice",
+      "question": "关于 subprocess.run() 和 subprocess.call() 的区别，以下说法正确的是？",
+      "options": [
+        "call() 返回 CompletedProcess 对象，run() 返回退出码",
+        "run() 返回 CompletedProcess 对象，call() 返回退出码",
+        "两者完全等价，只是名称不同",
+        "call() 不支持 shell=True"
+      ],
+      "answer": 1,
+      "explanation": "subprocess.run() 返回 CompletedProcess 实例，便于获取输出和退出码；subprocess.call() 是旧接口，直接返回退出码。",
+      "error_tag": "混淆 run 与 call 返回值",
+      "variant_group": "subprocess_run_vs_call"
+    },
+    {
+      "kp": "py.stdlib.subprocess",
+      "type": "single_choice",
+      "question": "使用 subprocess.Popen() 时，如果不调用 communicate() 或 wait() 就退出程序，可能导致什么问题？",
+      "options": [
+        "子进程会自动被杀死，没有任何问题",
+        "子进程可能变成孤儿进程继续运行，且管道缓冲区可能填满导致死锁",
+        "Python 会抛出 RuntimeError",
+        "子进程的退出码无法获取，但进程一定结束"
+      ],
+      "answer": 1,
+      "explanation": "Popen 不会自动等待子进程。若父进程退出，子进程可能成为孤儿；若使用了管道且不读取输出，缓冲区填满后子进程会阻塞，造成死锁。",
+      "error_tag": "忽略 Popen 等待与管道死锁",
+      "variant_group": "subprocess_popen_deadlock"
+    },
+    {
+      "kp": "py.stdlib.subprocess",
+      "type": "single_choice",
+      "question": "以下哪个参数用于指定子进程的工作目录？",
+      "options": [
+        "cwd",
+        "chdir",
+        "workdir",
+        "path"
+      ],
+      "answer": 0,
+      "explanation": "subprocess 的 cwd 参数用于设置子进程的当前工作目录。chdir 不是 subprocess 参数；workdir 和 path 也不是。",
+      "error_tag": "混淆 cwd 参数",
+      "variant_group": "subprocess_cwd"
+    },
+    {
+      "kp": "py.stdlib.subprocess",
+      "type": "single_choice",
+      "question": "在 subprocess.run() 中，若希望子进程继承当前进程的环境变量并额外添加一个变量，应使用哪个参数？",
+      "options": [
+        "env 参数，传入包含所有环境变量的字典",
+        "environment 参数，传入要添加的键值对",
+        "setenv 参数，传入要设置的变量名",
+        "inherit_env 参数，设为 True"
+      ],
+      "answer": 0,
+      "explanation": "env 参数用于指定子进程的环境变量字典。若希望继承当前环境，通常先复制 os.environ 再修改。其他参数名不存在。",
+      "error_tag": "混淆 env 参数用法",
+      "variant_group": "subprocess_env"
+    },
+    {
+      "kp": "py.stdlib.subprocess",
+      "type": "single_choice",
+      "question": "以下关于 subprocess.DEVNULL 的说法，正确的是？",
+      "options": [
+        "它用于将子进程的输出重定向到空设备，丢弃输出",
+        "它表示子进程的输入为空，不能读取",
+        "它等价于 subprocess.PIPE",
+        "它只能用于 stderr，不能用于 stdout"
+      ],
+      "answer": 0,
+      "explanation": "subprocess.DEVNULL 是一个特殊值，可传给 stdin/stdout/stderr，表示重定向到空设备（丢弃输出或提供空输入）。它不等价于 PIPE。",
+      "error_tag": "误解 DEVNULL 用途",
+      "variant_group": "subprocess_devnull"
+    },
+    {
+      "kp": "py.stdlib.subprocess",
+      "type": "single_choice",
+      "question": "在 Windows 上使用 subprocess.run() 执行命令时，以下哪种做法最可能引发 FileNotFoundError？",
+      "options": [
+        "命令名带 .exe 后缀且存在于 PATH 中",
+        "命令是 shell 内置命令（如 dir）且未指定 shell=True",
+        "使用绝对路径指定可执行文件",
+        "使用 sys.executable 作为命令"
+      ],
+      "answer": 1,
+      "explanation": "未指定 shell=True 时，subprocess 直接查找可执行文件。dir 等是 shell 内置命令，没有对应的可执行文件，因此会抛出 FileNotFoundError。",
+      "error_tag": "Windows 下 shell 内置命令处理",
+      "variant_group": "subprocess_windows_builtin"
+    },
+    {
+      "kp": "py.stdlib.subprocess",
+      "type": "single_choice",
+      "question": "以下代码：\nimport subprocess\nsubprocess.run(['echo', 'hi'], stdout=subprocess.PIPE, text=True)\n关于输出，说法正确的是？",
+      "options": [
+        "输出会直接打印到终端，因为未保存返回值",
+        "输出被捕获到 CompletedProcess 对象中，但未保存返回值所以无法访问",
+        "会抛出 ValueError",
+        "stdout=PIPE 在 text=True 时无效"
+      ],
+      "answer": 1,
+      "explanation": "stdout=PIPE 会捕获输出，不打印到终端。由于没有保存 run() 的返回值，CompletedProcess 对象被丢弃，无法再访问输出。",
+      "error_tag": "忽略 run 返回值导致输出丢失",
+      "variant_group": "subprocess_pipe_no_save"
+    },
+    {
+      "kp": "py.stdlib.subprocess",
+      "type": "single_choice",
+      "question": "关于 subprocess 模块的 timeout 参数，以下说法正确的是？",
+      "options": [
+        "timeout 参数只对 Popen 有效，run() 不支持",
+        "timeout 超时后会杀死子进程并抛出 TimeoutExpired",
+        "timeout 超时后子进程会继续运行，只是调用返回",
+        "timeout 参数单位是毫秒"
+      ],
+      "answer": 1,
+      "explanation": "subprocess.run() 和 Popen.communicate() 都支持 timeout。超时后会杀死子进程并抛出 subprocess.TimeoutExpired。单位是秒。",
+      "error_tag": "误解 timeout 行为",
+      "variant_group": "subprocess_timeout"
+    },
+    {
+      "kp": "py.stdlib.subprocess",
+      "type": "single_choice",
+      "question": "使用 subprocess.run() 执行命令后，以下哪个属性可以获取命令的标准输出（假设已正确捕获）？",
+      "options": [
+        "result.stdout",
+        "result.output",
+        "result.stderr",
+        "result.returncode"
+      ],
+      "answer": 0,
+      "explanation": "CompletedProcess 对象的 stdout 属性保存标准输出；stderr 保存标准错误；returncode 是退出码；output 不是该对象的属性。",
+      "error_tag": "混淆 CompletedProcess 属性",
+      "variant_group": "subprocess_completedprocess"
+    },
+    {
+      "kp": "py.stdlib.subprocess",
+      "type": "single_choice",
+      "question": "以下关于 subprocess.run() 的 text=True 参数，说法正确的是？",
+      "options": [
+        "它会把命令的输出编码为 UTF-8 字节串",
+        "它会把 stdin/stdout/stderr 以文本字符串形式处理",
+        "它等同于 shell=True",
+        "它会把命令的返回值自动转换为字符串"
+      ],
+      "answer": 1,
+      "explanation": "text=True（或 universal_newlines=True）让子进程的输入输出以文本模式（str）处理，而不是默认的字节串。它不影响 shell 行为，也不会改变返回码类型。",
+      "error_tag": "误解 text 参数作用",
+      "variant_group": "subprocess_text_mode"
+    },
+    {
+      "kp": "py.stdlib.subprocess",
+      "type": "single_choice",
+      "question": "以下代码中，subprocess.run(['echo', 'hello']) 在默认情况下（不指定 shell=True）执行时，会怎样？",
+      "options": [
+        "通过系统 shell 解释并执行 echo hello",
+        "直接执行名为 echo 的可执行文件，不经过 shell",
+        "因为 echo 是 shell 内置命令而报错",
+        "等价于 subprocess.run('echo hello', shell=True)"
+      ],
+      "answer": 1,
+      "explanation": "不指定 shell=True 时，第一个参数是命令列表，subprocess 会直接执行该可执行文件而不会经过 shell。因此 echo 需要是系统上真实存在的可执行文件。",
+      "error_tag": "误解 shell 参数与命令列表关系",
+      "variant_group": "subprocess_shell_vs_list"
+    },
+    {
+      "kp": "py.stdlib.subprocess",
+      "type": "single_choice",
+      "question": "在需要向子进程的标准输入发送数据时，subprocess.run() 应使用哪个参数？",
+      "options": [
+        "stdin",
+        "input",
+        "stdout",
+        "args"
+      ],
+      "answer": 1,
+      "explanation": "subprocess.run() 的 input 参数用于向子进程的标准输入传递数据，会自动设置 stdin=PIPE。stdin 参数用于重定向，stdout 用于输出重定向，args 是命令本身。",
+      "error_tag": "混淆 input 与 stdin 参数",
+      "variant_group": "subprocess_input"
+    },
+    {
+      "kp": "py.stdlib.subprocess",
+      "type": "single_choice",
+      "question": "使用 subprocess.Popen() 创建子进程后，如果需要等待子进程结束并获取其退出码，应调用哪个方法？",
+      "options": [
+        "p.start()",
+        "p.wait()",
+        "p.poll()",
+        "p.terminate()"
+      ],
+      "answer": 1,
+      "explanation": "wait() 会阻塞直到子进程结束并返回退出码。poll() 是非阻塞检查，可能返回 None；terminate() 是发送终止信号；start() 不是 Popen 的方法。",
+      "error_tag": "混淆 Popen 的等待与轮询方法",
+      "variant_group": "subprocess_popen_wait"
+    },
+    {
+      "kp": "py.stdlib.subprocess",
+      "type": "single_choice",
+      "question": "以下关于 subprocess.Popen() 的 communicate() 方法，说法正确的是？",
+      "options": [
+        "它只能用于读取标准输出，不能发送输入",
+        "它会等待子进程结束，并可选地发送输入、读取输出",
+        "它等同于调用 wait() 但不读取输出",
+        "它只能在没有使用管道时调用"
+      ],
+      "answer": 1,
+      "explanation": "communicate() 会与子进程交互：发送 input 数据（如果提供），读取 stdout/stderr 直到结束，并等待进程终止。这是避免管道死锁的推荐方式。",
+      "error_tag": "误解 communicate 功能",
+      "variant_group": "subprocess_communicate"
+    },
+    {
+      "kp": "py.stdlib.subprocess",
+      "type": "single_choice",
+      "question": "当 subprocess.run() 抛出 CalledProcessError 时，可以通过哪个属性获取命令的标准错误输出？",
+      "options": [
+        "e.output",
+        "e.stderr",
+        "e.stdout",
+        "e.returncode"
+      ],
+      "answer": 1,
+      "explanation": "CalledProcessError 对象有 stderr 属性保存标准错误；output 是旧式别名（在某些版本中指向 stdout）；stdout 属性保存标准输出；returncode 是退出码。",
+      "error_tag": "混淆 CalledProcessError 属性",
+      "variant_group": "subprocess_exception"
+    },
+    {
+      "kp": "py.stdlib.subprocess",
+      "type": "single_choice",
+      "question": "在 subprocess.run() 中同时使用 capture_output=True 和 stdout=subprocess.PIPE 会怎样？",
+      "options": [
+        "两者等效，可以同时使用",
+        "会引发 ValueError，因为两者不能同时指定",
+        "capture_output 会覆盖 stdout 的设置",
+        "stdout 会被忽略，只捕获标准错误"
+      ],
+      "answer": 1,
+      "explanation": "capture_output=True 已经隐含了 stdout=PIPE 和 stderr=PIPE，如果同时显式指定 stdout 或 stderr，会引发 ValueError。",
+      "error_tag": "重复指定输出捕获参数",
+      "variant_group": "subprocess_capture_conflict"
+    },
+    {
+      "kp": "py.stdlib.shutil",
+      "type": "single_choice",
+      "question": "在使用 shutil.copyfile() 复制文件时，以下哪种情况会抛出异常？",
+      "options": [
+        "源文件与目标文件是同一个文件",
+        "目标文件已存在且为普通文件",
+        "源文件是普通文本文件",
+        "目标路径所在磁盘剩余空间充足"
+      ],
+      "answer": 0,
+      "explanation": "shutil.copyfile() 明确禁止源和目标为同一文件，会抛出 SameFileError。目标已存在、源是普通文件、磁盘空间充足都不会导致异常。",
+      "error_tag": "边界错误",
+      "variant_group": "shutil.copyfile"
+    },
+    {
+      "kp": "py.stdlib.shutil",
+      "type": "single_choice",
+      "question": "shutil.copy(src, dst) 与 shutil.copyfile(src, dst) 的关键区别是什么？",
+      "options": [
+        "copy 会复制权限位，copyfile 不会",
+        "copy 会复制文件内容，copyfile 只复制元数据",
+        "copy 只能复制目录，copyfile 只能复制文件",
+        "两者完全等价，只是名字不同"
+      ],
+      "answer": 0,
+      "explanation": "shutil.copy() 在复制内容的同时会复制权限位（mode），而 copyfile() 只复制文件内容。两者都不能复制目录。",
+      "error_tag": "概念混淆",
+      "variant_group": "shutil.copy vs copyfile"
+    },
+    {
+      "kp": "py.stdlib.shutil",
+      "type": "single_choice",
+      "question": "shutil.chown(path, user, group) 的作用是什么？",
+      "options": [
+        "修改文件的所有者和所属组（依赖底层操作系统的支持）",
+        "修改文件的权限位（如 644、755）",
+        "修改文件的访问时间",
+        "修改文件的扩展名"
+      ],
+      "answer": 0,
+      "explanation": "shutil.chown() 用于更改文件属主和属组，它是对 os.chown() 的封装，可接受用户名/组名。修改权限位应使用 os.chmod()。",
+      "error_tag": "概念混淆",
+      "variant_group": "shutil.chown"
+    },
+    {
+      "kp": "py.stdlib.shutil",
+      "type": "single_choice",
+      "question": "以下哪个函数可以获取终端的列宽（用于格式化输出）？",
+      "options": [
+        "shutil.get_terminal_size()",
+        "shutil.disk_usage('/')",
+        "shutil.which('tty')",
+        "shutil.copyfileobj()"
+      ],
+      "answer": 0,
+      "explanation": "shutil.get_terminal_size() 返回终端大小（columns, lines）。若无终端，则回退到环境变量或默认值。其他选项与该需求无关。",
+      "error_tag": "记忆缺失",
+      "variant_group": "shutil.get_terminal_size"
+    },
+    {
+      "kp": "py.stdlib.shutil",
+      "type": "multi_choice",
+      "question": "关于 shutil.copyfileobj(fsrc, fdst)，下列说法正确的有？",
+      "options": [
+        "它从 fsrc 读取数据并写入 fdst，直到 fsrc 到达 EOF",
+        "它接收的是文件对象，而不是文件路径",
+        "可以通过 length 参数限制复制的字节数",
+        "它只能复制文本文件，不能复制二进制文件",
+        "它会自动关闭 fsrc 和 fdst"
+      ],
+      "answer": [
+        0,
+        1,
+        2
+      ],
+      "explanation": "copyfileobj() 接收文件对象，从 fsrc 读取并写入 fdst 直到 EOF，可用 length 限制字节数。它不区分文本/二进制，也不会自动关闭文件。",
+      "error_tag": "概念混淆",
+      "variant_group": "shutil.copyfileobj"
+    },
+    {
+      "kp": "py.stdlib.shutil",
+      "type": "multi_choice",
+      "question": "以下哪些函数在复制时可能保留文件的元数据（如权限、时间）？",
+      "options": [
+        "shutil.copy",
+        "shutil.copy2",
+        "shutil.copystat",
+        "shutil.copyfile",
+        "shutil.rmtree"
+      ],
+      "answer": [
+        0,
+        1,
+        2
+      ],
+      "explanation": "copy 保留权限位；copy2 保留更多元数据；copystat 专门复制状态信息。copyfile 只复制内容，rmtree 是删除操作，均不保留元数据。",
+      "error_tag": "概念混淆",
+      "variant_group": "shutil 元数据复制"
+    },
+    {
+      "kp": "py.stdlib.shutil",
+      "type": "multi_choice",
+      "question": "关于 shutil.copytree() 的参数，以下说法正确的有？",
+      "options": [
+        "ignore 参数可以接受一个可调用对象，用于过滤要忽略的文件/目录",
+        "dirs_exist_ok=True 时，允许目标目录已存在并合并内容",
+        "symlinks=True 时会复制符号链接本身而非其指向的文件",
+        "copytree 不能复制符号链接，永远跟随链接"
+      ],
+      "answer": [
+        0,
+        1,
+        2
+      ],
+      "explanation": "copytree 支持 ignore 回调、dirs_exist_ok 合并、symlinks 控制链接处理方式。默认情况下会跟随符号链接，但可通过 symlinks=True 复制链接本身，因此 D 错误。",
+      "error_tag": "概念混淆",
+      "variant_group": "shutil.copytree"
+    },
+    {
+      "kp": "py.stdlib.shutil",
+      "type": "fill_blank",
+      "question": "要递归删除一个非空目录及其全部内容，应使用 shutil 模块中的 ______ 函数。",
+      "options": [],
+      "answer": [
+        "rmtree",
+        "shutil.rmtree",
+        "shutil.rmtree()"
+      ],
+      "explanation": "shutil.rmtree(path) 专门用于递归删除目录树，删除空目录可以用 os.rmdir，但非空目录必须用 rmtree。",
+      "error_tag": "记忆缺失",
+      "variant_group": "shutil.rmtree"
+    },
+    {
+      "kp": "py.stdlib.shutil",
+      "type": "fill_blank",
+      "question": "使用 shutil.copyfile(src, dst) 时，如果 src 与 dst 指向同一个文件，会抛出 ______ 异常。",
+      "options": [],
+      "answer": [
+        "SameFileError",
+        "shutil.SameFileError"
+      ],
+      "explanation": "shutil 定义了 SameFileError 异常，当源和目标为同一文件时抛出，用于防止意外清空源文件。",
+      "error_tag": "边界错误",
+      "variant_group": "shutil.copyfile"
+    },
+    {
+      "kp": "py.stdlib.shutil",
+      "type": "code_reading",
+      "question": "阅读以下代码并回答问题：\n\nimport shutil, os\nos.makedirs('src/sub', exist_ok=True)\nopen('src/a.txt', 'w').write('hi')\nshutil.copytree('src', 'dst')\nshutil.copytree('src', 'dst')\n\n请问第二次调用 copytree 时会发生什么？请说明原因。",
+      "options": [],
+      "answer": "第二次调用会抛出 FileExistsError，因为 copytree 默认要求目标目录不存在。如需合并，应传入 dirs_exist_ok=True。",
+      "explanation": "copytree() 在目标已存在且未指定 dirs_exist_ok=True 时，会抛出 FileExistsError，以防止误覆盖已有目录内容。",
+      "error_tag": "边界错误",
+      "variant_group": "shutil.copytree"
+    },
+    {
+      "kp": "py.stdlib.shutil",
+      "type": "code_reading",
+      "question": "阅读以下代码：\n\nimport shutil\nwith open('a.txt', 'w') as f:\n    f.write('hello')\nwith open('a.txt', 'rb') as fsrc, open('b.txt', 'wb') as fdst:\n    shutil.copyfileobj(fsrc, fdst)\n\n请问 b.txt 的内容是什么？为什么？",
+      "options": [],
+      "answer": "b.txt 的内容是 'hello'（5 个字节）。因为 copyfileobj 会从源文件对象读取数据并原样写入目标文件对象，直到读取到 EOF。",
+      "explanation": "copyfileobj 不解析文件内容，只做字节流式的读写，直到 fsrc 读到 EOF。因此 b.txt 与 a.txt 内容一致。",
+      "error_tag": "概念混淆",
+      "variant_group": "shutil.copyfileobj"
+    },
+    {
+      "kp": "py.stdlib.shutil",
+      "type": "scenario",
+      "question": "场景：你正在写一个部署脚本，需要把 build/ 目录整体发布到 /srv/app/，但 /srv/app/ 中已有上一次发布的旧文件，其中还包含一些需要保留的日志文件。请描述你会如何用 shutil 的相关函数实现，并说明为什么直接调用 copytree('build', '/srv/app') 不合适。",
+      "options": [],
+      "answer": null,
+      "explanation": "直接 copytree 会因目标目录已存在而抛出 FileExistsError，无法覆盖发布；应使用 dirs_exist_ok=True 进行合并式复制，把新构建内容合并进现有目录，从而保留旧日志等文件。",
+      "error_tag": "边界错误",
+      "variant_group": "shutil.copytree",
+      "required_keywords": [
+        "FileExistsError",
+        "日志",
+        "复制"
+      ]
+    },
+    {
+      "kp": "py.stdlib.shutil",
+      "type": "single_choice",
+      "question": "shutil.copy2(src, dst) 相对于 shutil.copy(src, dst) 多了什么行为？",
+      "options": [
+        "会尝试保留更多元数据（如修改时间、访问时间）",
+        "会递归复制整个目录树",
+        "会自动覆盖只读文件",
+        "会校验复制内容的哈希值"
+      ],
+      "answer": 0,
+      "explanation": "copy2() 在 copy() 的基础上还会通过 copystat() 复制文件元数据（如 mtime、atime）。它不递归复制目录，也不做哈希校验。",
+      "error_tag": "概念混淆",
+      "variant_group": "shutil.copy2"
+    },
+    {
+      "kp": "py.stdlib.shutil",
+      "type": "single_choice",
+      "question": "shutil.copytree(src, dst) 在复制目录树时，如果 dst 已经存在，默认行为是什么？",
+      "options": [
+        "抛出 FileExistsError",
+        "合并到已有目录中",
+        "先删除 dst 再复制",
+        "静默跳过"
+      ],
+      "answer": 0,
+      "explanation": "copytree() 默认要求目标目录不存在，否则抛出 FileExistsError。要合并或覆盖需使用 dirs_exist_ok=True 参数。",
+      "error_tag": "边界错误",
+      "variant_group": "shutil.copytree"
+    },
+    {
+      "kp": "py.stdlib.shutil",
+      "type": "single_choice",
+      "question": "关于 shutil.rmtree(path) 的行为，以下说法正确的是？",
+      "options": [
+        "它递归删除目录及其所有内容，包括非空目录",
+        "它只能删除空目录",
+        "它会把目录移动到回收站",
+        "它默认会先询问用户确认"
+      ],
+      "answer": 0,
+      "explanation": "shutil.rmtree() 用于递归删除目录树，包括其中的所有文件和子目录。它不能删除单个文件（那是 os.remove 的职责），也不会移动到回收站或询问确认。",
+      "error_tag": "概念混淆",
+      "variant_group": "shutil.rmtree"
+    },
+    {
+      "kp": "py.stdlib.shutil",
+      "type": "single_choice",
+      "question": "shutil.move(src, dst) 与 os.rename(src, dst) 相比，主要优势是什么？",
+      "options": [
+        "当 src 和 dst 跨文件系统时，move 会先复制再删除，而 rename 可能失败",
+        "move 只能移动目录，rename 只能移动文件",
+        "move 会自动进行文件内容校验",
+        "move 不需要目标路径存在"
+      ],
+      "answer": 0,
+      "explanation": "os.rename() 在同一文件系统内重命名/移动很快，但跨文件系统时可能失效；shutil.move() 会检测到跨文件系统并执行“复制+删除”的降级策略。",
+      "error_tag": "概念混淆",
+      "variant_group": "shutil.move"
+    },
+    {
+      "kp": "py.stdlib.shutil",
+      "type": "single_choice",
+      "question": "shutil.disk_usage(path) 返回的对象包含哪三个属性？",
+      "options": [
+        "total、used、free",
+        "size、count、name",
+        "read、write、exec",
+        "inode、block、mount"
+      ],
+      "answer": 0,
+      "explanation": "disk_usage() 返回一个具名元组，包含 total（总空间）、used（已用空间）、free（可用空间），单位是字节。",
+      "error_tag": "记忆缺失",
+      "variant_group": "shutil.disk_usage"
+    },
+    {
+      "kp": "py.stdlib.shutil",
+      "type": "single_choice",
+      "question": "shutil.which('python3') 的作用是什么？",
+      "options": [
+        "在 PATH 环境变量中查找可执行文件并返回其路径（找不到返回 None）",
+        "返回当前 Python 解释器的版本号",
+        "检查 python3 是否为内置模块",
+        "启动一个 python3 子进程"
+      ],
+      "answer": 0,
+      "explanation": "shutil.which() 模拟 shell 的 which 命令，在 PATH 中搜索指定命令，返回可执行文件的绝对路径；未找到返回 None。它不会启动子进程或查询版本。",
+      "error_tag": "概念混淆",
+      "variant_group": "shutil.which"
+    },
+    {
+      "kp": "py.stdlib.shutil",
+      "type": "single_choice",
+      "question": "shutil.make_archive(base_name, 'zip', root_dir) 的参数含义，以下理解正确的是？",
+      "options": [
+        "base_name 是不含扩展名的归档路径，format 决定压缩格式，root_dir 是要打包的源目录",
+        "base_name 是源目录名，root_dir 是输出路径",
+        "format 只能是 'zip'，其他格式不支持",
+        "root_dir 必须是空目录"
+      ],
+      "answer": 0,
+      "explanation": "make_archive(base_name, format, root_dir=...) 中 base_name 是不含扩展名的输出路径，format 决定格式（如 zip、tar、gztar 等），root_dir 是要归档的目录。",
+      "error_tag": "概念混淆",
+      "variant_group": "shutil.make_archive"
+    },
+    {
+      "kp": "py.stdlib.shutil",
+      "type": "single_choice",
+      "question": "shutil.unpack_archive(filename, extract_dir) 用于什么？",
+      "options": [
+        "根据归档文件扩展名自动选择格式并解压到指定目录",
+        "把目录压缩成归档文件",
+        "校验归档文件是否损坏",
+        "列出归档文件中的内容清单"
+      ],
+      "answer": 0,
+      "explanation": "unpack_archive() 是 make_archive() 的逆操作，会根据 filename 的扩展名（如 .zip、.tar.gz）自动选择解压格式并解压到 extract_dir。",
+      "error_tag": "概念混淆",
+      "variant_group": "shutil.unpack_archive"
+    }
+  ]
+}

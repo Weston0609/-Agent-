@@ -1,0 +1,623 @@
+{
+  "id": "s1u4l4",
+  "title": "s1u4l4",
+  "kps": [
+    "py.type.dict_basic",
+    "py.type.dict_method"
+  ],
+  "theory": "## py.type.dict_basic\n\n# py.type.dict_basic：字典基础\n\n## 一句话直觉\n\n字典（dict）就是 Python 里的「通讯录/查表」：你给它一个键（key），它立刻告诉你对应的值（value）。当你要按名字、编号、标签之类的东西快速找数据时，第一个想到的就是它。\n\n本讲义对应课程 `s1u4l4`，知识点 `py.type.dict_basic`，为零基础到工程级准备的字典入门。\n\n---\n\n## 1. 字典是什么：键值对的集合\n\n字典用花括号 `{}` 写，里面是一组 `键: 值` 对，键和值之间用冒号分隔，对与对之间用逗号分隔。\n\n- 键（key）：用来查找的“名字”，必须是不可变（immutable）的类型，如字符串、数字、元组。\n- 值（value）：任意 Python 对象，可变、可嵌套都行。\n\n```python\n# 用花括号创建字典\nperson = {\"name\": \"Alice\", \"age\": 30, \"city\": \"Beijing\"}\n\n# 用 dict() 构造\nempty = dict()                      # 空字典\npairs = dict([(\"a\", 1), (\"b\", 2)]) # 从可迭代的键值对构造\n\nprint(person)        # {'name': 'Alice', 'age': 30, 'city': 'Beijing'}\nprint(pairs)         # {'a': 1, 'b': 2}\n```\n\n**关键结论**：字典不关心顺序（Python 3.7+ 虽然保持插入顺序，但语义上仍按“键”访问），它关心的是“键 → 值”的映射。\n\n---\n\n## 2. 增删改查：四种基本操作\n\n访问用方括号 `d[键]`；赋值 `d[键] = 值` 会更新或新增；删除用 `del d[键]`。\n\n```python\nstock = {\"apple\": 10, \"banana\": 5}\n\n# 查\nprint(stock[\"apple\"])      # 10\n\n# 增 / 改：key 存在就覆盖，不存在就新增\nstock[\"apple\"] = 12        # 改\nstock[\"cherry\"] = 7        # 增\n\n# 删\ndel stock[\"banana\"]\n\nprint(stock)                # {'apple': 12, 'cherry': 7}\n```\n\n如果访问不存在的键，会抛 `KeyError`。工程上更常用 `.get()`，它可以在键不存在时返回一个默认值，避免程序崩溃：\n\n```python\nprint(stock.get(\"apple\"))        # 12\nprint(stock.get(\"durian\"))       # None\nprint(stock.get(\"durian\", 0))    # 0\n```\n\n**关键结论**：习惯用 `.get(key, default)` 替代 `d[key]`，让你的代码在缺失数据时仍能继续运行。\n\n---\n\n## 3. 遍历字典：keys、values、items\n\n字典的三个视图对象（view）让你可以按需遍历：`.keys()`、`.values()`、`.items()`。\n\n```python\nscores = {\"math\": 90, \"english\": 85, \"science\": 92}\n\n# 遍历键\nfor subject in scores.keys():\n    print(subject)\n\n# 遍历值\nfor score in scores.values():\n    print(score)\n\n# 同时拿键和值（工程里最常用）\nfor subject, score in scores.items():\n    print(f\"{subject}: {score}\")\n```\n\n`in` 运算符检查的是“键”是否在字典中，而不是值：\n\n```python\nprint(\"math\" in scores)     # True\nprint(\"history\" in scores)  # False\n```\n\n**关键结论**：`for k, v in d.items()` 是最常见的遍历方式，几乎成了 Python 的“成语”。\n\n---\n\n## 4. 常用方法与嵌套：工程级用法\n\n一些常用方法：`keys()`、`values()`、`items()`、`get()`、`pop()`、`update()`、`setdefault()`、`clear()`。嵌套字典则用来表示层级数据，比如 JSON 配置。\n\n```python\nconfig = {\"db\": {\"host\": \"localhost\", \"port\": 5432}, \"debug\": True}\n\n# 嵌套访问\nprint(config[\"db\"][\"host\"])   # localhost\n\n# setdefault：键不存在时才写入默认值\nconfig.setdefault(\"retries\", 3)\nprint(config[\"retries\"])       # 3\n\n# update：批量更新/合并\nconfig.update({\"debug\": False, \"timeout\": 30})\nprint(config[\"debug\"], config[\"timeout\"])  # False 30\n\n# pop：取出并删除\nport = config[\"db\"].pop(\"port\")\nprint(port, config[\"db\"])      # 5432 {'host': 'localhost'}\n```\n\n**关键结论**：字典可以嵌套任意层，用来表示真实世界的结构化数据；`setdefault`、`update`、`pop` 是写“配置合并 / 缓存”类代码的利器。\n\n---\n\n## 5. 类型提示：用 dict[K, V] 标注字典\n\nPython 3.9+ 支持内置泛型 `dict[K, V]`，`typing` 模块里也有等价的写法。类型提示（type hint）不会被运行时强制，但 IDE、mypy、pyright 等静态检查器（static type checker）会据此帮你提前发现错误。\n\n```python\n# Python 3.9+ 写法\ndef total_price(cart: dict[str, float]) -> float:\n    return sum(cart.values())\n\n# 旧版本兼容写法\nfrom typing import Dict\ndef total_price_compat(cart: Dict[str, float]) -> float:\n    return sum(cart.values())\n\nprint(total_price({\"apple\": 1.5, \"banana\": 2.0}))  # 3.5\n```\n\n官方文档明确指出：类型提示在运行时不会被强制，它们用于静态检查器、IDE 和 linter。也就是说，写错了 `dict[str, float]` 仍然能跑，但检查工具会提醒你。\n\n**关键结论**：给字典加类型提示，是让“工程级代码”可维护的关键一步：`dict[str, int]` 比裸 `dict` 表达力强得多。\n\n---\n\n## 动手练习\n\n**任务**：写一个小脚本 `word_count.py`，统计一段文本中每个单词出现的次数，并按出现次数从高到低打印前 5 个单词。\n\n要求：\n1. 使用字典 `counts` 保存“单词 → 次数”。\n2. 使用 `.get(word, 0) + 1` 或 `collections.Counter` 计数。\n3. 使用 `sorted(counts.items(), key=lambda kv: kv[1], reverse=True)[:5]` 取前 5。\n4. 给 `counts` 加上类型提示 `dict[str, int]`。\n\n示例文本：`\"the quick brown fox jumps over the lazy dog the fox\"`。\n\n预期输出（顺序）：\n```\nthe: 3\nfox: 2\nquick: 1\nbrown: 1\njumps: 1\n```\n\n完成后，试着改成读取一个 `.txt` 文件并做同样统计。\n\n```python\nfrom collections import Counter\n\n# 示例文本\ntext = \"the quick brown fox jumps over the lazy dog the fox\"\nwords = text.split()\n\n# 方法一：手动用 dict.get 计数\ncounts: dict[str, int] = {}\nfor word in words:\n    counts[word] = counts.get(word, 0) + 1\n\n# 方法二：更简洁的 Counter\ncounts2 = Counter(words)\n\n# 取出现次数最多的前 5 个\ntop5 = sorted(counts.items(), key=lambda kv: kv[1], reverse=True)[:5]\n\nfor word, n in top5:\n    print(f\"{word}: {n}\")\n\n# 基础操作演示\nperson = {\"name\": \"Alice\", \"age\": 30}\nprint(person[\"name\"])            # 查\nperson[\"city\"] = \"Beijing\"      # 增\nperson[\"age\"] = 31              # 改\ndel person[\"city\"]               # 删\nprint(person)\nprint(\"name\" in person)          # 成员检查（检查键）\nprint(person.get(\"salary\", 0))   # 缺失时返回默认值\n```\n\n## py.type.dict_method\n\n# 字典方法（dict methods）：从查表到工程实践\n\n> **一句话直觉**：字典（dict）是 Python 里最常用的“键值对仓库”，而 `dict` 的方法（methods）就是你操作这个仓库的“标准工具箱”——学会它们，你写业务代码、做数据处理、实现缓存都会快一个数量级。\n\n本讲义面向零基础到工程级，共 5 个小节，每节都配可运行代码。\n\n---\n\n## 1. 字典是什么？先建立直观\n\n字典（dictionary，`dict`）是一种**可变（mutable）映射（mapping）**：\n\n- 用**键（key）**查找**值（value）**；\n- 键必须**可哈希（hashable）**，比如 `str`、`int`、`tuple`；\n- 值可以是任意对象；\n- 平均查找复杂度 O(1)。\n\n```python\n# 创建一个字典\nuser = {\"name\": \"Alice\", \"age\": 30}\n\n# 用键访问值\nprint(user[\"name\"])        # Alice\n\n# 用键赋值/修改\nuser[\"age\"] = 31\nprint(user)                # {'name': 'Alice', 'age': 31}\n\n# 键不存在时用 [] 会抛 KeyError\n# print(user[\"email\"])     # KeyError: 'email'\n```\n\n这里 `user[\"name\"]` 是**下标访问**，还不是“方法”。下面我们进入正题：`dict` 自带的**方法**。\n\n---\n\n## 2. 最常用的读取三剑客：`get` / `keys` / `values` / `items`\n\n### 2.1 `get(key, default=None)`：查不到也不报错\n\n业务里最常见的场景是“键可能不存在”。用 `[]` 会崩，用 `get` 更安全。\n\n```python\nuser = {\"name\": \"Alice\"}\n\n# 键不存在时返回 None\nprint(user.get(\"email\"))              # None\n\n# 键不存在时返回指定默认值\nprint(user.get(\"email\", \"未填写\"))   # 未填写\n\n# 键存在时正常返回\nprint(user.get(\"name\"))               # Alice\n```\n\n### 2.2 `keys()` / `values()` / `items()`：遍历视图\n\n这三个方法返回的是**视图对象（view object）**，会随字典变化而变化，不是快照。\n\n```python\nscores = {\"math\": 90, \"english\": 85, \"python\": 95}\n\nprint(list(scores.keys()))    # ['math', 'english', 'python']\nprint(list(scores.values()))  # [90, 85, 95]\n\n# items() 返回 (key, value) 元组，是遍历字典最常用的方式\nfor subject, score in scores.items():\n    print(f\"{subject}: {score}\")\n```\n\n### 2.3 视图会“跟着变”\n\n```python\nd = {\"a\": 1}\nks = d.keys()\nprint(list(ks))     # ['a']\nd[\"b\"] = 2\nprint(list(ks))     # ['a', 'b']  —— 视图跟着更新了\n```\n\n---\n\n## 3. 增删改的关键方法：`update` / `setdefault` / `pop` / `popitem` / `clear`\n\n### 3.1 `update(other)`：批量合并/更新\n\n```python\nconfig = {\"host\": \"localhost\", \"port\": 8000}\nconfig.update({\"port\": 9000, \"debug\": True})\nprint(config)  # {'host': 'localhost', 'port': 9000, 'debug': True}\n```\n\n### 3.2 `setdefault(key, default)`：不存在才写入\n\n这是构建“分组”“倒排索引”时的神器。\n\n```python\nwords = [\"apple\", \"banana\", \"avocado\", \"blueberry\"]\nby_first_letter = {}\n\nfor w in words:\n    by_first_letter.setdefault(w[0], []).append(w)\n\nprint(by_first_letter)\n# {'a': ['apple', 'avocado'], 'b': ['banana', 'blueberry']}\n```\n\n### 3.3 `pop` / `popitem` / `clear`\n\n```python\nd = {\"x\": 1, \"y\": 2}\n\n# pop 按键删除并返回值\nprint(d.pop(\"x\"))          # 1\nprint(d.pop(\"z\", None))    # None（键不存在时返回默认值）\nprint(d)                   # {'y': 2}\n\n# popitem 删除并返回最后一个插入的键值对（LIFO）\nkey, value = d.popitem()\nprint(key, value)          # y 2\n\n# clear 清空\nd.clear()\nprint(d)                   # {}\n```\n\n---\n\n## 4. 进阶：`fromkeys` / `copy` / 字典推导式\n\n### 4.1 `fromkeys`：用一组键批量建字典\n\n```python\nkeys = [\"a\", \"b\", \"c\"]\nd = dict.fromkeys(keys, 0)\nprint(d)  # {'a': 0, 'b': 0, 'c': 0}\n```\n\n⚠️ 当默认值是可变对象时，会共享同一个对象（见误区部分）。\n\n### 4.2 `copy()`：浅拷贝\n\n```python\noriginal = {\"a\": [1, 2]}\nshallow = original.copy()\nshallow[\"a\"].append(3)\nprint(original)  # {'a': [1, 2, 3]}  —— 嵌套对象仍是共享的\n```\n\n### 4.3 字典推导式（dict comprehension）\n\n```python\nsquares = {n: n * n for n in range(5)}\nprint(squares)  # {0: 0, 1: 1, 2: 4, 3: 9, 4: 16}\n```\n\n### 4.4 合并运算符（Python 3.9+）\n\n```python\na = {\"x\": 1}\nb = {\"y\": 2}\nprint(a | b)   # {'x': 1, 'y': 2}\na |= b\nprint(a)       # {'x': 1, 'y': 2}\n```\n\n---\n\n## 5. 工程视角：类型标注与方法选择\n\n### 5.1 给字典加类型提示（type hints）\n\n```python\nfrom typing import TypedDict\n\nclass User(TypedDict):\n    name: str\n    age: int\n\nuser: User = {\"name\": \"Alice\", \"age\": 30}\n```\n\n`TypedDict` 能在静态检查器（如 mypy）下发现拼错键、类型错误。\n\n### 5.2 方法选择速查\n\n| 需求 | 推荐方法 |\n|------|----------|\n| 安全取值 | `get` |\n| 遍历键值 | `items()` |\n| 分组/初始化 | `setdefault` |\n| 批量合并 | `update` / `|=` |\n| 安全删除 | `pop(key, default)` |\n| 复制一层 | `copy()` |\n| 结构约束 | `TypedDict` |\n\n---\n\n## 动手练习\n\n**任务：实现一个“单词首字母分组统计器”。**\n\n要求：\n\n1. 给定一段文本，用 `split()` 拆成单词；\n2. 用 `setdefault` 或 `items()` 统计：**每个首字母下有哪些单词**、**每个首字母的单词数量**；\n3. 最终输出形如：`a: 3 -> ['apple', 'avocado', 'ant']`；\n4. 用 `get` 安全读取某个字母的数量，键不存在时返回 0；\n5. 额外用 `TypedDict` 给结果结构加类型提示，并尝试用 mypy 检查。\n\n提示：先构造空字典，遍历单词，用 `word[0].lower()` 作为键。\n\n---\n\n**小结**：`dict` 方法贯穿了从入门到工程的全部环节——安全取值用 `get`，遍历用 `items`，分组用 `setdefault`，合并用 `update`。掌握这套工具箱，你就能写出既简洁又健壮的 Python 数据代码。\n\n```python\nfrom typing import TypedDict, Dict, List\n\n\nclass GroupResult(TypedDict):\n    words: Dict[str, List[str]]\n    counts: Dict[str, int]\n\n\ndef group_by_first_letter(text: str) -> GroupResult:\n    \"\"\"按首字母分组统计单词。\"\"\"\n    words_by_letter: Dict[str, List[str]] = {}\n    counts: Dict[str, int] = {}\n\n    for word in text.split():\n        word = word.strip(\".,!?\").lower()\n        if not word:\n            continue\n        first = word[0]\n        # setdefault 分组：键不存在时先放入空列表\n        words_by_letter.setdefault(first, []).append(word)\n        # update 累加计数，get 安全读取旧值\n        counts[first] = counts.get(first, 0) + 1\n\n    return {\"words\": words_by_letter, \"counts\": counts}\n\n\ndef main() -> None:\n    text = \"Apple banana Avocado blueberry ant Cherry, apple!\"\n    result = group_by_first_letter(text)\n\n    # 按首字母排序输出\n    for letter in sorted(result[\"words\"]):\n        words = result[\"words\"][letter]\n        count = result[\"counts\"].get(letter, 0)\n        print(f\"{letter}: {count} -> {words}\")\n\n    # 演示 get 默认值\n    print(\"z 的数量:\", result[\"counts\"].get(\"z\", 0))\n\n    # 演示 items 遍历\n    for letter, count in result[\"counts\"].items():\n        assert count == len(result[\"words\"][letter])\n\n\nif __name__ == \"__main__\":\n    main()\n```\n",
+  "quiz": [
+    {
+      "kp": "py.type.dict_basic",
+      "type": "single_choice",
+      "question": "执行以下代码后，d 的值是什么？\nd = {'a': 1}\nd['b'] = 2",
+      "options": [
+        "{'a': 1, 'b': 2}",
+        "{'b': 2}",
+        "{'a': 1}",
+        "抛出 KeyError"
+      ],
+      "answer": 0,
+      "explanation": "通过键赋值是新增或更新字典项的方式，键 'b' 不存在时会被追加，原有键 'a' 保留。",
+      "error_tag": "赋值语义误解",
+      "variant_group": "dict_assignment"
+    },
+    {
+      "kp": "py.type.dict_basic",
+      "type": "single_choice",
+      "question": "以下代码的输出是什么？\nd = {'x': 1, 'y': 2}\nprint(d['z'])",
+      "options": [
+        "None",
+        "0",
+        "抛出 KeyError",
+        "抛出 IndexError"
+      ],
+      "answer": 2,
+      "explanation": "使用方括号访问不存在的键会抛出 KeyError，而不是返回 None。",
+      "error_tag": "键访问异常",
+      "variant_group": "dict_key_access"
+    },
+    {
+      "kp": "py.type.dict_basic",
+      "type": "single_choice",
+      "question": "以下代码执行后，d 的值是什么？\nd = {'a': 1, 'b': 2}\nd.clear()",
+      "options": [
+        "{'a': 1, 'b': 2}",
+        "{}",
+        "None",
+        "抛出异常"
+      ],
+      "answer": 1,
+      "explanation": "clear 清空字典中的所有项，d 变为空字典 {}。",
+      "error_tag": "clear语义误解",
+      "variant_group": "dict_delete"
+    },
+    {
+      "kp": "py.type.dict_basic",
+      "type": "single_choice",
+      "question": "以下代码的输出是什么？\nd = {'a': 1}\nprint(list(d.keys()), list(d.values()), list(d.items()))",
+      "options": [
+        "['a'] [1] [('a', 1)]",
+        "['a'] ['a'] [('a', 1)]",
+        "[1] ['a'] [('a', 1)]",
+        "[('a', 1)] [('a', 1)] [('a', 1)]"
+      ],
+      "answer": 0,
+      "explanation": "keys 返回键视图，values 返回值视图，items 返回键值对视图。",
+      "error_tag": "视图方法混淆",
+      "variant_group": "dict_views"
+    },
+    {
+      "kp": "py.type.dict_basic",
+      "type": "single_choice",
+      "question": "以下代码遍历输出什么？\nd = {'a': 1, 'b': 2}\nfor k in d:\n    print(k, end=' ')",
+      "options": [
+        "a 1 b 2",
+        "a b",
+        "1 2",
+        "('a', 1) ('b', 2)"
+      ],
+      "answer": 1,
+      "explanation": "直接 for 遍历字典时迭代的是键，而不是值或键值对。",
+      "error_tag": "遍历对象误解",
+      "variant_group": "dict_iteration"
+    },
+    {
+      "kp": "py.type.dict_basic",
+      "type": "single_choice",
+      "question": "以下代码的输出是什么？\nd = {'a': 1}\nd.setdefault('a', 100)\nprint(d['a'])",
+      "options": [
+        "1",
+        "100",
+        "None",
+        "抛出 KeyError"
+      ],
+      "answer": 0,
+      "explanation": "setdefault 只有在键不存在时才设置默认值；键 'a' 已存在，故保持不变，仍为 1。",
+      "error_tag": "setdefault语义误解",
+      "variant_group": "dict_setdefault"
+    },
+    {
+      "kp": "py.type.dict_basic",
+      "type": "single_choice",
+      "question": "以下代码的输出是什么？\nd = {}\nd.setdefault('a', []).append(1)\nd.setdefault('a', []).append(2)\nprint(d)",
+      "options": [
+        "{'a': [1, 2]}",
+        "{'a': [1]}",
+        "{'a': [2]}",
+        "{'a': []}"
+      ],
+      "answer": 0,
+      "explanation": "第一次 setdefault 创建并返回空列表，第二次键已存在，返回原列表，两次 append 都作用在同一列表上。",
+      "error_tag": "setdefault应用误解",
+      "variant_group": "dict_setdefault"
+    },
+    {
+      "kp": "py.type.dict_basic",
+      "type": "single_choice",
+      "question": "以下代码执行后，d 的值是什么？\nd = {'a': 1}\nd.update({'b': 2, 'a': 100})",
+      "options": [
+        "{'a': 1, 'b': 2}",
+        "{'a': 100, 'b': 2}",
+        "{'b': 2}",
+        "{'a': 1, 'a': 100, 'b': 2}"
+      ],
+      "answer": 1,
+      "explanation": "update 对已存在的键 'a' 覆盖其值，对新键 'b' 新增，故 a 变为 100。",
+      "error_tag": "update覆盖语义",
+      "variant_group": "dict_update"
+    },
+    {
+      "kp": "py.type.dict_basic",
+      "type": "single_choice",
+      "question": "以下代码的输出是什么？\nd = {k: k * 2 for k in range(3)}\nprint(d)",
+      "options": [
+        "{0: 0, 1: 2, 2: 4}",
+        "{0: 0, 1: 1, 2: 2}",
+        "[0, 2, 4]",
+        "{1: 2, 2: 4, 3: 6}"
+      ],
+      "answer": 0,
+      "explanation": "字典推导式 {k: k * 2 for k in range(3)} 生成键 0、1、2，值为 0、2、4。",
+      "error_tag": "字典推导式误解",
+      "variant_group": "dict_comprehension"
+    },
+    {
+      "kp": "py.type.dict_basic",
+      "type": "single_choice",
+      "question": "以下代码能否正常运行？\nd = {[1, 2]: 'x'}",
+      "options": [
+        "可以，键为列表 [1, 2]",
+        "不可以，列表不可哈希，不能作为字典键",
+        "可以，但访问时需要用 d[[1, 2]]",
+        "可以，键会自动转换为元组 (1, 2)"
+      ],
+      "answer": 1,
+      "explanation": "字典的键必须是可哈希对象，列表是可变类型、不可哈希，因此不能作为键。",
+      "error_tag": "键可哈希性误解",
+      "variant_group": "dict_key_constraint"
+    },
+    {
+      "kp": "py.type.dict_basic",
+      "type": "single_choice",
+      "question": "以下代码执行后，d 有几个键值对？\nd = {}\nd[1] = 'a'\nd[True] = 'b'",
+      "options": [
+        "0",
+        "1",
+        "2",
+        "抛出 KeyError"
+      ],
+      "answer": 1,
+      "explanation": "在 Python 中 1 == True 且 hash(1) == hash(True)，因此它们是同一个键，第二次赋值覆盖第一次，只有一个键值对。",
+      "error_tag": "键相等性误解",
+      "variant_group": "dict_key_equality"
+    },
+    {
+      "kp": "py.type.dict_basic",
+      "type": "single_choice",
+      "question": "以下代码的输出是什么？\nd = {'a': 1, 'b': 2, 'c': 3}\nprint(d.pop('z', -1))",
+      "options": [
+        "KeyError",
+        "None",
+        "-1",
+        "'z'"
+      ],
+      "answer": 2,
+      "explanation": "pop 的第二个参数是键不存在时返回的默认值，故返回 -1。",
+      "error_tag": "pop默认值误解",
+      "variant_group": "dict_pop"
+    },
+    {
+      "kp": "py.type.dict_basic",
+      "type": "single_choice",
+      "question": "以下代码的输出是什么？\nd = {'x': 1, 'y': 2}\nprint(d.get('z'))",
+      "options": [
+        "KeyError",
+        "None",
+        "0",
+        "''"
+      ],
+      "answer": 1,
+      "explanation": "dict.get 在键不存在时默认返回 None，这正是它与方括号访问的关键区别。",
+      "error_tag": "get与索引混淆",
+      "variant_group": "dict_key_access"
+    },
+    {
+      "kp": "py.type.dict_basic",
+      "type": "single_choice",
+      "question": "以下代码的输出是什么？\nd = {'x': 1, 'y': 2}\nprint(d.get('z', 0))",
+      "options": [
+        "KeyError",
+        "None",
+        "0",
+        "1"
+      ],
+      "answer": 2,
+      "explanation": "get 的第二个参数是键不存在时返回的默认值，因此返回 0。",
+      "error_tag": "get默认值误解",
+      "variant_group": "dict_key_access"
+    },
+    {
+      "kp": "py.type.dict_basic",
+      "type": "single_choice",
+      "question": "以下代码执行后，d2 的值是什么？\nd1 = {'a': 1}\nd2 = d1\nd2['a'] = 99",
+      "options": [
+        "{'a': 1}",
+        "{'a': 99}",
+        "1",
+        "99"
+      ],
+      "answer": 1,
+      "explanation": "d2 = d1 只赋值引用，两个名字指向同一个字典，修改 d2 也修改了 d1。",
+      "error_tag": "引用赋值误解",
+      "variant_group": "dict_reference"
+    },
+    {
+      "kp": "py.type.dict_basic",
+      "type": "single_choice",
+      "question": "以下代码执行后，d1 和 d2 的值分别是什么？\nd1 = {'a': 1}\nd2 = dict(d1)\nd2['a'] = 99",
+      "options": [
+        "d1 和 d2 都是 {'a': 99}",
+        "d1 是 {'a': 1}，d2 是 {'a': 99}",
+        "d1 是 {'a': 99}，d2 是 {'a': 1}",
+        "两者都抛出异常"
+      ],
+      "answer": 1,
+      "explanation": "dict(d1) 创建浅拷贝，d2 是独立对象，修改它不影响 d1。",
+      "error_tag": "浅拷贝误解",
+      "variant_group": "dict_reference"
+    },
+    {
+      "kp": "py.type.dict_basic",
+      "type": "single_choice",
+      "question": "以下代码的输出是什么？\nd = {'a': 1, 'b': 2, 'c': 3}\nprint(len(d))",
+      "options": [
+        "2",
+        "3",
+        "6",
+        "抛出异常"
+      ],
+      "answer": 1,
+      "explanation": "len 返回字典中键值对的数量，这里有 'a'、'b'、'c' 三个键。",
+      "error_tag": "长度含义误解",
+      "variant_group": "dict_builtin"
+    },
+    {
+      "kp": "py.type.dict_basic",
+      "type": "single_choice",
+      "question": "以下代码的输出是什么？\nd = {'a': 1}\nprint('a' in d, 1 in d)",
+      "options": [
+        "True True",
+        "True False",
+        "False True",
+        "False False"
+      ],
+      "answer": 1,
+      "explanation": "in 运算符对字典检查的是键，不是值，因此 'a' in d 为 True，1 in d 为 False。",
+      "error_tag": "in检查对象误解",
+      "variant_group": "dict_membership"
+    },
+    {
+      "kp": "py.type.dict_basic",
+      "type": "single_choice",
+      "question": "以下代码执行后，d 的值是什么？\nd = {'a': 1, 'b': 2}\ndel d['a']",
+      "options": [
+        "{'a': 1, 'b': 2}",
+        "{'b': 2}",
+        "{'a': 1}",
+        "{}"
+      ],
+      "answer": 1,
+      "explanation": "del 会按键删除对应的键值对，剩余 {'b': 2}。",
+      "error_tag": "del语义误解",
+      "variant_group": "dict_delete"
+    },
+    {
+      "kp": "py.type.dict_basic",
+      "type": "single_choice",
+      "question": "以下代码执行后，d 的值是什么？\nd = {'a': 1, 'b': 2}\nprint(d.pop('a'))",
+      "options": [
+        "1",
+        "2",
+        "{'b': 2}",
+        "抛出 KeyError"
+      ],
+      "answer": 0,
+      "explanation": "pop 删除指定键并返回其值，所以输出 1（同时 d 变为 {'b': 2}）。",
+      "error_tag": "pop返回值误解",
+      "variant_group": "dict_delete"
+    },
+    {
+      "kp": "py.type.dict_method",
+      "type": "single_choice",
+      "question": "关于字典的 get 方法，下列说法正确的是？",
+      "options": [
+        "d.get('k') 在键不存在时会抛出 KeyError",
+        "d.get('k') 在键不存在时返回 None（或指定的默认值）",
+        "d.get('k') 会向字典中插入键 'k' 并赋值为 None",
+        "d.get('k') 只能用于读取，不能提供默认值"
+      ],
+      "answer": 1,
+      "explanation": "get 方法在键不存在时不会抛异常，而是返回 None，或返回调用时传入的第二个参数作为默认值；它也不会修改字典。",
+      "error_tag": "概念混淆",
+      "variant_group": "dict_get"
+    },
+    {
+      "kp": "py.type.dict_method",
+      "type": "single_choice",
+      "question": "执行 d = {'a': 1}; print(d.pop('b', 0)) 的输出是？",
+      "options": [
+        "抛出 KeyError",
+        "None",
+        "0",
+        "1"
+      ],
+      "answer": 2,
+      "explanation": "pop 在键不存在时若有提供默认值则返回该默认值，不抛异常；这里默认值是 0。",
+      "error_tag": "边界错误",
+      "variant_group": "dict_pop"
+    },
+    {
+      "kp": "py.type.dict_method",
+      "type": "single_choice",
+      "question": "关于字典的 popitem() 方法，在 Python 3.7 及以上版本中正确的是？",
+      "options": [
+        "随机删除并返回一个键值对",
+        "删除并返回最后一个插入的键值对（LIFO 顺序）",
+        "删除并返回第一个插入的键值对",
+        "必须传入键作为参数"
+      ],
+      "answer": 1,
+      "explanation": "Python 3.7+ 中 popitem 按 LIFO 顺序移除并返回最后插入的键值对，空字典调用会抛 KeyError。",
+      "error_tag": "记忆缺失",
+      "variant_group": "dict_popitem"
+    },
+    {
+      "kp": "py.type.dict_method",
+      "type": "multi_choice",
+      "question": "下列关于字典方法的说法，正确的有哪些？",
+      "options": [
+        "get 不会因键不存在而抛 KeyError",
+        "使用 d['k'] 读取不存在的键会抛 KeyError",
+        "setdefault 可以用于初始化缺失键的默认值",
+        "pop 在键不存在且未提供默认值时会抛 KeyError",
+        "in 运算符会抛出异常，需要用 has_key 代替"
+      ],
+      "answer": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "explanation": "get 和带默认值的 pop 不会抛键错误，d['k'] 与无默认值 pop 会抛 KeyError，setdefault 可初始化默认值；Python 3 中字典没有 has_key 方法，用 in 即可。",
+      "error_tag": "记忆缺失",
+      "variant_group": "dict_basic_methods"
+    },
+    {
+      "kp": "py.type.dict_method",
+      "type": "multi_choice",
+      "question": "以下哪些操作会修改原字典的内容？",
+      "options": [
+        "d.update({'a': 1})",
+        "d.setdefault('b', 0)",
+        "d.get('c', 9)",
+        "d.pop('a')",
+        "d.keys()"
+      ],
+      "answer": [
+        0,
+        1,
+        3
+      ],
+      "explanation": "update 覆盖/新增键值，setdefault 在键缺失时插入，pop 删除键；get 只是读取，keys 返回视图不修改字典。",
+      "error_tag": "概念混淆",
+      "variant_group": "dict_mutating_ops"
+    },
+    {
+      "kp": "py.type.dict_method",
+      "type": "multi_choice",
+      "question": "关于从两个字典合并数据，下列哪些说法正确？",
+      "options": [
+        "d1.update(d2) 会把 d2 的项并入 d1，键冲突时以 d2 为准",
+        "{**d1, **d2} 生成新字典，冲突时以 d2 为准",
+        "d1 | d2 在 Python 3.9+ 中可用，返回合并后的新字典",
+        "update 会返回合并后的新字典"
+      ],
+      "answer": [
+        0,
+        1,
+        2
+      ],
+      "explanation": "update 原地修改并返回 None；{**d1, **d2} 与 d1 | d2 均生成新字典且右侧优先。",
+      "error_tag": "概念混淆",
+      "variant_group": "dict_merge"
+    },
+    {
+      "kp": "py.type.dict_method",
+      "type": "fill_blank",
+      "question": "请补充代码，使得在键不存在时不抛异常而是返回默认值：\nvalue = d.____('key', 'default')",
+      "options": [],
+      "answer": [
+        "get",
+        "get()"
+      ],
+      "explanation": "字典的 get 方法支持提供默认值，键不存在时返回该默认值而不会抛 KeyError。",
+      "error_tag": "记忆缺失",
+      "variant_group": "dict_get"
+    },
+    {
+      "kp": "py.type.dict_method",
+      "type": "fill_blank",
+      "question": "请补充方法名，使得当键 'k' 不存在时插入并返回默认值，存在时直接返回已有值：\nvalue = d.____('k', [])",
+      "options": [],
+      "answer": [
+        "setdefault",
+        "setdefault()"
+      ],
+      "explanation": "setdefault 在键缺失时插入默认值并返回它，键已存在时返回现有值且不修改字典。",
+      "error_tag": "记忆缺失",
+      "variant_group": "dict_setdefault"
+    },
+    {
+      "kp": "py.type.dict_method",
+      "type": "code_reading",
+      "question": "阅读代码，写出输出结果：\nd = {'a': 1, 'b': 2}\nprint(d.get('c'), d.get('c', 0))\nprint(d)",
+      "options": [],
+      "answer": "None 0\n{'a': 1, 'b': 2}",
+      "explanation": "两次 get 都不会修改字典：第一次未提供默认值返回 None，第二次提供默认值返回 0；字典内容保持不变。",
+      "error_tag": "概念混淆",
+      "variant_group": "dict_get"
+    },
+    {
+      "kp": "py.type.dict_method",
+      "type": "code_reading",
+      "question": "阅读代码，写出输出结果：\nd = {}\nfor k in ['a', 'b', 'a']:\n    d[k] = d.get(k, 0) + 1\nprint(d)",
+      "options": [],
+      "answer": "{'a': 2, 'b': 1}",
+      "explanation": "该模式用 get 读取计数（首次为 0）后自增，实现对元素的统计；'a' 出现两次，'b' 一次。",
+      "error_tag": "边界错误",
+      "variant_group": "dict_counting"
+    },
+    {
+      "kp": "py.type.dict_method",
+      "type": "code_reading",
+      "question": "阅读代码，写出输出结果：\nd = {'x': 1, 'y': 2}\nfor k in list(d):\n    if d[k] % 2 == 1:\n        del d[k]\nprint(d)",
+      "options": [],
+      "answer": "{'y': 2}",
+      "explanation": "先用 list(d) 创建键的副本再遍历，避免遍历中修改字典；仅删除值为奇数的项，剩下 {'y': 2}。",
+      "error_tag": "边界错误",
+      "variant_group": "dict_iter_modify"
+    },
+    {
+      "kp": "py.type.dict_method",
+      "type": "scenario",
+      "question": "某服务统计日志中各接口的请求次数。工程师最初写：counts = {}; for api in logs: if api not in counts: counts[api] = 0; counts[api] += 1。请说明如何用字典方法简化这段代码，并解释为何这样更简洁、语义更清晰。",
+      "options": [],
+      "answer": null,
+      "explanation": "可用 counts[api] = counts.get(api, 0) + 1 替代先判断再初始化的两步操作，逻辑集中、不易漏写初始化，语义即“取当前计数（默认 0）再加一”。",
+      "error_tag": "概念混淆",
+      "variant_group": "dict_counting",
+      "required_keywords": [
+        "api",
+        "counts.get"
+      ]
+    },
+    {
+      "kp": "py.type.dict_method",
+      "type": "single_choice",
+      "question": "关于 d.setdefault('k', [])  的作用，正确的是？",
+      "options": [
+        "总是把键 'k' 的值设为 []",
+        "若键存在则返回其当前值，不修改；若不存在则插入并返回 []",
+        "若键存在则返回 None，不存在则插入 []",
+        "等价于 d['k'] = [] 后返回 d['k']"
+      ],
+      "answer": 1,
+      "explanation": "setdefault 只在键缺失时插入默认值并返回它；键已存在时直接返回已有值，不覆盖。",
+      "error_tag": "概念混淆",
+      "variant_group": "dict_setdefault"
+    },
+    {
+      "kp": "py.type.dict_method",
+      "type": "scenario",
+      "question": "某配置加载函数需要把多个配置字典合并，且后加载的配置应覆盖先加载的同名键。工程师用 base.update(overrides) 后却写 result = base.update(overrides)，导致后续使用 result 出错。请解释 update 的行为，并给出两种得到合并后新字典的正确做法。",
+      "options": [],
+      "answer": null,
+      "explanation": "update 是原地修改并返回 None，因此 result 会是 None。正确做法之一是先用 copy 或 {**base} 构造新字典再 update，之二是使用 {**base, **overrides}（或 Python 3.9+ 的 base | overrides）。",
+      "error_tag": "概念混淆",
+      "variant_group": "dict_update",
+      "required_keywords": [
+        "原地修改",
+        "返回 None",
+        "copy",
+        "字典解包",
+        "字典合并运算符"
+      ]
+    },
+    {
+      "kp": "py.type.dict_method",
+      "type": "single_choice",
+      "question": "下列哪种方式可以安全遍历字典并同时删除某些键？",
+      "options": [
+        "直接在 for k in d: 循环中执行 del d[k]",
+        "遍历 list(d.keys()) 拷贝，再根据条件删除",
+        "遍历 d.items() 并直接 del d[k]",
+        "遍历 d 时用 d.pop(k) 删除当前键"
+      ],
+      "answer": 1,
+      "explanation": "遍历过程中改变字典大小会引发 RuntimeError。先转为列表拷贝再删除是安全的做法。",
+      "error_tag": "边界错误",
+      "variant_group": "dict_iter_modify"
+    },
+    {
+      "kp": "py.type.dict_method",
+      "type": "single_choice",
+      "question": "d = {'x': 1, 'y': 2}; d.update({'y': 3, 'z': 4}) 后，d 的内容是？",
+      "options": [
+        "{'x': 1, 'y': 2, 'z': 4}",
+        "{'x': 1, 'y': 3, 'z': 4}",
+        "{'x': 1, 'y': 3}",
+        "{'y': 2, 'z': 4}"
+      ],
+      "answer": 1,
+      "explanation": "update 会覆盖已存在键的值并新增不存在的键，因此 y 变为 3，并新增 z: 4。",
+      "error_tag": "概念混淆",
+      "variant_group": "dict_update"
+    },
+    {
+      "kp": "py.type.dict_method",
+      "type": "single_choice",
+      "question": "关于字典的 keys()、values()、items() 返回的对象，正确的是？",
+      "options": [
+        "它们返回的都是列表，可以直接索引",
+        "keys() 与 items() 返回视图，支持动态反映字典变化；values() 返回列表",
+        "keys()、values()、items() 都返回动态视图",
+        "items() 返回的是生成器，只能遍历一次"
+      ],
+      "answer": 2,
+      "explanation": "三者返回的都是视图对象，会动态反映字典的变化，但不是列表也不是生成器；items() 视图可多次遍历。",
+      "error_tag": "概念混淆",
+      "variant_group": "dict_views"
+    },
+    {
+      "kp": "py.type.dict_method",
+      "type": "single_choice",
+      "question": "下列哪个键类型不能作为字典的键？",
+      "options": [
+        "整数 3",
+        "字符串 'abc'",
+        "元组 (1, 2)",
+        "列表 [1, 2]"
+      ],
+      "answer": 3,
+      "explanation": "字典键必须可哈希；列表是可变类型，不可哈希，不能作为键。元组若元素均不可变则可哈希，可作键。",
+      "error_tag": "概念混淆",
+      "variant_group": "dict_hashable_key"
+    },
+    {
+      "kp": "py.type.dict_method",
+      "type": "single_choice",
+      "question": "d = {'a': 1, 'b': 2, 'c': 3}; print(list(d)) 的输出是？",
+      "options": [
+        "['a', 'b', 'c']",
+        "[1, 2, 3]",
+        "[('a', 1), ('b', 2), ('c', 3)]",
+        "报错，字典不可迭代"
+      ],
+      "answer": 0,
+      "explanation": "直接迭代字典等价于迭代其键，list(d) 得到键的列表（假设插入顺序为 a、b、c）。",
+      "error_tag": "概念混淆",
+      "variant_group": "dict_iteration"
+    },
+    {
+      "kp": "py.type.dict_method",
+      "type": "single_choice",
+      "question": "执行 d = {}; d[1] = 'a'; d[1.0] = 'b'; print(len(d), d[1]) 的输出是？",
+      "options": [
+        "2 b",
+        "1 b",
+        "2 a",
+        "1 a"
+      ],
+      "answer": 1,
+      "explanation": "1 与 1.0 哈希值相同且相等，视为同一个键，赋值会覆盖，因此字典只有一项，值为 'b'。",
+      "error_tag": "边界错误",
+      "variant_group": "dict_key_equality"
+    },
+    {
+      "kp": "py.type.dict_method",
+      "type": "single_choice",
+      "question": "d = {'a': 1}; d.clear() 与 del d 的区别是？",
+      "options": [
+        "两者都删除变量 d",
+        "clear() 清空字典内容但保留变量，del d 删除变量本身",
+        "clear() 删除变量，del d 清空内容",
+        "两者都只清空内容"
+      ],
+      "answer": 1,
+      "explanation": "clear() 使字典变为空字典，变量仍存在；del d 会解除变量名绑定，之后引用 d 会 NameError。",
+      "error_tag": "概念混淆",
+      "variant_group": "dict_clear_del"
+    }
+  ]
+}

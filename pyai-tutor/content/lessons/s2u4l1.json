@@ -1,0 +1,634 @@
+{
+  "id": "s2u4l1",
+  "title": "s2u4l1",
+  "kps": [
+    "py.typehint.basic",
+    "py.typehint.optional_union"
+  ],
+  "theory": "## py.typehint.basic\n\n## 一句话直觉\n\n**类型注解（Type Hint）** 就像给代码贴上「标签」：它不会改变程序运行结果，但能让编辑器、静态检查器（如 mypy、pyright）和同事一眼看懂「这个变量/函数应该是什么类型」，从而在运行前就发现低级错误。\n\n在 AI 工程里，一个训练脚本动辄几百行，`loss`、`logits`、`batch` 满天飞。类型注解是让你半年后还能读懂自己代码的最低成本手段。\n\n---\n\n## 1. 为什么需要类型注解\n\nPython 是**动态类型（dynamic typing）** 语言：变量本身没有类型，类型属于运行时的对象。好处是灵活，坏处是 IDE 无法在你写 `x + 1` 时判断 `x` 是不是数字。\n\n类型注解让你显式声明意图，而不影响运行时。下面这段代码不写注解也能跑，但写注解后编辑器会立刻报错：\n\n```python\n# 没有注解：编辑器不知道 name 是 str 还是 int\nname = \"Alice\"\n# name + 1  # 编辑器不会提示；运行时才 TypeError\n\n# 有注解：编辑器会直接划红线\nname: str = \"Alice\"\n# name + 1  # 编辑器提示：str 不支持 + int\n```\n\n关键结论：**注解是给「工具」看的元数据，不是给「解释器」用的强制约束**。\n\n---\n\n## 2. 变量注解与函数注解\n\n最基本的两种位置：变量和函数参数/返回值。\n\n```python\ndef add(a: int, b: int) -> int:\n    return a + b\n\nscore: float = 95.5\nnames: list[str] = [\"Alice\", \"Bob\"]\nconfig: dict[str, int] = {\"epochs\": 10}\n```\n\n点几个要点：\n\n- `list[str]`、`dict[str, int]` 是 Python 3.9+ 的内置泛型写法，不需要 `from typing import List`。\n- 函数注解不会在调用时被检查，`add(\"a\", \"b\")` 依然会返回 `\"ab\"`。\n- 返回 `None` 时要写 `-> None`，别省略。\n\n---\n\n## 3. 特殊类型：`Optional`、`Union`、`Any`\n\n真实代码里最常见的三种「不纯」类型：\n\n```python\nfrom typing import Optional, Union, Any\n\ndef find_user(uid: int) -> Optional[str]:\n    # Optional[str] 等价于 str | None\n    return None if uid < 0 else \"Alice\"\n\ndef parse(x: Union[int, str]) -> int:\n    # 3.10+ 可以写成 x: int | str\n    return int(x)\n\ndef debug(obj: Any) -> None:\n    # Any 表示放弃检查；能不用就不用\n    print(obj)\n```\n\n关键结论：\n\n- `Optional[X]` = `X | None`，不是「可选参数」的意思。\n- `Union[A, B]` 用 `|` 写更短，3.10+ 推荐。\n- `Any` 是逃生舱，滥用会让类型检查形同虚设。\n\n---\n\n## 4. 复合类型：`Callable`、`Iterable`、泛型\n\nAI 代码里函数经常接收函数、迭代器，需要表达「容器里装的是什么」。\n\n```python\nfrom collections.abc import Callable, Iterable\n\ndef apply(fn: Callable[[int], int], xs: Iterable[int]) -> list[int]:\n    # Callable[[参数类型], 返回类型]\n    return [fn(x) for x in xs]\n\ndef first[T](xs: list[T]) -> T:\n    # 3.12+ 泛型函数语法；旧版用 TypeVar\n    return xs[0]\n```\n\n关键结论：\n\n- `Callable[[int], int]` 表示「接收 int、返回 int 的函数」。\n- `Iterable[int]` 比 `list[int]` 更宽，能接受生成器、tuple 等。\n- 泛型让「输入什么类型，输出什么类型」的关系被工具理解。\n\n---\n\n## 5. 运行时校验：`typing.get_type_hints` 与 `pydantic`\n\n注解默认不检查，但可以主动读出来做校验。这在配置解析、API 入参场景非常常见。\n\n```python\nfrom typing import get_type_hints\n\ndef greet(name: str, age: int) -> str:\n    return f\"{name} ({age})\"\n\nhints = get_type_hints(greet)\nprint(hints)  # {'name': <class 'str'>, 'age': <class 'int'>, 'return': <class 'str'>}\n```\n\n如果要自动校验，用 `pydantic` 这类库（AI 工程里几乎是标配）：\n\n```python\n# pip install pydantic\nfrom pydantic import BaseModel\n\nclass TrainConfig(BaseModel):\n    epochs: int\n    lr: float = 1e-3\n    model_name: str = \"resnet18\"\n\ncfg = TrainConfig(epochs=\"10\")  # 字符串会被强制转成 int\nprint(cfg.epochs, type(cfg.epochs))  # 10 <class 'int'>\n```\n\n关键结论：注解本身只是数据，`get_type_hints` 和 `pydantic` 把这份数据变成了运行时可执行的校验规则。\n\n---\n\n## 6. 与其他工具链对接\n\n- **mypy**：`mypy train.py` 静态检查，不运行代码。\n- **pyright / Pylance**：VS Code 内置，实时提示。\n- **FastAPI**：直接用类型注解生成 API 文档和请求校验。\n- **dataclasses**：`@dataclass` + 注解即可生成 `__init__`。\n\n```python\nfrom dataclasses import dataclass\n\n@dataclass\nclass Batch:\n    x: list[float]\n    y: list[float]\n```\n\n---\n\n## 动手练习\n\n写一个 `train.py`，包含：\n\n1. 一个函数 `normalize(values: list[float]) -> list[float]`，返回把每个元素除以最大值的列表；若列表为空返回 `[]`。\n2. 一个 `@dataclass` 叫 `Config`，字段：`epochs: int`、`lr: float = 1e-3`、`name: str = \"baseline\"`。\n3. 在文件末尾用 `get_type_hints` 打印 `normalize` 的类型注解，并调用 `normalize([2.0, 4.0, 8.0])`。\n4. 本地安装 `mypy`（`pip install mypy`），执行 `mypy train.py`，确保 0 error。\n\n提交内容：`train.py` 文件 + mypy 成功输出的截图或粘贴文本。\n\n```python\nfrom typing import Optional, get_type_hints\nfrom dataclasses import dataclass\n\n\ndef normalize(values: list[float]) -> list[float]:\n    \"\"\"把列表每个元素除以最大值；空列表返回空列表。\"\"\"\n    if not values:\n        return []\n    m = max(values)\n    return [v / m for v in values]\n\n\n@dataclass\nclass Config:\n    epochs: int\n    lr: float = 1e-3\n    name: str = \"baseline\"\n\n\nif __name__ == \"__main__\":\n    # 打印函数类型注解，直观看到 str -> class 的映射\n    print(get_type_hints(normalize))\n\n    # 正常调用\n    print(normalize([2.0, 4.0, 8.0]))\n\n    # 空列表边界\n    print(normalize([]))\n\n    # dataclass 自动生成的 __init__\n    cfg = Config(epochs=10)\n    print(cfg)\n```\n\n## py.typehint.optional_union\n\n## 一句话直觉\n\n**类型注解（type hint）是写给“人”和“工具”看的说明书，而 `Optional`（可选）和 `Union`（联合）是用来描述“一个值可能是 A，也可能是 B，或者可能是 `None`”这件事的基本语法。**\n\nPython 是动态类型语言，运行时并不强制检查你写下的类型注解；但当你把代码交给 IDE、`mypy`、`pyright`、CI 流水线时，这些注解就会变成提前抓住 bug 的第一道防线。学会 `Optional` 与 `Union`，你就能第一次准确地表达“这个函数可能返回 `None`”这样的真实业务语义——这是工程级 Python 代码的起点。\n\n---\n\n### 1. 从最简单的类型注解开始\n\n在 Python 3.5+ 中，我们可以在变量、函数参数、返回值上写类型标注：\n\n```python\ndef surface_area_of_cube(edge_length: float) -> str:\n    return f\"边长为 {edge_length} 的正方体表面积是 {6 * edge_length ** 2}\"\n```\n\n- `edge_length: float` 表示参数期望是 `float`；\n- `-> str` 表示返回值期望是 `str`。\n\n注意：Python **运行时不会强制检查**这些注解。如果你传一个字符串进去，函数照样跑（然后在 `** 2` 处报错）。注解的真正用途是交给类型检查器（type checker）、IDE 补全和静态分析工具。\n\n---\n\n### 2. 什么时候需要 Union：一个值可能是多种类型\n\n假设我们写一个函数，参数既可以是 `int`，也可以是 `str`（比如把它格式化后输出）：\n\n```python\nfrom typing import Union\n\ndef stringify(value: Union[int, str]) -> str:\n    return str(value)\n```\n\n`Union[int, str]` 读作“`int` 或 `str`”。在 **Python 3.10+** 可以写成更简洁的 `int | str`：\n\n```python\ndef stringify(value: int | str) -> str:\n    return str(value)\n```\n\n`Union` 的价值：让静态检查器知道**所有合法的输入类型**，从而在你漏写分支时给出警告。例如：\n\n```python\nfrom typing import Union\n\ndef double(x: Union[int, float]) -> Union[int, float]:\n    return x * 2   # 类型检查器接受；但如果你调用 double(\"a\")，mypy 会报错\n```\n\n---\n\n### 3. 什么是 Optional：语法糖，等价于 `Union[X, None]`\n\nPython 中函数返回“找不到”的时候，惯例是返回 `None`。类型上要表达“可能是 `X`，也可能是 `None`”，就用 `Optional`：\n\n```python\nfrom typing import Optional\n\ndef find_user(user_id: int) -> Optional[str]:\n    # 模拟查询：找不到返回 None\n    if user_id == 1:\n        return \"Alice\"\n    return None\n```\n\n**关键事实**：`Optional[str]` 不是“可选参数”，而是 **`Union[str, None]` 的等价写法**。等价写法：\n\n```python\nfrom typing import Union\n\ndef find_user(user_id: int) -> Union[str, None]:\n    ...\n```\n\nPython 3.10+ 可直接写 `str | None`。\n\n---\n\n### 4. 处理 Optional 时的正确姿势：显式判空\n\n由于返回值可能是 `None`，调用方必须先判定再使用，否则类型检查器（以及未来的你）都会骂人：\n\n```python\nfrom typing import Optional\n\ndef get_length(s: Optional[str]) -> int:\n    if s is None:\n        return 0\n    return len(s)   # 到这里类型检查器知道 s 是 str\n```\n\n对比一下反例——虽然能跑，但类型检查器会报“`s` 可能是 `None`”：\n\n```python\nfrom typing import Optional\n\ndef bad_length(s: Optional[str]) -> int:\n    return len(s)   # ❌ mypy: Argument 1 to \"len\" has incompatible type \"Optional[str]\"\n```\n\n---\n\n### 5. 工程级写法：Optional 与 Union 的常见组合模式\n\n真实工程里常见三种写法：\n\n```python\nfrom typing import Optional, Union, List, Dict\n\n# ① 默认参数为 None（常见于“未传时用默认值”的语义）\ndef connect(host: str, port: Optional[int] = None) -> None:\n    port = port or 8080\n    print(f\"连接 {host}:{port}\")\n\n# ② 返回多种“成功类型”，或失败时返回 None\ndef parse_int(s: str) -> Optional[int]:\n    try:\n        return int(s)\n    except ValueError:\n        return None\n\n# ③ 字段可能为空（配置、JSON 反序列化场景）\nConfig = Dict[str, Union[str, int, None]]\nconfig: Config = {\"name\": \"svc\", \"port\": 8080, \"desc\": None}\n```\n\n**风格建议**：一个新式项目（Python 3.10+）可以统一用 `X | None`；为兼容旧版本或强调可读性时，`Optional[X]` 也完全没问题。二者在语义上等价。\n\n---\n\n### 一句话总结\n\n- `Union[A, B]` / `A | B`：**“可能是 A 或 B”**；\n- `Optional[X]` / `X | None`：**`Union[X, None]` 的简写**；\n- 使用时记得**显式判空**，让类型检查器帮你把 `None` 相关 bug 提前打死。\n\n```python\nfrom typing import Optional, Union\n\n# 演示 Union：参数可以是 int 或 str\ndef stringify(value: Union[int, str]) -> str:\n    return str(value)\n\n# 演示 Optional：找不到时返回 None\ndef find_user(user_id: int) -> Optional[str]:\n    if user_id == 1:\n        return \"Alice\"\n    return None\n\n# 演示 Optional 参数的正确判空\ndef greet(name: Optional[str]) -> str:\n    if name is None:\n        return \"Hello, guest!\"\n    return f\"Hello, {name}!\"\n\nif __name__ == \"__main__\":\n    print(stringify(42))          # 42\n    print(stringify(\"hi\"))        # hi\n    print(find_user(1))           # Alice\n    print(find_user(2))           # None\n    print(greet(None))            # Hello, guest!\n    print(greet(\"Bob\"))           # Hello, Bob!\n```\n",
+  "quiz": [
+    {
+      "kp": "py.typehint.basic",
+      "type": "single_choice",
+      "question": "在函数定义 `def greet(name: str) -> str: return 'Hi ' + name` 中，`name: str` 和 `-> str` 的作用是什么？",
+      "options": [
+        "运行时强制校验 name 必须是 str，否则抛出 TypeError",
+        "为参数和返回值提供类型注解，供人和静态检查工具参考，运行时不强制",
+        "把 name 自动转换为 str 类型后再传入函数体",
+        "声明该函数只能被 str 类型的调用者使用"
+      ],
+      "answer": 1,
+      "explanation": "类型注解在运行时默认不做任何强制校验，它只是元数据，供阅读者和类型检查工具（如 mypy）使用。传入其他类型对象不会因注解本身报错。",
+      "error_tag": "运行时强制误解",
+      "variant_group": "注解语义"
+    },
+    {
+      "kp": "py.typehint.basic",
+      "type": "single_choice",
+      "question": "以下代码运行结果是？\n```python\ndef f(x: int) -> int:\n    return x\ndef g():\n    return f('hello')\nprint(g())\n```",
+      "options": [
+        "抛出 TypeError，因为 'hello' 不是 int",
+        "打印 hello",
+        "打印 0",
+        "返回 None"
+      ],
+      "answer": 1,
+      "explanation": "类型注解不会在运行时检查或转换类型，f('hello') 正常返回字符串 'hello' 并被打印。",
+      "error_tag": "运行时强制误解",
+      "variant_group": "注解语义"
+    },
+    {
+      "kp": "py.typehint.basic",
+      "type": "single_choice",
+      "question": "关于 `-> None` 注解，以下说法正确的是？",
+      "options": [
+        "表示函数没有返回值（返回 None），主要用于可读性和静态检查",
+        "强制函数必须显式 return None",
+        "运行时会检查函数是否真的返回 None",
+        "表示该函数不能有 return 语句"
+      ],
+      "answer": 0,
+      "explanation": "-> None 只是表达设计意图，运行时不强制；函数仍可以直接 return 而不写值。",
+      "error_tag": "返回注解语义误解",
+      "variant_group": "返回注解"
+    },
+    {
+      "kp": "py.typehint.basic",
+      "type": "single_choice",
+      "question": "以下哪个注解表示『元素为 int 的元组，且长度固定为 2』？",
+      "options": [
+        "tuple[int, int]",
+        "tuple[int, ...]",
+        "Tuple[int]",
+        "List[int]"
+      ],
+      "answer": 0,
+      "explanation": "tuple[int, int] 表示恰好两个 int 的元组；tuple[int, ...] 表示任意长度的 int 元组；List[int] 是列表。",
+      "error_tag": "元组注解混淆",
+      "variant_group": "内置泛型"
+    },
+    {
+      "kp": "py.typehint.basic",
+      "type": "single_choice",
+      "question": "以下哪个注解表示『任意长度的 int 元组』？",
+      "options": [
+        "tuple[int, ...]",
+        "tuple[int, int]",
+        "tuple[int]",
+        "tuple[...]"
+      ],
+      "answer": 0,
+      "explanation": "省略号 ... 表示可变长度；tuple[int] 表示只有一个 int 的元组。",
+      "error_tag": "元组注解混淆",
+      "variant_group": "内置泛型"
+    },
+    {
+      "kp": "py.typehint.basic",
+      "type": "single_choice",
+      "question": "定义抽象基类时，`class Animal:` 中要给子类规定必须实现的 `speak` 方法，常用的类型注解组合是？",
+      "options": [
+        "在方法上用 @abstractmethod，并注解 `def speak(self) -> str: ...`",
+        "把 speak 注解为 `speak: str`",
+        "在类上写 `class Animal(Protocol[str])`",
+        "把返回值注解为 `-> abstract str`"
+      ],
+      "answer": 0,
+      "explanation": "抽象方法用 @abstractmethod 标记，返回注解使用常规类型；Protocol 用于结构化子类型，不能这样带参数写。",
+      "error_tag": "抽象方法注解误解",
+      "variant_group": "抽象方法"
+    },
+    {
+      "kp": "py.typehint.basic",
+      "type": "single_choice",
+      "question": "以下关于 `typing.Any` 的说法正确的是？",
+      "options": [
+        "Any 表示『任意类型』，任何值都可以赋给 Any，Any 也可以赋给任何类型",
+        "Any 等价于 object",
+        "Any 表示该变量必须是动态类型",
+        "Any 表示该值是 None"
+      ],
+      "answer": 0,
+      "explanation": "Any 会关闭该处的类型检查，双向兼容；object 表示所有类型的父类但不允许反向赋值；None 对应 NoneType。",
+      "error_tag": "Any 语义误解",
+      "variant_group": "特殊类型"
+    },
+    {
+      "kp": "py.typehint.basic",
+      "type": "single_choice",
+      "question": "以下哪个注解表示『可迭代的 int 序列』？",
+      "options": [
+        "Iterable[int]",
+        "List[int]",
+        "Sequence[int] 与 List[int] 都不等价于 Iterable[int]",
+        "Iterator[str]"
+      ],
+      "answer": 0,
+      "explanation": "typing.Iterable[int] 表示任何可被迭代、元素为 int 的对象；List 与 Sequence 是更具体的类型。",
+      "error_tag": "抽象容器类型混淆",
+      "variant_group": "抽象容器"
+    },
+    {
+      "kp": "py.typehint.basic",
+      "type": "single_choice",
+      "question": "以下注释片段 `x = []  # type: List[int]` 的含义是？",
+      "options": [
+        "使用类型注释（type comment）声明 x 是 int 列表，主要用于旧代码或需要避开注解语法歧义的场景",
+        "把 x 强制转换成 List[int] 实例",
+        "这是 Python 2 专用语法，Python 3 完全忽略",
+        "它会导入 typing.List"
+      ],
+      "answer": 0,
+      "explanation": "type comment 是 PEP 484 中与变量注解并行的写法，工具会解析它，运行时同样不做强制。",
+      "error_tag": "类型注释形式误解",
+      "variant_group": "注解书写方式"
+    },
+    {
+      "kp": "py.typehint.basic",
+      "type": "single_choice",
+      "question": "以下代码运行结果最可能是？\n```python\nfrom typing import get_type_hints\ndef f(a: int, b: 'str') -> bool:\n    return True\nprint(get_type_hints(f))\n```",
+      "options": [
+        "打印 {'a': <class 'int'>, 'b': <class 'str'>, 'return': <class 'bool'>}",
+        "抛出 NameError，因为 'str' 是字符串",
+        "打印空字典 {}",
+        "打印 {'a': int, 'b': 'str', 'return': bool}"
+      ],
+      "answer": 0,
+      "explanation": "get_type_hints 会解析字符串形式的前向引用（如 'str'），把注解解析为真正的类型对象。",
+      "error_tag": "前向引用解析误解",
+      "variant_group": "前向引用"
+    },
+    {
+      "kp": "py.typehint.basic",
+      "type": "single_choice",
+      "question": "在类方法中要引用『当前类』作为类型注解，且想让它在运行时能正确解析，较稳妥的写法是？",
+      "options": [
+        "使用字符串前向引用，例如 `'Node'`，必要时配合 `from __future__ import annotations`",
+        "直接写 `Node`，Python 会自动延迟解析",
+        "写 `self.__class__` 作为注解",
+        "写 `type(self)` 作为注解"
+      ],
+      "answer": 0,
+      "explanation": "直接写尚未定义的类名会因名称未绑定而报错；使用字符串或 `from __future__ import annotations` 可以把注解延迟解析。",
+      "error_tag": "前向引用写法错误",
+      "variant_group": "前向引用"
+    },
+    {
+      "kp": "py.typehint.basic",
+      "type": "single_choice",
+      "question": "以下关于 `from __future__ import annotations` 的说法正确的是？",
+      "options": [
+        "它让所有注解在运行时以字符串形式保存，从而支持更自由的前向引用和延迟求值",
+        "它启用运行时类型检查",
+        "它把注解转换为 typing 模块中的对象",
+        "它使注解在运行时被完全忽略，连 __annotations__ 都不再存在"
+      ],
+      "answer": 0,
+      "explanation": "该 future 导入让注解以字符串形式存储（PEP 563），便于前向引用，仍需工具解析；它不会启用运行时检查，__annotations__ 仍然存在。",
+      "error_tag": "future annotations 误解",
+      "variant_group": "延迟注解"
+    },
+    {
+      "kp": "py.typehint.basic",
+      "type": "single_choice",
+      "question": "关于变量注解 `count: int = 0`，以下说法正确的是？",
+      "options": [
+        "count 会被自动转换成 int 类型",
+        "该注解会被存入模块的 __annotations__ 中（作为元数据）",
+        "如果之后写 count = 'abc' 会立即报错",
+        "变量注解只能用于函数内部"
+      ],
+      "answer": 1,
+      "explanation": "模块级和类级变量注解会记录在 __annotations__ 中；运行时赋值不会被拦截，也不会自动转换类型。",
+      "error_tag": "注解存储位置误解",
+      "variant_group": "变量注解"
+    },
+    {
+      "kp": "py.typehint.basic",
+      "type": "single_choice",
+      "question": "以下哪个类型注解表示『一个由 int 组成的列表』？",
+      "options": [
+        "list[int]",
+        "list(int)",
+        "[int]",
+        "List<int>"
+      ],
+      "answer": 0,
+      "explanation": "list[int] 是 PEP 585 引入的内置泛型写法；list(int) 是调用语法，[int] 只是含一个元素的列表，List<int> 不是合法语法。",
+      "error_tag": "泛型写法混淆",
+      "variant_group": "内置泛型"
+    },
+    {
+      "kp": "py.typehint.basic",
+      "type": "single_choice",
+      "question": "以下哪个注解表示『键为 str、值为 int 的字典』？",
+      "options": [
+        "dict[str, int]",
+        "dict(str, int)",
+        "dict<str, int>",
+        "dict[str -> int]"
+      ],
+      "answer": 0,
+      "explanation": "dict[str, int] 是标准写法；dict(str, int) 是调用 dict 构造函数的语法，另外两种都不是合法注解。",
+      "error_tag": "泛型写法混淆",
+      "variant_group": "内置泛型"
+    },
+    {
+      "kp": "py.typehint.basic",
+      "type": "single_choice",
+      "question": "以下哪个注解表示『可能是 int 也可能是 None』？",
+      "options": [
+        "int | None",
+        "int & None",
+        "int or None",
+        "int and None"
+      ],
+      "answer": 0,
+      "explanation": "联合类型用 | 表示（PEP 604）；& 是位运算，or/and 是布尔运算，都不是类型联合语法。",
+      "error_tag": "联合类型语法错误",
+      "variant_group": "联合类型"
+    },
+    {
+      "kp": "py.typehint.basic",
+      "type": "single_choice",
+      "question": "在 Python 3.10 之前的版本中，表示『int 或 None』更常写成？",
+      "options": [
+        "Optional[int]（来自 typing）",
+        "Nullable[int]（来自 typing）",
+        "Maybe[int]（来自 typing）",
+        "Union[int]（不写 None）"
+      ],
+      "answer": 0,
+      "explanation": "typing.Optional[int] 等价于 Union[int, None]；typing 中没有 Nullable 或 Maybe。",
+      "error_tag": "typing 名称混淆",
+      "variant_group": "联合类型"
+    },
+    {
+      "kp": "py.typehint.basic",
+      "type": "single_choice",
+      "question": "以下哪个注解表示『可以是 int 或 str』？",
+      "options": [
+        "Union[int, str]",
+        "Intersection[int, str]",
+        "Both[int, str]",
+        "Tuple[int, str]"
+      ],
+      "answer": 0,
+      "explanation": "Union 表示任选其一；Tuple[int, str] 表示一个两元素的元组类型；Intersection 不是 typing 中的类型。",
+      "error_tag": "typing 名称混淆",
+      "variant_group": "联合类型"
+    },
+    {
+      "kp": "py.typehint.basic",
+      "type": "single_choice",
+      "question": "以下哪个注解表示『一个接收 int 并返回 str 的函数』？",
+      "options": [
+        "Callable[[int], str]",
+        "Function[int, str]",
+        "Callable[int, str]",
+        "Func[[int], str]"
+      ],
+      "answer": 0,
+      "explanation": "typing.Callable[[参数类型列表], 返回类型] 是标准写法；括号不能省略，也没有 Function/Func 这样的类型。",
+      "error_tag": "Callable 语法错误",
+      "variant_group": "Callable"
+    },
+    {
+      "kp": "py.typehint.basic",
+      "type": "single_choice",
+      "question": "以下代码中 `*args` 与 `**kwargs` 的合理注解是？\n```python\ndef f(*args: ___, **kwargs: ___) -> None: ...\n```",
+      "options": [
+        "args: int，kwargs: str",
+        "args 注解的是每个参数的类型（如 int），kwargs 注解的是每个值的类型（如 str）",
+        "args 注解整个元组类型，kwargs 注解整个字典类型",
+        "两者都必须用 Any"
+      ],
+      "answer": 1,
+      "explanation": "*args 的注解表示每个位置参数的类型；**kwargs 的注解表示每个关键字参数值的类型，而不是整个容器类型。",
+      "error_tag": "变长参数注解误解",
+      "variant_group": "变长参数"
+    },
+    {
+      "kp": "py.typehint.optional_union",
+      "type": "single_choice",
+      "question": "在 Python 类型注解中，表达式 `Optional[int]` 的含义是以下哪一项？",
+      "options": [
+        "只能是 int 类型",
+        "可以是 int 类型，也可以是 None",
+        "可以是任意类型",
+        "必须是 None"
+      ],
+      "answer": 1,
+      "explanation": "Optional[X] 等价于 Union[X, None]，表示该值要么是 X 类型，要么是 None；它并没有放宽到任意类型，也不是只能为 None。",
+      "error_tag": "概念混淆",
+      "variant_group": "optional_含义"
+    },
+    {
+      "kp": "py.typehint.optional_union",
+      "type": "single_choice",
+      "question": "下列哪个表达式与 `Union[int, str]` 的含义完全等价？",
+      "options": [
+        "Union[str, int]",
+        "Optional[Union[int, str]]",
+        "Union[int, str, None]",
+        "int | str 之外的写法都不等价"
+      ],
+      "answer": 0,
+      "explanation": "Union 中的类型顺序不影响语义，Union[int, str] 与 Union[str, int] 等价。Optional[Union[int, str]] 和 Union[int, str, None] 都额外允许了 None，不等价。",
+      "error_tag": "概念混淆",
+      "variant_group": "union_等价性"
+    },
+    {
+      "kp": "py.typehint.optional_union",
+      "type": "multi_choice",
+      "question": "下列哪些写法与 `Optional[float]` 语义等价？（多选）",
+      "options": [
+        "Union[float, None]",
+        "float | None（Python 3.10+）",
+        "Union[float, int]",
+        "Optional[Union[float]]"
+      ],
+      "answer": [
+        0,
+        1,
+        3
+      ],
+      "explanation": "Optional[float] 即 Union[float, None]。float | None 是 3.10+ 的等价写法；Optional[Union[float]] 等价于 Optional[float]。Union[float, int] 不含 None，不等价。",
+      "error_tag": "概念混淆",
+      "variant_group": "optional_等价性"
+    },
+    {
+      "kp": "py.typehint.optional_union",
+      "type": "multi_choice",
+      "question": "关于 Union 和 Optional，下列说法正确的有哪些？（多选）",
+      "options": [
+        "Optional[X] 是 Union[X, None] 的简写",
+        "Union 中多个类型只要匹配其一即可",
+        "Optional 只能用于返回值，不能用于参数注解",
+        "Union 允许把 None 作为一个成员类型"
+      ],
+      "answer": [
+        0,
+        1,
+        3
+      ],
+      "explanation": "Optional 是 Union[X, None] 的简写；Union 表示“之一”；None 可作为 Union 成员。Optional 可用于参数、返回值、变量等各种注解位置，故第三项错误。",
+      "error_tag": "概念混淆",
+      "variant_group": "optional_含义"
+    },
+    {
+      "kp": "py.typehint.optional_union",
+      "type": "multi_choice",
+      "question": "以下哪些场景适合把类型标注为包含 None（如 Optional 或 X | None）？（多选）",
+      "options": [
+        "查找函数在未找到时返回 None",
+        "可选的配置项，未设置时为 None",
+        "函数保证一定返回非空字符串时的返回值",
+        "字典 .get(key) 的返回值"
+      ],
+      "answer": [
+        0,
+        1,
+        3
+      ],
+      "explanation": "查找可能未命中、可选配置未提供、dict.get 未命中时都会得到 None，适合标注可选类型。函数保证返回非空字符串时不应包含 None。",
+      "error_tag": "概念混淆",
+      "variant_group": "optional_适用场景"
+    },
+    {
+      "kp": "py.typehint.optional_union",
+      "type": "multi_choice",
+      "question": "关于 `Optional` 的常见误区，下列判断错误的有哪些？（多选，选出错误说法）",
+      "options": [
+        "Optional[int] 表示“这个 int 是可选的，可以不用传”",
+        "Optional 会让运行时自动接受 None 并做类型转换",
+        "Optional[X] 在类型层面允许 None",
+        "有了 Optional 注解，运行时就不再需要判空"
+      ],
+      "answer": [
+        0,
+        1,
+        3
+      ],
+      "explanation": "Optional 描述的是“类型上可为 None”，与参数是否可省略无关，也不会做运行时转换或自动判空；第三项才是对 Optional 的正确描述。",
+      "error_tag": "概念混淆",
+      "variant_group": "optional_误区"
+    },
+    {
+      "kp": "py.typehint.optional_union",
+      "type": "fill_blank",
+      "question": "在 typing 中，`Optional[X]` 等价于 `Union[X, ____]`，请填写缺少的内容。",
+      "options": [],
+      "answer": [
+        "None",
+        "NoneType",
+        "type(None)"
+      ],
+      "explanation": "Optional[X] 就是 Union[X, None] 的简写，缺失的成员是表示空值的 None（其类型可写作 NoneType）。",
+      "error_tag": "记忆缺失",
+      "variant_group": "optional_含义"
+    },
+    {
+      "kp": "py.typehint.optional_union",
+      "type": "fill_blank",
+      "question": "请补全下面代码，使其在 Python 3.10 及以上用 `|` 语法表达“参数 n 可以是 int 或 None”：\n\n```python\ndef f(n: ____) -> None:\n    ...\n```",
+      "options": [],
+      "answer": [
+        "int | None",
+        "None | int"
+      ],
+      "explanation": "在 3.10+ 中，int | None（顺序可交换）即可表达 Optional[int]，无需再导入 typing。",
+      "error_tag": "记忆缺失",
+      "variant_group": "optional_写法演进"
+    },
+    {
+      "kp": "py.typehint.optional_union",
+      "type": "fill_blank",
+      "question": "阅读下面函数的返回类型标注，它表示返回值可能是哪些类型？请填写“类型 或 类型”的形式（用中文或英文均可）：\n\n```python\ndef parse(s: str) -> Union[int, str]:\n    ...\n```",
+      "options": [],
+      "answer": [
+        "int 或 str",
+        "int或str",
+        "int 或 None（错误理解）",
+        "int or str",
+        "整数或字符串"
+      ],
+      "explanation": "Union[int, str] 表示返回值要么是 int，要么是 str；注意它并不包含 None。",
+      "error_tag": "概念混淆",
+      "variant_group": "union_等价性"
+    },
+    {
+      "kp": "py.typehint.optional_union",
+      "type": "code_reading",
+      "question": "阅读代码，回答问题：类型检查器会对下面哪一行发出“可能为 None”的警告？为什么？\n\n```python\nfrom typing import Optional\n\ndef find(seq: list, x: int) -> Optional[int]:\n    for i, v in enumerate(seq):\n        if v == x:\n            return i\n    return None\n\nidx = find([1, 2, 3], 3)\nprint(idx + 1)\n```",
+      "options": [],
+      "answer": "会警告 `print(idx + 1)` 这一行。因为 find 的返回类型是 Optional[int]，在未命中时会返回 None，而 None 不能参与整数加法。应先判断 idx is not None 再使用。",
+      "explanation": "Optional[int] 意味着返回值可能是 None；直接对可能为 None 的值做算术运算属于类型与运行时的双重风险，需先判空。",
+      "error_tag": "边界错误",
+      "variant_group": "optional_使用"
+    },
+    {
+      "kp": "py.typehint.optional_union",
+      "type": "code_reading",
+      "question": "阅读代码并说明输出与原因：\n\n```python\ndef f(x: int | None = None) -> str:\n    if x is None:\n        return \"empty\"\n    return str(x)\n\nprint(f())\nprint(f(0))\n```",
+      "options": [],
+      "answer": "输出为：第一行 empty，第二行 0。因为调用 f() 时 x 取默认值 None，返回 \"empty\"；调用 f(0) 时 x 为 0，0 不是 None，返回 str(0) 即 \"0\"。注意 0 与 None 不同。",
+      "explanation": "判断依据是 is None 而非真假值；0 为假值但不是 None，因此仍走非空分支，体现了 None 判断与布尔判断的区别。",
+      "error_tag": "边界错误",
+      "variant_group": "optional_判空与真值"
+    },
+    {
+      "kp": "py.typehint.optional_union",
+      "type": "scenario",
+      "question": "团队约定所有公开函数都要有类型注解。你写了一个根据用户 ID 查询用户名的函数，未找到时它返回 None。同事把返回类型写成 `-> str`，评审时被指出有问题。请说明应如何修改返回类型，以及在调用方要注意什么。",
+      "options": [],
+      "answer": null,
+      "explanation": "返回值在未命中时为 None，因此返回类型应写成 Optional[str]（或 str | None，Python 3.10+），表示可能为 None。调用方在使用前应先做 None 判断，避免类型检查器报错及运行时空指针式错误（如对它做字符串操作）。",
+      "error_tag": "边界错误",
+      "variant_group": "optional_适用场景",
+      "required_keywords": [
+        "Optional",
+        "str | None",
+        "None 判断",
+        "类型检查器",
+        "空指针式错误"
+      ]
+    },
+    {
+      "kp": "py.typehint.optional_union",
+      "type": "single_choice",
+      "question": "关于 `Optional[int]` 和 `Union[int, None]` 的关系，下列说法正确的是？",
+      "options": [
+        "两者含义相同，Optional[int] 就是 Union[int, None] 的简写",
+        "Optional[int] 允许 None，Union[int, None] 不允许",
+        "Union[int, None] 是语法错误",
+        "两者含义不同，Optional 会额外允许空字符串"
+      ],
+      "answer": 0,
+      "explanation": "在 typing 中，Optional[X] 是 Union[X, None] 的等价写法，二者完全一致，只是书写风格不同。",
+      "error_tag": "概念混淆",
+      "variant_group": "optional_含义"
+    },
+    {
+      "kp": "py.typehint.optional_union",
+      "type": "scenario",
+      "question": "你在把一个老项目升级到 Python 3.10。项目里大量使用 `typing.Optional` 和 `typing.Union` 注解。团队成员问：能否把 `Optional[int]` 直接换成 `int | None`，以及这样做需要注意什么？请给出建议。",
+      "options": [],
+      "answer": null,
+      "explanation": "在 Python 3.10+ 中 Optional[int] 与 int | None 语义等价，可以替换。但要注意：若项目还需支持 3.9 及更低版本，则不能直接用 | 写法；另外在运行时把复杂类型用到 isinstance 等场景时行为不同，需通过类型检查器与测试验证。",
+      "error_tag": "概念混淆",
+      "variant_group": "optional_写法演进",
+      "required_keywords": [
+        "Python 3.10",
+        "Optional",
+        "Union",
+        "类型检查器",
+        "isinstance"
+      ]
+    },
+    {
+      "kp": "py.typehint.optional_union",
+      "type": "single_choice",
+      "question": "使用 `X | None` 这种写法（而非 typing.Optional）作为类型注解，需要的最低 Python 版本是？",
+      "options": [
+        "Python 3.6",
+        "Python 3.8",
+        "Python 3.10",
+        "Python 3.12"
+      ],
+      "answer": 2,
+      "explanation": "用 | 运算符组合类型（PEP 604）从 Python 3.10 起才在注解中受支持，3.10 之前需要用 typing.Union 或 typing.Optional。",
+      "error_tag": "记忆缺失",
+      "variant_group": "optional_写法演进"
+    },
+    {
+      "kp": "py.typehint.optional_union",
+      "type": "single_choice",
+      "question": "下面这段代码，类型检查器最可能给出什么提示？\n\n```python\ndef get_name(user_id: int) -> Optional[str]:\n    ...\n\nname = get_name(1)\nprint(name.upper())\n```",
+      "options": [
+        "没有任何问题，name 一定是 str",
+        "name 可能是 None，直接调用 .upper() 存在风险",
+        "get_name 的返回类型写错了",
+        "Optional[str] 不是合法返回类型"
+      ],
+      "answer": 1,
+      "explanation": "返回值声明为 Optional[str]，说明可能为 None；直接对可能为 None 的值调用 .upper() 是不安全的，类型检查器会提示需要先判空。",
+      "error_tag": "边界错误",
+      "variant_group": "optional_使用"
+    },
+    {
+      "kp": "py.typehint.optional_union",
+      "type": "single_choice",
+      "question": "当函数参数注解为 `Optional[int] = None` 时，最贴切的描述是？",
+      "options": [
+        "调用者必须传入 int，不能省略",
+        "调用者可以不传该参数，也可以传 int 或显式传 None",
+        "调用者只能传 None",
+        "该参数不能有默认值"
+      ],
+      "answer": 1,
+      "explanation": "Optional 只描述类型允许 None，而默认值 None 使得参数可省略。两者结合意味着既可省略，也可传 int 或 None。",
+      "error_tag": "概念混淆",
+      "variant_group": "optional_默认值"
+    },
+    {
+      "kp": "py.typehint.optional_union",
+      "type": "single_choice",
+      "question": "以下哪个说法正确描述了 `Union[int, str]` 在运行时对传入值的影响？",
+      "options": [
+        "会在运行时强制把值转换成 int 或 str",
+        "会在传入其他类型时抛异常",
+        "运行时不做类型校验，只对静态类型检查器有意义",
+        "会自动把 int 转成 str"
+      ],
+      "answer": 2,
+      "explanation": "Python 的类型注解默认不参与运行时强制或校验，Union 只是给静态检查器的信息，不会在运行时阻止传入其他类型。",
+      "error_tag": "概念混淆",
+      "variant_group": "union_运行时行为"
+    },
+    {
+      "kp": "py.typehint.optional_union",
+      "type": "single_choice",
+      "question": "若变量声明为 `x: Optional[str]`，下列哪段代码最符合类型安全的写法？",
+      "options": [
+        "直接 `len(x)`",
+        "先 `if x is not None:` 再使用 x",
+        "直接 `x + 'abc'`",
+        "直接用 `x.strip()`，无需判断"
+      ],
+      "answer": 1,
+      "explanation": "因为 x 可能为 None，先做 None 判断再使用，能让类型检查器收窄类型为 str，是类型安全的标准做法。",
+      "error_tag": "边界错误",
+      "variant_group": "optional_使用"
+    },
+    {
+      "kp": "py.typehint.optional_union",
+      "type": "single_choice",
+      "question": "关于 `Optional` 与「默认参数」的常见误解，下列说法正确的是？",
+      "options": [
+        "只要参数有默认值，就必须写成 Optional",
+        "参数为 Optional 只说明类型上可为 None，并不代表一定有默认值",
+        "Optional 参数一定有默认值 None",
+        "默认值为 None 的参数不能标注 Optional"
+      ],
+      "answer": 1,
+      "explanation": "Optional 描述的是类型是否包含 None，与是否有默认值是两件独立的事。一个 Optional 参数可以没有默认值（调用时必须显式传参，包括传 None）。",
+      "error_tag": "概念混淆",
+      "variant_group": "optional_默认值"
+    },
+    {
+      "kp": "py.typehint.optional_union",
+      "type": "single_choice",
+      "question": "下面哪种写法在 Python 3.10 及以上**不是**等价于 `Optional[int]` 的？",
+      "options": [
+        "int | None",
+        "Union[int, None]",
+        "typing.Optional[int]",
+        "Union[None, int, str]"
+      ],
+      "answer": 3,
+      "explanation": "Union[None, int, str] 额外包含了 str，范围比 Optional[int] 更宽，因此不等价；其余三种都只表示 int 或 None。",
+      "error_tag": "边界错误",
+      "variant_group": "union_等价性"
+    }
+  ]
+}

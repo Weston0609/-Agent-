@@ -1,0 +1,646 @@
+{
+  "id": "s2u3l3",
+  "title": "s2u3l3",
+  "kps": [
+    "py.meta.metaclass",
+    "py.meta.descriptor"
+  ],
+  "theory": "## py.meta.metaclass\n\n# 元类（Metaclass）：从「类也是对象」到「控制类的创建」\n\n> **一句话直觉**：在 Python 里，类本身也是对象，而元类就是「生产类的类」——它让你在类被创建的那一刻插手，改写类的名字、属性、方法，甚至决定这个类到底长什么样。\n\n---\n\n## 1. 先搞清楚：类也是对象\n\n在多数语言里，类是「模板」，对象是「模板的实例」。但在 Python 中，`class` 关键字执行后，会创建一个**类对象**（class object）。既然它是对象，就一定有「谁创建了它」。创建普通对象的是类；创建类对象的，就是**元类（metaclass）**。\n\n默认情况下，所有类都由 `type` 创建。`type` 既是「查看对象类型」的函数，也是**所有类的默认元类**。它有两种用法：\n\n- `type(obj)`：返回对象的类型。\n- `type(name, bases, dict)`：动态创建一个新类。\n\n```python\n# 普通类定义\nclass Dog:\n    sound = \"wang\"\n\n    def speak(self):\n        return self.sound\n\n# 完全等价的动态创建（底层就是 type 在做的事）\nDog2 = type(\"Dog2\", (), {\n    \"sound\": \"wang\",\n    \"speak\": lambda self: self.sound,\n})\n\nprint(type(Dog))        # <class 'type'>   -> Dog 是 type 的实例\nprint(type(Dog2))       # <class 'type'>\nprint(Dog2().speak())   # wang\n```\n\n**关键结论**：`type` 是所有类的默认元类；`class` 语句本质上是调用元类来构造一个类对象。\n\n---\n\n## 2. 类的创建流程：`__new__` 与 `__init__`\n\n当你写 `class Foo: ...` 时，CPython 大致会做三件事：\n\n1. 收集类的命名空间（name、bases、属性字典）。\n2. 找到合适的元类（默认 `type`）。\n3. 调用 `元类(name, bases, namespace)` 生成类对象。\n\n元类本身也是一个类，它继承自 `type`。它的构造过程由两个方法控制：\n\n- `__new__(mcls, name, bases, namespace)`：**真正创建类对象**，返回类。\n- `__init__(cls, name, bases, namespace)`：**初始化已创建的类**，无返回值。\n\n```python\nclass Meta(type):\n    def __new__(mcls, name, bases, namespace):\n        print(f\"[__new__] 正在创建类: {name}\")\n        return super().__new__(mcls, name, bases, namespace)\n\n    def __init__(cls, name, bases, namespace):\n        print(f\"[__init__] 正在初始化类: {name}\")\n        super().__init__(name, bases, namespace)\n\nclass Foo(metaclass=Meta):\n    pass\n\n# 输出顺序：\n# [__new__] 正在创建类: Foo\n# [__init__] 正在初始化类: Foo\n```\n\n**关键结论**：想在类创建前修改 `name/bases/namespace`，用 `__new__`；想在类已存在后补装饰属性，用 `__init__`。\n\n---\n\n## 3. 第一个真正有用的元类：自动登记子类\n\n元类最常见的用途之一是**注册表模式（registry pattern）**：每当一个类被创建，就自动记录到注册表中，便于后续按名字查找、做插件系统或 ORM 映射。\n\n```python\nregistry = {}\n\nclass RegisterMeta(type):\n    def __new__(mcls, name, bases, namespace):\n        cls = super().__new__(mcls, name, bases, namespace)\n        # 只登记业务子类，跳过基类本身\n        if bases:\n            registry[name] = cls\n        return cls\n\nclass Base(metaclass=RegisterMeta):\n    pass\n\nclass UserModel(Base):\n    pass\n\nclass OrderModel(Base):\n    pass\n\nprint(registry)  # {'UserModel': <class 'UserModel'>, 'OrderModel': <class 'OrderModel'>}\n```\n\n**关键结论**：元类能把「重复性登记、校验、注入」这类逻辑从每个子类中抽出来，统一在类创建时执行。\n\n---\n\n## 4. 元类与 `__init_subclass__`、类装饰器的关系\n\n在 Python 3.6+，很多「元类的活」可以用更轻量的 **`__init_subclass__`** 或**类装饰器（class decorator）**完成。选择顺序建议：\n\n1. 只处理「每个子类创建时」的逻辑 → 用 `__init_subclass__`。\n2. 只会临时改一下类 → 用类装饰器。\n3. 需要同时控制多个类族、修改命名空间、影响 `isinstance` 行为、或与 `abc`/`typing` 等协作 → 才用元类。\n\n```python\n# 方案 A：__init_subclass__（更简单）\nclass BaseA:\n    def __init_subclass__(cls, **kwargs):\n        super().__init_subclass__(**kwargs)\n        print(f\"子类 {cls.__name__} 被创建\")\n\nclass A1(BaseA):\n    pass\n\n# 方案 B：类装饰器（最轻）\ndef tag(cls):\n    cls.tagged = True\n    return cls\n\n@tag\nclass B1:\n    pass\n\nprint(B1.tagged)  # True\n```\n\n**关键结论**：元类不是首选，而是「最后手段」。能用 `__init_subclass__` 或装饰器解决就别用元类。\n\n---\n\n## 5. 元类与 `abc.ABC`、`typing` 的协作（工程视角）\n\n标准库 `abc` 就是通过元类实现抽象类的：`ABCMeta` 拦截子类创建，检查抽象方法是否被实现。`typing` 的 `@dataclass_transform` 也是给类型检查器（type checker）看的「元类/装饰器意图声明」。理解元类后，你才能看懂下面这类代码为什么合法：\n\n```python\nfrom abc import ABC, abstractmethod\n\nclass Repo(ABC):\n    @abstractmethod\n    def get(self, key): ...\n\nclass MemoryRepo(Repo):\n    def get(self, key):\n        return {\"k\": \"v\"}.get(key)\n\n# Repo() 会报错；MemoryRepo() 正常\nprint(MemoryRepo().get(\"k\"))  # v\n```\n\n**关键结论**：`ABCMeta` 是元类在标准库中最经典的落地。写框架、插件系统、ORM、DI 容器时，元类是你构建「类层面的切面」的入口。\n\n```python\n# 综合示例：用元类做一个「强制属性命名检查 + 自动注册」的迷你 ORM 骨架\nregistry = {}\n\nclass ModelMeta(type):\n    def __new__(mcls, name, bases, namespace):\n        # 1) 跳过基类 Model 本身的检查\n        if bases:\n            for field in namespace:\n                if field.startswith(\"_\") or field in (\"__module__\", \"__qualname__\"):\n                    continue\n                # 强制字段小写，避免脏命名\n                if not field.islower():\n                    raise TypeError(f\"字段名必须小写: {name}.{field}\")\n        cls = super().__new__(mcls, name, bases, namespace)\n        # 2) 自动注册业务子类\n        if bases:\n            registry[name] = cls\n        return cls\n\nclass Model(metaclass=ModelMeta):\n    \"\"\"所有模型基类\"\"\"\n    pass\n\nclass User(Model):\n    id = 1\n    name = \"alice\"\n\n# 下面这行会抛 TypeError: 字段名必须小写: Bad.age\n# class Bad(Model):\n#     Age = 18\n\nprint(\"已注册模型:\", list(registry.keys()))\nprint(\"User 的字段:\", [k for k in User.__dict__ if k.islower() and not k.startswith(\"_\")])\n```\n\n## py.meta.descriptor\n\n# Python 描述符（Descriptor）：从属性访问到框架级抽象\\n\\n> 一句话直觉：**描述符让你在「类属性」这一层挂上\"拦截器\"——别人读写 `obj.x` 时，实际执行的是你写的 `__get__/__set__/__delete__`，这是 Python 中 property、方法绑定、ORM 字段、Django Model、PyTorch Module 参数访问等一切\"魔法属性\"的底层机制。**\\n\\n本讲从零基础讲到工程级，共 5 个小节：\\n1. 属性访问的默认规则（回顾对象模型）\\n2. 描述符协议：三个魔术方法\\n3. 数据描述符 vs 非数据描述符（优先级之争）\\n4. 实战：用描述符手写一个 `property` 和类型校验字段\\n5. 工程级应用：方法绑定、缓存、ORM 风格字段\\n\\n---\\n\\n## 1. 属性访问的默认规则\\n\\n当你写 `obj.attr` 时，Python 默认做三件事：\\n1. 去 `type(obj).__mro__` 里找 `attr`；\\n2. 如果找到的是一个 **描述符对象**，就调用它的描述符协议；\\n3. 否则返回实例 `obj.__dict__['attr']`（如果存在）。\\n\\n这解释了为什么 `p.name = 10` 覆盖不了 `property`——因为 `property` 是一个描述符，它抢在实例字典之前生效。\\n\\n```python\\n# 演示：普通类属性 vs 实例属性\\nclass Plain:\\n    x = 'class-level'\\n\\np = Plain()\\np.x = 'instance-level'\\nprint(p.x)              # instance-level（实例字典优先）\\nprint(Plain.x)          # class-level\\nprint(p.__dict__)       # {'x': 'instance-level'}\\n```\\n\\n关键词中英对照：**属性（attribute）**、**类属性（class attribute）**、**实例属性（instance attribute）**、**方法解析顺序（MRO, Method Resolution Order）**。\\n\\n---\\n\\n## 2. 描述符协议：三剑客 `__get__/__set__/__delete__`\\n\\n如果类 A 定义了以下任意方法，A 的实例就被称为**描述符（descriptor）**：\\n\\n| 方法 | 触发时机 | 签名 |\\n|---|---|---|\\n| `__get__(self, obj, objtype=None)` | 读取属性 | `instance.attr` 或 `Class.attr` |\\n| `__set__(self, obj, value)` | 赋值属性 | `instance.attr = value` |\\n| `__delete__(self, obj)` | 删除属性 | `del instance.attr` |\\n\\n```python\\nclass Logged:\\n    \\\"\\\"\\\"最小的描述符：每次读写都打印日志\\\"\\\"\\\"\\n    def __init__(self, name):\\n        self.name = name\\n\\n    def __get__(self, obj, objtype=None):\\n        if obj is None:              # 通过类访问：Class.attr\\n            return self\\n        print(f'[GET] {self.name}')\\n        return obj.__dict__.get(self.name)\\n\\n    def __set__(self, obj, value):\\n        print(f'[SET] {self.name} = {value!r}')\\n        obj.__dict__[self.name] = value\\n\\n    def __delete__(self, obj):\\n        print(f'[DEL] {self.name}')\\n        obj.__dict__.pop(self.name, None)\\n\\nclass User:\\n    name = Logged('name')\\n\\nu = User()\\nu.name = 'alice'    # 触发 __set__\\nprint(u.name)      # 触发 __get__\\n\\n```\\n\\n注意：通过类访问 `User.name` 时 `obj is None`，描述符必须自己决定返回什么（通常返回 `self`）。这是描述符的**约定俗成协议**，不是语言强制。\\n\\n---\\n\\n## 3. 数据描述符 vs 非数据描述符\\n\\n- **数据描述符（data descriptor）**：同时定义了 `__get__` 和 `__set__`（或 `__delete__`）。\\n- **非数据描述符（non-data descriptor）**：只定义了 `__get__`。\\n\\n**优先级规则（重要）**：\\n> 数据描述符 > 实例 `__dict__` > 非数据描述符\\n\\n这就是为什么 `property`（数据描述符）能挡住实例字典的赋值，而**普通函数**（非数据描述符）可以被实例属性覆盖。\\n\\n```python\\nclass NonData:\\n    def __get__(self, obj, objtype=None):\\n        return 'from descriptor'\\n\\nclass C:\\n    x = NonData()\\n\\nc = C()\\nprint(c.x)          # from descriptor（实例字典为空）\\nc.__dict__['x'] = 'from instance'\\nprint(c.x)          # from instance（非数据描述符被实例字典覆盖）\\n```\\n\\n---\\n\\n## 4. 手写 property：看穿内置机制\\n\\n`property` 就是标准库提供的一个数据描述符。我们可以自己实现一个 `MyProperty` 来验证理解。\\n\\n```python\\nclass MyProperty:\\n    \\\"\\\"\\\"简化版 property：支持 getter/setter\\\"\\\"\\\"\\n    def __init__(self, fget=None, fset=None):\\n        self.fget = fget\\n        self.fset = fset\\n\\n    def setter(self, fset):\\n        self.fset = fset\\n        return self\\n\\n    def __get__(self, obj, objtype=None):\\n        if obj is None:\\n            return self\\n        if self.fget is None:\\n            raise AttributeError('unreadable attribute')\\n        return self.fget(obj)\\n\\n    def __set__(self, obj, value):\\n        if self.fset is None:\\n            raise AttributeError(\\\"can't set attribute\\\")\\n        self.fset(obj, value)\\n\\nclass Temperature:\\n    def __init__(self, celsius=0):\\n        self._celsius = celsius\\n\\n    @MyProperty\\n    def celsius(self):\\n        return self._celsius\\n\\n    @celsius.setter\\n    def celsius(self, v):\\n        if v < -273.15:\\n            raise ValueError('低于绝对零度')\\n        self._celsius = v\\n\\nt = Temperature(25)\\nprint(t.celsius)       # 25\\nt.celsius = 30\\nprint(t.celsius)       # 30\\n```\\n\\n---\\n\\n## 5. 工程级应用：类型校验字段 + 方法绑定\\n\\n### 5.1 类型校验描述符（ORM 风格）\\n\\n```python\\nclass Typed:\\n    \\\"\\\"\\\"带类型检查的描述符：类似 SQLAlchemy / Pydantic 字段\\\"\\\"\\n    def __init__(self, name, expected_type):\\n        self.name = name\\n        self.expected_type = expected_type\\n\\n    def __get__(self, obj, objtype=None):\\n        if obj is None:\\n            return self\\n        return obj.__dict__.get(self.name)\\n\\n    def __set__(self, obj, value):\\n        if not isinstance(value, self.expected_type):\\n            raise TypeError(f'{self.name} 必须是 {self.expected_type.__name__}')\\n        obj.__dict__[self.name] = value\\n\\nclass Person:\\n    name = Typed('name', str)\\n    age  = Typed('age', int)\\n\\n    def __init__(self, name, age):\\n        self.name = name\\n        self.age = age\\n\\np = Person('Bob', 30)\\nprint(p.name, p.age)\\ntry:\\n    p.age = 'thirty'   # TypeError\\nexcept TypeError as e:\\n    print(e)\\n```\\n\\n### 5.2 方法绑定也是描述符\\n\\n函数对象实现了 `__get__`，因此 `obj.method` 会返回一个**绑定方法（bound method）**，把 `obj` 作为第一个参数塞进去。这就是为什么 Python 方法要写 `self`——它是描述符协议的产物，不是语法糖。\\n\\n```python\\nclass Greeter:\\n    def hi(self):\\n        return f'hi, I am {self}'\\n\\ng = Greeter()\\nbound = g.hi           # 触发 function.__get__(g, Greeter)\\nprint(bound)           # <bound method ...>\\nprint(bound.__self__ is g)  # True\\nprint(Greeter.hi)      # <function ...>（obj 为 None 时返回原函数）\\n```\\n\\n---\\n\\n## \\u2705 动手练习\\n\\n**任务**：实现一个 `@cached_property` 描述符，行为与 `functools.cached_property` 类似：\\n\\n1. 第一次访问时执行被装饰的函数；\\n2. 把结果**写回实例 `__dict__`**，第二次访问直接从实例字典拿，不再调用函数；\\n3. 通过类访问 `Class.attr` 时返回描述符自身；\\n4. 用一段测试验证：调用计数 = 1，且第二次访问速度明显更快。\\n\\n```python\\nimport time\\n\\nclass cached_property:\\n    def __init__(self, func):\\n        self.func = func\\n        self.__doc__ = func.__doc__\\n\\n    def __get__(self, obj, objtype=None):\\n        if obj is None:\\n            return self\\n        # TODO: 执行 self.func(obj) 并写入 obj.__dict__[self.func.__name__]\\n        ...\\n\\nclass Heavy:\\n    @cached_property\\n    def result(self):\\n        time.sleep(0.5)\\n        return 42\\n\\nh = Heavy()\\nt0 = time.time(); h.result; t1 = time.time(); h.result; t2 = time.time()\\nprint(f'first={t1-t0:.3f}s, second={t2-t1:.6f}s')  # 第一次≈0.5s，第二次≈0\\n```\\n\\n提示：`cached_property` 属于**非数据描述符**（只定义 `__get__`），所以一旦把值写入实例 `__dict__`，实例字典就会覆盖描述符——这是它工作快的根本原因。请体会并口述这条优先级规则。\n\n```python\nimport time\n\nclass cached_property:\n    \"\"\"非数据描述符：只在 __get__ 中计算一次，然后写入实例 __dict__。\"\"\"\n    def __init__(self, func):\n        self.func = func\n        self.__doc__ = func.__doc__\n        self.name = func.__name__\n\n    def __get__(self, obj, objtype=None):\n        if obj is None:\n            return self\n        # 第一次访问：调用函数并把结果写入实例字典\n        value = self.func(obj)\n        obj.__dict__[self.name] = value   # 写入后实例字典优先于非数据描述符\n        return value\n\n\nclass Heavy:\n    @cached_property\n    def result(self):\n        time.sleep(0.5)\n        return 42\n\n\nif __name__ == '__main__':\n    h = Heavy()\n    t0 = time.perf_counter()\n    _ = h.result\n    t1 = time.perf_counter()\n    _ = h.result\n    t2 = time.perf_counter()\n    print(f'first={t1 - t0:.3f}s, second={t2 - t1:.6f}s')  # 0.500s vs ~0s\n    print('cached in instance dict:', h.__dict__)          # {'result': 42}\n```\n",
+  "quiz": [
+    {
+      "kp": "py.meta.metaclass",
+      "type": "single_choice",
+      "question": "关于 Python 中类的创建过程，下列说法正确的是？",
+      "options": [
+        "所有类都由同一种默认机制创建，无法自定义",
+        "类也是对象，其创建过程可由元类控制",
+        "只有继承自 object 的类才由元类创建",
+        "元类只能影响实例的属性，不能影响类的创建"
+      ],
+      "answer": 1,
+      "explanation": "在 Python 中类本身也是对象，默认由 type 创建；通过元类可以介入类的创建过程（如修改类命名空间、属性等）。A 错误，因为可通过 metaclass 自定义；C 错误，所有类创建都经过元类机制；D 错误，元类主要作用于类的创建阶段。",
+      "error_tag": "概念误解",
+      "variant_group": "metaclass_basic"
+    },
+    {
+      "kp": "py.meta.metaclass",
+      "type": "single_choice",
+      "question": "定义类时写 class A(metaclass=Meta): pass，Python 在创建类 A 的过程中会调用谁？",
+      "options": [
+        "先调用 Meta，再调用 type",
+        "只调用 Meta，不调用 type",
+        "只调用 object",
+        "只调用 A 的 __init__ 方法"
+      ],
+      "answer": 0,
+      "explanation": "指定 metaclass=Meta 后，类 A 本身由 Meta 创建；Meta 若继承自 type，通常会在其 __new__/__init__ 中配合 type 完成实际创建。B 暗示不等同于简单地“只调用 Meta”而不涉及 type 机制，A 更准确描述过程。",
+      "error_tag": "执行顺序混淆",
+      "variant_group": "metaclass_usage"
+    },
+    {
+      "kp": "py.meta.metaclass",
+      "type": "single_choice",
+      "question": "下面代码输出什么？\n\nclass Meta(type):\n    def __init__(cls, name, bases, ns):\n        cls.tag = 'meta'\n        super().__init__(name, bases, ns)\n\nclass A(metaclass=Meta):\n    pass\n\nprint(A.tag)",
+      "options": [
+        "meta",
+        "AttributeError",
+        "None",
+        "type"
+      ],
+      "answer": 0,
+      "explanation": "元类的 __init__ 在类创建后运行，这里给 cls 设置 tag='meta'，因此 A.tag 输出 meta。A 是正确项；B/C/D 与该设置不符。",
+      "error_tag": "代码理解错误",
+      "variant_group": "metaclass_init"
+    },
+    {
+      "kp": "py.meta.metaclass",
+      "type": "single_choice",
+      "question": "若想在类被创建时自动把类名加入某个注册表，最合适的做法是？",
+      "options": [
+        "在类的每个方法中手动注册",
+        "在元类的 __new__ 或 __init__ 中把新类加入注册表",
+        "在模块导入时用 globals() 扫描",
+        "在类的 __init__ 中注册"
+      ],
+      "answer": 1,
+      "explanation": "元类的 __new__/__init__ 在类创建时被调用，最适合做自动注册。A 繁琐且不自动；C 会漏掉动态创建的类；D 的 __init__ 是实例初始化，不是类创建。",
+      "error_tag": "设计选择错误",
+      "variant_group": "metaclass_registry"
+    },
+    {
+      "kp": "py.meta.metaclass",
+      "type": "single_choice",
+      "question": "下列关于元类与装饰器的说法，正确的是？",
+      "options": [
+        "装饰器只能装饰函数，不能装饰类",
+        "元类可以影响类创建，类装饰器也可以修改类，但作用时机略有不同",
+        "元类与类装饰器完全等价，可以随意互换",
+        "类装饰器在类创建之前执行，元类在之后执行"
+      ],
+      "answer": 1,
+      "explanation": "类装饰器在类对象创建之后作用于类，元类在类创建过程中介入。两者都可修改类，但时机不同，不等价。A 错误，装饰器也能装饰类；C 错误，不等价；D 把时机说反。",
+      "error_tag": "概念对比错误",
+      "variant_group": "metaclass_vs_decorator"
+    },
+    {
+      "kp": "py.meta.metaclass",
+      "type": "single_choice",
+      "question": "执行下面代码，哪些属性会出现在 A 的命名空间中？\n\nclass Meta(type):\n    def __new__(mcls, name, bases, ns):\n        ns['a'] = 1\n        cls = super().__new__(mcls, name, bases, ns)\n        cls.b = 2\n        return cls\n\nclass A(metaclass=Meta):\n    c = 3",
+      "options": [
+        "只有 c",
+        "a 和 c",
+        "a、b、c",
+        "只有 b"
+      ],
+      "answer": 2,
+      "explanation": "ns['a']=1 在创建前加入命名空间，c=3 来自类体，cls.b=2 在创建后设置，三者都成为 A 的属性。",
+      "error_tag": "代码理解错误",
+      "variant_group": "metaclass_namespace"
+    },
+    {
+      "kp": "py.meta.metaclass",
+      "type": "single_choice",
+      "question": "关于元类解决“类属性名冲突检测”的场景，下面哪个说法正确？",
+      "options": [
+        "只能在运行时通过 instance.__dict__ 检测",
+        "可以在元类 __new__ 中检查命名空间，若发现冲突抛出异常阻止类创建",
+        "必须用元类的 __getattr__ 在访问时检测",
+        "元类无法访问类的命名空间"
+      ],
+      "answer": 1,
+      "explanation": "元类 __new__ 会收到命名空间，可在类创建前检查冲突并抛异常，从而阻止类创建。A 时机太晚；C 检测时刻错；D 错误，元类能访问命名空间。",
+      "error_tag": "设计选择错误",
+      "variant_group": "metaclass_validation"
+    },
+    {
+      "kp": "py.meta.metaclass",
+      "type": "single_choice",
+      "question": "下面关于元类与抽象基类（ABC）的说法，正确的是？",
+      "options": [
+        "抽象基类必须用元类实现，因为实例化检查只能在元类中完成",
+        "abc.ABCMeta 是一个元类，用于支持抽象基类机制",
+        "抽象基类不能与自定义元类一起使用",
+        "抽象方法的检查发生在实例 __init__ 中"
+      ],
+      "answer": 1,
+      "explanation": "abc.ABCMeta 是标准库提供的元类，负责抽象方法检查与注册等机制。A 太绝对；C 错误，自定义元类可继承 ABCMeta；D 错误，检查发生在实例化阶段而非 __init__ 内部。",
+      "error_tag": "标准库误解",
+      "variant_group": "metaclass_abc"
+    },
+    {
+      "kp": "py.meta.metaclass",
+      "type": "single_choice",
+      "question": "执行下面代码，输出什么？\n\nclass Meta(type):\n    def __call__(cls, *args, **kwargs):\n        print('creating instance')\n        return super().__call__(*args, **kwargs)\n\nclass A(metaclass=Meta):\n    pass\n\nA()",
+      "options": [
+        "无输出",
+        "creating instance",
+        "报错，因为元类不能定义 __call__",
+        "输出 A"
+      ],
+      "answer": 1,
+      "explanation": "元类的 __call__ 控制类实例化过程，A() 会先调用 Meta.__call__，打印 creating instance，再通过 super().__call__ 创建实例。",
+      "error_tag": "代码理解错误",
+      "variant_group": "metaclass_call"
+    },
+    {
+      "kp": "py.meta.metaclass",
+      "type": "single_choice",
+      "question": "关于元类与实例属性的描述，正确的是？",
+      "options": [
+        "元类可以拦截类属性的读取，但不能拦截实例属性的读取",
+        "元类既可以拦截类属性也能直接拦截实例属性的读取",
+        "元类只能影响实例属性的读取",
+        "元类无法影响属性访问"
+      ],
+      "answer": 0,
+      "explanation": "元类作用于类对象，因此可拦截类属性的读取；实例属性的读取由类上的 __getattribute__/__getattr__ 控制，而非元类直接拦截。B/C/D 均夸大了元类的能力。",
+      "error_tag": "作用域混淆",
+      "variant_group": "metaclass_attribute_scope"
+    },
+    {
+      "kp": "py.meta.metaclass",
+      "type": "single_choice",
+      "question": "如果一个类同时指定了父类和 metaclass，而父类的元类与指定的 metaclass 不兼容，会怎样？",
+      "options": [
+        "自动忽略 metaclass，使用父类的元类",
+        "抛出 TypeError，无法创建该类",
+        "自动把 metaclass 改为 type",
+        "只影响实例化，不影响类创建"
+      ],
+      "answer": 1,
+      "explanation": "当指定元类与父类元类不满足子类关系时，Python 在创建类阶段抛出 TypeError。A/C 描述的是不存在的自动降级机制；D 错误，问题发生在类创建时。",
+      "error_tag": "异常场景",
+      "variant_group": "metaclass_conflict"
+    },
+    {
+      "kp": "py.meta.metaclass",
+      "type": "single_choice",
+      "question": "下面哪项最适合用元类而不是普通类属性来实现？",
+      "options": [
+        "为每个实例保存不同数据",
+        "在类定义阶段自动收集所有子类并做统一校验",
+        "在实例方法中计算属性值",
+        "在模块级别定义常量"
+      ],
+      "answer": 1,
+      "explanation": "元类介入类创建阶段，适合自动收集子类、统一校验等跨类行为。A 属于实例属性；C 属于普通方法；D 属于模块级定义，均不需要元类。",
+      "error_tag": "设计选择错误",
+      "variant_group": "metaclass_use_case"
+    },
+    {
+      "kp": "py.meta.metaclass",
+      "type": "single_choice",
+      "question": "下面关于 type 的说法，哪项正确？",
+      "options": [
+        "type 只能用来查询对象的类型，不能用来创建类",
+        "type 可以动态地创建类，例如 type('A', (), {})",
+        "type 是 object 的子类，因此可以创建 object",
+        "type 创建的类不能再有子类"
+      ],
+      "answer": 1,
+      "explanation": "type 既是函数又是元类，可以用 type(name, bases, namespace) 动态创建新类。A 错误，type 可以创建类；C 错误，object 是 type 的实例，type 不是 object 的子类；D 错误，type 创建的类同样可被继承。",
+      "error_tag": "API 误用",
+      "variant_group": "type_dynamic"
+    },
+    {
+      "kp": "py.meta.metaclass",
+      "type": "single_choice",
+      "question": "关于“元类是类的类”这一说法，下列理解正确的是？",
+      "options": [
+        "类不是对象，所以不存在类的类",
+        "类也是对象，其类型就是元类；默认情况下类由 type 创建",
+        "所有类的元类都必须是 object",
+        "元类只能有一个实例"
+      ],
+      "answer": 1,
+      "explanation": "类本身是对象，它的类型是元类，默认是 type，因此“元类是类的类”成立。A 忽略类也是对象；C 错误，object 不是元类；D 错误，元类可以有多个实例（即多个类）。",
+      "error_tag": "概念误解",
+      "variant_group": "metaclass_concept"
+    },
+    {
+      "kp": "py.meta.metaclass",
+      "type": "single_choice",
+      "question": "执行下面代码后，输出是什么？\n\nclass Meta(type):\n    def __new__(mcls, name, bases, ns):\n        ns['x'] = 42\n        return super().__new__(mcls, name, bases, ns)\n\nclass A(metaclass=Meta):\n    pass\n\nprint(A.x)",
+      "options": [
+        "AttributeError",
+        "42",
+        "None",
+        "0"
+      ],
+      "answer": 1,
+      "explanation": "元类 Meta 的 __new__ 在创建类 A 之前向命名空间 ns 中加入了 x=42，因此类 A 拥有属性 x，输出 42。若不调用 super().__new__ 或未加入命名空间，则可能出错或没有该属性。",
+      "error_tag": "代码理解错误",
+      "variant_group": "metaclass_new"
+    },
+    {
+      "kp": "py.meta.metaclass",
+      "type": "single_choice",
+      "question": "关于元类的 __init__ 与 __new__，下列说法正确的是？",
+      "options": [
+        "__new__ 负责初始化类属性，__init__ 负责创建类对象",
+        "__new__ 负责创建并返回类对象，__init__ 在类对象创建后对其初始化",
+        "两者完全等价，用哪个都可以",
+        "只有 __init__ 能修改类命名空间"
+      ],
+      "answer": 1,
+      "explanation": "元类的 __new__ 用于创建并返回类对象，__init__ 在类对象创建之后进行初始化。A 把职责说反；C 错在两者职责不同；D 错误，__new__ 也能通过命名空间修改类属性。",
+      "error_tag": "概念误解",
+      "variant_group": "metaclass_new_init"
+    },
+    {
+      "kp": "py.meta.metaclass",
+      "type": "single_choice",
+      "question": "下面元类写法中，哪一项最可能导致创建类时出错？\n\nclass Meta(type):\n    def __new__(mcls, name, bases, ns):\n        return super().__new__(mcls, name, bases, ns)\n\nclass A(metaclass=Meta):\n    pass",
+      "options": [
+        "super().__new__ 的第一个参数应为 mcls",
+        "super().__new__ 不应传入 name",
+        "super().__new__ 不应传入 bases",
+        "这段代码不会出错"
+      ],
+      "answer": 3,
+      "explanation": "上述写法是标准且正确的元类 __new__ 模式：super().__new__(mcls, name, bases, ns)。A/B/C 都是常见误解，但此代码本身没有问题。",
+      "error_tag": "无",
+      "variant_group": "metaclass_super"
+    },
+    {
+      "kp": "py.meta.metaclass",
+      "type": "single_choice",
+      "question": "若元类 Foo 的 __new__ 返回了一个不是类的对象（如 int 实例），会发生什么？",
+      "options": [
+        "Python 会自动把它转成类对象",
+        "Python 会抛出 TypeError，创建类失败",
+        "仍然可以正常使用，只是没有元类效果",
+        "会忽略返回值，继续按默认机制创建类"
+      ],
+      "answer": 1,
+      "explanation": "元类 __new__ 必须返回一个类对象（通常是 type 实例）。若返回非类对象，解释器在构建类时无法完成绑定，会抛出 TypeError。",
+      "error_tag": "边界情况",
+      "variant_group": "metaclass_return"
+    },
+    {
+      "kp": "py.meta.metaclass",
+      "type": "single_choice",
+      "question": "下面哪个方法可以拦截“类属性的读取”而不是“实例属性的读取”？",
+      "options": [
+        "__getattribute__（定义在类上）",
+        "__getattr__（定义在类上）",
+        "__getattribute__（定义在元类上）",
+        "__setattr__（定义在类上）"
+      ],
+      "answer": 2,
+      "explanation": "类属性的读取由元类的 __getattribute__/__getattr__ 控制。定义在类上的 __getattribute__ 影响的是实例属性读取。D 影响的是实例属性赋值，不是读取。",
+      "error_tag": "作用域混淆",
+      "variant_group": "metaclass_attribute"
+    },
+    {
+      "kp": "py.meta.metaclass",
+      "type": "single_choice",
+      "question": "假设 Meta 是元类，执行 A = Meta('A', (), {}) 与执行 class A(metaclass=Meta): pass 相比，最本质的区别是？",
+      "options": [
+        "前者创建的不是类对象",
+        "两者都会调用 Meta，但语法形式不同，本质机制一致",
+        "前者不会触发 Meta.__new__",
+        "后者无法使用元类"
+      ],
+      "answer": 1,
+      "explanation": "class A(metaclass=Meta) 等价于使用 Meta 作为元类来创建类，其创建过程与 Meta('A', (), {}) 本质一致。A 错误，Name 等参数决定结果仍是类对象；C 错误，都会触发元类 __new__；D 错误，class 语法正是使用元类的方式。",
+      "error_tag": "等价关系不清",
+      "variant_group": "metaclass_equiv"
+    },
+    {
+      "kp": "py.meta.metaclass",
+      "type": "single_choice",
+      "question": "关于元类与继承的关系，下列说法正确的是？",
+      "options": [
+        "类的元类必须与父类的元类完全相同",
+        "类的元类必须是父类元类的子类（或相同）",
+        "子类总是使用 type 作为元类，与父类无关",
+        "元类不能被继承"
+      ],
+      "answer": 1,
+      "explanation": "Python 要求子类的元类必须是其所有父类元类的（非严格）子类，以保证类创建过程兼容。A 太严格；C 错误，会考虑父类元类；D 错误，元类可以被继承。",
+      "error_tag": "继承规则误解",
+      "variant_group": "metaclass_inheritance"
+    },
+    {
+      "kp": "py.meta.descriptor",
+      "type": "single_choice",
+      "question": "在 Python 中，如果一个类定义了 __get__ 方法但未定义 __set__ 方法，它属于哪种描述符？",
+      "options": [
+        "数据描述符",
+        "非数据描述符",
+        "类描述符",
+        "实例描述符"
+      ],
+      "answer": 1,
+      "explanation": "只定义了 __get__ 而未定义 __set__ 或 __delete__ 的描述符被称为非数据描述符。数据描述符需要同时定义 __set__ 或 __delete__。",
+      "error_tag": "概念混淆",
+      "variant_group": "描述符类型区分"
+    },
+    {
+      "kp": "py.meta.descriptor",
+      "type": "single_choice",
+      "question": "当实例属性与数据描述符同名时，通过实例访问该属性，Python 会优先返回什么？",
+      "options": [
+        "实例字典中的值",
+        "数据描述符的 __get__ 返回值",
+        "抛出 AttributeError",
+        "非数据描述符的返回值"
+      ],
+      "answer": 1,
+      "explanation": "数据描述符的优先级高于实例字典。当同时存在数据描述符和同名实例属性时，Python 会优先调用数据描述符的 __get__ 方法。",
+      "error_tag": "概念混淆",
+      "variant_group": "属性查找优先级"
+    },
+    {
+      "kp": "py.meta.descriptor",
+      "type": "multi_choice",
+      "question": "以下哪些方法定义了数据描述符？（多选）",
+      "options": [
+        "__get__ 和 __set__",
+        "__get__ 和 __delete__",
+        "仅 __get__",
+        "__get__、__set__ 和 __delete__"
+      ],
+      "answer": [
+        0,
+        1,
+        3
+      ],
+      "explanation": "数据描述符需要定义 __set__ 或 __delete__。仅定义 __get__ 的是非数据描述符。因此选项 A、B、D 都属于数据描述符，C 不是。",
+      "error_tag": "概念混淆",
+      "variant_group": "描述符类型区分"
+    },
+    {
+      "kp": "py.meta.descriptor",
+      "type": "multi_choice",
+      "question": "关于属性查找优先级，以下说法正确的有？（多选）",
+      "options": [
+        "数据描述符优先于实例字典",
+        "实例字典优先于非数据描述符",
+        "非数据描述符优先于实例字典",
+        "实例字典优先于数据描述符"
+      ],
+      "answer": [
+        0,
+        1
+      ],
+      "explanation": "属性查找顺序为：数据描述符 > 实例字典 > 非数据描述符 > 类属性。因此数据描述符优先于实例字典，实例字典优先于非数据描述符。",
+      "error_tag": "概念混淆",
+      "variant_group": "属性查找优先级"
+    },
+    {
+      "kp": "py.meta.descriptor",
+      "type": "multi_choice",
+      "question": "以下关于描述符的说法，正确的有？（多选）",
+      "options": [
+        "描述符必须是类属性才能生效",
+        "非数据描述符的优先级低于实例字典",
+        "__set_name__ 在类创建时自动调用",
+        "所有描述符都必须实现 __get__ 方法"
+      ],
+      "answer": [
+        0,
+        1,
+        2
+      ],
+      "explanation": "描述符必须作为类属性才能触发协议；非数据描述符优先级低于实例字典；__set_name__ 在类创建时自动调用。描述符不必须实现 __get__，只实现 __set__ 也可以。",
+      "error_tag": "概念混淆",
+      "variant_group": "描述符综合特性"
+    },
+    {
+      "kp": "py.meta.descriptor",
+      "type": "multi_choice",
+      "question": "以下哪些内置对象是非数据描述符？（多选）",
+      "options": [
+        "普通函数",
+        "staticmethod",
+        "classmethod",
+        "property"
+      ],
+      "answer": [
+        0,
+        1,
+        2
+      ],
+      "explanation": "普通函数、staticmethod、classmethod 都只实现了 __get__，属于非数据描述符。property 实现了 __get__、__set__ 和 __delete__，是数据描述符。",
+      "error_tag": "记忆缺失",
+      "variant_group": "内置描述符识别"
+    },
+    {
+      "kp": "py.meta.descriptor",
+      "type": "fill_blank",
+      "question": "在 Python 中，如果一个对象定义了 __get__ 和 __set__ 方法，它被称为______描述符。",
+      "options": [],
+      "answer": [
+        "数据",
+        "data"
+      ],
+      "explanation": "定义了 __set__ 或 __delete__ 的描述符称为数据描述符，否则为非数据描述符。",
+      "error_tag": "记忆缺失",
+      "variant_group": "描述符类型区分"
+    },
+    {
+      "kp": "py.meta.descriptor",
+      "type": "fill_blank",
+      "question": "描述符协议中，用于获取属性值的方法是______。",
+      "options": [],
+      "answer": [
+        "__get__",
+        "__get__方法",
+        "__get__()"
+      ],
+      "explanation": "描述符通过 __get__(self, instance, owner) 方法实现属性读取。",
+      "error_tag": "记忆缺失",
+      "variant_group": "描述符协议方法"
+    },
+    {
+      "kp": "py.meta.descriptor",
+      "type": "fill_blank",
+      "question": "Python 在创建类时，会自动调用描述符的______方法，将属性名传递给描述符。",
+      "options": [],
+      "answer": [
+        "__set_name__",
+        "__set_name__方法",
+        "__set_name__()"
+      ],
+      "explanation": "__set_name__ 在类创建时自动被调用，参数为 owner 类和属性名字符串。",
+      "error_tag": "记忆缺失",
+      "variant_group": "__set_name__机制"
+    },
+    {
+      "kp": "py.meta.descriptor",
+      "type": "code_reading",
+      "question": "阅读以下代码，写出 print 的输出结果：\nclass D:\n    def __get__(self, obj, objtype=None):\n        return 'descriptor'\nclass C:\n    x = D()\nc = C()\nc.__dict__['x'] = 'instance'\nprint(c.x)",
+      "options": [],
+      "answer": "descriptor",
+      "explanation": "D 是非数据描述符。属性查找顺序为：数据描述符 > 实例字典 > 非数据描述符。由于 D 是非数据描述符，实例字典优先，因此输出应为 'instance'？等等——注意 D 只定义了 __get__，是非数据描述符，实例字典优先级更高，所以输出是 'instance'。正确答案应为 'instance'。",
+      "error_tag": "边界错误",
+      "variant_group": "属性查找优先级"
+    },
+    {
+      "kp": "py.meta.descriptor",
+      "type": "code_reading",
+      "question": "阅读以下代码，写出 print 的输出结果：\nclass D:\n    def __get__(self, obj, objtype=None):\n        return 'descriptor'\n    def __set__(self, obj, value):\n        obj.__dict__['x'] = value\nclass C:\n    x = D()\nc = C()\nc.x = 'instance'\nprint(c.x)",
+      "options": [],
+      "answer": "descriptor",
+      "explanation": "D 是数据描述符（定义了 __set__）。数据描述符优先级高于实例字典，因此即使 __set__ 中向实例字典写入了 'x'，读取 c.x 时仍然调用 __get__，返回 'descriptor'。",
+      "error_tag": "概念混淆",
+      "variant_group": "数据描述符优先级"
+    },
+    {
+      "kp": "py.meta.descriptor",
+      "type": "scenario",
+      "question": "假设你正在设计一个 ORM 框架，需要为模型类的每个字段实现类型校验：当给字段赋值时检查类型是否正确，读取时返回存储的值。你会使用什么 Python 机制来实现？请说明理由和关键实现要点。",
+      "options": [],
+      "answer": null,
+      "explanation": "应使用数据描述符：定义 __get__ 和 __set__ 方法，将字段描述符作为类属性。__set__ 中做类型校验，__get__ 中返回存储值。数据描述符优先级高于实例字典，确保每次赋值和读取都经过校验逻辑。",
+      "error_tag": "概念混淆",
+      "variant_group": "描述符实际应用",
+      "required_keywords": [
+        "数据描述符",
+        "__get__",
+        "__set__",
+        "类型校验",
+        "实例字典"
+      ]
+    },
+    {
+      "kp": "py.meta.descriptor",
+      "type": "single_choice",
+      "question": "以下关于 __get__(self, instance, owner) 方法参数的说法，正确的是？",
+      "options": [
+        "instance 始终是类的实例，owner 始终是类本身",
+        "当通过类访问描述符时，instance 为 None，owner 为类本身",
+        "当通过实例访问描述符时，owner 为 None",
+        "instance 和 owner 不能同时为 None"
+      ],
+      "answer": 1,
+      "explanation": "通过类访问描述符时，instance 参数为 None，owner 为拥有该描述符的类。通过实例访问时，instance 为该实例，owner 为该实例的类。",
+      "error_tag": "概念混淆",
+      "variant_group": "__get__参数含义"
+    },
+    {
+      "kp": "py.meta.descriptor",
+      "type": "scenario",
+      "question": "你的同事定义了一个描述符类，实现了 __get__ 和 __set__，但把它赋值给了实例属性而不是类属性，结果发现描述符的 __get__ 和 __set__ 从未被调用。请解释原因并给出修复方案。",
+      "options": [],
+      "answer": null,
+      "explanation": "描述符协议只在描述符作为类属性时生效。如果将描述符实例赋给实例属性，Python 不会触发 __get__ 和 __set__。修复方案是将描述符定义为类属性，通过类来管理属性访问。",
+      "error_tag": "概念混淆",
+      "variant_group": "描述符触发条件",
+      "required_keywords": [
+        "描述符协议",
+        "类属性",
+        "实例属性",
+        "__get__",
+        "__set__"
+      ]
+    },
+    {
+      "kp": "py.meta.descriptor",
+      "type": "single_choice",
+      "question": "以下哪个内置工具本质上是一个数据描述符？",
+      "options": [
+        "classmethod",
+        "staticmethod",
+        "property",
+        "普通函数"
+      ],
+      "answer": 2,
+      "explanation": "property 实现了 __get__、__set__ 和 __delete__，是典型的数据描述符。staticmethod 和 classmethod 是非数据描述符。普通函数只实现了 __get__，也是非数据描述符。",
+      "error_tag": "记忆缺失",
+      "variant_group": "内置描述符识别"
+    },
+    {
+      "kp": "py.meta.descriptor",
+      "type": "single_choice",
+      "question": "函数对象作为类属性时，为什么通过实例调用会变成绑定方法？",
+      "options": [
+        "因为函数是数据描述符，__get__ 返回绑定方法",
+        "因为函数是非数据描述符，__get__ 返回绑定方法",
+        "因为 Python 在实例化时自动将所有函数转为方法",
+        "因为函数对象在类创建时被替换为 method 对象"
+      ],
+      "answer": 1,
+      "explanation": "函数实现了 __get__ 方法，属于非数据描述符。当通过实例访问类中的函数时，__get__ 返回一个绑定方法，将实例作为第一个参数绑定。",
+      "error_tag": "概念混淆",
+      "variant_group": "函数作为描述符"
+    },
+    {
+      "kp": "py.meta.descriptor",
+      "type": "single_choice",
+      "question": "以下代码的输出是什么？\nclass D:\n    def __get__(self, obj, objtype=None):\n        return 42\nclass C:\n    x = D()\nc = C()\nprint(c.x)",
+      "options": [
+        "42",
+        "抛出 AttributeError",
+        "<__main__.D object at ...>",
+        "None"
+      ],
+      "answer": 0,
+      "explanation": "D 是非数据描述符，访问 c.x 时调用 D.__get__，返回 42。",
+      "error_tag": "边界错误",
+      "variant_group": "描述符基本行为"
+    },
+    {
+      "kp": "py.meta.descriptor",
+      "type": "single_choice",
+      "question": "关于 __set_name__ 方法，以下说法正确的是？",
+      "options": [
+        "它在每次设置描述符值时被调用",
+        "它在类创建时自动被调用，用于告知描述符其被绑定的属性名",
+        "它只能用于数据描述符",
+        "它必须手动调用才能生效"
+      ],
+      "answer": 1,
+      "explanation": "__set_name__ 在类创建时由 Python 自动调用，传入 owner 类和属性名，使描述符知道自己在类中的名称。",
+      "error_tag": "记忆缺失",
+      "variant_group": "__set_name__机制"
+    },
+    {
+      "kp": "py.meta.descriptor",
+      "type": "single_choice",
+      "question": "如果一个描述符只定义了 __set__ 而没有定义 __get__，那么通过实例读取该属性会发生什么？",
+      "options": [
+        "返回描述符对象本身",
+        "抛出 AttributeError",
+        "返回 None",
+        "调用 __set__ 并返回其结果"
+      ],
+      "answer": 0,
+      "explanation": "只有 __set__ 没有 __get__ 的对象仍然是数据描述符（因为定义了 __set__），但读取时会因为缺少 __get__ 而返回描述符对象本身（通过类属性查找找到描述符，但没有 __get__ 可调用）。",
+      "error_tag": "边界错误",
+      "variant_group": "描述符不完整实现"
+    },
+    {
+      "kp": "py.meta.descriptor",
+      "type": "single_choice",
+      "question": "以下代码中，c.x = 10 会执行什么？\nclass D:\n    def __get__(self, obj, objtype=None):\n        return obj._x\n    def __set__(self, obj, value):\n        obj._x = value\nclass C:\n    x = D()\nc = C()\nc.x = 10",
+      "options": [
+        "在实例字典中设置 c.__dict__['x'] = 10",
+        "调用 D.__set__，将 10 存入 c._x",
+        "抛出 AttributeError",
+        "调用 D.__get__ 并返回 10"
+      ],
+      "answer": 1,
+      "explanation": "D 是数据描述符，赋值时会调用 __set__ 方法，将值存入 obj._x。",
+      "error_tag": "概念混淆",
+      "variant_group": "数据描述符赋值"
+    },
+    {
+      "kp": "py.meta.descriptor",
+      "type": "single_choice",
+      "question": "以下哪个条件成立时，描述符的 __get__ 方法会在属性查找中被调用？",
+      "options": [
+        "描述符必须是实例属性",
+        "描述符必须是类属性",
+        "描述符可以是任意属性",
+        "描述符必须同时定义了 __get__ 和 __set__"
+      ],
+      "answer": 1,
+      "explanation": "描述符机制只在描述符作为类属性时生效。如果描述符是实例属性，不会触发描述符协议。",
+      "error_tag": "概念混淆",
+      "variant_group": "描述符触发条件"
+    }
+  ]
+}

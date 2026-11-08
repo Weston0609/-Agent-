@@ -1,0 +1,634 @@
+{
+  "id": "s7u6l3",
+  "title": "s7u6l3",
+  "kps": [
+    "agent.mem.episodic",
+    "agent.mem.semantic"
+  ],
+  "theory": "## agent.mem.episodic\n\n## 一句话直觉\n\n**情景记忆（Episodic Memory）** 就是让 AI Agent（智能体）像人一样，记住“**什么时候、在哪里、发生了什么**”，并在之后需要时把这段经历**原样或摘要地取出来**用。  \n没有它，Agent 每次对话都像失忆；有了它，Agent 才能“吃一堑长一智”。\n\n---\n\n## 1. 什么是情景记忆：从“失忆助手”说起\n\n普通 LLM（大语言模型）的上下文窗口（Context Window）是临时的：关掉会话，一切归零。  \n**情景记忆**要解决的就是：把每一次交互事件（Event）持久化下来，形成一个可按时间、按语义检索的“经历库”。\n\n它和另外两种记忆的区别：\n\n| 类型 | 英文 | 内容 | 例子 |\n|---|---|---|---|\n| 语义记忆 | Semantic Memory | 事实、概念 | “北京是中国首都” |\n| 程序记忆 | Procedural Memory | 技能、步骤 | “怎么调用天气 API” |\n| **情景记忆** | **Episodic Memory** | **具体经历事件** | “2024-05-01 用户让我订了去上海的票” |\n\n> 关键结论：情景记忆 = **事件 + 时间戳 + 参与者 + 可检索**。\n\n```python\n# 一条最小的情景记忆记录：就是结构化的事件\nfrom dataclasses import dataclass, field\nfrom datetime import datetime\n\n@dataclass\nclass Episode:\n    timestamp: str          # 事件发生时间（ISO 格式）\n    role: str               # 谁说的：user / agent / tool\n    content: str            # 事件内容\n    metadata: dict = field(default_factory=dict)  # 标签、session_id 等\n\n# 造一条情景记忆\nep = Episode(\n    timestamp=datetime.now().isoformat(),\n    role=\"user\",\n    content=\"帮我订一张明天去上海的火车票\",\n    metadata={\"session_id\": \"s001\", \"intent\": \"book_train\"},\n)\nprint(ep)\n```\n\n---\n\n## 2. 存储：情景记忆怎么写进去\n\n工程上，情景记忆通常存到**向量数据库（Vector Database）** 或**关系库 + 向量索引**。  \n原因：检索时既要“按时间”，也要“按语义相似”。\n\n核心流程：  \n1. 事件发生 → 2. 生成文本 → 3. 调用 Embedding（嵌入）模型 → 4. 存入带向量的表。\n\n```python\n# 用内存版 FAISS 模拟向量库：把情景记忆写进去\nimport numpy as np\n\nclass SimpleEpisodicStore:\n    def __init__(self, dim=4):\n        self.dim = dim\n        self.vectors = []   # 向量\n        self.episodes = []  # 对应的情景\n\n    def _embed(self, text: str):\n        \"\"\"真实项目请换成 OpenAI / BGE / Sentence-Transformers 的 embedding 模型。\n        这里用哈希做一个可复现的玩具向量，仅用于教学。\"\"\"\n        rng = np.random.default_rng(abs(hash(text)) % (2**32))\n        return rng.random(self.dim)\n\n    def add(self, episode):\n        vec = self._embed(episode.content)\n        self.vectors.append(vec)\n        self.episodes.append(episode)\n\n    def search(self, query: str, top_k: int = 2):\n        if not self.vectors:\n            return []\n        q = self._embed(query)\n        mat = np.stack(self.vectors)\n        sims = mat @ q / (np.linalg.norm(mat, axis=1) * np.linalg.norm(q) + 1e-9)\n        idx = np.argsort(-sims)[:top_k]\n        return [(self.episodes[i], float(sims[i])) for i in idx]\n\nstore = SimpleEpisodicStore()\nstore.add(Episode(\"2024-05-01T10:00\", \"user\", \"我明天要从北京去上海\"))\nstore.add(Episode(\"2024-05-01T10:01\", \"agent\", \"已为您查询到 G1 次列车\"))\nstore.add(Episode(\"2024-05-02T09:00\", \"user\", \"上次那趟车几点发车？\"))\n\nfor ep, score in store.search(\"去上海的火车\", top_k=2):\n    print(f\"[{score:.3f}] {ep.timestamp} {ep.role}: {ep.content}\")\n```\n\n---\n\n## 3. 检索：情景记忆怎么被“想起来”\n\n检索策略有三种常见组合：\n\n1. **语义检索（Semantic Retrieval）**：按内容相似度。  \n2. **时间检索（Temporal Retrieval）**：最近 N 条 / 某时间段。  \n3. **混合检索（Hybrid Retrieval）**：两者加权，再加关键词过滤。\n\n真实的 Agent 会把检索结果拼进 Prompt（提示词）里，形成“回忆上下文”。\n\n```python\n# 混合检索：语义相似度 + 时间新鲜度\ndef hybrid_search(store, query, top_k=2, alpha=0.7):\n    results = store.search(query, top_k=len(store.episodes))\n    # 按时间排序后归一化新鲜度\n    episodes = [ep for ep, _ in results]\n    times = sorted(range(len(episodes)), key=lambda i: episodes[i].timestamp)\n    freshness = {i: rank / max(len(episodes) - 1, 1) for rank, i in enumerate(times)}\n    scored = [\n        (ep, alpha * sim + (1 - alpha) * freshness[i])\n        for i, (ep, sim) in enumerate(results)\n    ]\n    scored.sort(key=lambda x: -x[1])\n    return scored[:top_k]\n\nfor ep, score in hybrid_search(store, \"订票经历\"):\n    print(f\"[{score:.3f}] {ep.timestamp} {ep.content}\")\n```\n\n---\n\n## 4. 注入：把回忆放进 Agent 的决策循环\n\n记忆只有进入 Prompt，才会影响 Agent 行为。典型做法：  \n**系统提示（System Prompt）+ 检索到的情景 + 当前用户输入**。\n\n```python\ndef build_prompt(user_input: str, store) -> str:\n    recalled = store.search(user_input, top_k=3)\n    memory_block = \"\\n\".join(\n        f\"- ({ep.timestamp}) {ep.role}: {ep.content}\" for ep, _ in recalled\n    )\n    return f\"\"\"你是一个有记忆的助手。以下是你与用户的历史经历：\n{memory_block}\n\n用户现在说：{user_input}\n请结合历史经历回答。\"\"\"\n\nprint(build_prompt(\"上次那趟车几点发车？\", store))\n```\n\n> 关键结论：情景记忆的价值 = **存得下 · 检得准 · 用得上**。三者缺一，Agent 依然“失忆”。\n\n---\n\n## 5. 生命周期：写入、摘要、遗忘\n\n长期跑下去，记忆会膨胀。工程上必须处理：  \n- **写入策略**：每轮都写？还是只写重要事件？  \n- **摘要（Summarization）**：把多轮压缩成一条。  \n- **遗忘（Forgetting）**：按时间衰减、按容量淘汰。\n\n```python\n# 简易遗忘：只保留最近 100 条\nMAX_SIZE = 100\n\ndef add_with_forgetting(store, episode):\n    store.add(episode)\n    if len(store.episodes) > MAX_SIZE:\n        store.episodes = store.episodes[-MAX_SIZE:]\n        store.vectors  = store.vectors[-MAX_SIZE:]\n\nadd_with_forgetting(store, Episode(\"2024-05-03T12:00\", \"user\", \"谢谢\") )\nprint(\"当前记忆条数:\", len(store.episodes))\n```\n\n## agent.mem.semantic\n\n# agent.mem.semantic：让智能体记住“意思”，而不是“字面”\n\n> **一句话直觉**：如果 Agent（智能体）只按原文逐字搜索记忆，那么用户换一种说法它就“失忆”；语义记忆（semantic memory）让它按“含义”找回相关信息。\n\n---\n\n## 1. 为什么需要“语义记忆”？\n\n传统程序里，记忆通常是一个字典（dict）或数据库：你存什么，就按什么键查。  \n但对话型 Agent 面对的是自然语言（natural language），同一个意思可以有无数种说法：\n\n- “我明天要去北京出差”\n- “下周一我得飞一趟帝都”\n- “计划去北京办点事”\n\n如果 Agent 的记忆只存第一句，用户后面说“帮我查下帝都的天气”，字面匹配（literal matching）就找不到“北京”。  \n**语义记忆（semantic memory）** 的目标是：把文本映射成向量（vector），让“意思相近”的文本在向量空间里距离也相近，从而用相似度（similarity）检索。\n\n这一节你只需要记住一个核心结论：\n\n> **语义记忆 = 文本嵌入（embedding）+ 向量相似度检索（vector similarity search）**\n\n---\n\n## 2. 从文本到向量：嵌入（Embedding）\n\n**嵌入（embedding）** 是把一段文本变成一个固定长度的数字列表，例如 384 维或 1536 维。  \n理想情况下：\n\n- “北京”和“帝都”向量夹角很小；\n- “北京”和“香蕉”向量夹角很大。\n\n零基础阶段，我们可以先用一个轻量、离线可跑的库 `sentence-transformers`。  \n下面代码会把三句话变成向量，并计算余弦相似度（cosine similarity）。\n\n```python\n# pip install sentence-transformers\nfrom sentence_transformers import SentenceTransformer, util\n\n# 1) 加载一个轻量嵌入模型（首次运行会自动下载）\nmodel = SentenceTransformer(\"all-MiniLM-L6-v2\")\n\n# 2) 准备文本\nsentences = [\n    \"我明天要去北京出差\",\n    \"下周一我得飞一趟帝都\",\n    \"我想买一根香蕉\",\n]\n\n# 3) 编码为向量\nembeddings = model.encode(sentences, convert_to_tensor=True)\n\n# 4) 计算两两余弦相似度\nsim_matrix = util.cos_sim(embeddings, embeddings)\nprint(sim_matrix)\n# 你会看到第 0 句和第 1 句相似度明显高于第 0 句和第 2 句\n```\n\n**关键结论**：嵌入模型不是“关键词匹配”，而是把语义压缩进向量。  \n选模型时，维度、速度、语言支持都要权衡；但教学阶段先用小模型即可。\n\n---\n\n## 3. 把记忆存起来：向量库（Vector Store）\n\n有了向量，还需要一个地方存：**向量库（vector store）** 或 **向量数据库（vector database）**。  \n最小实现可以用 NumPy 数组；工程级会用 FAISS、Chroma、Qdrant、Milvus 等。\n\n语义记忆通常存两类东西：\n\n- **原始文本**：给 LLM（大语言模型）读；\n- **向量**：给检索用。\n\n下面用 NumPy 做一个“最小语义记忆”。\n\n```python\n# pip install numpy sentence-transformers\nimport numpy as np\nfrom sentence_transformers import SentenceTransformer\n\nclass SimpleSemanticMemory:\n    def __init__(self, model_name=\"all-MiniLM-L6-v2\"):\n        self.model = SentenceTransformer(model_name)\n        self.texts = []          # 原始记忆\n        self.vectors = None      # 向量矩阵\n\n    def add(self, text: str):\n        \"\"\"写入一条记忆\"\"\"\n        vec = self.model.encode([text], convert_to_numpy=True)[0]\n        self.texts.append(text)\n        if self.vectors is None:\n            self.vectors = vec.reshape(1, -1)\n        else:\n            self.vectors = np.vstack([self.vectors, vec])\n\n    def search(self, query: str, top_k: int = 2):\n        \"\"\"按语义相似度检索\"\"\"\n        q = self.model.encode([query], convert_to_numpy=True)[0]\n        # 余弦相似度 = 点积 / 模长乘积\n        q_norm = q / np.linalg.norm(q)\n        v_norm = self.vectors / np.linalg.norm(self.vectors, axis=1, keepdims=True)\n        sims = v_norm @ q_norm\n        idx = np.argsort(-sims)[:top_k]\n        return [(self.texts[i], float(sims[i])) for i in idx]\n\n# 使用\nmem = SimpleSemanticMemory()\nmem.add(\"我明天要去北京出差\")\nmem.add(\"我喜欢吃香蕉\")\nmem.add(\"下周一我得飞一趟帝都\")\n\nprint(mem.search(\"帮我查下帝都的天气\"))\n# 会优先命中“下周一我得飞一趟帝都”或“我明天要去北京出差”\n```\n\n**关键结论**：语义记忆的最小闭环是 `add()` 和 `search()`。  \n工程上，向量库负责索引与近似最近邻（ANN, Approximate Nearest Neighbor）加速。\n\n---\n\n## 4. 让 Agent 用上语义记忆：写入与召回\n\nAgent 的语义记忆一般分两步：\n\n1. **写入（write）**：从对话中抽取值得长期记住的事实，例如“用户要去北京”。\n2. **召回（recall）**：每轮对话前，用当前用户输入去检索 Top-K 相关记忆，拼进提示词（prompt）。\n\n伪代码：\n\n```python\n# 假设 memory 是上面的 SimpleSemanticMemory\n\ndef agent_step(user_input, memory, llm):\n    # 1) 召回相关记忆\n    recalled = memory.search(user_input, top_k=3)\n    context = \"\\n\".join([f\"- {t}\" for t, _ in recalled])\n\n    # 2) 拼 prompt\n    prompt = f\"\"\"已知用户信息：\n{context}\n\n用户说：{user_input}\n请回答：\"\"\"\n\n    # 3) 调 LLM（这里用假函数示意）\n    answer = llm(prompt)\n\n    # 4) 可选：把新事实写回记忆\n    # memory.add(extract_fact(user_input))\n    return answer\n```\n\n**关键结论**：语义记忆不是“全量塞给 LLM”，而是**按需召回**，这样既省 token（词元）又更准。\n\n---\n\n## 5. 工程级要注意什么？\n\n1. **分块（chunking）**：长文本要切成合适大小的块再嵌入。\n2. **元数据（metadata）**：时间、来源、用户 ID 要一起存，方便过滤。\n3. **去重与更新**：用户改口时，旧记忆要能失效或覆盖。\n4. **混合检索（hybrid search）**：向量 + 关键词（BM25）往往比纯向量更稳。\n5. **评估（evaluation）**：用 Recall@K、MRR 等指标衡量召回质量。\n\n**关键结论**：语义记忆是 RAG（Retrieval-Augmented Generation，检索增强生成）和长期记忆系统的基础组件。\n\n---\n\n## 动手练习\n\n**任务**：实现一个“个人语义备忘录”命令行程序。\n\n要求：\n\n1. 用 `sentence-transformers` 的 `all-MiniLM-L6-v2` 做嵌入。\n2. 支持三个命令：\n   - `add <文本>`：写入记忆；\n   - `search <查询>`：返回 Top-3 相似记忆及相似度；\n   - `quit`：退出。\n3. 额外挑战：把记忆持久化到 `memory.json`，重启后还能加载。\n\n参考代码骨架：\n\n```python\n# memo.py\nimport json\nimport numpy as np\nfrom sentence_transformers import SentenceTransformer\n\nmodel = SentenceTransformer(\"all-MiniLM-L6-v2\")\n\nclass Memo:\n    def __init__(self, path=\"memory.json\"):\n        self.path = path\n        self.texts = []\n        self.vectors = []\n        self.load()\n\n    def load(self):\n        try:\n            data = json.load(open(self.path, \"r\", encoding=\"utf-8\"))\n            self.texts = [d[\"text\"] for d in data]\n            self.vectors = [np.array(d[\"vector\"]) for d in data]\n        except FileNotFoundError:\n            pass\n\n    def save(self):\n        data = [{\"text\": t, \"vector\": v.tolist()} for t, v in zip(self.texts, self.vectors)]\n        json.dump(data, open(self.path, \"w\", encoding=\"utf-8\"), ensure_ascii=False)\n\n    def add(self, text):\n        v = model.encode([text], convert_to_numpy=True)[0]\n        self.texts.append(text)\n        self.vectors.append(v)\n        self.save()\n\n    def search(self, query, top_k=3):\n        if not self.vectors:\n            return []\n        q = model.encode([query], convert_to_numpy=True)[0]\n        q = q / np.linalg.norm(q)\n        M = np.vstack(self.vectors)\n        M = M / np.linalg.norm(M, axis=1, keepdims=True)\n        sims = M @ q\n        idx = np.argsort(-sims)[:top_k]\n        return [(self.texts[i], float(sims[i])) for i in idx]\n\nif __name__ == \"__main__\":\n    memo = Memo()\n    while True:\n        cmd = input(\"> \").strip()\n        if cmd == \"quit\":\n            break\n        if cmd.startswith(\"add \"):\n            memo.add(cmd[4:])\n            print(\"已记住\")\n        elif cmd.startswith(\"search \"):\n            for text, score in memo.search(cmd[7:]):\n                print(f\"{score:.3f}  {text}\")\n```\n\n完成后你会得到一个可复用的语义记忆模块，后续可以接入任何 LLM 做长期记忆。\n",
+  "quiz": [
+    {
+      "kp": "agent.mem.episodic",
+      "type": "single_choice",
+      "question": "在构建一个客服对话 Agent 时，工程师把「用户本次会话中提到的订单号」和「用户上周反馈过的退款问题」都存进了同一份记忆。关于这两种信息的记忆类型，下列说法最准确的是？",
+      "options": [
+        "两者都属于情景记忆，因为它们都来自真实发生过的交互事件",
+        "订单号属于会话上下文，退款反馈属于情景记忆，二者在时间跨度和检索方式上并不相同",
+        "两者都属于语义记忆，因为它们都是可以被检索的事实",
+        "只有订单号属于记忆，退款反馈不属于任何记忆类型"
+      ],
+      "answer": 1,
+      "explanation": "情景记忆强调对过去具体经历事件的存储与按情境/时间线索的回溯式检索。本次会话内的订单号更多是工作性的会话上下文，而跨会话的「上周退款经历」才是典型的情景记忆。把它们笼统归为同一类会混淆检索时机与生命周期，故 B 最准确。",
+      "error_tag": "概念混淆",
+      "variant_group": "情景记忆与会话上下文的区分"
+    },
+    {
+      "kp": "agent.mem.episodic",
+      "type": "single_choice",
+      "question": "下列关于 Agent 情景记忆的说法，哪一项最符合它的本质特征？",
+      "options": [
+        "它存储的是与具体时间、地点、参与者绑定的经历事件，可按情景线索被重新唤起",
+        "它存储的是通用的世界知识和概念定义，与何时习得无关",
+        "它等同于模型权重中固化的知识，训练后不再改变",
+        "它只能存储结构化的数值，不能存储自然语言描述"
+      ],
+      "answer": 0,
+      "explanation": "情景记忆的核心是「关于具体经历的事件」并带有情境线索（时间、场合、参与者）。语义记忆才是通用概念与事实；权重知识是参数化记忆，与情景记忆不同；情景记忆当然可以用自然语言存储。故 A 正确。",
+      "error_tag": "概念混淆",
+      "variant_group": "情景记忆的本质特征"
+    },
+    {
+      "kp": "agent.mem.episodic",
+      "type": "multi_choice",
+      "question": "在设计 Agent 的情景记忆模块时，下列哪些属于应当考虑的关键要素？（多选）",
+      "options": [
+        "为每条经历记录时间戳与会话来源等情境线索",
+        "设计写入策略，决定何时把交互摘要为一条事件",
+        "设计检索策略，结合相关性与时间新鲜度排序",
+        "考虑时效性，对过时或冲突的记忆降权或更新",
+        "确保每条记忆都直接修改模型权重"
+      ],
+      "answer": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "explanation": "情景记忆模块的关键要素包括情境线索、写入策略、检索策略与时效/冲突处理。而「直接修改模型权重」不属于情景记忆的做法，情景记忆通常存于外部可检索存储，故前四项正确。",
+      "error_tag": "概念混淆",
+      "variant_group": "情景记忆模块设计要素"
+    },
+    {
+      "kp": "agent.mem.episodic",
+      "type": "multi_choice",
+      "question": "下列哪些说法正确地描述了情景记忆与语义记忆的区别？（多选）",
+      "options": [
+        "情景记忆绑定具体经历的时间与情境，语义记忆更关注一般性知识",
+        "情景记忆通常按经历事件检索，语义记忆通常按概念与事实检索",
+        "情景记忆可以随新经历不断积累，语义记忆相对更稳定",
+        "情景记忆只能由程序硬编码，语义记忆只能由模型生成",
+        "把情景记忆中的规律提炼出来，可以形成语义记忆"
+      ],
+      "answer": [
+        0,
+        1,
+        2,
+        4
+      ],
+      "explanation": "A、B、C、E 都正确描述了二者的差异与联系：情境绑定、检索方式、稳定性、以及从经历提炼知识。D 把两者限定为「硬编码/模型生成」，是错误二分，故不选。",
+      "error_tag": "概念混淆",
+      "variant_group": "情景记忆与语义记忆的关系"
+    },
+    {
+      "kp": "agent.mem.episodic",
+      "type": "multi_choice",
+      "question": "某 Agent 只会按语义相似度检索历史记忆，导致经常遗漏「用户刚刚说过的重要偏好」。下列哪些改进方向是合理的？（多选）",
+      "options": [
+        "在检索打分中加入时间新鲜度，让近期经历更容易被召回",
+        "对重要偏好做显式标记，使其在检索时获得更高权重",
+        "把检索范围限制为仅最近一条记录",
+        "基于会话情境（如同一会话）做过滤与提升",
+        "彻底删除所有历史记忆以避免干扰"
+      ],
+      "answer": [
+        0,
+        1,
+        3
+      ],
+      "explanation": "改进方向包括引入时间新鲜度、对重要内容加权、按会话情境过滤提升，这些都是情景记忆检索的合理增强。仅取最近一条会丢失信息，删除全部历史同样不合理，故 A、B、D 正确。",
+      "error_tag": "边界错误",
+      "variant_group": "情景记忆的检索策略"
+    },
+    {
+      "kp": "agent.mem.episodic",
+      "type": "multi_choice",
+      "question": "关于情景记忆的生命周期管理，下列哪些做法是合理的？（多选）",
+      "options": [
+        "对新写入的经历设置时间戳，便于后续按新鲜度排序",
+        "对长期未被访问的旧记忆做归档或清理",
+        "当新旧经历冲突时，保留两者并标记冲突供后续判断",
+        "写入后永不核对，认为情景记忆不可能出错",
+        "对记忆做摘要以控制存储规模"
+      ],
+      "answer": [
+        0,
+        1,
+        2,
+        4
+      ],
+      "explanation": "生命周期管理包括时间戳、归档清理、冲突标记与摘要压缩，以控制规模和保持可用性。认为记忆永不需核对是错误假设，故排除 D。",
+      "error_tag": "边界错误",
+      "variant_group": "情景记忆的生命周期管理"
+    },
+    {
+      "kp": "agent.mem.episodic",
+      "type": "fill_blank",
+      "question": "情景记忆依赖具体的经历与________线索（如时间、场合、参与者）来被重新唤起。",
+      "options": [],
+      "answer": [
+        "情境",
+        "情境化",
+        "上下文",
+        "语境"
+      ],
+      "explanation": "情景记忆的关键在于它与具体情境（时间、场合、参与者等）绑定，这些情境线索是唤起回忆的依据。故填「情境」（或等价的「情境化/上下文」）。",
+      "error_tag": "记忆缺失",
+      "variant_group": "情景记忆的检索线索"
+    },
+    {
+      "kp": "agent.mem.episodic",
+      "type": "fill_blank",
+      "question": "与情景记忆相对、存储不依赖具体经历情境的一般性知识与事实的记忆类型是________记忆。",
+      "options": [],
+      "answer": [
+        "语义",
+        "语义记忆",
+        "semantic"
+      ],
+      "explanation": "语义记忆存储一般性的概念、事实与知识，与情景记忆相对。题干描述正是语义记忆，故填「语义」（或「语义记忆」）。",
+      "error_tag": "概念混淆",
+      "variant_group": "情景记忆与语义记忆的关系"
+    },
+    {
+      "kp": "agent.mem.episodic",
+      "type": "fill_blank",
+      "question": "在设计情景记忆检索时，除了内容相关性外，常引入________来衡量经历的新鲜程度，使近期经历更易被召回。",
+      "options": [],
+      "answer": [
+        "时间新鲜度",
+        "新鲜度",
+        "时间衰减",
+        "时效性"
+      ],
+      "explanation": "情景记忆检索常加入时间新鲜度（或时间衰减）这一情境因素，让近期经历获得更高排序。故填「时间新鲜度」或其等价说法。",
+      "error_tag": "记忆缺失",
+      "variant_group": "情景记忆的检索策略"
+    },
+    {
+      "kp": "agent.mem.episodic",
+      "type": "code_reading",
+      "question": "阅读下面用于检索情景记忆的伪代码，回答问题。\n\n```python\ndef retrieve(memories, query, now, alpha=0.7):\n    scored = []\n    for m in memories:\n        sim = similarity(query, m.text)\n        recency = 1.0 / (1.0 + (now - m.timestamp))\n        score = alpha * sim + (1 - alpha) * recency\n        scored.append((score, m))\n    scored.sort(reverse=True)\n    return [m for _, m in scored[:3]]\n```\n\n问：这段代码在选择情景记忆时同时考虑了哪两类因素？分别由哪个变量/表达式体现？",
+      "options": [],
+      "answer": "同时考虑了内容相关性（由 sim = similarity(query, m.text) 体现）和时间新鲜度（由 recency = 1.0 / (1.0 + (now - m.timestamp)) 体现），并用 alpha 对两者加权求和。",
+      "explanation": "sim 反映语义相关性，recency 反映时间新鲜度，二者由 alpha 组合成最终打分。这正体现了情景记忆检索中「相关性 + 情境线索」的综合排序思路。",
+      "error_tag": "概念混淆",
+      "variant_group": "情景记忆的检索策略"
+    },
+    {
+      "kp": "agent.mem.episodic",
+      "type": "code_reading",
+      "question": "阅读下面写入情景记忆的伪代码，回答问题。\n\n```python\ndef on_session_end(conversation, store):\n    if len(conversation.turns) == 0:\n        return\n    summary = summarize(conversation.turns)\n    event = {\n        \"text\": summary,\n        \"timestamp\": conversation.end_time,\n        \"session_id\": conversation.id,\n        \"participants\": conversation.users,\n    }\n    store.append(event)\n```\n\n问：这段代码为什么选择在会话结束时（而非每收到一条消息时）写入一条情景记忆？",
+      "options": [],
+      "answer": "因为情景记忆以有意义的事件为单位，会话结束时写入可对整段交互做摘要，保留时间、会话来源、参与者等情境线索，同时避免逐条写入带来的噪声与存储膨胀。",
+      "explanation": "情景记忆的写入粒度是事件，会话结束是自然的边界，可产出结构化摘要并附带情境线索。逐条写入会产生大量碎片与噪声，故在会话结束时写入更合理。",
+      "error_tag": "边界错误",
+      "variant_group": "情景记忆的写入时机"
+    },
+    {
+      "kp": "agent.mem.episodic",
+      "type": "scenario",
+      "question": "工程场景：你为一个电商客服 Agent 设计记忆模块。产品经理要求它既能回答「我上周咨询过的那笔退货现在怎样了」，又不能让提示词无限增长。团队最初的做法是把所有历史对话原文都拼进当前提示词。请说明你会如何改造记忆设计，并解释原因（至少涉及存储粒度、检索方式和时效处理三个方面）。",
+      "options": [],
+      "answer": null,
+      "explanation": "应把历史交互按事件粒度做摘要并附加时间等情境线索，存入可检索的情景记忆存储；回答时按内容相关性与时间新鲜度综合检索相关事件，而非拼接全部原文；同时对过时或冲突的记忆做降权或更新。这样既能让 Agent 回溯具体经历，又能控制上下文长度。",
+      "error_tag": "边界错误",
+      "variant_group": "情景记忆的工程落地",
+      "required_keywords": [
+        "情景记忆",
+        "摘要",
+        "时间",
+        "检索",
+        "时效"
+      ]
+    },
+    {
+      "kp": "agent.mem.episodic",
+      "type": "single_choice",
+      "question": "某 Agent 需要在多轮对话中「记住用户三分钟前说过不喜欢某个品牌」。从情景记忆的角度看，最关键的检索线索通常是什么？",
+      "options": [
+        "该品牌的词向量相似度，且必须全局扫描所有历史",
+        "发生时间与对话情境，使这次偏好陈述能被按近期经历重新唤起",
+        "模型的参数规模，规模越大记忆越准",
+        "用户的账户等级，等级越高越优先"
+      ],
+      "answer": 1,
+      "explanation": "情景记忆依赖情境线索（尤其是时间、会话上下文）来检索具体经历。类似「三分钟前说过」这种近期经历，需要按时间/情境线索唤起，而非单纯按词向量全局扫描。参数规模和账户等级与情景记忆检索机制无关。",
+      "error_tag": "概念混淆",
+      "variant_group": "情景记忆的检索线索"
+    },
+    {
+      "kp": "agent.mem.episodic",
+      "type": "scenario",
+      "question": "工程场景：某 Agent 上线后被用户投诉「记不住刚说过的话，却老翻旧账」。日志显示它检索记忆时只看语义相似度，不区分时间。请分析问题原因，并给出至少两条改进措施与理由。",
+      "options": [],
+      "answer": null,
+      "explanation": "问题在于检索只依赖语义相似度，忽略了情景记忆赖以唤起的时间线索，导致近期经历被久远但语义相近的旧经历压制。改进可在检索打分中引入时间新鲜度并做加权综合排序，同时优先在同一会话情境内过滤/提升近期经历，从而让「刚说过的话」更容易被召回。",
+      "error_tag": "边界错误",
+      "variant_group": "情景记忆的检索策略",
+      "required_keywords": [
+        "时间新鲜度",
+        "情景记忆",
+        "检索",
+        "加权",
+        "排序"
+      ]
+    },
+    {
+      "kp": "agent.mem.episodic",
+      "type": "single_choice",
+      "question": "下面关于情景记忆与语义记忆关系的描述，正确的是？",
+      "options": [
+        "两者完全对立，一个系统只能选其一实现",
+        "情景记忆中的具体经历经过抽象和提炼后，可以逐渐沉淀为语义记忆",
+        "语义记忆必须先于情景记忆存在，否则无法记住任何事件",
+        "情景记忆只能存错误的经历，语义记忆只能存正确的知识"
+      ],
+      "answer": 1,
+      "explanation": "认知科学中一个常见观点是：反复出现的具体经历可被抽象、去情境化，逐步形成语义记忆（一般性知识）。二者并非对立，也不是以对错划分。因此 B 正确，其余选项为常见误解。",
+      "error_tag": "概念混淆",
+      "variant_group": "情景记忆与语义记忆的关系"
+    },
+    {
+      "kp": "agent.mem.episodic",
+      "type": "single_choice",
+      "question": "某团队为 Agent 设计记忆模块，需求是「能回答用户『我上次跟你说过什么』」。仅把每次对话原文拼进当前提示词，最主要的缺陷是什么？",
+      "options": [
+        "拼接会使模型无法生成任何回复",
+        "随会话增长上下文会超长，且缺乏按情景检索的能力，难以稳定回溯久远经历",
+        "拼接会导致语法错误，程序无法运行",
+        "这种做法会改变模型的权重，破坏模型"
+      ],
+      "answer": 1,
+      "explanation": "把全部历史原文塞进提示词会受上下文窗口限制，且没有对经历做结构化存储与检索，无法可靠地回答「上次说过什么」。它不会导致无法生成、语法错误或改变权重，故 B 正确。",
+      "error_tag": "边界错误",
+      "variant_group": "情景记忆的工程必要性"
+    },
+    {
+      "kp": "agent.mem.episodic",
+      "type": "single_choice",
+      "question": "关于 Agent 情景记忆的写入时机，下列说法最合理的是？",
+      "options": [
+        "每收到一个 token 就写入一条永久记忆",
+        "在完成一次有意义的交互事件后（如任务结束、用户表达重要偏好）进行摘要并写入",
+        "只在程序启动时写入一次，之后不再更新",
+        "只有当模型参数更新时才写入"
+      ],
+      "answer": 1,
+      "explanation": "情景记忆以「事件」为粒度，通常在完成一段有意义的交互后做摘要/结构化写入，兼顾信息量与存储成本。逐 token 写入会造成噪声与膨胀；一次性或仅随参数更新写入都不符合情景记忆的动态积累特性。",
+      "error_tag": "边界错误",
+      "variant_group": "情景记忆的写入时机"
+    },
+    {
+      "kp": "agent.mem.episodic",
+      "type": "single_choice",
+      "question": "下列关于情景记忆检索策略的说法，哪一项是常见且合理的做法？",
+      "options": [
+        "只按时间倒序返回最近 N 条，不看相关性",
+        "只按语义相似度检索，完全忽略时间因素",
+        "结合语义相关性与时间新鲜度等情境线索进行综合排序",
+        "随机抽取历史记录，以保证多样性"
+      ],
+      "answer": 2,
+      "explanation": "情景记忆检索常同时考虑内容相关性（语义）与情境线索（如时间新鲜度、会话来源），做综合排序。仅按时间、仅按相似度或随机抽取都各有明显缺陷，故 C 最合理。",
+      "error_tag": "概念混淆",
+      "variant_group": "情景记忆的检索策略"
+    },
+    {
+      "kp": "agent.mem.episodic",
+      "type": "single_choice",
+      "question": "某 Agent 把用户「上一次购买的收货地址」当作情景记忆保存并复用。后来用户搬了家。系统若直接复用旧地址，最可能违反的原则是？",
+      "options": [
+        "情景记忆应当只读，永远不能更新",
+        "情景记忆需要处理时效性与冲突，过时经历应被降权或覆盖",
+        "情景记忆必须加密，否则不能使用",
+        "情景记忆和地址无关，不应存储地址"
+      ],
+      "answer": 1,
+      "explanation": "情景记忆会过时，系统需处理时效性与新旧冲突（如地址变更），对过时条目降权、标记或覆盖。情景记忆并非只读，也不因加密或存储类型而被禁止。故 B 正确。",
+      "error_tag": "边界错误",
+      "variant_group": "情景记忆的时效与冲突处理"
+    },
+    {
+      "kp": "agent.mem.episodic",
+      "type": "single_choice",
+      "question": "以下哪一项最不适合作为情景记忆的存储内容？",
+      "options": [
+        "「2024-05-01 用户咨询了退货流程并最终选择换货」",
+        "「用户在本会话中表现出对物流延迟的不满」",
+        "「所有用户共享的物理常数与数学公理」",
+        "「用户上周三提到他的会员将于下月到期」"
+      ],
+      "answer": 2,
+      "explanation": "情景记忆存储与具体时间/情境绑定的经历事件。物理常数、数学公理这类与情境无关的通用知识属于语义记忆，不适合放进情景记忆，故 C 正确。",
+      "error_tag": "概念混淆",
+      "variant_group": "情景记忆的适用内容"
+    },
+    {
+      "kp": "agent.mem.episodic",
+      "type": "single_choice",
+      "question": "关于情景记忆的「粒度」，下列做法最合理的是？",
+      "options": [
+        "每条记忆都保留原始逐字对话，不做任何压缩",
+        "把一整天的交互合并成一条无结构的超长文本",
+        "以有意义的事件为单位，做适度摘要并保留关键线索（时间、参与者、结果）",
+        "只存储单个关键词，丢弃所有上下文"
+      ],
+      "answer": 2,
+      "explanation": "情景记忆以事件为粒度、适度摘要并保留关键情境线索，兼顾可检索性与存储效率。逐字保留会膨胀且噪声大；无结构超长文本难以检索；只存关键词则丢失情境，均不合理。",
+      "error_tag": "边界错误",
+      "variant_group": "情景记忆的粒度设计"
+    },
+    {
+      "kp": "agent.mem.semantic",
+      "type": "single_choice",
+      "question": "某对话助手需要记住“用户对花生过敏”这一事实，即使三个月后开启全新会话也要能想起来。这类跨会话、以事实为中心的记忆，最贴近下列哪一类？",
+      "options": [
+        "工作记忆（当前上下文窗口内的临时信息）",
+        "情节记忆（某次具体交互发生的时间与经过）",
+        "语义记忆（与具体会话无关的稳定事实与概念）",
+        "程序记忆（如何执行某个技能或流程）"
+      ],
+      "answer": 2,
+      "explanation": "“用户对花生过敏”是与具体会话、时间无关的稳定事实，属于语义记忆。工作记忆随会话结束而消失；情节记忆记录的是“什么时候发生过什么”；程序记忆是技能性知识。",
+      "error_tag": "概念混淆",
+      "variant_group": "semantic_vs_episodic"
+    },
+    {
+      "kp": "agent.mem.semantic",
+      "type": "single_choice",
+      "question": "下面哪种信息最适合放入智能体的语义记忆，而不是情节记忆？",
+      "options": [
+        "“昨天上午用户让我把报表导出成 CSV。”",
+        "“上周三的对话里用户情绪很差。”",
+        "“公司产品支持邮箱登录和企业 SSO 两种方式。”",
+        "“这次会话中用户先问了退款再问了物流。”"
+      ],
+      "answer": 2,
+      "explanation": "“产品支持哪些登录方式”是可复用的稳定事实，与具体某次交互无关，属于语义记忆。其余三项都绑定了具体时间或某次会话经历，属情节记忆。",
+      "error_tag": "概念混淆",
+      "variant_group": "semantic_vs_episodic"
+    },
+    {
+      "kp": "agent.mem.semantic",
+      "type": "single_choice",
+      "question": "关于语义记忆与检索增强生成（RAG）的关系，下列说法正确的是？",
+      "options": [
+        "语义记忆必须依赖 RAG，二者是同一个东西",
+        "语义记忆可以借助向量检索等技术来存取，但它是关于“记住用户/领域稳定事实”的机制，与一般文档问答的 RAG 目标不同",
+        "RAG 只能检索文档，不能用于记忆",
+        "有了 RAG 就不需要任何记忆管理"
+      ],
+      "answer": 1,
+      "explanation": "二者可共享向量检索等技术，但语义记忆强调对稳定事实的抽取、更新与个性化，文档问答 RAG 侧重从知识库检索资料，目标与生命周期管理不同。",
+      "error_tag": "概念混淆",
+      "variant_group": "semantic_vs_rag"
+    },
+    {
+      "kp": "agent.mem.semantic",
+      "type": "multi_choice",
+      "question": "下列哪些内容适合作为语义记忆长期保存？（多选）",
+      "options": [
+        "用户的长期饮食禁忌",
+        "用户所在时区",
+        "某次会话中用户随口说的“今天好累”",
+        "产品对某项功能的稳定计费规则"
+      ],
+      "answer": [
+        0,
+        1,
+        3
+      ],
+      "explanation": "长期禁忌、时区、稳定计费规则都是可复用的稳定事实。而“今天好累”是绑定当时情境的临时状态，属于情节性/瞬时信息，不适合长期写入语义记忆。",
+      "error_tag": "边界错误",
+      "variant_group": "semantic_what_to_store"
+    },
+    {
+      "kp": "agent.mem.semantic",
+      "type": "multi_choice",
+      "question": "设计语义记忆的写入流程时，下列哪些做法是合理的？（多选）",
+      "options": [
+        "只抽取可复用、相对稳定的事实，而非逐句转存",
+        "对同一主体的事实做冲突检测与更新",
+        "为每条记忆保留来源与时间，便于溯源",
+        "为了提高召回率，把所有原始对话完整无差别地塞进语义库"
+      ],
+      "answer": [
+        0,
+        1,
+        2
+      ],
+      "explanation": "抽取稳定事实、处理冲突、保留元数据都是良好实践。无差别全量转存会带来大量冗余与噪声，反而降低检索质量，是不合理的。",
+      "error_tag": "边界错误",
+      "variant_group": "semantic_write_strategy"
+    },
+    {
+      "kp": "agent.mem.semantic",
+      "type": "multi_choice",
+      "question": "检索语义记忆时，为保证输出可靠，通常需要考虑下列哪些因素？（多选）",
+      "options": [
+        "检索结果与当前问题的语义相关性",
+        "记忆的新鲜度/时效",
+        "记忆之间是否相互矛盾",
+        "把检索到的全部内容不筛选地拼进提示词"
+      ],
+      "answer": [
+        0,
+        1,
+        2
+      ],
+      "explanation": "相关性、时效与一致性都会影响记忆可用性，需要评估。而不筛选地全量拼接会污染上下文，是应避免的反模式。",
+      "error_tag": "记忆缺失",
+      "variant_group": "semantic_retrieval_quality"
+    },
+    {
+      "kp": "agent.mem.semantic",
+      "type": "multi_choice",
+      "question": "关于语义记忆与情节记忆的区别，下列描述正确的有哪些？（多选）",
+      "options": [
+        "语义记忆侧重“是什么”的稳定事实，情节记忆侧重“何时发生过什么”的具体经历",
+        "语义记忆通常不绑定某次具体会话，情节记忆往往绑定具体时间与事件",
+        "语义记忆中的一条事实可能由多条情节记忆归纳而来",
+        "情节记忆只能由人类产生，智能体无法拥有情节记忆"
+      ],
+      "answer": [
+        0,
+        1,
+        2
+      ],
+      "explanation": "前三条准确刻画了两类记忆的差异与联系：语义记忆可由情节记忆抽象归纳而来。智能体同样可以实现情节记忆，故最后一条错误。",
+      "error_tag": "概念混淆",
+      "variant_group": "semantic_vs_episodic"
+    },
+    {
+      "kp": "agent.mem.semantic",
+      "type": "fill_blank",
+      "question": "在语义记忆的存储与检索中，常把文本转换为数值向量，并用向量之间的距离或相似度衡量文本在____上的接近程度，从而支持按含义而非字面关键词检索。请填入最合适的词。",
+      "options": [],
+      "answer": [
+        "语义",
+        "含义",
+        "语义/含义",
+        "意思"
+      ],
+      "explanation": "向量表示的核心在于捕捉语义；相似度衡量的是语义接近程度，因此应填“语义”（含义/意思等近义表达亦可）。",
+      "error_tag": "记忆缺失",
+      "variant_group": "semantic_embedding_purpose"
+    },
+    {
+      "kp": "agent.mem.semantic",
+      "type": "fill_blank",
+      "question": "当语义记忆中出现两条相互冲突的事实（例如“现居北京”与“现居上海”）时，为了保持记忆的一致性，通常的做法是对旧事实进行____或标记为失效。请填入一个表示“用新信息覆盖旧信息”的词。",
+      "options": [],
+      "answer": [
+        "更新",
+        "覆盖",
+        "替换",
+        "update",
+        "overwrite"
+      ],
+      "explanation": "冲突时应以新事实更新或覆盖旧事实，并保留必要的溯源信息，避免检索到过期结论。",
+      "error_tag": "边界错误",
+      "variant_group": "semantic_update_conflict"
+    },
+    {
+      "kp": "agent.mem.semantic",
+      "type": "code_reading",
+      "question": "阅读下面的伪代码，回答问题：这段流程最后会向模型展示哪些记忆？为什么？\n\nfacts = [\n  {\"text\": \"用户现居上海\", \"updated_at\": \"2025-06-01\"},\n  {\"text\": \"用户现居北京\", \"updated_at\": \"2023-01-01\"},\n  {\"text\": \"用户喜欢用 Markdown 写周报\", \"updated_at\": \"2025-05-20\"},\n]\n\ndef select_for_prompt(facts, topic):\n    fresh = [f for f in facts if is_fresh(f)]\n    relevant = [f for f in fresh if is_relevant(f, topic)]\n    return dedupe_conflicts(relevant)\n\n# 假设 is_fresh 过滤掉 2023 的旧记忆，is_relevant 对话题“生成周报”\n# 只保留与周报相关的记忆，dedupe_conflicts 对同一主体保留最新一条\nprint(select_for_prompt(facts, \"生成周报\"))",
+      "options": [],
+      "answer": "只展示“用户喜欢用 Markdown 写周报”。因为 is_fresh 过滤掉了 2023 年的“现居北京”，而 is_relevant 认为“现居上海”与“生成周报”不相关；剩下的相关且新鲜记忆只有 Markdown 偏好这一条。",
+      "explanation": "该流程先用新鲜度筛选，再用相关性筛选，最后对冲突去重。旧地址被时效过滤，现居地虽新但与周报话题不相关，故最终只剩 Markdown 偏好。",
+      "error_tag": "理解偏差",
+      "variant_group": "semantic_pipeline_reasoning"
+    },
+    {
+      "kp": "agent.mem.semantic",
+      "type": "code_reading",
+      "question": "阅读下面的伪代码并回答问题：如果把 write_memory 改为对每条用户消息都执行且不做抽取，最可能出现什么问题？\n\ndef handle(user_msg):\n    reply = model(user_msg)\n    write_memory(user_msg)   # 直接存原始消息\n    return reply\n\n# 场景：用户连续说“早上好”“今天天气不错”“对了，我对花生过敏”",
+      "options": [],
+      "answer": "会把大量与稳定事实无关的寒暄和临时内容写入语义记忆，造成噪声与冗余，降低后续检索的相关性和准确性；真正有价值的“花生过敏”反而可能被淹没。",
+      "explanation": "语义记忆应存稳定、可复用的事实。逐条无差别转存会把“早上好”“今天天气不错”等瞬时/寒暄内容当作记忆，污染检索结果。",
+      "error_tag": "边界错误",
+      "variant_group": "semantic_noise"
+    },
+    {
+      "kp": "agent.mem.semantic",
+      "type": "single_choice",
+      "question": "在实现语义记忆时，通常先把一段信息转成向量再存入向量库。这样做最核心的目的是什么？",
+      "options": [
+        "压缩存储空间，降低磁盘占用",
+        "让语义相近的内容在向量空间中距离更近，从而支持按含义检索",
+        "对内容做加密，防止泄露",
+        "把自然语言翻译成另一种语言"
+      ],
+      "answer": 1,
+      "explanation": "向量化的核心价值是语义相似度可计算：含义相近的文本向量距离近，于是可以按“意思”而不是关键词精确匹配来检索。空间压缩、加密、翻译都不是主要目的。",
+      "error_tag": "概念混淆",
+      "variant_group": "semantic_embedding_purpose"
+    },
+    {
+      "kp": "agent.mem.semantic",
+      "type": "single_choice",
+      "question": "关于语义记忆的写入时机，下列说法更合理的是？",
+      "options": [
+        "每收到一条用户消息就立即无条件写入，越多越好",
+        "只在会话结束时把整段对话原文一次性写入",
+        "从交互中抽取稳定、可复用的事实，并附带来源与时间，必要时做去重与更新",
+        "只要模型参数量足够大，就不需要单独的语义记忆"
+      ],
+      "answer": 2,
+      "explanation": "语义记忆的关键是“抽取稳定事实 + 可追溯 + 可更新”。无条件全写会引入噪声和矛盾；只存原文难以复用且冗余；模型参数无法动态、精确地记住单个用户的最新事实。",
+      "error_tag": "边界错误",
+      "variant_group": "semantic_write_strategy"
+    },
+    {
+      "kp": "agent.mem.semantic",
+      "type": "single_choice",
+      "question": "用户先说过“我住在北京”，后来又说“我上个月搬到上海了”。语义记忆系统最恰当的处理是？",
+      "options": [
+        "保留两条，检索时随机返回其中一条",
+        "用新事实更新旧事实（或将其标记为已失效），使检索只返回“现居上海”",
+        "两条都删除，因为出现冲突",
+        "把两条合并成“我住在北京和上海”"
+      ],
+      "answer": 1,
+      "explanation": "语义记忆需要处理事实更新：新信息覆盖/失效旧信息，避免检索到过期事实。随机返回、全删或强行合并都会产生错误或矛盾的知识。",
+      "error_tag": "边界错误",
+      "variant_group": "semantic_update_conflict"
+    },
+    {
+      "kp": "agent.mem.semantic",
+      "type": "single_choice",
+      "question": "关于“检索语义记忆后再交给模型生成回答”这一流程，下列说法正确的是？",
+      "options": [
+        "检索到的记忆应原样拼接进提示，无需任何筛选",
+        "检索结果可能不相关或已过期，需要相关性过滤与新鲜度判断后再使用",
+        "只要建立了语义记忆，模型就不需要系统提示了",
+        "语义记忆只能用于问答，不能用于个性化推荐"
+      ],
+      "answer": 1,
+      "explanation": "检索是近似的，可能召回不相关或过时内容，因此需要过滤、打分与新鲜度判断。不筛选地拼接会污染上下文；语义记忆并不取代系统提示，其用途也远不止问答。",
+      "error_tag": "记忆缺失",
+      "variant_group": "semantic_retrieval_quality"
+    },
+    {
+      "kp": "agent.mem.semantic",
+      "type": "single_choice",
+      "question": "用户说：“帮我按我常用的格式发周报。”系统此前在语义记忆中存有“该用户偏好 Markdown 表格形式的周报”。这体现了语义记忆的什么作用？",
+      "options": [
+        "替代模型推理能力",
+        "提供跨会话的个性化事实，减少重复询问",
+        "记录本次会话的临时状态",
+        "对模型输出做安全审查"
+      ],
+      "answer": 1,
+      "explanation": "语义记忆承载用户偏好等稳定事实，使得跨会话可直接复用，减少重复澄清。它不替代推理、不是临时状态，也不承担安全审查职责。",
+      "error_tag": "概念混淆",
+      "variant_group": "semantic_personalization"
+    },
+    {
+      "kp": "agent.mem.semantic",
+      "type": "single_choice",
+      "question": "下列哪一项最可能成为语义记忆中的“噪声”，从而降低检索质量？",
+      "options": [
+        "经确认的、稳定的用户偏好",
+        "从寒暄和玩笑中抽取出的、被误当作事实的内容",
+        "产品的稳定功能说明",
+        "用户明确声明的长期约束条件"
+      ],
+      "answer": 1,
+      "explanation": "把寒暄、玩笑、假设语气误抽为事实，会产生错误知识并污染检索结果，是典型的记忆噪声。其余三项都是应被保留的稳定信息。",
+      "error_tag": "边界错误",
+      "variant_group": "semantic_noise"
+    },
+    {
+      "kp": "agent.mem.semantic",
+      "type": "single_choice",
+      "question": "在语义记忆中存一条事实时，同时保存“来源会话 ID”和“写入时间”。这样做的主要好处是？",
+      "options": [
+        "让向量维度更高，检索更准",
+        "支持溯源与时效判断，便于冲突时决定采信哪条、以及清理过期内容",
+        "减少模型调用次数",
+        "让事实自动变成情节记忆"
+      ],
+      "answer": 1,
+      "explanation": "来源与时间元数据用于溯源、判断新鲜度和解决冲突，是维护语义记忆一致性的关键。它不改变向量维度，也不自动转化记忆类型。",
+      "error_tag": "记忆缺失",
+      "variant_group": "semantic_metadata"
+    },
+    {
+      "kp": "agent.mem.semantic",
+      "type": "single_choice",
+      "question": "用户问：“你们支持发票吗？”系统检索语义记忆，返回一条“该用户在两年前咨询过发票，但当时问题未解决”。最恰当的处理是？",
+      "options": [
+        "直接回答“您之前问过，仍未解决”，无需再查",
+        "把该条作为参考但不直接复述，优先依据最新产品政策回答，并在必要时确认上下文",
+        "忽略该条，因为时间太久",
+        "把该条更新为“用户已解决发票问题”"
+      ],
+      "answer": 1,
+      "explanation": "旧记忆可作为背景但不应直接当作答案；应结合最新政策，必要时向用户确认。直接复述旧状态可能误导；无依据地改写为“已解决”属于臆造。",
+      "error_tag": "边界错误",
+      "variant_group": "semantic_usage_judgment"
+    }
+  ]
+}

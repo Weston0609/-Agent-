@@ -1,0 +1,904 @@
+{
+  "id": "s1u7l1",
+  "title": "s1u7l1",
+  "kps": [
+    "py.exc.try_except",
+    "py.exc.multiple",
+    "py.exc.finally"
+  ],
+  "theory": "## py.exc.try_except\n\n# 异常处理：try / except 入门到工程实践\n\n> 一句话直觉：程序总会遇到“意外”（除零、文件不存在、网络超时），**try/except** 让你优雅地接住这些意外，而不是让程序直接崩溃。\n\n---\n\n## 1. 为什么需要 try/except\n\n写代码时我们总假设“输入是对的、文件是存在的”。但真实世界并非如此。\n\n看下面这段代码：\n\n```python\nimport math\n\nprint(math.sqrt(-1))\n```\n\n运行它会得到：\n\n```\nValueError: math.sqrt(x): x must be non-negative\n```\n\n程序**直接崩溃（crash）**，后面所有代码都不再执行。\n\n再比如 `int(\"abc\")` 会抛 `ValueError`，`1/0` 会抛 `ZeroDivisionError`，`open(\"不存在.txt\")` 会抛 `FileNotFoundError`。\n\n这些“抛出”的东西叫 **异常（Exception）**：它是 Python 用来表示“我遇到问题了，处理不了”的机制。\n\n如果不想让程序因为一次小问题就挂掉，就需要用 **try / except** 主动接住它。\n\n---\n\n## 2. 基本语法：try / except\n\n语法结构：\n\n```python\ntry:\n    # 可能出错的代码\nexcept 异常类型:\n    # 出错时怎么办\n```\n\nPython 会先执行 `try` 里的代码；如果没有出错，`except` 块被跳过；一旦抛异常，程序**立刻跳到**匹配的 `except` 块，而不是崩溃。\n\n### 示例 1：安全求平方根\n\n```python\nimport math\n\ndef safe_sqrt(x):\n    try:\n        return math.sqrt(x)      # 负数会抛 ValueError\n    except ValueError:\n        print(f\"输入 {x} 无法开平方\")\n        return None\n\nprint(safe_sqrt(16))    # 4.0\nprint(safe_sqrt(-1))    # 打印提示，返回 None\n```\n\n对比一下原始材料里的 `foo` 和 `bar`：它们用 `if x >= 0` 提前防御。那种写法不算错，但**只能覆盖你想到的情况**；而 try/except 能兜住“运行期真实发生的错误”，更贴近工程实践。\n\n---\n\n## 3. 捕获多种异常与 as 取异常对象\n\n现实中的函数可能抛出**不同类型**的异常，需要分别处理。\n\n```python\ndef to_int(s):\n    try:\n        return int(s)\n    except (ValueError, TypeError) as e:\n        # 一个 except 可以接多个异常类型（元组）\n        # as e 把异常对象捕获，方便打印诊断信息\n        print(f\"转换失败：{type(e).__name__} -> {e}\")\n        return None\n\nprint(to_int(\"42\"))     # 42\nprint(to_int(\"abc\"))    # ValueError\nprint(to_int(None))     # TypeError\n```\n\n关键结论：\n\n- `except A, B` 用元组形式一次捕获多个类型。\n- `as e` 让你拿到异常对象，可以读 `e.args`、`str(e)` 等。\n- `type(e).__name__` 是打印异常类名的常用技巧。\n\n---\n\n## 4. else、finally：完整结构\n\ntry/except 还可以配 `else` 和 `finally`：\n\n| 子句 | 何时执行 |\n|------|---------|\n| `try` | 总是先执行 |\n| `except` | try 中抛出匹配异常时 |\n| `else` | try 中**没有**抛异常时 |\n| `finally` | **无论如何**都执行 |\n\n```python\ndef read_first_line(path):\n    f = None\n    try:\n        f = open(path, \"r\", encoding=\"utf-8\")\n        data = f.readline()\n    except FileNotFoundError:\n        print(f\"文件不存在：{path}\")\n        return None\n    except OSError as e:\n        print(f\"读取文件出错：{e}\")\n        return None\n    else:\n        print(\"读取成功\")\n        return data.strip()\n    finally:\n        # 不管成功失败，都关掉文件句柄，防止资源泄漏\n        if f is not None:\n            f.close()\n\nprint(read_first_line(\"some.txt\"))\n```\n\n工程意义：`finally` 是**资源释放（cleanup）**的标准位置，例如关闭文件、释放锁、断开连接。\n\n更 Pythonic 的写法是用 `with` 上下文管理器，但理解 `finally` 的语义是基础。\n\n---\n\n## 5. 工程级实践：精细捕获 + 按需兜底\n\n### 5.1 不要裸捕 `except:`\n\n```python\n# ❌ 不推荐：会吞掉 KeyboardInterrupt、SystemExit 等\ntry:\n    do_something()\nexcept:\n    pass\n```\n\n裸 `except:` 会连用户按 Ctrl+C 都一并吞掉，非常危险。至少要写 `except Exception:`，更好的是**精确列出**你期望的异常。\n\n### 5.2 不要用异常控制正常流程\n\n原始材料中的 `foo / bar` 演示了：**用返回值 None 表达“不合法输入”** 是一种风格。工程上推荐：\n\n- 你能提前判断的错误：用 `if` 提前校验（更清晰、更快）。\n- 你**无法提前判断**、或来自外部（文件、网络、第三方库）的错误：用 try/except。\n\n### 5.3 re-raise：记录后继续向上抛\n\n```python\nimport logging\nlog = logging.getLogger(__name__)\n\ndef parse_config(raw):\n    try:\n        return dict(line.split(\"=\", 1) for line in raw.splitlines())\n    except ValueError as e:\n        log.warning(\"配置解析失败：%s\", e)\n        raise       # 关键：重新抛出，让上层决定怎么处理\n```\n\n`raise` 单用可以**重新抛出当前异常**，同时保留原始 traceback。这样既记录了日志，又不掩盖问题。\n\n### 5.4 `try/except/else/finally` 与 finally 中的 return\n\n原始 PEP 8 里强调：\n\n> 不要在 `try...finally` 的 `finally` 里写 `return / break / continue`，因为它会**悄悄吞掉正在传播的异常**。\n\n```python\ndef foo():\n    try:\n        1 / 0\n    finally:\n        return 42          # ❌ ZeroDivisionError 被吞，函数却返回 42\n\nprint(foo())   # 42 —— 你根本不知道发生了除零\n```\n\n正确做法是让 `finally` 只负责清理，不改变控制流：\n\n```python\ndef foo():\n    try:\n        return 1 / 0\n    except ZeroDivisionError as e:\n        print(\"出错了：\", e)\n        return None\n```\n\n---\n\n## 6. 小结（判断用 if 还是 try）\n\n| 场景 | 推荐 |\n|------|------|\n| 已知的、可提前判断的非法输入（`x < 0`） | `if` 提前校验 |\n| 外部来源的失败（文件/网络/数据库） | `try / except` |\n| 需要释放资源 | `try / finally` 或 `with` |\n| 记录日志后继续向上传播 | `try / except ... raise` |\n| 想“什么都接住然后忽略” | ⚠️ 不要这么做 |\n\n学会 try/except，你的程序就从“脆弱脚本”迈向“靠谱工程”。\n\n```python\nimport math\nimport logging\n\nlogging.basicConfig(level=logging.INFO, format=\"%(levelname)s: %(message)s\")\nlog = logging.getLogger(__name__)\n\n\ndef safe_sqrt(x):\n    \"\"\"安全求平方根：非数字或负数都返回 None 并记录原因。\"\"\"\n    try:\n        return math.sqrt(x)             # 可能抛 TypeError / ValueError\n    except (TypeError, ValueError) as e:\n        log.warning(\"sqrt(%r) 失败：%s\", x, e)\n        return None\n\n\ndef parse_int(s):\n    \"\"\"把字符串转 int；失败返回 None，并演示 else/finally。\"\"\"\n    try:\n        value = int(s)                  # 可能抛 ValueError\n    except ValueError as e:\n        print(f\"  [parse_int] 无法解析 {s!r}: {e}\")\n        return None\n    else:\n        print(f\"  [parse_int] 解析成功 -> {value}\")\n        return value\n    finally:\n        # 无论如何都会执行，这里只是打个日志（真实场景常用于释放资源）\n        print(f\"  [parse_int] 处理结束：input={s!r}\")\n\n\nif __name__ == \"__main__\":\n    print(\"== safe_sqrt ==\")\n    print(safe_sqrt(16))    # 4.0\n    print(safe_sqrt(-1))    # None（并记录 warning）\n    print(safe_sqrt(\"abc\")) # None（TypeError）\n\n    print(\"\\n== parse_int ==\")\n    print(parse_int(\"42\"))\n    print(parse_int(\"abc\"))\n```\n\n## py.exc.multiple\n\n# 多个异常的处理（Multiple Exceptions）\n\n> 一句话直觉：现实中的代码出错往往不止一种原因，学会「一次捕获多种异常」才能让程序既健壮又优雅。\n\n---\n\n## 一、为什么需要「多个异常」？\n\n假设你在写一个读取配置文件的函数：文件可能不存在（`FileNotFoundError`），也可能是 JSON 格式错误（`json.JSONDecodeError`），还有可能是权限问题（`PermissionError`）。\n\n如果每种异常都写一个 `except`，代码会变得冗长：\n\n```python\ntry:\n    do_something()\nexcept FileNotFoundError:\n    handle_missing()\nexcept json.JSONDecodeError:\n    handle_bad_format()\nexcept PermissionError:\n    handle_permission()\n```\n\nPython 允许我们把「处理方式相同」的异常合并到一条语句里，这就是**多个异常（multiple exceptions）**。\n\n---\n\n## 二、基础语法：`except (A, B, C)`\n\n多个异常要用**元组（tuple）**包裹，不能写 `except A, B`。\n\n```python\n# 把「文件不存在」和「没有权限」都当成同一种情况处理\ntry:\n    with open(\"cfg.json\") as f:\n        data = f.read()\nexcept (FileNotFoundError, PermissionError) as e:\n    print(f\"无法读取配置文件：{e}\")\n```\n\n关键点：\n- 括号是元组，不是分组表达式。\n- `as e` 绑定的是**实际触发的那个异常实例**。\n- 匹配顺序仍然从上到下，先匹配到的分支生效。\n\n---\n\n## 三、在一条语句里混合「单异常」和「多异常」\n\n可以按处理逻辑分组：\n\n```python\ntry:\n    result = risky_operation()\nexcept (ValueError, TypeError) as e:\n    print(f\"输入有问题：{e}\")\nexcept OSError as e:\n    print(f\"系统调用失败：{e}\")\nexcept Exception as e:  # 兜底\n    print(f\"未预期错误：{type(e).__name__}: {e}\")\n```\n\n注意：更宽泛的异常要放在后面，否则前面的分支永远走不到。\n\n---\n\n## 四、异常元组可以传变量、可以动态构造\n\n`except` 后面的表达式在运行时求值，因此可以复用变量：\n\n```python\nNETWORK_ERRORS = (ConnectionError, TimeoutError)\n\ntry:\n    fetch()\nexcept NETWORK_ERRORS as e:\n    retry(e)\n```\n\n这在「库作者希望把一批异常暴露成公共名字」时非常常用。\n\n---\n\n## 五、从「捕获」到「分类处理」：`type(e)` 与 `isinstance`\n\n当多种异常要区分为不同处理时，捕获后可以用 `isinstance` 分发：\n\n```python\ntry:\n    parse(data)\nexcept (ValueError, TypeError, KeyError) as e:\n    if isinstance(e, KeyError):\n        print(f\"缺少字段：{e.args[0]}\")\n    elif isinstance(e, TypeError):\n        print(\"类型不匹配\")\n    else:\n        print(\"值不合法\")\n```\n\n对于自定义异常层次结构，`except` 本身就会按 MRO 匹配父类，无需手动 `isinstance`。\n\n---\n\n## 六、工程级建议\n\n1. **不要用 `except Exception` 吞掉一切**——除非你确实要做顶层兜底并重新抛出。\n2. **保持元组内异常语义相近**：把「都能用同一句话解释」的异常放在一起。\n3. **捕获后要记日志**：`logging.exception(...)` 会带上 traceback。\n4. **别把异常当控制流**：能用 `if` 判断的先判断，异常留给真正的意外。\n5. **自定义异常可继承同一基类**，让调用方只写一条 `except` 就能覆盖一组：\n\n```python\nclass AppError(Exception): ...\nclass ConfigError(AppError): ...\nclass NetworkError(AppError): ...\n\ntry:\n    run()\nexcept AppError as e:   # 一次覆盖子类\n    log(e)\n```\n\n---\n\n## 七、动手练习\n\n写一个 `safe_read_number(path: str) -> float | None` 函数：\n\n- 读取文件内容并转成 `float`。\n- 用**一条 `except`** 同时捕获 `FileNotFoundError`、`PermissionError`（返回 `None` 并打印「文件不可读」）。\n- 用**另一条 `except`** 同时捕获 `ValueError`、`TypeError`（返回 `None` 并打印「内容不是合法数字」）。\n- 其它异常不捕获，让它自然抛出。\n\n测试用例：文件不存在、内容为 `\"abc\"`、内容为 `\"3.14\"`。\n\n完成后思考：如果把两个 `except` 合并成一条，可读性会变好还是变差？为什么？\n\n```python\nimport json\nimport logging\n\nlogging.basicConfig(level=logging.INFO)\n\n\ndef safe_read_number(path: str):\n    \"\"\"读取文件并解析为 float；失败时返回 None。\"\"\"\n    try:\n        with open(path, encoding=\"utf-8\") as f:\n            text = f.read().strip()\n        return float(text)\n    except (FileNotFoundError, PermissionError) as e:\n        # 一组「文件层面」的错误，统一处理\n        print(f\"文件不可读：{e}\")\n        return None\n    except (ValueError, TypeError) as e:\n        # 一组「内容层面」的错误，统一处理\n        print(f\"内容不是合法数字：{e}\")\n        return None\n\n\nif __name__ == \"__main__\":\n    print(safe_read_number(\"missing.txt\"))   # 文件不存在\n\n    # 临时造两个测试文件\n    with open(\"num.txt\", \"w\") as f:\n        f.write(\"3.14\")\n    with open(\"bad.txt\", \"w\") as f:\n        f.write(\"abc\")\n\n    print(safe_read_number(\"num.txt\"))       # 3.14\n    print(safe_read_number(\"bad.txt\"))       # None\n```\n\n## py.exc.finally\n\n# `try/finally`：让清理代码一定执行\n\n> **一句话直觉**：无论 `try` 里面的代码是正常结束、抛出异常、还是提前 `return`，`finally` 里的清理动作都一定会被执行——它是 Python 中\"善后\"的可靠保证。\n\n---\n\n## 一、为什么需要 `finally`？\n\n程序里有一类操作是\"成对出现\"的：打开文件要关闭、加锁要解锁、连接要断开、临时状态要恢复。\n\n但如果中间出错、或者提前 `return`，后面的清理代码就可能被跳过。`finally` 的作用就是：**把清理逻辑放进一个永远不会被跳过的代码块里**。\n\n语法结构：\n\n```python\ntry:\n    ...  # 可能出错的代码\nfinally:\n    ...  # 无论如何都会执行的清理代码\n```\n\n关键点：`finally` 不需要 `except` 也能单独和 `try` 搭配使用。\n\n---\n\n## 二、`finally` 的三种触发场景\n\n`try` 块有三种\"离开方式\"，`finally` 都会执行：\n\n1. **正常结束**：`try` 块跑完，没有异常。\n2. **发生异常**：异常向上抛出前，先执行 `finally`。\n3. **遇到控制流语句**：`return`、`break`、`continue` 触发离开时，先执行 `finally`。\n\n```python\ndef demo(flag):\n    try:\n        print(\"try: 开始\")\n        if flag:\n            return \"提前返回\"        # 有 return 也不会跳过 finally\n        raise ValueError(\"出错了\")   # 抛异常也不会跳过 finally\n    finally:\n        print(\"finally: 清理完毕\")\n\nprint(demo(True))\n# try: 开始\n# finally: 清理完毕\n# 提前返回\n```\n\n注意：`return` 的值会**先计算、暂存**，然后执行 `finally`，最后才真正返回。如果 `finally` 里也有 `return`，会覆盖前面的返回值（这是坑，见\"常见误区\"）。\n\n---\n\n## 三、异常传播：`finally` 不\"吃掉\"异常\n\n`finally` 和 `except` 最大的区别是：**`finally` 不捕获异常**。异常在执行完 `finally` 之后，依然会向上传播。\n\n```python\ntry:\n    raise RuntimeError(\"boom\")\nfinally:\n    print(\"先做清理\")\n# 输出: 先做清理\n# 然后仍然抛出 RuntimeError 给上层\n```\n\n如果你希望既做清理、又要捕获异常，就写成 `try/except/finally`：\n\n```python\ntry:\n    1 / 0\nexcept ZeroDivisionError:\n    print(\"捕获到除零错误\")\nfinally:\n    print(\"无论如何都清理\")\n```\n\n**工程师心法**：能用 `finally` 就说明这不是\"错误处理\"，而是\"资源保证\"。区分这两件事，代码会更清晰。\n\n---\n\n## 四、`finally` 的真实用途：资源生命周期\n\n`finally` 最常见的场景就是\"谁开谁关\"。下面是一个文件读写的最小闭环：\n\n```python\ndef read_first_line(path):\n    f = open(path, \"r\", encoding=\"utf-8\")\n    try:\n        return f.readline()\n    finally:\n        f.close()          # 即使 readline 抛错，文件也会被关闭\n```\n\n`with` 语句（上下文管理器）本身就是基于 `try/finally` 实现的，能替代大部分显式 `finally`。但如果某个资源没有上下文管理器（例如某些底层句柄），`try/finally` 就是必备工具。\n\n---\n\n## 五、一个更完整的模板\n\n工业级代码里常见的形态是\"锁 + 事务 + finally\"：\n\n```python\nlock.acquire()\ntry:\n    do_critical_work()\nfinally:\n    lock.release()   # 死锁就出在这里被避免\n```\n\n请记住三件事：\n\n- `finally` **一定执行**（除非进程被杀掉、`os._exit()`、或解释器崩溃）。\n- `finally` **不吞异常**，只在离开时插播一段清理。\n- `finally` **不要写 `return`**，会静默覆盖原返回值，是调试噩梦。\n\n---\n\n## 动手练习\n\n**任务：写一个\"安全的整数除法 + 资源清理\"函数**\n\n要求：\n1. 函数签名 `safe_divide(a, b, log_path)`。\n2. 在函数内部用 `open(log_path, \"a\", encoding=\"utf-8\")` 打开一个日志文件。\n3. 用 `try/finally` 保证无论如何日志文件都被关闭。\n4. 在 `try` 里做 `a / b`，并把结果写入日志（形如 `\"a/b = result\"` 或 `\"error: ...\"`）。\n5. 遇到 `ZeroDivisionError` 时，记录日志后返回 `None`，但**不要**用 `finally` 吞掉其他异常。\n\n**自测用例**：\n\n```python\nprint(safe_divide(10, 2, \"log.txt\"))   # 5.0\nprint(safe_divide(1, 0, \"log.txt\"))    # None\n```\n\n**进阶**：把 `try/finally` 改成 `with open(...) as f`，对比一下代码量，想想为什么 `with` 更推荐。\n\n---\n\n## 小结\n\n| 结构 | 作用 |\n| --- | --- |\n| `try/except` | 处理异常 |\n| `try/finally` | 保证清理 |\n| `try/except/finally` | 既处理又清理 |\n| `with` | `try/finally` 的语法糖（针对上下文管理器） |\n\n记住这条工程准则：**只要资源需要成对操作，就用 `try/finally` 或 `with`，绝不要靠\"代码顺序\"赌它会被执行。**\n\n```python\n\"\"\"演示 py.exc.finally 的核心行为：三种离开 try 的路径都会执行 finally。\"\"\"\nimport os\n\n\ndef demo_normal():\n    try:\n        print(\"[normal] try 块执行\")\n    finally:\n        print(\"[normal] finally 清理\")\n\n\ndef demo_return():\n    try:\n        print(\"[return] 准备 return\")\n        return \"from try\"\n    finally:\n        print(\"[return] finally 仍然执行\")\n\n\ndef demo_exception():\n    try:\n        print(\"[except] 抛出异常\")\n        raise ValueError(\"boom\")\n    except ValueError as e:\n        print(f\"[except] 捕获: {e}\")\n        return \"handled\"\n    finally:\n        print(\"[except] finally 仍然执行\")\n\n\ndef safe_read_first_line(path: str) -> str | None:\n    \"\"\"用 try/finally 保证文件对象一定被关闭。\"\"\"\n    if not os.path.exists(path):\n        return None\n    f = open(path, \"r\", encoding=\"utf-8\")\n    try:\n        return f.readline()\n    finally:\n        f.close()\n        print(f\"[file] {path} 已关闭: {f.closed}\")\n\n\nif __name__ == \"__main__\":\n    demo_normal()\n    print(demo_return())\n    print(demo_exception())\n\n    # 写一个临时文件做读取测试\n    tmp = \"_finally_demo.txt\"\n    with open(tmp, \"w\", encoding=\"utf-8\") as fp:\n        fp.write(\"hello finally\\n\")\n    print(\"first line:\", safe_read_first_line(tmp))\n    print(\"missing file:\", safe_read_first_line(\"__no_such_file__\"))\n```\n",
+  "quiz": [
+    {
+      "kp": "py.exc.try_except",
+      "type": "single_choice",
+      "question": "运行以下代码，输出是什么？\ntry:\n    print(\"A\")\n    raise ValueError(\"err\")\nexcept ValueError:\n    print(\"B\")\nprint(\"C\")",
+      "options": [
+        "A\\nB\\nC",
+        "A\\nC",
+        "A\\nB",
+        "B\\nC"
+      ],
+      "answer": 0,
+      "explanation": "try 块中 print(\"A\") 先执行，随后抛出 ValueError 被 except ValueError 捕获，打印 B；捕获处理完后继续执行后续语句打印 C。因此输出为 A、B、C 三行。",
+      "error_tag": "异常流程理解错误",
+      "variant_group": "try_except_basic_flow"
+    },
+    {
+      "kp": "py.exc.try_except",
+      "type": "single_choice",
+      "question": "以下代码的运行结果是？\ntry:\n    x = 1 / 0\nexcept ZeroDivisionError:\n    print(\"捕获\")\nelse:\n    print(\"正常\")",
+      "options": [
+        "只打印 捕获",
+        "只打印 正常",
+        "先打印 捕获 再打印 正常",
+        "程序崩溃，不打印任何内容"
+      ],
+      "answer": 0,
+      "explanation": "发生 ZeroDivisionError 被 except 捕获，执行 except 块打印“捕获”。else 子句只在 try 块未发生异常时才执行，因此不会打印“正常”。",
+      "error_tag": "else子句语义误解",
+      "variant_group": "try_except_else"
+    },
+    {
+      "kp": "py.exc.try_except",
+      "type": "single_choice",
+      "question": "以下代码运行时，哪一行会抛出异常？\ntry:\n    a = int(\"abc\")\nexcept TypeError:\n    print(\"类型错误\")",
+      "options": [
+        "int(\"abc\") 抛出 ValueError，而 except 只捕获 TypeError，因此异常未被处理",
+        "int(\"abc\") 不抛异常，输出类型错误",
+        "except TypeError 会捕获 ValueError，输出类型错误",
+        "把字符串转成整数不会抛出任何异常"
+      ],
+      "answer": 0,
+      "explanation": "int(\"abc\") 抛出 ValueError，而 except TypeError 仅捕获 TypeError，类型不匹配导致异常未被捕获。",
+      "error_tag": "异常类型匹配错误",
+      "variant_group": "except_type_choice"
+    },
+    {
+      "kp": "py.exc.try_except",
+      "type": "single_choice",
+      "question": "以下写法中，可以同时捕获 ValueError 和 TypeError 的是？",
+      "options": [
+        "except (ValueError, TypeError):",
+        "except ValueError, TypeError:",
+        "except ValueError or TypeError:",
+        "except [ValueError, TypeError]:"
+      ],
+      "answer": 0,
+      "explanation": "Python 3 中用元组 (ValueError, TypeError) 表示捕获多种异常。except ValueError, TypeError: 是 Python 2 语法，在 Python 3 中会因语法错误无法运行。",
+      "error_tag": "多异常捕获语法错误",
+      "variant_group": "multiple_except"
+    },
+    {
+      "kp": "py.exc.try_except",
+      "type": "single_choice",
+      "question": "如果 try 块中先抛出 ValueError，except 块中又抛出一个异常，且 finally 中没有 return，最终传播的是哪个异常？",
+      "options": [
+        "except 块中新抛出的异常",
+        "原来的 ValueError",
+        "两个异常都会传播",
+        "不会有异常传播"
+      ],
+      "answer": 0,
+      "explanation": "except 块中新抛出的异常会取代原异常继续向外传播（原异常作为其 __context__ 记录），最终传播的是新异常。",
+      "error_tag": "异常传播机制错误",
+      "variant_group": "exception_propagation"
+    },
+    {
+      "kp": "py.exc.try_except",
+      "type": "single_choice",
+      "question": "以下代码输出是什么？\ntry:\n    raise ValueError(\"v\")\nexcept ValueError:\n    print(\"handled\")\n    raise\n",
+      "options": [
+        "打印 handled，然后重新抛出同一个 ValueError",
+        "打印 handled，程序正常结束",
+        "直接重新抛出 ValueError，不打印 handled",
+        "抛出 RuntimeError"
+      ],
+      "answer": 0,
+      "explanation": "except 中裸 raise 会重新抛出当前正在处理的异常，即原来的 ValueError；在此之前已先打印 handled。",
+      "error_tag": "raise重抛理解错误",
+      "variant_group": "raise_reraise"
+    },
+    {
+      "kp": "py.exc.try_except",
+      "type": "single_choice",
+      "question": "以下代码的输出是？\ntry:\n    print(\"1\")\n    raise ValueError()\nexcept ValueError:\n    print(\"2\")\nfinally:\n    print(\"3\")",
+      "options": [
+        "1\\n2\\n3",
+        "1\\n2",
+        "1\\n3",
+        "2\\n3"
+      ],
+      "answer": 0,
+      "explanation": "先打印 1，抛出 ValueError 被 except 捕获打印 2，最后 finally 打印 3。",
+      "error_tag": "try语句执行顺序错误",
+      "variant_group": "try_except_full_order"
+    },
+    {
+      "kp": "py.exc.try_except",
+      "type": "single_choice",
+      "question": "关于 except 子句的书写顺序，以下代码会出现什么问题？\ntry:\n    pass\nexcept Exception:\n    print(\"E\")\nexcept ValueError:\n    print(\"V\")",
+      "options": [
+        "第二个 except 永远不会被匹配到，因为 ValueError 是 Exception 的子类",
+        "代码无法运行，会抛出语法错误",
+        "两个 except 会依次都执行",
+        "ValueError 会优先匹配第二个 except"
+      ],
+      "answer": 0,
+      "explanation": "except 按从上到下顺序匹配，ValueError 继承自 Exception，因此会先匹配 Exception，后面的 except ValueError 永远不会被命中。",
+      "error_tag": "except顺序错误",
+      "variant_group": "multiple_except"
+    },
+    {
+      "kp": "py.exc.try_except",
+      "type": "single_choice",
+      "question": "以下代码运行后变量 e 的值是什么？\ntry:\n    raise ValueError(\"v\")\nexcept ValueError as e:\n    pass\nprint(e)",
+      "options": [
+        "NameError，因为 except 块结束后 e 被自动删除",
+        "ValueError 的字符串表示",
+        "空字符串",
+        "None"
+      ],
+      "answer": 0,
+      "explanation": "Python 3 中 except ... as e 的绑定变量在 except 块结束后会被自动删除，因此在块外访问 e 会触发 NameError。",
+      "error_tag": "except绑定变量作用域错误",
+      "variant_group": "except_as_binding"
+    },
+    {
+      "kp": "py.exc.try_except",
+      "type": "single_choice",
+      "question": "以下代码的输出是？\ndef f():\n    try:\n        raise ValueError(\"x\")\n    except ValueError:\n        return \"caught\"\n    finally:\n        print(\"finally\")\n\nprint(f())",
+      "options": [
+        "finally\\ncaught",
+        "caught\\nfinally",
+        "finally",
+        "caught"
+      ],
+      "answer": 0,
+      "explanation": "先执行 except 中的 return \"caught\"，在函数真正返回前执行 finally 里的 print(\"finally\")，最后返回字符串，因此先打印 finally 再打印 caught。",
+      "error_tag": "finally与return顺序错误",
+      "variant_group": "try_except_return_finally"
+    },
+    {
+      "kp": "py.exc.try_except",
+      "type": "single_choice",
+      "question": "以下哪段代码会在捕获到异常时输出异常对象的信息？",
+      "options": [
+        "except ValueError as e: print(e)",
+        "except ValueError: print(ValueError)",
+        "except ValueError e: print(e)",
+        "except as ValueError: print(e)"
+      ],
+      "answer": 0,
+      "explanation": "except ValueError as e: print(e) 是正确语法，print(e) 会打印异常对象的描述。其他写法要么打印类本身，要么语法错误。",
+      "error_tag": "except语法错误",
+      "variant_group": "except_as_binding"
+    },
+    {
+      "kp": "py.exc.try_except",
+      "type": "single_choice",
+      "question": "以下代码运行后的输出是什么？\ntry:\n    try:\n        raise ValueError(\"inner\")\n    except ValueError:\n        print(\"inner handled\")\n        raise\nexcept ValueError:\n    print(\"outer handled\")",
+      "options": [
+        "inner handled\\nouter handled",
+        "inner handled",
+        "outer handled",
+        "程序崩溃，无输出"
+      ],
+      "answer": 0,
+      "explanation": "内层 except 捕获 ValueError 并打印，随后裸 raise 重新抛出，被外层 except 捕获并打印 outer handled。",
+      "error_tag": "嵌套try_except流程错误",
+      "variant_group": "nested_try_except"
+    },
+    {
+      "kp": "py.exc.try_except",
+      "type": "single_choice",
+      "question": "关于 try 语句中的 else 子句，下列说法正确的是？",
+      "options": [
+        "只有当 try 块中没有发生异常时才会执行 else 块",
+        "无论 try 块是否发生异常，else 块都会执行",
+        "只有当 try 块发生异常时才会执行 else 块",
+        "else 块在 except 块之前执行"
+      ],
+      "answer": 0,
+      "explanation": "else 子句只有在 try 块顺利执行完、没有异常时才执行；若 try 里发生异常，则进入 except，else 不执行。",
+      "error_tag": "else子句语义误解",
+      "variant_group": "try_except_else"
+    },
+    {
+      "kp": "py.exc.try_except",
+      "type": "single_choice",
+      "question": "以下代码运行后的输出是？\ntry:\n    raise KeyError(\"k\")\nexcept ValueError:\n    print(\"V\")\nfinally:\n    print(\"F\")",
+      "options": [
+        "F",
+        "V\\nF",
+        "V",
+        "程序崩溃，无输出"
+      ],
+      "answer": 3,
+      "explanation": "抛出的 KeyError 与 except 的 ValueError 不匹配，异常未被处理；但 finally 仍会执行后异常继续向外传播，最终程序因未捕获的 KeyError 而终止。因此不会输出 F 或 V，最终表现为程序崩溃。",
+      "error_tag": "finally执行时机理解错误",
+      "variant_group": "try_except_finally"
+    },
+    {
+      "kp": "py.exc.try_except",
+      "type": "single_choice",
+      "question": "当 try 块中发生异常且被匹配的 except 捕获后，finally 块会怎样？",
+      "options": [
+        "仍然会执行",
+        "不会执行",
+        "只在异常未被捕获时执行",
+        "只在 try 块无异常时执行"
+      ],
+      "answer": 0,
+      "explanation": "finally 块无论是否发生异常、异常是否被捕获，都会执行，常用于释放资源。",
+      "error_tag": "finally执行时机理解错误",
+      "variant_group": "try_except_finally"
+    },
+    {
+      "kp": "py.exc.try_except",
+      "type": "single_choice",
+      "question": "以下代码输出什么？\ndef f():\n    try:\n        return 1\n    finally:\n        print(\"cleanup\")\n\nprint(f())",
+      "options": [
+        "cleanup\\n1",
+        "1\\ncleanup",
+        "1",
+        "cleanup"
+      ],
+      "answer": 0,
+      "explanation": "return 1 会先记录下来，在真正返回前执行 finally 中的 print(\"cleanup\")，因此先打印 cleanup，再打印函数返回值 1。",
+      "error_tag": "finally与return顺序错误",
+      "variant_group": "try_except_return_finally"
+    },
+    {
+      "kp": "py.exc.try_except",
+      "type": "single_choice",
+      "question": "以下代码的输出是什么？\ntry:\n    raise Exception(\"a\")\nexcept Exception as e:\n    print(type(e).__name__)",
+      "options": [
+        "Exception",
+        "a",
+        "e",
+        "None"
+      ],
+      "answer": 0,
+      "explanation": "异常对象 e 的类型名通过 type(e).__name__ 获取，为 Exception。异常消息 \"a\" 是 e.args[0] 或 str(e)，不是类型名。",
+      "error_tag": "异常对象属性理解错误",
+      "variant_group": "except_as_binding"
+    },
+    {
+      "kp": "py.exc.try_except",
+      "type": "single_choice",
+      "question": "以下哪个 except 子句能够捕获除 SystemExit 和 KeyboardInterrupt 之外的所有常见异常？",
+      "options": [
+        "except Exception:",
+        "except:",
+        "except BaseException:",
+        "except StandardError:"
+      ],
+      "answer": 0,
+      "explanation": "except Exception 捕获大多数普通异常，但不会捕获 SystemExit、KeyboardInterrupt 等 BaseException 子类。裸 except 会捕获包括它们在内的所有异常；BaseException 也会捕获系统退出类异常。",
+      "error_tag": "异常层次结构混淆",
+      "variant_group": "except_type_choice"
+    },
+    {
+      "kp": "py.exc.try_except",
+      "type": "single_choice",
+      "question": "运行以下代码，会发生什么？\ntry:\n    print(\"try\")\nexcept:\n    print(\"except\")\nelse:\n    print(\"else\")\nfinally:\n    print(\"finally\")",
+      "options": [
+        "输出 try、else、finally",
+        "输出 try、except、finally",
+        "输出 try、except、else、finally",
+        "输出 try、finally"
+      ],
+      "answer": 0,
+      "explanation": "try 块没有异常，因此不执行 except，执行 else，最后执行 finally。正确顺序为 try、else、finally。",
+      "error_tag": "try语句执行顺序错误",
+      "variant_group": "try_except_full_order"
+    },
+    {
+      "kp": "py.exc.try_except",
+      "type": "single_choice",
+      "question": "以下代码中，如果 open 成功但读取时抛出异常，文件会被关闭吗？\nf = open(\"data.txt\")\ntry:\n    content = f.read()\nfinally:\n    f.close()",
+      "options": [
+        "会，因为 finally 总会执行 close",
+        "不会，因为异常未被 except 捕获",
+        "不会，因为 f.close() 必须放在 except 中",
+        "只有读取成功时才会关闭"
+      ],
+      "answer": 0,
+      "explanation": "无论 read() 是否抛出异常，finally 块都会执行 f.close()，从而保证文件被关闭；异常随后继续向外传播。",
+      "error_tag": "finally资源释放理解错误",
+      "variant_group": "try_except_finally"
+    },
+    {
+      "kp": "py.exc.multiple",
+      "type": "single_choice",
+      "question": "关于 Python 中在同一段代码里捕获多种异常，下列说法正确的是？",
+      "options": [
+        "一个 except 子句只能列一个异常类型，不能写成元组",
+        "except (ValueError, TypeError): 可以同时捕获这两种异常",
+        "except ValueError, TypeError: 是 Python 3 的推荐写法",
+        "捕获多种异常必须写多个 try 语句"
+      ],
+      "answer": 1,
+      "explanation": "Python 3 中在一个 except 后使用异常类型元组可以捕获多种异常；逗号分隔的旧写法在 Python 3 中语法错误（那是 Python 2 写法）。多个 try 并非必需。",
+      "error_tag": "语法混淆",
+      "variant_group": "多异常捕获语法"
+    },
+    {
+      "kp": "py.exc.multiple",
+      "type": "single_choice",
+      "question": "下面代码执行后输出是什么？\n\ntry:\n    raise ValueError('bad')\nexcept (ValueError, TypeError) as e:\n    print('caught', type(e).__name__)",
+      "options": [
+        "caught ValueError",
+        "caught TypeError",
+        "程序崩溃并打印 traceback",
+        "什么都不输出"
+      ],
+      "answer": 0,
+      "explanation": "抛出的是 ValueError，元组中匹配到 ValueError，因此捕获并输出 caught ValueError。",
+      "error_tag": "概念混淆",
+      "variant_group": "多异常捕获行为"
+    },
+    {
+      "kp": "py.exc.multiple",
+      "type": "multi_choice",
+      "question": "关于把多个异常合并到一个 except 子句与拆分成多个 except 子句的对比，正确的有？",
+      "options": [
+        "合并写法可减少重复的处理代码",
+        "合并写法无法针对不同异常给出不同处理",
+        "拆分写法能让每种异常的处理逻辑更清晰",
+        "合并写法一定比拆分写法性能更好"
+      ],
+      "answer": [
+        0,
+        1,
+        2
+      ],
+      "explanation": "合并减少重复但牺牲差异化处理，拆分更灵活可读。性能差异在绝大多数场景可忽略，选项 4“一定更好”说法不成立。",
+      "error_tag": "概念混淆",
+      "variant_group": "合并 vs 拆分"
+    },
+    {
+      "kp": "py.exc.multiple",
+      "type": "multi_choice",
+      "question": "下面哪几种情况适合用一个 except 子句同时捕获多种异常？",
+      "options": [
+        "多种异常的处理逻辑完全一致（如都记日志并返回默认值）",
+        "需要针对每种异常给出完全不同的用户提示",
+        "多个异常类型都是同一业务失败的变体",
+        "其中一个异常是 KeyboardInterrupt"
+      ],
+      "answer": [
+        0,
+        2
+      ],
+      "explanation": "处理逻辑一致或同一业务变体适合合并；需要差异化处理时应拆分；KeyboardInterrupt 属 BaseException，不应与普通业务异常一起捕获。",
+      "error_tag": "概念混淆",
+      "variant_group": "合并 vs 拆分"
+    },
+    {
+      "kp": "py.exc.multiple",
+      "type": "fill_blank",
+      "question": "补全代码，使下面这段能同时捕获 ValueError 和 TypeError：\n\ntry:\n    do_something()\n____ (ValueError, TypeError) as e:\n    handle(e)",
+      "options": [],
+      "answer": [
+        "except",
+        "except "
+      ],
+      "explanation": "捕获多种异常的子句关键字是 except，后面跟异常类元组。",
+      "error_tag": "记忆缺失",
+      "variant_group": "多异常捕获语法"
+    },
+    {
+      "kp": "py.exc.multiple",
+      "type": "fill_blank",
+      "question": "下面代码希望在返回值与抛出异常之间区分处理，请补全 except 后的表达式：\n\ntry:\n    n = int(s)\nexcept ____:\n    print('输入不是合法整数')\n\n要求同时能处理非数字字符串和 None 输入。",
+      "options": [],
+      "answer": [
+        "(ValueError, TypeError)",
+        "ValueError, TypeError"
+      ],
+      "explanation": "int(None) 抛 TypeError，int('abc') 抛 ValueError，两者都需要捕获，元组写法能一次覆盖。",
+      "error_tag": "边界错误",
+      "variant_group": "多异常捕获语法"
+    },
+    {
+      "kp": "py.exc.multiple",
+      "type": "fill_blank",
+      "question": "关于 except 子句按顺序匹配，下面的空格应填入什么，才能既捕获 ValueError 又让 KeyError 的处理和它区分开？\n\ntry:\n    parse(data)\nexcept ValueError:\n    print('值错误')\nexcept ____:\n    print('键错误')",
+      "options": [],
+      "answer": [
+        "KeyError"
+      ],
+      "explanation": "两个独立 except 分别匹配不同异常，按类型一一对应，顺序上把较具体的放在前更安全。",
+      "error_tag": "记忆缺失",
+      "variant_group": "异常匹配顺序"
+    },
+    {
+      "kp": "py.exc.multiple",
+      "type": "code_reading",
+      "question": "阅读下面代码，写出输出内容：\n\ntry:\n    raise TypeError('t')\nexcept (ValueError, TypeError) as e:\n    print('1', type(e).__name__)\nexcept Exception:\n    print('2')\nfinally:\n    print('3')",
+      "options": [],
+      "answer": "1 TypeError\n3",
+      "explanation": "TypeError 匹配第一个元组子句，输出 1 TypeError；之后执行 finally，输出 3。注意第二个 except 不会执行。",
+      "error_tag": "概念混淆",
+      "variant_group": "多异常捕获行为"
+    },
+    {
+      "kp": "py.exc.multiple",
+      "type": "code_reading",
+      "question": "阅读下面代码，写出输出内容：\n\ndef f():\n    try:\n        raise KeyError('k')\n    except (ValueError, KeyError) as e:\n        return type(e).__name__\n\nprint(f())",
+      "options": [],
+      "answer": "KeyError",
+      "explanation": "KeyError 在元组中，被捕获并返回异常类型名 KeyError。",
+      "error_tag": "概念混淆",
+      "variant_group": "多异常捕获行为"
+    },
+    {
+      "kp": "py.exc.multiple",
+      "type": "scenario",
+      "question": "团队在解析用户上传的配置文件时，遇到文件不存在、编码错误、格式非法等多种情况，之前用一个 except Exception 统一处理，结果线上把程序 Bug 也当成“用户输入错误”吞掉了。现在希望只把预期的几类异常当作输入错误处理，其余异常照常抛出。请说明你会怎么改，并解释为什么。",
+      "options": [],
+      "answer": null,
+      "explanation": "应把预期的几种异常用元组形式在 except 中列出（如 FileNotFoundError、UnicodeDecodeError、ValueError 等），避免用 Exception 一刀切；对未预期的异常不要捕获，让其自然传播以便暴露 Bug 和保留追踪信息。",
+      "error_tag": "概念混淆",
+      "variant_group": "工程实践：捕获范围",
+      "required_keywords": [
+        "FileNotFoundError",
+        "UnicodeDecodeError",
+        "ValueError",
+        "追踪"
+      ]
+    },
+    {
+      "kp": "py.exc.multiple",
+      "type": "scenario",
+      "question": "同事写了一段代码：\n\ntry:\n    run()\nexcept (KeyboardInterrupt, SystemExit, Exception) as e:\n    log(e)\n\n上线后发现用 Ctrl+C 无法终止服务。请解释原因，并给出修改方案。",
+      "options": [],
+      "answer": null,
+      "explanation": "KeyboardInterrupt 和 SystemExit 继承自 BaseException 而非 Exception，把它们写进 except 元组会吞掉用户的终止信号和程序退出请求。应只在 except 中列出 Exception 或其子类（如具体的业务异常），不要捕获 BaseException 体系中的退出类异常。",
+      "error_tag": "概念混淆",
+      "variant_group": "工程实践：捕获范围",
+      "required_keywords": [
+        "KeyboardInterrupt",
+        "SystemExit",
+        "BaseException",
+        "Exception",
+        "捕获范围"
+      ]
+    },
+    {
+      "kp": "py.exc.multiple",
+      "type": "single_choice",
+      "question": "关于捕获多种异常时 except 子句的匹配顺序，下列说法正确的是？",
+      "options": [
+        "Python 会自动选择最精确的异常类型，与书写顺序无关",
+        "按书写顺序从上到下匹配，第一个匹配的子句生效",
+        "最后一个匹配的子句生效",
+        "必须把父类异常写在子类异常之前"
+      ],
+      "answer": 1,
+      "explanation": "except 子句按书写顺序依次匹配，命中第一个就执行，因此把范围大的父类异常写在前面会“吃掉”后面的子类异常。",
+      "error_tag": "边界错误",
+      "variant_group": "异常匹配顺序"
+    },
+    {
+      "kp": "py.exc.multiple",
+      "type": "single_choice",
+      "question": "下面代码的输出是什么？\n\ntry:\n    raise KeyError('k')\nexcept (ValueError, TypeError):\n    print('A')\nexcept Exception:\n    print('B')\nexcept KeyError:\n    print('C')",
+      "options": [
+        "A",
+        "B",
+        "C",
+        "程序崩溃"
+      ],
+      "answer": 1,
+      "explanation": "KeyError 不匹配第一个元组，但匹配 Exception，因此输出 B。后面的 except KeyError 永远不会被到达——这正是把宽泛异常写在前面的陷阱。",
+      "error_tag": "边界错误",
+      "variant_group": "异常匹配顺序"
+    },
+    {
+      "kp": "py.exc.multiple",
+      "type": "single_choice",
+      "question": "关于在一个 except 子句中捕获多种异常后，如何判断具体是哪种异常，最推荐的做法是？",
+      "options": [
+        "用字符串比较 str(e) 的内容",
+        "用 isinstance(e, ValueError) 判断，或分多个 except 子句处理",
+        "题目无法判断，只能重新抛出",
+        "用 e.type 属性读取异常类型"
+      ],
+      "answer": 1,
+      "explanation": "异常对象没有 e.type 属性；判断类型应用 isinstance 或按类型拆分 except 子句。字符串比较脆弱不可靠。",
+      "error_tag": "概念混淆",
+      "variant_group": "异常类型判断"
+    },
+    {
+      "kp": "py.exc.multiple",
+      "type": "single_choice",
+      "question": "下面哪种异常组合可以合并到同一个 except 中捕获，且行为等价于分开捕获？",
+      "options": [
+        "SystemExit 和 KeyboardInterrupt",
+        "ValueError 和 UnicodeDecodeError",
+        "FileNotFoundError 和 PermissionError",
+        "GeneratorExit 和 Exception"
+      ],
+      "answer": 2,
+      "explanation": "FileNotFoundError 和 PermissionError 都是正常的业务异常，合并捕获等价。KeyboardInterrupt/SystemExit/GeneratorExit 属于 BaseException 体系，捕获它们会干扰程序正常退出，通常不应与普通异常合并捕获。",
+      "error_tag": "概念混淆",
+      "variant_group": "该不该捕获的异常"
+    },
+    {
+      "kp": "py.exc.multiple",
+      "type": "single_choice",
+      "question": "在 except 中捕获多个异常后重新抛出，希望保留原始 traceback，应使用？",
+      "options": [
+        "raise e",
+        "raise",
+        "raise e from None",
+        "sys.exit(1)"
+      ],
+      "answer": 1,
+      "explanation": "裸 raise 会保留原始 traceback；raise e 会重置 traceback 起点。raise e from None 会抑制上下文但仍是新抛出。",
+      "error_tag": "概念混淆",
+      "variant_group": "异常重抛"
+    },
+    {
+      "kp": "py.exc.multiple",
+      "type": "single_choice",
+      "question": "下面代码最终会抛出什么？\n\ntry:\n    try:\n        raise ValueError('inner')\n    except TypeError:\n        print('no')\nexcept ValueError:\n    print('outer')",
+      "options": [
+        "输出 no",
+        "输出 outer",
+        "抛出 ValueError 给上层",
+        "抛出 TypeError 给上层"
+      ],
+      "answer": 1,
+      "explanation": "内层 except TypeError 不匹配 ValueError，异常向外传播到外层 except ValueError，输出 outer。",
+      "error_tag": "概念混淆",
+      "variant_group": "异常传播"
+    },
+    {
+      "kp": "py.exc.multiple",
+      "type": "multi_choice",
+      "question": "关于用一个 except 子句捕获多种异常，下列说法正确的有？",
+      "options": [
+        "异常类型需写成元组，如 except (A, B):",
+        "元组中元素必须按字母顺序排列",
+        "捕获后可用 as 绑定一个异常对象变量",
+        "该变量在 except 块结束后会被自动删除",
+        "元组里可以包含自定义异常类"
+      ],
+      "answer": [
+        0,
+        2,
+        3,
+        4
+      ],
+      "explanation": "元组顺序无关，且不需要排序。as 绑定变量在块外被删除（Python 3 的行为），元组可包含任意异常类包括自定义类。",
+      "error_tag": "概念混淆",
+      "variant_group": "多异常捕获语法"
+    },
+    {
+      "kp": "py.exc.multiple",
+      "type": "multi_choice",
+      "question": "下面哪些写法在 Python 3 中能正确捕获 ValueError 和 TypeError？",
+      "options": [
+        "except (ValueError, TypeError):",
+        "except ValueError or TypeError:",
+        "except [ValueError, TypeError]:",
+        "except (ValueError, TypeError) as e:"
+      ],
+      "answer": [
+        0,
+        3
+      ],
+      "explanation": "except 后接受异常类或异常类元组。`ValueError or TypeError` 会先求真值，结果只等价于 ValueError；列表 [ValueError, TypeError] 不是合法类型，会引发 TypeError。",
+      "error_tag": "语法混淆",
+      "variant_group": "多异常捕获语法"
+    },
+    {
+      "kp": "py.exc.finally",
+      "type": "single_choice",
+      "question": "关于 try/finally 结构，下列说法正确的是？",
+      "options": [
+        "无论 try 块是否抛出异常，finally 块都会执行",
+        "只有 try 块正常结束，finally 块才执行",
+        "只有 try 块抛出异常，finally 块才执行",
+        "finally 块只在捕获到异常时才执行"
+      ],
+      "answer": 0,
+      "explanation": "finally 的设计目的就是无论 try 块是正常结束、抛出异常还是被 return/break 中断，都会执行清理逻辑。其他选项都错误地把 finally 的执行与异常是否发生绑定。",
+      "error_tag": "概念混淆",
+      "variant_group": "finally_always_runs"
+    },
+    {
+      "kp": "py.exc.finally",
+      "type": "single_choice",
+      "question": "以下代码执行后，控制台输出的顺序是？\n\ntry:\n    print('A')\n    raise ValueError('boom')\nexcept ValueError:\n    print('B')\nfinally:\n    print('C')",
+      "options": [
+        "A B C",
+        "A C B",
+        "A B",
+        "A C"
+      ],
+      "answer": 0,
+      "explanation": "先执行 try 中 print('A')，抛异常后匹配 except 打印 'B'，之后无论是否异常 finally 都会打印 'C'，所以顺序为 A B C。",
+      "error_tag": "记忆缺失",
+      "variant_group": "finally_execution_order"
+    },
+    {
+      "kp": "py.exc.finally",
+      "type": "single_choice",
+      "question": "以下代码中，文件会被关闭吗？\n\nf = open('data.txt')\ntry:\n    process(f)\nfinally:\n    f.close()",
+      "options": [
+        "无论 process 是否抛异常，文件都会关闭",
+        "只有 process 正常返回时文件才关闭",
+        "只有 process 抛异常时文件才关闭",
+        "文件不会关闭，程序退出才会释放"
+      ],
+      "answer": 0,
+      "explanation": "finally 保证无论 process 是否抛出异常，f.close() 都会被执行。这是经典的资源清理模式，也是 with 语句所封装的语义。",
+      "error_tag": "记忆缺失",
+      "variant_group": "finally_resource_cleanup"
+    },
+    {
+      "kp": "py.exc.finally",
+      "type": "multi_choice",
+      "question": "下列关于 finally 的说法，哪些是正确的？（多选）",
+      "options": [
+        "finally 会在 try 块正常结束时执行",
+        "finally 会在 try 块抛出未捕获异常时执行",
+        "finally 会在 try 块中执行 return 或 break 时执行",
+        "finally 只在有 except 子句时才允许出现",
+        "finally 中可以使用 return，但会覆盖之前的返回值"
+      ],
+      "answer": [
+        0,
+        1,
+        2,
+        4
+      ],
+      "explanation": "finally 在正常结束、异常、return/break 等情况下都会执行；它不要求必须有 except；finally 中的 return 会覆盖之前返回值。因此 D 错误。",
+      "error_tag": "概念混淆",
+      "variant_group": "finally_always_runs"
+    },
+    {
+      "kp": "py.exc.finally",
+      "type": "multi_choice",
+      "question": "关于在 finally 中 return 或 raise 的后果，下列哪些描述正确？（多选）",
+      "options": [
+        "finally 中的 return 会丢弃正在传播的异常",
+        "finally 中的 raise 会替换掉正在传播的原异常",
+        "finally 中的 return 会覆盖 try 中的返回值",
+        "finally 中的 return 只是装饰，不影响返回值"
+      ],
+      "answer": [
+        0,
+        1,
+        2
+      ],
+      "explanation": "finally 中的控制流语句（return/raise）会接管出口，覆盖或丢弃之前 try/except 中的返回值或异常。D 的说法错误。",
+      "error_tag": "边界错误",
+      "variant_group": "finally_control_flow"
+    },
+    {
+      "kp": "py.exc.finally",
+      "type": "multi_choice",
+      "question": "以下哪些结构会触发 finally 执行？（多选）",
+      "options": [
+        "try 块中正常执行完毕",
+        "try 块中抛出异常并被 except 捕获",
+        "try 块中抛出异常且未被任何 except 捕获",
+        "try 块中执行 os._exit(0) 直接终止进程"
+      ],
+      "answer": [
+        0,
+        1,
+        2
+      ],
+      "explanation": "正常、捕获异常、未捕获异常三种情况 finally 都会执行；但 os._exit 直接终止进程，绕过一切清理，finally 不会运行。",
+      "error_tag": "边界错误",
+      "variant_group": "finally_always_runs"
+    },
+    {
+      "kp": "py.exc.finally",
+      "type": "fill_blank",
+      "question": "阅读以下代码，程序会先打印什么？\n\ntry:\n    print('body')\nfinally:\n    print('end')\n\n请写出首先打印的字符串（不含引号）。",
+      "options": [],
+      "answer": [
+        "body",
+        "'body'",
+        "\"body\""
+      ],
+      "explanation": "先执行 try 块中的 print('body')，然后 finally 执行 print('end')，因此首先打印 body。",
+      "error_tag": "记忆缺失",
+      "variant_group": "finally_execution_order"
+    },
+    {
+      "kp": "py.exc.finally",
+      "type": "fill_blank",
+      "question": "以下函数调用的返回值是整数几？\n\ndef f():\n    try:\n        return 10\n    finally:\n        return 20\n\n请填写 f() 的返回值。",
+      "options": [],
+      "answer": [
+        "20",
+        "'20'"
+      ],
+      "explanation": "finally 中的 return 20 会覆盖 try 中的 return 10，因此函数最终返回 20。",
+      "error_tag": "边界错误",
+      "variant_group": "finally_overrides_return"
+    },
+    {
+      "kp": "py.exc.finally",
+      "type": "code_reading",
+      "question": "阅读以下代码，写出其输出。\n\ndef demo():\n    try:\n        print('T')\n        return 'R'\n    finally:\n        print('F')\n\nprint(demo())",
+      "options": [],
+      "answer": "T\nF\nR",
+      "explanation": "先打印 T，return 表达式求值得 'R' 并暂存，接着 finally 打印 F，最后打印返回值 R。输出为三行：T、F、R。",
+      "error_tag": "边界错误",
+      "variant_group": "finally_before_return"
+    },
+    {
+      "kp": "py.exc.finally",
+      "type": "code_reading",
+      "question": "阅读以下代码，写出其输出。\n\ntry:\n    try:\n        raise KeyError('k')\n    finally:\n        print('inner')\nexcept KeyError:\n    print('caught')",
+      "options": [],
+      "answer": "inner\ncaught",
+      "explanation": "内层 try 抛 KeyError，内层 finally 先打印 inner，然后异常冒泡到外层 except 捕获并打印 caught。",
+      "error_tag": "概念混淆",
+      "variant_group": "finally_nested"
+    },
+    {
+      "kp": "py.exc.finally",
+      "type": "scenario",
+      "question": "你在写一个函数，需要在文件读取完成后无论如何都关闭文件句柄，并且还要保证即使读取过程中抛出异常也不会泄漏资源。你会如何组织 try/except/finally（或更优方案）？请说明理由。",
+      "options": [],
+      "answer": null,
+      "explanation": "经典做法是把 open 放在 try 外或 try 内，用 finally 保证 close 一定执行，无论是否抛异常。更优雅的替代是使用 with 语句（上下文管理器），它内部等价于 try/finally 的清理语义。",
+      "error_tag": "概念混淆",
+      "variant_group": "finally_resource_cleanup",
+      "required_keywords": [
+        "with",
+        "上下文管理器",
+        "finally",
+        "try",
+        "close"
+      ]
+    },
+    {
+      "kp": "py.exc.finally",
+      "type": "scenario",
+      "question": "你写了一个函数，在 try 块中 return 计算结果，在 finally 块中进行日志记录并意外写了 return。上线后发现返回值不对。请分析原因以及应如何修正。",
+      "options": [],
+      "answer": null,
+      "explanation": "finally 中的 return 会覆盖 try 中的返回值，并且可能吞掉正在传播的异常，导致返回值不正确。正确做法是不要在 finally 中写 return，日志等清理逻辑只写副作用，返回留给 try/except 处理。",
+      "error_tag": "边界错误",
+      "variant_group": "finally_control_flow",
+      "required_keywords": [
+        "finally",
+        "return",
+        "覆盖",
+        "异常",
+        "副作用"
+      ]
+    },
+    {
+      "kp": "py.exc.finally",
+      "type": "single_choice",
+      "question": "以下函数调用 f() 的返回值是什么？\n\ndef f():\n    try:\n        return 1\n    finally:\n        return 2",
+      "options": [
+        "1",
+        "2",
+        "None",
+        "抛出异常"
+      ],
+      "answer": 1,
+      "explanation": "finally 块中的 return 会覆盖 try 块中尚未真正返回的值，因此最终返回 2。这是一个容易被忽视的陷阱。",
+      "error_tag": "边界错误",
+      "variant_group": "finally_overrides_return"
+    },
+    {
+      "kp": "py.exc.finally",
+      "type": "single_choice",
+      "question": "以下代码的输出是？\n\ndef g():\n    try:\n        return 'try'\n    finally:\n        print('cleanup')\n\nprint(g())",
+      "options": [
+        "cleanup\\ntry",
+        "try\\ncleanup",
+        "try",
+        "cleanup"
+      ],
+      "answer": 0,
+      "explanation": "return 的表达式先求值保存，finally 在真正返回前执行，因此打印顺序是 cleanup，再打印返回值 try。",
+      "error_tag": "记忆缺失",
+      "variant_group": "finally_before_return"
+    },
+    {
+      "kp": "py.exc.finally",
+      "type": "single_choice",
+      "question": "以下代码执行后，程序会怎样？\n\ntry:\n    raise ValueError('x')\nfinally:\n    print('done')",
+      "options": [
+        "打印 done 后，ValueError 继续向外传播",
+        "打印 done，异常被静默吞掉",
+        "不打印 done，直接抛出 ValueError",
+        "打印 done 后抛出 RuntimeError"
+      ],
+      "answer": 0,
+      "explanation": "没有 except 捕获时，finally 仍然会执行，但异常不会被吞掉，会继续向上传播。finally 只做清理，并不处理异常。",
+      "error_tag": "概念混淆",
+      "variant_group": "finally_not_swallow"
+    },
+    {
+      "kp": "py.exc.finally",
+      "type": "single_choice",
+      "question": "以下代码执行后 x 的值是？\n\ndef h():\n    x = 0\n    try:\n        x = 1\n        raise RuntimeError()\n    except RuntimeError:\n        x = 2\n    finally:\n        x = 3\n    return x",
+      "options": [
+        "1",
+        "2",
+        "3",
+        "0"
+      ],
+      "answer": 2,
+      "explanation": "except 中 x 被赋为 2，finally 在 return 之前执行并把 x 改为 3，因此最终返回 3。",
+      "error_tag": "边界错误",
+      "variant_group": "finally_side_effect"
+    },
+    {
+      "kp": "py.exc.finally",
+      "type": "single_choice",
+      "question": "关于 finally 中返回值/抛异常的影响，下列描述正确的是？",
+      "options": [
+        "finally 中使用 return 会覆盖之前 try 或 except 的返回值或异常",
+        "finally 中 return 会立即报语法错误",
+        "finally 中的代码在 try 返回后不会再执行",
+        "finally 中抛出的异常会被自动忽略"
+      ],
+      "answer": 0,
+      "explanation": "finally 中的 return 会丢弃正在传播的异常或覆盖原返回值；同理 finally 中抛出的新异常会替换原异常。因此一般不建议在 finally 里写 return。",
+      "error_tag": "概念混淆",
+      "variant_group": "finally_control_flow"
+    },
+    {
+      "kp": "py.exc.finally",
+      "type": "single_choice",
+      "question": "以下循环会输出几次 'cleanup'？\n\nfor i in range(3):\n    try:\n        if i == 1:\n            continue\n    finally:\n        print('cleanup')",
+      "options": [
+        "1 次",
+        "2 次",
+        "3 次",
+        "0 次"
+      ],
+      "answer": 2,
+      "explanation": "每次循环迭代结束时 finally 都会执行，包括 continue 触发的那次，因此 3 次迭代各打印一次 cleanup。",
+      "error_tag": "边界错误",
+      "variant_group": "finally_with_continue"
+    },
+    {
+      "kp": "py.exc.finally",
+      "type": "single_choice",
+      "question": "以下使用 break 的循环，finally 会怎样？\n\nwhile True:\n    try:\n        break\n    finally:\n        print('bye')",
+      "options": [
+        "打印一次 bye，然后退出循环",
+        "不打印 bye，直接退出循环",
+        "一直循环打印 bye",
+        "抛出异常"
+      ],
+      "answer": 0,
+      "explanation": "break 会触发离开 try 块，finally 在真正跳出循环前执行一次，打印 bye 后循环结束。",
+      "error_tag": "记忆缺失",
+      "variant_group": "finally_with_break"
+    },
+    {
+      "kp": "py.exc.finally",
+      "type": "single_choice",
+      "question": "关于 try/except/finally 中 return 的求值时机，下列说法正确的是？",
+      "options": [
+        "return 表达式在到达该语句时求值，finally 在其后、真正返回前执行",
+        "return 表达式在 finally 执行之后才求值",
+        "finally 永远在 return 表达式求值之前执行",
+        "finally 中的语句会被编译器忽略"
+      ],
+      "answer": 0,
+      "explanation": "return 后的表达式会先求值并保存，然后执行 finally，最后才真正返回保存的值。理解这一点有助于避免 finally 修改对象造成的困惑。",
+      "error_tag": "概念混淆",
+      "variant_group": "finally_return_semantics"
+    }
+  ]
+}

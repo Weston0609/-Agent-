@@ -1,0 +1,620 @@
+{
+  "id": "s7u2l1",
+  "title": "s7u2l1",
+  "kps": [
+    "agent.rag.pipeline",
+    "agent.rag.chunking"
+  ],
+  "theory": "## agent.rag.pipeline\n\n# agent.rag.pipeline：从零搭建一条可运行的 RAG 流水线\n\n> 一句话直觉：RAG（Retrieval-Augmented Generation，检索增强生成）就是让大模型在回答前先“查资料”，而 pipeline（流水线）就是把“查资料 → 喂给模型 → 得到答案”拆成标准步骤，让 Agent 能稳定、可替换、可调试地完成问答。\n\n---\n\n## 1. 为什么需要 RAG？先理解“模型不知道你的私有知识”\n\n大语言模型（LLM, Large Language Model）的知识来自训练语料，它不知道你公司内部文档、最新政策、私人笔记。\n\n两种常见补知识方式：\n\n- 微调（Fine-tuning）：把知识写进模型参数，成本高、更新慢。\n- RAG：把知识放在外部知识库，回答时先检索再生成，更新快、可溯源、成本低。\n\nRAG 的核心公式可以写成：\n\n```\n用户问题 → 检索相关文档 → 把文档作为上下文 → LLM 生成答案\n```\n\n这就是一条最简 pipeline。\n\n```python\n# 一个最小 RAG 直觉示例：先检索，再拼接上下文，最后“生成”\n# 注意：这里用规则函数模拟 LLM，真实场景替换为 OpenAI / 本地模型调用\n\nknowledge_base = [\n    \"RAG 是检索增强生成，先检索文档再让模型回答。\",\n    \"pipeline 是把多个处理步骤按顺序连接起来。\",\n    \"Agent 是可以调用工具、做决策的智能体。\",\n]\n\nquestion = \"RAG 是什么？\"\n\n# 1) 检索：用最简单关键词匹配模拟\nretrieved = [doc for doc in knowledge_base if \"RAG\" in doc]\n\n# 2) 增强：把检索结果拼成上下文\ncontext = \"\\n\".join(retrieved)\n\n# 3) 生成：真实场景应调用 LLM\nanswer = f\"根据资料：{context}\"\n\nprint(answer)\n```\n\n**关键结论**：RAG 不是“模型变聪明”，而是“模型开卷考试”。pipeline 的价值是把开卷考试的每一步标准化。\n\n---\n\n## 2. RAG pipeline 的五个标准阶段\n\n工程级 RAG pipeline 通常包含：\n\n1. **加载（Load）**：读取 PDF、Markdown、网页、数据库等原始资料。\n2. **切分（Split / Chunk）**：把长文档切成小块，便于检索。\n3. **嵌入（Embedding）**：把文本块转成向量（vector），让语义相近的文本在向量空间接近。\n4. **检索（Retrieve）**：用用户问题向量去向量库找最相似的 top-k 文本块。\n5. **生成（Generate）**：把检索结果和问题一起交给 LLM，生成最终答案。\n\n可以把它想成一条工厂流水线：\n\n```\n原始文档 → 切分 → 向量化 → 存入向量库\n用户问题 → 向量化 → 检索 top-k → 拼接 prompt → LLM → 答案\n```\n\n```python\n# 用纯 Python 模拟 RAG pipeline 的五个阶段，不依赖第三方库\n# 真实工程中 embedding 和向量库会换成 sentence-transformers / FAISS / Chroma 等\n\nimport math\nfrom collections import Counter\n\n# ---------- 阶段 1：加载 ----------\ndocuments = [\n    \"RAG 是检索增强生成，它先检索相关文档，再让大模型生成答案。\",\n    \"向量数据库用于存储文本向量，并支持相似度检索。\",\n    \"Agent 可以调用工具，根据环境反馈做决策。\",\n    \"pipeline 把多个处理步骤串联起来，形成可复用的工作流。\",\n]\n\n# ---------- 阶段 2：切分 ----------\n# 这里每句话已经很短，直接作为 chunk；真实场景按字符数或语义切分\nchunks = documents\n\n# ---------- 阶段 3：嵌入 ----------\n# 用词频向量模拟 embedding，仅用于教学\ndef embed(text: str) -> Counter:\n    # 中文按字符切分，英文按空格切分，简化处理\n    tokens = text.replace(\"，\", \" \").replace(\"。\", \" \").split()\n    return Counter(tokens)\n\nchunk_vectors = [embed(c) for c in chunks]\n\n# ---------- 阶段 4：检索 ----------\ndef cosine_sim(a: Counter, b: Counter) -> float:\n    # 计算两个稀疏向量的余弦相似度\n    common = set(a) & set(b)\n    dot = sum(a[t] * b[t] for t in common)\n    norm_a = math.sqrt(sum(v * v for v in a.values()))\n    norm_b = math.sqrt(sum(v * v for v in b.values()))\n    return dot / (norm_a * norm_b + 1e-8)\n\ndef retrieve(query: str, top_k: int = 2):\n    q_vec = embed(query)\n    scored = [(cosine_sim(q_vec, c_vec), c) for c_vec, c in zip(chunk_vectors, chunks)]\n    scored.sort(key=lambda x: x[0], reverse=True)\n    return [c for _, c in scored[:top_k]]\n\nquestion = \"RAG 是怎么工作的？\"\ntop_chunks = retrieve(question)\nprint(\"检索结果：\", top_chunks)\n\n# ---------- 阶段 5：生成 ----------\n# 真实场景把 prompt 发给 LLM；这里用模板模拟\nprompt = f\"\"\"请根据以下资料回答问题。\n资料：\n{chr(10).join(top_chunks)}\n问题：{question}\n答案：\"\"\"\n\nprint(\"\\n构造的 Prompt：\\n\", prompt)\n```\n\n**关键结论**：pipeline 的每个阶段都应可单独测试、替换和观测。工程上最怕“黑盒一把梭”。\n\n---\n\n## 3. 切分策略：chunk 大小决定检索质量\n\n切分（chunking）是 RAG 最容易被忽视、却最影响效果的一步。\n\n- chunk 太小：语义不完整，检索到碎片。\n- chunk 太大：噪声多，LLM 上下文浪费。\n- 常见做法：按 300~800 字符切分，保留 10%~20% 重叠（overlap），避免边界语义断裂。\n\n```python\n# 一个简单的滑动窗口切分器\ndef split_text(text: str, chunk_size: int = 20, overlap: int = 5):\n    chunks = []\n    start = 0\n    while start < len(text):\n        end = start + chunk_size\n        chunks.append(text[start:end])\n        start = end - overlap  # 保留重叠，避免语义断裂\n    return chunks\n\ndoc = \"RAG 是检索增强生成。它先检索相关文档，再让大模型生成答案。pipeline 把步骤串联起来。\"\nfor i, c in enumerate(split_text(doc)):\n    print(f\"chunk {i}: {c}\")\n```\n\n**关键结论**：chunk 策略不是拍脑袋，要用真实问题集评估召回率（recall）和答案质量。\n\n---\n\n## 4. 检索：从关键词到向量，再到混合检索\n\n检索阶段决定“能不能找到正确资料”。\n\n- 关键词检索（BM25）：擅长精确匹配，比如专有名词、编号。\n- 向量检索（dense retrieval）：擅长语义相似，比如“怎么退款”和“如何申请退钱”。\n- 混合检索（hybrid retrieval）：两者结合，工程中常用。\n- 重排（rerank）：先召回 top-20，再用交叉编码器（cross-encoder）精排 top-5。\n\n```python\n# 演示：关键词检索 vs 向量检索的差异\n# 关键词检索命中“退款”字面；向量检索更可能命中“退钱”语义\n\n# 简化：用字符集合重合度模拟向量语义相似度\ndef vec_sim(a: str, b: str) -> float:\n    return len(set(a) & set(b)) / (len(set(a) | set(b)) + 1e-8)\n\ndocs = [\n    \"如何申请退款？\",\n    \"怎么退钱？\",\n    \"RAG 的 pipeline 包含检索和生成。\",\n]\nquery = \"退款流程\"\n\n# 关键词：看是否包含“退款”\nkeyword_hits = [d for d in docs if \"退款\" in d]\n# 向量：看字符重合度\nvector_hits = sorted(docs, key=lambda d: vec_sim(query, d), reverse=True)\n\nprint(\"关键词检索：\", keyword_hits)\nprint(\"向量检索 top-2：\", vector_hits[:2])\n```\n\n**关键结论**：检索不是“越向量越好”。生产环境常做 hybrid + rerank，并记录每次检索的命中情况。\n\n---\n\n## 5. 生成与 Agent 化：把 pipeline 变成可调用工具\n\n最后一步是把检索结果塞进 prompt，让 LLM 生成答案。工程要点：\n\n- 明确指令：只根据资料回答，不知道就说不知道。\n- 引用来源：让答案可追溯。\n- 控制上下文长度：top-k 不是越大越好。\n- Agent 化：把 RAG pipeline 封装成工具（tool），Agent 可在需要时调用。\n\n```python\n# 把 RAG pipeline 封装成一个函数，模拟 Agent 调用工具\ndef rag_answer(question: str, knowledge: list[str]) -> dict:\n    # 简化检索：返回包含问题关键词的文档\n    retrieved = [d for d in knowledge if any(ch in d for ch in question)]\n    context = \"\\n\".join(retrieved) if retrieved else \"无相关资料\"\n    prompt = f\"只根据资料回答，不知道就说不知道。\\n资料：{context}\\n问题：{question}\"\n    # 真实场景调用 LLM；这里模拟\n    answer = f\"（模拟 LLM）根据资料，答案是：{context}\"\n    return {\"answer\": answer, \"sources\": retrieved}\n\nresult = rag_answer(\"RAG 是什么？\", documents)\nprint(result[\"answer\"])\nprint(\"来源：\", result[\"sources\"])\n```\n\n**关键结论**：Agent 不直接“记住”知识，而是通过 RAG pipeline 动态获取知识。pipeline 是 Agent 的知识接口。\n\n---\n\n## 动手练习\n\n**任务**：在本地实现一条最小可运行 RAG pipeline。\n\n1. 准备 5 条你感兴趣领域的文本（比如：电影、菜谱、编程笔记）。\n2. 实现 `split_text`、`embed`、`retrieve`、`generate` 四个函数。\n3. 用 3 个问题测试，打印：\n   - 检索到的 top-2 chunk\n   - 最终 prompt\n   - 模拟答案\n4. 进阶：把 `embed` 换成 `sentence-transformers` 的 `all-MiniLM-L6-v2`，观察检索结果变化。\n\n**提交物**：一个 `.py` 文件 + 一段 100 字总结：切分大小如何影响检索结果。\n\n---\n\n## 常见误区\n\n- 以为 RAG 等于“把文档全塞进 prompt”：上下文有限，噪声大，成本高。\n- 只关注 LLM，不关注切分和检索：检索错了，生成再强也没用。\n- top-k 越大越好：错误信息会干扰 LLM。\n- 没有评估：没有测试集，无法判断 pipeline 是否变好。\n\n---\n\n## 小结\n\nRAG pipeline = 加载 → 切分 → 嵌入 → 检索 → 生成。\n\nAgent 通过这条 pipeline 获得外部知识。\n\n工程级关键在于：每一步可测试、可替换、可观测。\n\n```python\nimport math\nfrom collections import Counter\n\n# ============================================================\n# 最小可运行 RAG pipeline 示例\n# 说明：用词频向量模拟 embedding，用余弦相似度模拟向量检索\n# 真实工程请替换为 sentence-transformers / FAISS / Chroma + LLM API\n# ============================================================\n\n# ---------- 1. 加载 ----------\ndocuments = [\n    \"RAG 是检索增强生成，它先检索相关文档，再让大模型生成答案。\",\n    \"向量数据库用于存储文本向量，并支持相似度检索。\",\n    \"Agent 可以调用工具，根据环境反馈做决策。\",\n    \"pipeline 把多个处理步骤串联起来，形成可复用的工作流。\",\n    \"切分 chunk 时保留重叠，可以避免语义在边界处断裂。\",\n]\n\n# ---------- 2. 切分 ----------\ndef split_text(text: str, chunk_size: int = 20, overlap: int = 5):\n    \"\"\"滑动窗口切分，保留重叠\"\"\"\n    chunks = []\n    start = 0\n    while start < len(text):\n        end = start + chunk_size\n        chunks.append(text[start:end])\n        start = end - overlap\n    return chunks\n\n# 这里文档较短，直接把每句话作为一个 chunk\nchunks = documents\n\n# ---------- 3. 嵌入 ----------\ndef embed(text: str) -> Counter:\n    \"\"\"用词频向量模拟 embedding\"\"\"\n    tokens = text.replace(\"，\", \" \").replace(\"。\", \" \").split()\n    return Counter(tokens)\n\nchunk_vectors = [embed(c) for c in chunks]\n\n# ---------- 4. 检索 ----------\ndef cosine_sim(a: Counter, b: Counter) -> float:\n    common = set(a) & set(b)\n    dot = sum(a[t] * b[t] for t in common)\n    norm_a = math.sqrt(sum(v * v for v in a.values()))\n    norm_b = math.sqrt(sum(v * v for v in b.values()))\n    return dot / (norm_a * norm_b + 1e-8)\n\ndef retrieve(query: str, top_k: int = 2):\n    q_vec = embed(query)\n    scored = [(cosine_sim(q_vec, c_vec), c) for c_vec, c in zip(chunk_vectors, chunks)]\n    scored.sort(key=lambda x: x[0], reverse=True)\n    return [c for _, c in scored[:top_k]]\n\n# ---------- 5. 生成 ----------\ndef generate(question: str, top_chunks: list) -> str:\n    context = \"\\n\".join(top_chunks)\n    prompt = f\"请只根据资料回答问题。\\n资料：\\n{context}\\n问题：{question}\\n答案：\"\n    # 真实场景：response = llm.invoke(prompt)\n    return f\"（模拟 LLM 输出）根据资料：{context}\"\n\n# ---------- 运行 ----------\nif __name__ == \"__main__\":\n    question = \"RAG 是怎么工作的？\"\n    top_chunks = retrieve(question, top_k=2)\n    answer = generate(question, top_chunks)\n\n    print(\"问题：\", question)\n    print(\"\\n检索到的 top-2 chunk：\")\n    for i, c in enumerate(top_chunks, 1):\n        print(f\"  {i}. {c}\")\n    print(\"\\n最终答案：\")\n    print(answer)\n```\n\n## agent.rag.chunking\n\n# Agent RAG 分块（Chunking）：让检索更聪明的第一步\n\n**一句话直觉**：在 RAG（Retrieval-Augmented Generation，检索增强生成）中，分块就是把长文档切成小段，这样才能在用户提问时，精准找到“最相关”的那一小块，而不是把整本书塞给模型。\n\n---\n\n## 1. 为什么需要分块？（Why Chunking）\n\n想象你在一个巨大的图书馆找一句话。如果所有书都粘成一本 10 万页的巨著，你根本没法快速定位。RAG 也一样：\n\n- 大语言模型（LLM，Large Language Model）有上下文窗口（context window）限制，比如 8K、32K、128K token，不能塞下整本书。\n- 把所有内容都塞进去，不仅贵、慢，还会让模型“注意力分散”，回答质量下降。\n- 检索系统（retriever）需要把文档表示成向量（embedding），粒度太粗会导致语义模糊。\n\n所以，**分块是 RAG 的第一道工序**：把文档切成语义相对完整的小段（chunk），再为每段生成向量，存入向量数据库（vector database）。\n\n**关键结论**：分块质量直接决定检索质量，检索质量决定最终回答质量。\n\n```python\n# 演示：不分块 vs 分块 的检索直觉\n# 假设用户问：“Python 的 GIL 是什么？”\n# 不分块：整篇 100 页文档 -> 一个向量，语义太泛，可能检索不到。\n# 分块后：包含“GIL 是全局解释器锁”的那一小段 -> 向量更聚焦，更容易命中。\nprint(\"分块 = 把大文档变成可检索的语义单元\")\n```\n\n---\n\n## 2. 分块的基本单位：从字符到 token\n\n分块不是随便切。常见单位有三种：\n\n1. **字符（character）**：最简单，`len(text)` 就是字符数。\n2. **词（word）**：按空格切分，适合英文。\n3. **token**：LLM 实际处理的最小单位。英文约 1 token ≈ 0.75 个单词，中文约 1 token ≈ 1~2 个汉字。\n\n工程上，我们常用 **token 数** 来控制块大小，因为模型的上下文窗口是以 token 计的。但 tokenizer（分词器）有开销，所以原型阶段也常用字符数近似。\n\n**关键结论**：块大小用 token 最准，但字符数在快速实验中足够用。\n\n```python\n# 示例：按字符数简单分块\ntext = \"RAG 是检索增强生成。它先检索，再生成。分块是第一步。\"\nchunk_size = 10  # 每块最多 10 个字符\nchunks = [text[i:i+chunk_size] for i in range(0, len(text), chunk_size)]\nprint(chunks)\n# 输出：['RAG 是检索增强', '生成。它先检索，再', '生成。分块是第一步', '。']\n```\n\n---\n\n## 3. 三种经典分块策略\n\n### 3.1 固定大小分块（Fixed-size Chunking）\n\n最简单：每块固定长度，块之间可以重叠（overlap），避免边界切断语义。\n\n- 优点：实现快、可控。\n- 缺点：可能在句子中间切断，语义不完整。\n\n```python\n# 固定大小 + 重叠分块\ndef fixed_size_chunks(text, size=20, overlap=5):\n    chunks = []\n    start = 0\n    while start < len(text):\n        end = start + size\n        chunks.append(text[start:end])\n        start = end - overlap  # 回退 overlap 个字符\n        if start >= len(text):\n            break\n    return chunks\n\ntext = \"RAG 是检索增强生成。它先检索，再生成。分块是第一步，决定检索质量。\"\nfor i, c in enumerate(fixed_size_chunks(text, 15, 5)):\n    print(f\"块{i}: {c}\")\n```\n\n### 3.2 递归字符分块（Recursive Character Chunking）\n\nLangChain 的默认策略：按优先级尝试分隔符 `[\"\\n\\n\", \"\\n\", \"。\", \".\", \" \", \"\"]`，先按段落切，再按句子，最后按字符。这样尽量保持语义完整。\n\n- 优点：语义边界更自然。\n- 缺点：块大小不完全均匀。\n\n```python\n# 简化版递归分块：按句号、换行、空格依次尝试\ndef recursive_chunks(text, size=20):\n    separators = [\"\\n\\n\", \"\\n\", \"。\", \" \", \"\"]\n    def split(t, sep_idx):\n        if len(t) <= size or sep_idx >= len(separators):\n            return [t]\n        sep = separators[sep_idx]\n        parts = t.split(sep) if sep else list(t)\n        result = []\n        for p in parts:\n            if len(p) <= size:\n                result.append(p)\n            else:\n                result.extend(split(p, sep_idx + 1))\n        return result\n    return [c for c in split(text, 0) if c.strip()]\n\ntext = \"RAG 是检索增强生成。\\n它先检索，再生成。\\n分块是第一步，决定检索质量。\"\nprint(recursive_chunks(text, 15))\n```\n\n### 3.3 语义分块（Semantic Chunking）\n\n用 embedding 计算相邻句子的相似度，相似度骤降处就是语义边界。\n\n- 优点：最贴近“语义完整”。\n- 缺点：计算贵、实现复杂，通常用于高质量场景。\n\n```python\n# 伪代码示意：真实使用需 embedding 模型\n# 1. 把文档切成句子\n# 2. 计算相邻句子 embedding 的余弦相似度\n# 3. 相似度低于阈值处切分\nprint(\"语义分块：按语义相似度动态切分，效果最好但最贵\")\n```\n\n**关键结论**：入门先用递归分块，追求质量再上语义分块。\n\n---\n\n## 4. 工程参数：块大小、重叠与元数据\n\n实际项目中，分块不是孤立的，要配合这些参数：\n\n| 参数 | 典型值 | 作用 |\n|------|--------|------|\n| chunk_size | 256~1024 token | 每块大小 |\n| chunk_overlap | 10%~20% | 块间重叠，防边界丢失 |\n| metadata | 来源、页码、标题 | 检索后可溯源 |\n\n**元数据（metadata）** 非常重要：检索到块后，你可以告诉用户“这段话来自第 3 页”，提升可信度。\n\n```python\n# 带元数据的分块\nchunks = fixed_size_chunks(\"RAG 分块示例。\" * 10, size=20, overlap=5)\nchunk_records = [\n    {\"text\": c, \"source\": \"demo.txt\", \"chunk_id\": i}\n    for i, c in enumerate(chunks)\n]\nprint(chunk_records[0])\n# {'text': 'RAG 分块示例。RAG 分块', 'source': 'demo.txt', 'chunk_id': 0}\n```\n\n---\n\n## 5. 端到端小流程：从文档到可检索块\n\n把上面串起来：读取文档 -> 分块 -> 加元数据 -> 生成 embedding（示意）-> 存入向量库（示意）。\n\n```python\n# 端到端示意（embedding 和向量库用占位函数）\ndef fake_embed(text):\n    return [len(text) % 7, len(text) % 5]  # 仅演示\n\ndef build_index(text, source):\n    chunks = recursive_chunks(text, size=30)\n    index = []\n    for i, c in enumerate(chunks):\n        index.append({\n            \"text\": c,\n            \"vector\": fake_embed(c),\n            \"metadata\": {\"source\": source, \"chunk_id\": i}\n        })\n    return index\n\ndoc = \"RAG 是检索增强生成。\\n分块是第一步。\\n好的分块提升检索质量。\"\nindex = build_index(doc, \"demo.txt\")\nfor item in index:\n    print(item[\"metadata\"], item[\"text\"])\n```\n\n**关键结论**：分块是 RAG 流水线的起点，块的质量和元数据决定了后续检索与生成的上限。\n\n---\n\n## 动手练习\n\n**任务**：本地实现一个 `chunk_text` 函数，满足：\n1. 输入一段中文文本和 `chunk_size`（字符数）。\n2. 使用递归分块策略，优先按 `\\n\\n`、`\\n`、`。`、` ` 切分。\n3. 每个块附带 `chunk_id` 和 `start_index` 元数据。\n4. 打印每个块的长度和内容。\n\n**进阶**：加入 `chunk_overlap` 参数，让相邻块有 20% 重叠。\n\n**提交**：把你的代码和一段测试文本的运行结果贴出来。\n\n```python\ndef recursive_chunks(text, size=20):\n    \"\"\"递归字符分块：按语义分隔符优先级切分。\"\"\"\n    separators = [\"\\n\\n\", \"\\n\", \"。\", \" \", \"\"]\n\n    def split(t, sep_idx):\n        if len(t) <= size or sep_idx >= len(separators):\n            return [t]\n        sep = separators[sep_idx]\n        parts = t.split(sep) if sep else list(t)\n        result = []\n        for p in parts:\n            if len(p) <= size:\n                result.append(p)\n            else:\n                result.extend(split(p, sep_idx + 1))\n        return result\n\n    return [c for c in split(text, 0) if c.strip()]\n\n\ndef build_index(text, source, size=30):\n    \"\"\"把文档分块并附上元数据，模拟向量索引结构。\"\"\"\n    chunks = recursive_chunks(text, size=size)\n    index = []\n    for i, c in enumerate(chunks):\n        index.append({\n            \"text\": c,\n            \"metadata\": {\"source\": source, \"chunk_id\": i}\n        })\n    return index\n\n\nif __name__ == \"__main__\":\n    doc = (\n        \"RAG 是检索增强生成。\\n\"\n        \"它先检索相关文档，再让大模型生成回答。\\n\"\n        \"分块是 RAG 的第一步，决定检索质量。\\n\"\n        \"好的分块让语义更聚焦，坏的分块会切断语义。\"\n    )\n    index = build_index(doc, \"demo.txt\", size=25)\n    for item in index:\n        print(item[\"metadata\"], \"->\", item[\"text\"])\n```\n",
+  "quiz": [
+    {
+      "kp": "agent.rag.pipeline",
+      "type": "single_choice",
+      "question": "在构建基于检索增强生成的问答管道时，文档经过切分、嵌入和向量存储后，用户提问时第一步通常应该做什么？",
+      "options": [
+        "将用户问题直接输入大语言模型生成答案",
+        "将用户问题转换为向量后到向量库中检索相关文档片段",
+        "先对用户问题做关键词抽取，再去数据库做精确匹配",
+        "把用户问题扩充为多个子问题后直接拼接成最终答案"
+      ],
+      "answer": 1,
+      "explanation": "RAG 管道的推理阶段，通常先把用户问题嵌入成向量，再与向量库中的文档向量做相似度检索，得到相关片段后交给大语言模型生成答案。直接输入模型无法利用外部知识；纯关键词匹配不是向量检索管道的典型第一步；问题扩充可能在多路召回中使用，但不是通用第一步。",
+      "error_tag": "流程顺序错误",
+      "variant_group": "rag_pipeline_stage_order"
+    },
+    {
+      "kp": "agent.rag.pipeline",
+      "type": "single_choice",
+      "question": "某团队在 RAG 系统中发现，检索到的文档片段虽然语义相关，但包含大量无关内容，导致大语言模型答案被干扰。以下哪种做法最可能缓解该问题？",
+      "options": [
+        "增大生成模型的温度参数，让答案更灵活",
+        "在检索后增加重排序步骤，只保留与问题最相关的少量片段",
+        "把所有检索到的片段全部拼接后交给模型，让模型自行忽略无关内容",
+        "将向量库中的文档全部重新嵌入一次"
+      ],
+      "answer": 1,
+      "explanation": "检索后重排序可以基于更精细的相关性打分筛选片段，减少无关内容对生成的干扰。提高温度会增加随机性，不会提升事实相关性；全部拼接会加剧上下文噪声；重新嵌入不会自动改变片段粒度或排序质量。",
+      "error_tag": "检索增强理解不足",
+      "variant_group": "rag_post_retrieval_refine"
+    },
+    {
+      "kp": "agent.rag.pipeline",
+      "type": "single_choice",
+      "question": "在 RAG 管道中，如果嵌入模型和检索时使用的嵌入模型不是同一个，最可能发生什么？",
+      "options": [
+        "向量数据库会自动把两者对齐，检索不受影响",
+        "文档向量和查询向量不在同一语义空间，相似度计算失去意义",
+        "生成模型会自动纠正嵌入不一致的问题",
+        "文档会被自动重新切分"
+      ],
+      "answer": 1,
+      "explanation": "不同嵌入模型产生的向量空间通常不一致，混用会导致相似度不可比，检索质量严重下降。向量数据库、生成模型和切分流程都不会自动修复该问题。",
+      "error_tag": "嵌入一致性误解",
+      "variant_group": "rag_embedding_consistency"
+    },
+    {
+      "kp": "agent.rag.pipeline",
+      "type": "single_choice",
+      "question": "某 RAG 系统在检索阶段返回了相关片段，但大语言模型仍然给出了错误答案。以下哪种排查方向最合理？",
+      "options": [
+        "检查提示词是否明确要求模型基于检索内容回答，以及检索片段是否真的包含答案",
+        "直接认定向量数据库损坏，并重建整个索引",
+        "把嵌入模型换成参数量更大的模型，不需要其他排查",
+        "关闭检索阶段，让模型自己回答"
+      ],
+      "answer": 0,
+      "explanation": "检索到相关片段但答案仍错，常见原因包括提示词没有约束模型依据上下文回答、片段中实际缺少关键信息、或模型忽略上下文。应先检查这些环节，而不是直接重建索引或更换模型。",
+      "error_tag": "故障排查方向错误",
+      "variant_group": "rag_generation_failure_diagnosis"
+    },
+    {
+      "kp": "agent.rag.pipeline",
+      "type": "single_choice",
+      "question": "在 RAG 管道中，「多路召回」通常指什么？",
+      "options": [
+        "同时使用多种检索方式（如向量检索和关键词检索）获取候选片段，再合并结果",
+        "让多个大语言模型同时生成答案，再投票选一个",
+        "把同一个文档重复存储多份",
+        "让用户多次输入同一个问题以提高准确率"
+      ],
+      "answer": 0,
+      "explanation": "多路召回指用不同检索策略并行获取候选集并融合，以提升召回率和覆盖面。多模型投票、重复存储和重复提问都不是多路召回的含义。",
+      "error_tag": "多路召回概念混淆",
+      "variant_group": "rag_multi_recall_concept"
+    },
+    {
+      "kp": "agent.rag.pipeline",
+      "type": "single_choice",
+      "question": "某 RAG 管道在切分文档时采用固定长度切分，不考虑句子或段落边界。这种做法最可能导致什么问题？",
+      "options": [
+        "文档无法被嵌入模型处理",
+        "片段可能在句子中间被截断，语义不完整，影响检索和生成质量",
+        "向量数据库无法存储这些片段",
+        "大语言模型会拒绝读取这些片段"
+      ],
+      "answer": 1,
+      "explanation": "固定长度切分可能切断句子或段落，破坏语义完整性，进而影响检索相关性和生成答案的质量。嵌入模型和向量库通常仍能处理，问题在于语义边界。",
+      "error_tag": "切分边界理解不足",
+      "variant_group": "rag_chunking_boundary"
+    },
+    {
+      "kp": "agent.rag.pipeline",
+      "type": "single_choice",
+      "question": "在 RAG 管道中，如果向量检索返回的片段与问题语义相似但实际并不包含答案，这通常称为什么问题？",
+      "options": [
+        "召回不足",
+        "检索结果与答案需求不匹配，属于相关性误判",
+        "嵌入维度设置错误",
+        "生成模型温度过高"
+      ],
+      "answer": 1,
+      "explanation": "语义相似不等于包含正确答案，这类情况属于检索相关性误判或答案覆盖不足。召回不足指没有检索到相关片段；嵌入维度和温度不是直接原因。",
+      "error_tag": "检索相关性理解偏差",
+      "variant_group": "rag_relevance_mismatch"
+    },
+    {
+      "kp": "agent.rag.pipeline",
+      "type": "single_choice",
+      "question": "某团队希望在 RAG 系统中支持用户按文档来源、时间范围等条件筛选检索结果。以下哪种做法最合适？",
+      "options": [
+        "在向量检索时结合元数据过滤，只返回满足条件的片段",
+        "把所有文档合并成一个大文档后再检索",
+        "让大语言模型在生成答案时自行忽略不满足条件的片段",
+        "提高嵌入模型的维度"
+      ],
+      "answer": 0,
+      "explanation": "元数据过滤可以在检索阶段按来源、时间等条件缩小候选范围，是最直接有效的做法。合并文档、依赖模型忽略和高维嵌入都不能可靠实现条件筛选。",
+      "error_tag": "元数据过滤理解不足",
+      "variant_group": "rag_metadata_filter"
+    },
+    {
+      "kp": "agent.rag.pipeline",
+      "type": "single_choice",
+      "question": "在 RAG 管道中，重排序（rerank）通常发生在哪个阶段？",
+      "options": [
+        "在文档切分之前，对原始文档排序",
+        "在向量检索返回候选片段之后、交给大语言模型生成之前",
+        "在大语言模型生成答案之后，对答案进行排序",
+        "在嵌入模型训练之前，对训练数据排序"
+      ],
+      "answer": 1,
+      "explanation": "重排序通常位于初步检索之后、生成之前，用更精细的模型对候选片段重新打分排序。切分前、生成后和嵌入训练前都不是典型位置。",
+      "error_tag": "重排序阶段混淆",
+      "variant_group": "rag_rerank_stage"
+    },
+    {
+      "kp": "agent.rag.pipeline",
+      "type": "single_choice",
+      "question": "某 RAG 应用的用户提问非常简短，例如「怎么弄？」，检索效果很差。以下哪种处理方式最合理？",
+      "options": [
+        "直接返回默认答案，不做检索",
+        "结合对话历史或上下文对问题做补全和改写，再进行检索",
+        "把问题重复多次后拼接成一个长查询",
+        "降低向量数据库的相似度阈值到零"
+      ],
+      "answer": 1,
+      "explanation": "简短问题往往缺少指代和背景，结合对话历史补全或改写能显著提升检索质量。直接返回默认答案、重复拼接或把阈值降到零都不能解决语义缺失问题。",
+      "error_tag": "查询补全理解不足",
+      "variant_group": "rag_query_completion"
+    },
+    {
+      "kp": "agent.rag.pipeline",
+      "type": "single_choice",
+      "question": "在 RAG 管道中，下列哪一项最可能属于「检索质量」问题，而不是「生成质量」问题？",
+      "options": [
+        "模型回答时语气不够礼貌",
+        "检索返回的片段中不包含回答问题所需的事实",
+        "模型输出的格式不符合预期",
+        "模型生成的内容过长"
+      ],
+      "answer": 1,
+      "explanation": "检索片段缺少所需事实属于检索阶段的问题，即没有召回正确内容。语气、格式和长度通常属于生成阶段的控制问题。",
+      "error_tag": "阶段归因错误",
+      "variant_group": "rag_quality_attribution"
+    },
+    {
+      "kp": "agent.rag.pipeline",
+      "type": "single_choice",
+      "question": "某 RAG 系统计划支持知识库文档的频繁更新。以下哪种设计最有利于保持检索结果的新鲜度？",
+      "options": [
+        "只在系统上线时构建一次索引，之后不再更新",
+        "建立文档更新到索引重建或增量更新的流程，使新文档能进入检索范围",
+        "让大语言模型记住所有新文档内容",
+        "每次用户提问时都重新训练嵌入模型"
+      ],
+      "answer": 1,
+      "explanation": "知识库频繁更新时，需要建立索引更新或增量更新机制，保证新文档可被检索。一次性索引会过期；模型记忆不可靠；每次请求重新训练嵌入模型不现实。",
+      "error_tag": "索引更新理解不足",
+      "variant_group": "rag_index_freshness"
+    },
+    {
+      "kp": "agent.rag.pipeline",
+      "type": "single_choice",
+      "question": "在 RAG 管道中，把长文档切分成较小片段（chunk）时，如果片段切得过小，最可能带来什么负面效果？",
+      "options": [
+        "嵌入模型无法处理任何输入",
+        "检索到的片段可能缺失完整语境，生成答案时信息不完整",
+        "向量数据库会拒绝存储这些片段",
+        "大语言模型会完全无法读取检索结果"
+      ],
+      "answer": 1,
+      "explanation": "片段过小容易破坏语义完整性，检索出的内容可能只是局部信息，缺少回答所需上下文。嵌入模型和向量数据库通常都能处理小片段；模型也可以读取短文本，问题在于信息不完整。",
+      "error_tag": "切分策略理解偏差",
+      "variant_group": "rag_chunking_effect"
+    },
+    {
+      "kp": "agent.rag.pipeline",
+      "type": "single_choice",
+      "question": "某 RAG 系统在检索时只返回一个最相似的文档片段，但用户问题需要综合多个文档的信息才能回答。以下哪种调整最直接有效？",
+      "options": [
+        "降低生成模型的最大输出长度",
+        "增加检索返回的片段数量，即提高 top-k",
+        "把用户问题改写成更短的句子",
+        "关闭向量相似度计算，改为随机返回片段"
+      ],
+      "answer": 1,
+      "explanation": "提高 top-k 可以让检索阶段返回更多相关片段，为需要综合多文档信息的问题提供更全面的上下文。降低输出长度、缩短问题或随机返回都不能解决召回不足的问题。",
+      "error_tag": "召回参数理解不足",
+      "variant_group": "rag_topk_adjustment"
+    },
+    {
+      "kp": "agent.rag.pipeline",
+      "type": "single_choice",
+      "question": "在 RAG 管道中，对用户问题进行「查询改写」的主要目的是什么？",
+      "options": [
+        "让问题变得更长，从而占用更多上下文窗口",
+        "把口语化或含糊的问题改写成更适合检索的形式，提高召回质量",
+        "替代向量检索，直接生成最终答案",
+        "把问题翻译成英文，因为嵌入模型只支持英文"
+      ],
+      "answer": 1,
+      "explanation": "查询改写旨在弥合用户表达与文档表述之间的差距，使检索更容易命中相关内容。它不是为了占上下文、不能替代检索，也不一定要求翻译成英文。",
+      "error_tag": "查询处理理解偏差",
+      "variant_group": "rag_query_rewrite_purpose"
+    },
+    {
+      "kp": "agent.rag.pipeline",
+      "type": "single_choice",
+      "question": "某 RAG 应用在检索后把多个文档片段拼接成一个长提示词交给大语言模型。如果拼接的片段总长度超过模型上下文窗口，最可能发生什么？",
+      "options": [
+        "模型会自动忽略超出的部分并保证答案完整",
+        "提示词会被截断或调用失败，导致部分检索信息丢失",
+        "向量数据库会自动扩容以容纳更多片段",
+        "嵌入模型会重新生成更短的片段"
+      ],
+      "answer": 1,
+      "explanation": "大语言模型有上下文窗口限制，超过后通常会被截断或直接报错，检索到的部分信息无法进入模型。模型不会自动保证完整；向量库和嵌入模型也不会因此动态调整。",
+      "error_tag": "上下文窗口理解不足",
+      "variant_group": "rag_context_window_limit"
+    },
+    {
+      "kp": "agent.rag.pipeline",
+      "type": "single_choice",
+      "question": "在 RAG 管道中，向量数据库的主要作用是什么？",
+      "options": [
+        "存储文档原文并支持全文检索，不涉及向量",
+        "存储文档片段的向量表示，并支持按相似度快速检索",
+        "负责把用户问题翻译成多种语言",
+        "负责对大语言模型进行微调"
+      ],
+      "answer": 1,
+      "explanation": "向量数据库用于存储嵌入向量并支持近似最近邻搜索，是 RAG 检索阶段的核心组件。它通常不负责全文检索、翻译或模型微调。",
+      "error_tag": "组件职责混淆",
+      "variant_group": "rag_vector_store_role"
+    },
+    {
+      "kp": "agent.rag.pipeline",
+      "type": "single_choice",
+      "question": "某团队发现 RAG 系统对同一问题有时返回不一致的答案。排查后发现检索阶段返回的片段顺序不稳定。以下哪种做法有助于提高答案稳定性？",
+      "options": [
+        "在检索后增加重排序，并按固定规则组织提示词中的片段顺序",
+        "每次请求都随机打乱检索结果，以增加多样性",
+        "关闭检索阶段，只依赖模型自身知识",
+        "把生成模型的温度调到最高"
+      ],
+      "answer": 1,
+      "explanation": "重排序和固定片段组织顺序可以减少输入提示词的波动，从而提高生成答案的稳定性。随机打乱、关闭检索或提高温度都会增加不确定性。",
+      "error_tag": "稳定性优化理解不足",
+      "variant_group": "rag_stability_improvement"
+    },
+    {
+      "kp": "agent.rag.pipeline",
+      "type": "single_choice",
+      "question": "在 RAG 管道中，嵌入模型的作用是什么？",
+      "options": [
+        "把文本转换为高维向量，使语义相近的文本在向量空间中距离较近",
+        "直接生成最终的自然语言答案",
+        "对文档进行语法纠错和拼写检查",
+        "负责压缩向量数据库的存储空间"
+      ],
+      "answer": 0,
+      "explanation": "嵌入模型将文本映射为向量，用于相似度计算和检索。它不直接生成答案、不做语法纠错，也不负责存储压缩。",
+      "error_tag": "嵌入模型职责混淆",
+      "variant_group": "rag_embedding_role"
+    },
+    {
+      "kp": "agent.rag.pipeline",
+      "type": "single_choice",
+      "question": "某 RAG 系统在回答「公司最新的差旅报销标准是什么」时，检索到的却是几年前的旧制度文档。以下哪种改进最直接相关？",
+      "options": [
+        "在检索时加入时间过滤或时效性排序，优先返回最新文档",
+        "提高生成模型的最大输出长度",
+        "把用户问题翻译成英文再检索",
+        "减少向量数据库中的文档数量"
+      ],
+      "answer": 1,
+      "explanation": "加入时间过滤或时效性排序可以让检索结果优先命中最新制度，直接解决旧文档干扰问题。输出长度、翻译和减少文档数量都不能针对时效性。",
+      "error_tag": "检索过滤理解不足",
+      "variant_group": "rag_temporal_filter"
+    },
+    {
+      "kp": "agent.rag.chunking",
+      "type": "single_choice",
+      "question": "在构建检索增强生成（RAG）系统时，对原始文档进行分块（chunking）的主要目的是什么？",
+      "options": [
+        "减少文档的总字符数，以节省存储空间",
+        "使每个文本片段的语义相对完整，便于检索时精准匹配相关内容",
+        "将非结构化文本转换为结构化表格数据",
+        "提高模型的训练速度，减少训练所需的 GPU 内存"
+      ],
+      "answer": 1,
+      "explanation": "分块是为了让检索粒度与语义单元对齐，使向量表示更聚焦、检索更精准，而不是单纯压缩存储或做结构化转换；分块也不涉及模型训练过程。",
+      "error_tag": "概念混淆",
+      "variant_group": "chunking-purpose"
+    },
+    {
+      "kp": "agent.rag.chunking",
+      "type": "single_choice",
+      "question": "当你把一份长文档按固定字符数（例如每 500 字符）切分时，可能出现「一句话被从中间截断」的问题。这种现象最直接的负面影响是什么？",
+      "options": [
+        "文档的向量维度会发生变化，导致无法检索",
+        "被截断的片段语义不完整，检索到后提供给模型的信息有缺失",
+        "文件编码会出错，读取时抛出 UnicodeDecodeError",
+        "分块数量减少，检索速度变慢"
+      ],
+      "answer": 1,
+      "explanation": "固定长度切分容易在语义边界之外断开，导致片段语义残缺，影响检索命中和生成质量；向量维度和编码与切分长度无关。",
+      "error_tag": "边界错误",
+      "variant_group": "fixed-size-chunking"
+    },
+    {
+      "kp": "agent.rag.chunking",
+      "type": "multi_choice",
+      "question": "关于分块粒度与检索效果的关系，下列说法正确的有？（多选）",
+      "options": [
+        "块太大时，嵌入向量会混合多个主题，检索精度可能下降",
+        "块太小时，单个块可能缺乏足够上下文，生成答案可能不完整",
+        "块大小不存在任何权衡，越小越好",
+        "实际工程中常通过实验对比不同块大小来选择较优方案"
+      ],
+      "answer": [
+        0,
+        1,
+        3
+      ],
+      "explanation": "块大小存在精度与上下文的权衡，需实验调优；「越小越好」忽略了上下文缺失的问题。",
+      "error_tag": "概念混淆",
+      "variant_group": "chunk-size-tradeoff"
+    },
+    {
+      "kp": "agent.rag.chunking",
+      "type": "multi_choice",
+      "question": "下列哪些属于常见的 RAG 分块策略？（多选）",
+      "options": [
+        "固定长度分块（按字符或 token）",
+        "递归/层次化分块（先按大结构，再按小结构细分）",
+        "基于语义相似度的分块（在语义变化处切分）",
+        "按文件修改时间分块",
+        "基于文档结构（标题、代码块、表格）分块"
+      ],
+      "answer": [
+        0,
+        1,
+        2,
+        4
+      ],
+      "explanation": "固定长度、递归/层次、语义、结构感知都是常见策略；修改时间不是文本语义边界，不能作为分块依据。",
+      "error_tag": "记忆缺失",
+      "variant_group": "chunking-strategies"
+    },
+    {
+      "kp": "agent.rag.chunking",
+      "type": "fill_blank",
+      "question": "在固定长度分块中，为了让相邻块共享部分上下文、减少边界信息丢失，通常会在块之间设置 ______。",
+      "options": [],
+      "answer": [
+        "重叠",
+        "overlap",
+        "重叠区",
+        "重叠部分"
+      ],
+      "explanation": "重叠（overlap）让相邻块共享一部分内容，从而缓解边界处语义被截断的问题。",
+      "error_tag": "记忆缺失",
+      "variant_group": "chunk-overlap"
+    },
+    {
+      "kp": "agent.rag.chunking",
+      "type": "fill_blank",
+      "question": "递归分块（recursive chunking）通常按照一组分隔符从大到小依次尝试切分，例如先按段落、再按句子、最后按 ______ 进行切分。",
+      "options": [],
+      "answer": [
+        "字符",
+        "字符数",
+        "固定长度",
+        "单词",
+        "词"
+      ],
+      "explanation": "递归分块逐级使用更细的分隔符，最后的兜底通常是按字符或固定长度切分。",
+      "error_tag": "记忆缺失",
+      "variant_group": "recursive-chunking"
+    },
+    {
+      "kp": "agent.rag.chunking",
+      "type": "code_reading",
+      "question": "阅读下面的代码片段，说明它在做什么，并指出当 overlap 大于 chunk_size 时可能出现什么问题。\n\n```python\ndef split_text(text, chunk_size, overlap):\n    chunks = []\n    start = 0\n    while start < len(text):\n        end = start + chunk_size\n        chunks.append(text[start:end])\n        start = end - overlap\n    return chunks\n```",
+      "options": [],
+      "answer": "该函数按固定长度切分文本，每次取 chunk_size 个字符，然后向前移动 chunk_size - overlap 个字符，从而实现块间重叠。若 overlap 大于或等于 chunk_size，start 将不再前进甚至后退，导致死循环或产生无限重复的块。",
+      "explanation": "步长为 chunk_size - overlap，必须为正数才能保证循环推进；overlap >= chunk_size 会使步长 <= 0，导致死循环。",
+      "error_tag": "边界错误",
+      "variant_group": "overlap-implementation"
+    },
+    {
+      "kp": "agent.rag.chunking",
+      "type": "code_reading",
+      "question": "阅读下面代码，指出输出结果，并简要说明原因。\n\n```python\ntext = \"ABCDEFGHIJ\"\nchunk_size = 4\noverlap = 1\nchunks = []\nstart = 0\nwhile start < len(text):\n    end = min(start + chunk_size, len(text))\n    chunks.append(text[start:end])\n    start = end - overlap\nprint(chunks)\n```",
+      "options": [],
+      "answer": "输出近似为 ['ABCD', 'DEFG', 'GHIJ']。因为每块长度 4、重叠 1，步长为 3，依次从下标 0、3、6 开始取，最后一块被 min 截断到文本末尾。",
+      "explanation": "步长 = chunk_size - overlap = 3，起始下标为 0、3、6，分别得到 ABCD、DEFG、GHIJ（最后一块不足 4 时截断）。",
+      "error_tag": "边界错误",
+      "variant_group": "overlap-implementation"
+    },
+    {
+      "kp": "agent.rag.chunking",
+      "type": "code_reading",
+      "question": "阅读下面代码，回答：为什么对每个块单独调用嵌入并存入向量库后，检索时通常还要在元数据中记录块所属的文档 ID 和块序号？\n\n```python\nfor chunk in chunks:\n    vec = embed(chunk)\n    store.add(vector=vec, text=chunk, metadata={\"doc_id\": doc_id, \"index\": i})\n    i += 1\n```",
+      "options": [],
+      "answer": "记录 doc_id 和块序号便于在检索到某个块后回溯其来源文档、定位原文位置，并支持按文档聚合、去重、按顺序拼接相邻块或在需要时返回父块上下文，从而提升生成答案的可解释性与完整性。",
+      "explanation": "元数据用于溯源与后处理；仅存向量和文本无法高效关联同一文档的其他块或展示引用来源。",
+      "error_tag": "概念混淆",
+      "variant_group": "chunk-metadata"
+    },
+    {
+      "kp": "agent.rag.chunking",
+      "type": "scenario",
+      "question": "工程场景：你正在为一个企业知识库搭建 RAG 检索系统。文档包含产品手册、FAQ 和会议纪要，其中 FAQ 每条很短（一两句话），产品手册章节较长且含大量表格。当前系统统一按固定 1000 字符切分，导致 FAQ 被多条合并、检索命中后答案混杂，而产品手册的表格被拦腰截断。请说明你会如何调整分块策略，并解释理由。",
+      "options": [],
+      "answer": null,
+      "explanation": "不同文档类型适合不同粒度与结构策略：FAQ 应保持单条为块或小块，手册应结合标题层级并按结构保留表格完整，必要时对表格单独处理并配合重叠，从而提升检索精度与答案完整性。",
+      "error_tag": "概念混淆",
+      "variant_group": "heterogeneous-docs",
+      "required_keywords": [
+        "FAQ",
+        "精度"
+      ]
+    },
+    {
+      "kp": "agent.rag.chunking",
+      "type": "scenario",
+      "question": "工程场景：某 RAG 系统发现检索经常召回「看似相关但答非所问」的块，人工检查发现这些块往往包含多个主题，前半段讲 A、后半段讲 B。请分析可能的分块问题，并给出两种改进方向。",
+      "options": [],
+      "answer": null,
+      "explanation": "块过大且跨越多个主题时，嵌入向量被混合语义稀释，导致与单一问题的相似度失真。改进方向包括按语义/结构边界切分，或减小块大小并配合重叠与父子策略。",
+      "error_tag": "概念混淆",
+      "variant_group": "chunk-size-tradeoff",
+      "required_keywords": [
+        "分块",
+        "语义边界",
+        "块大小",
+        "重叠",
+        "父子策略"
+      ]
+    },
+    {
+      "kp": "agent.rag.chunking",
+      "type": "scenario",
+      "question": "工程场景：团队要在不重新生成已有向量的前提下，把分块的重叠从 0 调整为 50 字符，以改善边界信息丢失。请说明这样做是否可行，以及需要采取什么步骤。",
+      "options": [],
+      "answer": null,
+      "explanation": "改变重叠会改变每个块的文本内容，原有向量对应的文本已不一致，因此必须重新分块并重新生成嵌入，同时更新或重建向量索引，否则检索结果与文本不匹配。",
+      "error_tag": "概念混淆",
+      "variant_group": "chunk-overlap",
+      "required_keywords": [
+        "重新分块",
+        "重新生成嵌入",
+        "向量索引",
+        "文本内容不一致",
+        "检索不匹配"
+      ]
+    },
+    {
+      "kp": "agent.rag.chunking",
+      "type": "single_choice",
+      "question": "下列关于「按语义/段落分块」与「按固定长度分块」的比较，哪一项描述是正确的？",
+      "options": [
+        "按固定长度分块一定比按段落分块检索效果更好",
+        "按段落分块通常能保留更完整的语义单元，但块长度可能差异较大",
+        "按段落分块不需要计算嵌入向量，因此可以省去向量数据库",
+        "按固定长度分块无法处理英文文本，只能处理中文"
+      ],
+      "answer": 1,
+      "explanation": "按段落/语义分块尽量保证语义完整，但各块长度不均衡；两种方式都需要嵌入和向量检索，且均支持多语言文本。",
+      "error_tag": "概念混淆",
+      "variant_group": "semantic-vs-fixed"
+    },
+    {
+      "kp": "agent.rag.chunking",
+      "type": "single_choice",
+      "question": "在 RAG 分块中引入「重叠（overlap）」机制，例如每块 500 字符、重叠 50 字符，其主要作用是：",
+      "options": [
+        "增加向量数据库的存储容量上限",
+        "让跨越边界的上下文信息在相邻块中都有保留，减少信息丢失",
+        "强制所有块的长度完全一致",
+        "把文档翻译成另一种语言后再分块"
+      ],
+      "answer": 1,
+      "explanation": "重叠可以缓解边界截断造成的信息丢失，使相邻块共享部分上下文，提高检索召回的完整性；它并不改变存储上限或统一块长。",
+      "error_tag": "概念混淆",
+      "variant_group": "chunk-overlap"
+    },
+    {
+      "kp": "agent.rag.chunking",
+      "type": "single_choice",
+      "question": "以下哪种情况最适合使用「较小的块」（例如 100~200 字符）？",
+      "options": [
+        "需要检索非常具体的事实性答案，如某个型号的额定电压",
+        "需要对整本书做主题摘要",
+        "需要保留长篇论述的完整逻辑链条",
+        "需要把整篇论文作为一次检索单元"
+      ],
+      "answer": 0,
+      "explanation": "小块更聚焦、噪声更少，适合精确定位事实型答案；摘要和长逻辑链则更适合较大的块或分层策略。",
+      "error_tag": "概念混淆",
+      "variant_group": "chunk-size-tradeoff"
+    },
+    {
+      "kp": "agent.rag.chunking",
+      "type": "single_choice",
+      "question": "某系统把每篇文档切成块后，直接对每个块单独生成嵌入向量。若块与块之间没有任何重叠且块很小，最可能出现的问题是：",
+      "options": [
+        "嵌入模型无法处理短文本，会直接抛出异常",
+        "检索到的片段可能缺失关键上下文，生成答案时依据不足",
+        "向量数据库会自动把小块合并，导致分块失效",
+        "文档中的数字会被自动删除"
+      ],
+      "answer": 1,
+      "explanation": "小块无重叠时，跨块信息被割裂，检索到的片段可能缺少必要上下文；嵌入模型可以处理短文本，也不会自动合并。",
+      "error_tag": "边界错误",
+      "variant_group": "chunk-overlap"
+    },
+    {
+      "kp": "agent.rag.chunking",
+      "type": "single_choice",
+      "question": "关于「父文档/子块（parent-child）」分块策略，下列说法正确的是：",
+      "options": [
+        "检索时用小块定位，再把其所属的较大父块提供给生成模型",
+        "父块只用于存储，永远不会被检索到",
+        "子块必须比父块更长",
+        "该策略要求父子块使用完全相同的嵌入向量"
+      ],
+      "answer": 0,
+      "explanation": "父子策略用小块提高检索精度，同时回传更大的父块以补充上下文；父块并非只存储，子块通常更短。",
+      "error_tag": "概念混淆",
+      "variant_group": "parent-child-chunking"
+    },
+    {
+      "kp": "agent.rag.chunking",
+      "type": "single_choice",
+      "question": "在对 Markdown 文档分块时，优先按标题层级切分（如按 ## 或 ### 分段）相比纯字符切分的主要优势是：",
+      "options": [
+        "可以完全避免生成嵌入向量",
+        "能利用文档原有的结构信息，使每个块在语义上更内聚",
+        "会让所有块的长度严格相等",
+        "可以自动纠正文档中的错别字"
+      ],
+      "answer": 1,
+      "explanation": "Markdown 标题本身就是作者给出的语义边界，按标题切分能让块更内聚；它不消除嵌入需求，也不保证等长或纠错。",
+      "error_tag": "概念混淆",
+      "variant_group": "structure-aware-chunking"
+    },
+    {
+      "kp": "agent.rag.chunking",
+      "type": "multi_choice",
+      "question": "在设计 RAG 分块方案时，通常需要考虑以下哪些因素？（多选）",
+      "options": [
+        "块的大小（字符数或 token 数）",
+        "块与块之间是否重叠及重叠比例",
+        "文档自身的结构（段落、标题、列表等）",
+        "生成模型的名称是否为 GPT",
+        "检索时返回的块数量（top-k）与块的粒度是否匹配"
+      ],
+      "answer": [
+        0,
+        1,
+        2,
+        4
+      ],
+      "explanation": "块大小、重叠、文档结构、top-k 与粒度的匹配都是分块设计要素；生成模型名称与分块策略无关。",
+      "error_tag": "记忆缺失",
+      "variant_group": "chunking-design-factors"
+    },
+    {
+      "kp": "agent.rag.chunking",
+      "type": "multi_choice",
+      "question": "以下哪些做法有助于减少「同一句话被切到两个块中导致语义断裂」的影响？（多选）",
+      "options": [
+        "设置块间重叠",
+        "优先在句子或段落边界处切分",
+        "把整篇文档作为唯一一个块，不做切分",
+        "使用基于 token 的切分并配合标点感知的边界规则"
+      ],
+      "answer": [
+        0,
+        1,
+        3
+      ],
+      "explanation": "重叠、按语义边界切分、标点感知的 token 切分都能缓解断裂；把整篇作为单块会牺牲检索精度，不是缓解语义断裂的合理方案。",
+      "error_tag": "边界错误",
+      "variant_group": "chunk-overlap"
+    }
+  ]
+}

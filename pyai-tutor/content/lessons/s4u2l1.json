@@ -1,0 +1,606 @@
+{
+  "id": "s4u2l1",
+  "title": "s4u2l1",
+  "kps": [
+    "py.perf.profiling_cprofile",
+    "py.perf.py_spy"
+  ],
+  "theory": "## py.perf.profiling_cprofile\n\n# Python 性能剖析：认识 cProfile\n\n> **一句话直觉**：程序的“慢”往往不是你以为的那一行，`cProfile` 就是 Python 自带的“X 光机”，能告诉你每一行函数到底被调用了多少次、累计花了多少秒。\n\n---\n\n## 1. 为什么要学 cProfile？\n\n写 Python 时最怕的不是报错，而是**代码能跑，但慢得让人抓狂**。直觉常常骗人：你以为慢的是数据库查询，结果 90% 时间却浪费在一个无关紧要的字符串拼接上。\n\n**Profiling（性能剖析）** 就是用数据代替直觉，量化地找出“热点（hot spot）”。Python 标准库自带 `cProfile`（用 C 实现，性能开销小），是工程中最常用的入口工具。\n\n它的核心价值：\n- 零依赖，标准库自带，任何环境都能用；\n- 记录每个函数被调用的**次数（ncalls）**、**总耗时（tottime）**、**累计耗时（cumtime）**；\n- 输出可以被 `pstats` 读取，也可以可视化（如 `snakeviz`）。\n\n---\n\n## 2. 最小可用示例：一次完整的剖析\n\n`cProfile` 有三种典型用法：命令行（`python -m cProfile`）、代码内 `cProfile.run()`、以及装饰/上下文方式。先看最简的。\n\n```python\nimport cProfile\n\ndef slow_square(n):\n    # 故意写得很慢：每次循环都做一次无关的计算\n    total = 0\n    for i in range(n):\n        total += i * i\n    return total\n\ndef main():\n    for _ in range(100):\n        slow_square(10_000)\n\n# 直接在代码中启动剖析，结果会打印到 stdout\ncProfile.run(\"main()\")\n```\n\n输出会是一张表，列含义：\n\n| 列名 | 含义 |\n|------|------|\n| `ncalls` | 被调用次数 |\n| `tottime` | 该函数自身执行耗时（不含子调用） |\n| `percall` | `tottime / ncalls` |\n| `cumtime` | 含子调用的累计耗时 |\n| `filename:lineno(function)` | 函数位置 |\n\n**关键结论**：看瓶颈先看 `tottime`，看调用链回溯用 `cumtime`。\n\n---\n\n## 3. 用 pstats 做排序与过滤，定位真正的热点\n\n`cProfile.run()` 打印的表格往往很长。用 `pstats`（Profile Statistics）可以按任意维度排序、只看前 N 行。\n\n```python\nimport cProfile, pstats, io\n\ndef main():\n    for _ in range(100):\n        slow_square(10_000)\n\n# 把结果写入内存里的“文件对象”，避免落盘\npr = cProfile.Profile()\npr.enable()\nmain()\npr.disable()\n\ns = io.StringIO()\nps = pstats.Stats(pr, stream=s).sort_stats(\"cumulative\")\nps.print_stats(10)   # 只打印前 10 行\nprint(s.getvalue())\n```\n\n**要点**：`Profile.enable()/disable()` 可以让你只剖析关心的代码段，而不污染整个程序的启动过程。\n\n---\n\n## 4. 输出到文件 + 离线分析（工程常用姿势）\n\n线上或长时间运行的任务，通常不在同一进程分析，而是先收集再离线看。\n\n```python\nimport cProfile, pstats\n\ndef main():\n    for _ in range(100):\n        slow_square(10_000)\n\ncProfile.run(\"main()\", \"profile.out\")   # 结果存到文件\n\n# 另一个 Python 会话里读取它\nps = pstats.Stats(\"profile.out\")\nps.sort_stats(\"tottime\").print_stats(5)\n```\n\n也可以直接命令行：\n\n```bash\npython -m cProfile -o profile.out your_script.py\npython -m pstats profile.out\n```\n\n---\n\n## 5. 读取真实场景：找出真正的瓶颈并验证优化\n\n下面给一个“看起来很正常但很慢”的例子——拼字符串。用它来演示如何从剖析结果推理并验证优化。\n\n```python\nimport cProfile, pstats, io\n\ndef concat_by_plus(n):\n    s = \"\"\n    for _ in range(n):\n        s += \"x\"          # 每次都创建新字符串，O(n^2)\n    return s\n\ndef concat_by_join(n):\n    return \"\".join(\"x\" for _ in range(n))\n\ndef main_bad():\n    concat_by_plus(20_000)\n\ndef main_good():\n    concat_by_join(20_000)\n\nfor name, fn in [(\"bad\", main_bad), (\"good\", main_good)]:\n    pr = cProfile.Profile()\n    pr.enable()\n    fn()\n    pr.disable()\n    s = io.StringIO()\n    pstats.Stats(pr, stream=s).sort_stats(\"tottime\").print_stats(3)\n    print(f\"===== {name} =====\\n{s.getvalue()}\")\n```\n\n运行后你会看到 `bad` 版本里 `concat_by_plus` 自己占的时间远大于 `good` 版本。这就是 **tottime 的价值**：它把“到底是不是这一行慢”这件事变成了可测量的数据。\n\n---\n\n## 结语\n\n`cProfile` 教会我们的不是“怎么优化”，而是**先测量、再优化**的工程习惯。它本身几乎零成本，却能把 90% 的猜测误差消除掉。\n\n```python\nimport cProfile\nimport pstats\nimport io\n\n\ndef slow_square(n):\n    \"\"\"故意写成慢版本：循环里做无意义的平方累加。\"\"\"\n    total = 0\n    for i in range(n):\n        total += i * i\n    return total\n\n\ndef main():\n    for _ in range(100):\n        slow_square(10_000)\n\n\nif __name__ == \"__main__\":\n    # 1) 用 Profile 对象只剖析我们关心的 main()\n    pr = cProfile.Profile()\n    pr.enable()\n    main()\n    pr.disable()\n\n    # 2) 用 pstats 按累计耗时排序，打印前 8 行\n    s = io.StringIO()\n    ps = pstats.Stats(pr, stream=s).sort_stats(\"cumulative\")\n    ps.print_stats(8)\n    print(s.getvalue())\n\n    # 3) 也可以把结果保存到文件，方便离线分析\n    cProfile.run(\"main()\", \"profile.out\")\n    offline = pstats.Stats(\"profile.out\")\n    offline.sort_stats(\"tottime\").print_stats(5)\n```\n\n## py.perf.py_spy\n\n# py.perf.py_spy：用 Python 自带的“性能侦察兵”定位热点\n\n## 一句话直觉\n\n> 你不需要猜代码哪里慢——`cProfile` + `pstats` 这对内置组合就是 Python 自带的“性能侦察兵（spy）”，它会如实记录每个函数被调用了多少次、花了多少时间，让你把优化精力用在真正的大头（hotspot，热点）上。\n\n本讲标题里的 `py.perf.py_spy` 可以这样拆开理解：`py.perf` = Python performance（Python 性能），`spy` = 侦察/监视。我们要学的，就是如何在**不引入任何第三方库**的前提下，用一个标准的“间谍流程”完成性能分析（profiling，性能剖析）：\n\n1. 装好间谍：`cProfile`\n2. 让间谍跑一遍你的代码：`cProfile.run(...)` 或 `Profile` 对象\n3. 读间谍报告：`pstats.Stats`\n4. 从报告里挑出真正的瓶颈函数\n5. 有针对性地优化，并再次“侦察”验证效果\n\n下面分 5 个小节循序渐进。\n\n---\n\n## 第 1 节：为什么需要 profiler（性能分析器）\n\n性能优化最大的坑是**凭感觉优化**。你可能花了两小时重写一个函数，结果它只占总耗时的 2%。更靠谱的办法是：先测量，再优化。\n\nPython 标准库自带两个 profiler（性能分析器）：\n\n- `cProfile`：用 C 实现，开销小（overhead，额外开销），适合生产前压测。\n- `profile`：纯 Python 实现，开销大，已不推荐日常使用，主要用作教学参考。\n\n`time.time()` 只能测“总墙钟时间（wall-clock time）”，它无法告诉你时间花在**哪个函数**上。`cProfile` 能。\n\n```python\n# 用 time 只能拿到整体耗时，拿不到“哪个函数慢”\nimport time\n\ndef slow_sum(n):\n    total = 0\n    for i in range(n):\n        total += i\n    return total\n\nt0 = time.perf_counter()\nslow_sum(1_000_000)\nprint(\"总耗时：\", time.perf_counter() - t0)\n# 输出：总耗时：约 0.05 秒（具体因机器而异）\n# 但它没告诉你时间花在哪一行、哪个函数上\n```\n\n**结论**：想知道“哪慢”，必须上 profiler。\n\n---\n\n## 第 2 节：最小的 cProfile 用法——“间谍装好，跑一遍”\n\n最简单的用法是 `cProfile.run()`，它会直接打印一份统计表。\n\n```python\nimport cProfile\n\ndef fib(n):\n    # 故意用朴素递归制造一个“慢函数”，方便观察\n    if n < 2:\n        return n\n    return fib(n - 1) + fib(n - 2)\n\n# 让 cProfile 在这个表达式上跑一遍，并打印结果\ncProfile.run(\"fib(25)\")\n# 输出示例（截取）：\n#          2692539 function calls (2692537 primitive calls) in 0.532 seconds\n#    Ordered by: standard name\n#    ncalls  tottime  percall  cumtime  percall filename:lineno(function)\n#   2692537    0.532    0.000    0.532    0.000 <string>:1(fib)\n```\n\n关键列解释（**记住这 4 列就够用了**）：\n\n| 列名 | 含义 |\n|------|------|\n| `ncalls` | 被调用的次数（次数特别大的函数往往值钱）|\n| `tottime` | **函数体本身**消耗的时间，不含子函数 |\n| `cumtime` | 累积时间（cumulative time），含它调用的所有子函数 |\n| `percall` | 每次调用平均时间 |\n\n常见误读：**优化看 `tottime`，不是 `cumtime`**。因为 `cumtime` 会被子函数“传染”，最外层的 `main` 永远是 cumtime 最大的，改它没用。\n\n---\n\n## 第 3 节：用 Profile 对象，把“间谍报告”导出并排序\n\n`cProfile.run()` 是快速版；真实工程里我们更常用 `cProfile.Profile` 对象，因为能把数据保存下来，用 `pstats` 反复分析、排序、过滤。\n\n```python\nimport cProfile\nimport pstats\nimport io\n\ndef a(n):\n    return sum(range(n))\n\ndef b(n):\n    return [x * x for x in range(n)]\n\ndef main():\n    a(200_000)\n    b(200_000)\n\n# 1) 创建 profiler\npr = cProfile.Profile()\n# 2) 开启/执行/关闭（用 enable/disable 包裹要分析的代码）\npr.enable()\nmain()\npr.disable()\n\n# 3) 用 pstats 读取数据，并按 tottime 排序\nstream = io.StringIO()\nstats = pstats.Stats(pr, stream=stream).sort_stats(\"tottime\")\nstats.print_stats(5)      # 只打印前 5 个最耗时的函数\nprint(stream.getvalue())\n```\n\n输出会按 `tottime` 降序排出热点函数。`sort_stats` 支持的常用键：\n\n- `\"tottime\"`：函数体自身耗时（**优化首选**）\n- `\"cumtime\"`：累积耗时，用来找“入口函数”\n- `\"calls\"`：调用次数\n\n>`pstats.Stats(...).strip_dirs()` 可以去掉冗长的目录路径，让报告更清爽。\n\n---\n\n## 第 4 节：一个完整的“侦察—优化—复测”工作流\n\n真正的工程用法是这样的闭环：\n\n```python\nimport cProfile\nimport pstats\nimport io\nfrom functools import lru_cache\n\n# ---- 版本 1：朴素递归 ----\ndef fib_v1(n):\n    if n < 2:\n        return n\n    return fib_v1(n - 1) + fib_v1(n - 2)\n\n# ---- 版本 2：加缓存（memoization，记忆化）----\n@lru_cache(maxsize=None)\ndef fib_v2(n):\n    if n < 2:\n        return n\n    return fib_v2(n - 1) + fib_v2(n - 2)\n\ndef profile_call(fn, *args, label=\"\"):\n    pr = cProfile.Profile()\n    pr.enable()\n    fn(*args)\n    pr.disable()\n    s = io.StringIO()\n    pstats.Stats(pr, stream=s).sort_stats(\"tottime\").print_stats(3)\n    print(f\"--- {label} ---\")\n    print(s.getvalue())\n\nprofile_call(fib_v1, 30, label=\"v1 朴素递归\")\nprofile_call(fib_v2, 30, label=\"v2 加 lru_cache\")\n```\n\n你会看到：\n\n- `v1`：`fib_v1` 被调用了数百万次（`ncalls` 巨大），是明显的热点。\n- `v2`：`ncalls` 骤然降到几十次，整体耗时被压缩了几个数量级。\n\n**这就是 py_spy 的标准节奏**：profile → 读 ncalls/tottime → 找到热点 → 优化 → 再 profile 验证。\n\n---\n\n## 第 5 节：进阶——命令行侦察与内存侦察\n\n### 5.1 命令行方式\n\n不写代码也能分析整个脚本：\n\n```bash\n# 会让你的脚本在 cProfile 下运行，并把结果写入 out.prof\npython -m cProfile -o out.prof myscript.py\n\n# 然后从命令行读取报告，按 tottime 排序，展示前 20 行\npython -m pstats out.prof\n# 进入交互后输入： stats 20  然后回车；输入 quit 退出\n```\n\n### 5.2 内存侧的“侦察兵”\n\n`cProfile` 只看时间，不看内存。想看对象占多少内存，标准库给了 `tracemalloc`：\n\n```python\nimport tracemalloc\n\ntracemalloc.start()\n\nbig = [str(i) * 100 for i in range(10_000)]   # 造一批字符串\n\nsnapshot = tracemalloc.take_snapshot()\ntop = snapshot.statistics(\"lineno\")[:3]\nfor stat in top:\n    print(stat)   # 每一行都显示“哪个文件哪一行，占了多少内存”\n```\n\n**口诀**：时间热点找 `cProfile`，内存热点找 `tracemalloc`。两个工具都是标准库，零依赖。\n\n---\n\n## 小结\n\n| 你想要的 | 用什么 |\n|---|---|\n| 看某段代码耗时分布 | `cProfile.Profile` + `pstats.Stats.sort_stats(\"tottime\")` |\n| 快速看一个表达式 | `cProfile.run(\"expr\")` |\n| 不写代码分析整个脚本 | `python -m cProfile -o out.prof script.py` |\n| 看内存占用 | `tracemalloc` |\n\n**核心心法**：热点看 `tottime`，不看 `cumtime`；优化前先测量，优化后再测量。\n\n---\n\n## 动手练习\n\n写一个脚本 `profile_me.py`，完成下列任务：\n\n1. 实现两个函数：\n   - `contains_duplicate_slow(nums)`：用嵌套循环判断列表里是否有重复元素（O(n²)）。\n   - `contains_duplicate_fast(nums)`：用 `set` 判断列表里是否有重复元素（平均 O(n)）。\n2. 构造一个约 5000 个整数、且包含重复的列表，分别调用这两个函数。\n3. 用 `cProfile.Profile` 对每个函数分别做一次 profile，用 `pstats` 按 `tottime` 排序，各打印前 3 行。\n4. **对比两次报告的 `ncalls` 列**，用一句话解释为什么 `fast` 版本运行得快。\n5. 挑战：把 `cProfile.Profile` 包成一个上下文管理器 `spy()`（用 `contextlib.contextmanager`），让调用者只需 `with spy(\"fast\"):` 就能自动打印报告。\n\n提交物：`profile_me.py` 文件 + 一段不超过 5 行的分析结论说明。\n\n```python\nimport cProfile\nimport pstats\nimport io\n\n\ndef contains_duplicate_slow(nums):\n    # O(n^2)：两两比较，热点会出现在这个双层循环里\n    for i in range(len(nums)):\n        for j in range(i + 1, len(nums)):\n            if nums[i] == nums[j]:\n                return True\n    return False\n\n\ndef contains_duplicate_fast(nums):\n    # 平均 O(n)：用 set 去重后比较长度\n    return len(set(nums)) != len(nums)\n\n\ndef run_and_report(fn, data, label):\n    # 通用侦察流程：enable -> 跑 -> disable -> 读报告\n    pr = cProfile.Profile()\n    pr.enable()\n    fn(data)\n    pr.disable()\n\n    s = io.StringIO()\n    stats = pstats.Stats(pr, stream=s).sort_stats(\"tottime\")\n    stats.strip_dirs().print_stats(3)   # 只打印前 3 个热点\n    print(f\"=== {label} ===\")\n    print(s.getvalue())\n\n\nif __name__ == \"__main__\":\n    # 造一个包含重复元素的数据集\n    nums = list(range(2500)) * 2\n\n    run_and_report(contains_duplicate_slow, nums, \"slow 版本\")\n    run_and_report(contains_duplicate_fast, nums, \"fast 版本\")\n\n    # 观察点：slow 的 ncalls 会是几百万级别；fast 只有个位数\n    # 结论：ncalls + tottime 双高，就是我们要消灭的热点\n```\n",
+  "quiz": [
+    {
+      "kp": "py.perf.profiling_cprofile",
+      "type": "single_choice",
+      "question": "在命令行使用性能分析工具分析脚本 script.py 时，以下哪种调用方式能够生成统计信息？",
+      "options": [
+        "python script.py profile",
+        "python -m cProfile script.py",
+        "python profile script.py",
+        "python cProfile.run(script.py)"
+      ],
+      "answer": 1,
+      "explanation": "分析工具可以作为模块通过 -m 参数运行，从而对目标脚本进行性能统计；直接在脚本后加参数或把脚本当作参数传给工具都不符合调用约定。",
+      "error_tag": "API 调用形式混淆",
+      "variant_group": "命令行调用方式"
+    },
+    {
+      "kp": "py.perf.profiling_cprofile",
+      "type": "single_choice",
+      "question": "关于性能分析结果中各列的含义，以下说法正确的是？",
+      "options": [
+        "cumtime 表示函数自身执行所消耗的时间，不含子函数调用",
+        "tottime 表示函数及其所有子函数调用所消耗的累计时间",
+        "cumtime 表示函数及其所有子函数调用所消耗的累计时间",
+        "ncalls 表示函数被调用的次数，但只统计非递归调用"
+      ],
+      "answer": 2,
+      "explanation": "cumtime 是包含子调用在内的累计耗时；tottime 才是不含子调用的自身耗时；ncalls 会统计所有调用，包括递归。",
+      "error_tag": "统计字段含义混淆",
+      "variant_group": "输出字段理解"
+    },
+    {
+      "kp": "py.perf.profiling_cprofile",
+      "type": "single_choice",
+      "question": "在分析报告中，某一行的 tottime 很高但 cumtime 与 tottime 接近，最可能说明？",
+      "options": [
+        "该函数的耗时主要来自其自身代码，而不是子函数调用",
+        "该函数的耗时主要来自子函数调用",
+        "该函数没有被调用过",
+        "该函数只被调用了一次"
+      ],
+      "answer": 0,
+      "explanation": "cumtime 与 tottime 接近说明子调用占比较小，耗时主要发生在函数自身。",
+      "error_tag": "统计字段解读错误",
+      "variant_group": "输出字段理解"
+    },
+    {
+      "kp": "py.perf.profiling_cprofile",
+      "type": "single_choice",
+      "question": "以下哪种场景最适合使用性能分析工具？",
+      "options": [
+        "程序运行结果不正确，需要定位逻辑错误",
+        "程序运行缓慢，需要找出耗时最多的函数",
+        "程序出现未捕获异常，需要查看调用栈",
+        "程序内存占用过大，需要定位内存泄漏"
+      ],
+      "answer": 1,
+      "explanation": "性能分析工具主要关注函数调用次数与耗时，适合定位性能瓶颈；逻辑错误、异常栈、内存问题需要其他手段。",
+      "error_tag": "工具适用场景混淆",
+      "variant_group": "性能分析基本认知"
+    },
+    {
+      "kp": "py.perf.profiling_cprofile",
+      "type": "single_choice",
+      "question": "关于分析报告中按累计时间排序的输出，以下说法正确的是？",
+      "options": [
+        "排在最前面的函数一定是自身耗时最长的函数",
+        "排在最前面的函数通常包含子调用在内的累计耗时较高，可能是调用链入口",
+        "排序结果与函数调用次数完全无关",
+        "排序结果不能通过任何参数调整"
+      ],
+      "answer": 1,
+      "explanation": "按累计时间排序时，靠前的往往是包含大量子调用的上层函数，不能直接等同于自身耗时最长。",
+      "error_tag": "排序结果误解",
+      "variant_group": "结果解读"
+    },
+    {
+      "kp": "py.perf.profiling_cprofile",
+      "type": "single_choice",
+      "question": "在命令行中分析模块时，若希望输出按自身耗时排序的统计，通常应使用哪个参数？",
+      "options": [
+        "-s tottime",
+        "-s cumtime",
+        "-t tottime",
+        "-c tottime"
+      ],
+      "answer": 0,
+      "explanation": "cProfile 命令行支持 -s 指定排序字段，如 -s tottime 按自身耗时排序。",
+      "error_tag": "命令行参数混淆",
+      "variant_group": "结果输出与保存"
+    },
+    {
+      "kp": "py.perf.profiling_cprofile",
+      "type": "single_choice",
+      "question": "关于性能分析工具对递归函数的统计，以下说法正确的是？",
+      "options": [
+        "递归调用会被合并为一次调用统计",
+        "递归调用会被多次统计，报告中的 ncalls 可能包含递归次数",
+        "递归函数无法被性能分析工具分析",
+        "递归函数的 tottime 一定为 0"
+      ],
+      "answer": 1,
+      "explanation": "分析工具会统计每次调用，包括递归产生的调用，因此 ncalls 可能较大。",
+      "error_tag": "递归统计理解错误",
+      "variant_group": "特殊场景"
+    },
+    {
+      "kp": "py.perf.profiling_cprofile",
+      "type": "single_choice",
+      "question": "以下哪一项不是性能分析报告中的典型字段？",
+      "options": [
+        "ncalls",
+        "tottime",
+        "cumtime",
+        "memory_usage"
+      ],
+      "answer": 3,
+      "explanation": "ncalls、tottime、cumtime 是分析报告的典型字段；memory_usage 不是该报告的标准字段。",
+      "error_tag": "字段混淆",
+      "variant_group": "输出字段理解"
+    },
+    {
+      "kp": "py.perf.profiling_cprofile",
+      "type": "single_choice",
+      "question": "某开发者说“我用了性能分析工具，所以程序的实际运行时间没有变”，这种说法的问题在于？",
+      "options": [
+        "分析工具会完全阻止程序运行",
+        "分析过程会引入额外开销，通常会拖慢程序",
+        "分析工具只能分析内存，不能分析时间",
+        "分析工具只能在程序结束后使用，不影响运行"
+      ],
+      "answer": 1,
+      "explanation": "性能分析会记录函数调用与耗时，带来额外开销，因此程序在分析时通常会变慢。",
+      "error_tag": "对分析开销认识不足",
+      "variant_group": "性能分析基本认知"
+    },
+    {
+      "kp": "py.perf.profiling_cprofile",
+      "type": "single_choice",
+      "question": "若只想统计一段代码片段而不是整个脚本，以下做法最合适的是？",
+      "options": [
+        "把代码片段封装成函数或字符串，用分析工具的 run() 执行并输出统计",
+        "必须对整个脚本重新运行，无法只分析片段",
+        "只能通过修改解释器源码实现",
+        "只能使用操作系统自带的性能计数器"
+      ],
+      "answer": 0,
+      "explanation": "可以把待分析代码封装为函数或字符串，交给分析工具执行，从而只关注目标片段。",
+      "error_tag": "使用范围误解",
+      "variant_group": "程序内调用"
+    },
+    {
+      "kp": "py.perf.profiling_cprofile",
+      "type": "single_choice",
+      "question": "关于性能分析结果的准确性，以下说法正确的是？",
+      "options": [
+        "分析结果中的时间绝对精确，可直接作为优化后的性能指标",
+        "分析结果受运行时环境、输入规模等影响，应结合多次运行和基准测试判断",
+        "分析结果只与代码有关，与机器负载无关",
+        "分析结果中的调用次数一定是准确的，时间一定不准确"
+      ],
+      "answer": 1,
+      "explanation": "性能分析结果会受环境与输入影响，应多次测量并结合基准测试，不宜直接当作绝对指标。",
+      "error_tag": "对结果准确性理解偏差",
+      "variant_group": "性能分析基本认知"
+    },
+    {
+      "kp": "py.perf.profiling_cprofile",
+      "type": "single_choice",
+      "question": "以下关于读取已保存分析结果文件的说法，正确的是？",
+      "options": [
+        "必须重新运行程序才能查看结果",
+        "可以使用 pstats 模块读取保存的统计文件并排序、过滤",
+        "保存的文件是二进制格式，无法被任何工具读取",
+        "保存的文件只能在相同的 Python 版本中查看，跨版本一定失败"
+      ],
+      "answer": 1,
+      "explanation": "pstats 可以读取分析工具保存的统计文件，并支持排序、过滤等操作。",
+      "error_tag": "结果处理方式错误",
+      "variant_group": "结果查看与处理"
+    },
+    {
+      "kp": "py.perf.profiling_cprofile",
+      "type": "single_choice",
+      "question": "有一段代码执行较慢，开发者希望在程序内部直接对某个函数进行性能分析并打印统计结果，以下做法最合适的是？",
+      "options": [
+        "调用 cProfile.run() 并传入要执行的代码字符串或函数调用表达式",
+        "调用 cProfile.start() 启动分析，再用 cProfile.stop() 停止",
+        "调用 time.time() 在函数前后记录时间差",
+        "调用 sys.settrace() 手动记录每一行执行时间"
+      ],
+      "answer": 0,
+      "explanation": "cProfile.run() 可以接收代码字符串或表达式并执行后输出统计；该模块没有 start/stop 这样的函数；time/sys.settrace 不是该分析模块的用法。",
+      "error_tag": "API 误用",
+      "variant_group": "程序内调用"
+    },
+    {
+      "kp": "py.perf.profiling_cprofile",
+      "type": "single_choice",
+      "question": "使用性能分析工具时，若希望把统计结果保存到文件以便后续用其他工具查看，通常应使用哪个参数？",
+      "options": [
+        "-o output_file",
+        "-f output_file",
+        "--save output_file",
+        "-w output_file"
+      ],
+      "answer": 0,
+      "explanation": "cProfile 命令行支持 -o 将统计结果写入文件；其他选项不是该工具用于保存结果到文件的参数。",
+      "error_tag": "命令行参数混淆",
+      "variant_group": "结果输出与保存"
+    },
+    {
+      "kp": "py.perf.profiling_cprofile",
+      "type": "single_choice",
+      "question": "某函数在分析报告中的 ncalls 显示为 1000，tottime 为 0.500 秒，cumtime 为 1.200 秒，以下推断合理的是？",
+      "options": [
+        "该函数自身平均每次耗时约 0.5 毫秒，子调用合计约 0.7 秒",
+        "该函数自身平均每次耗时约 1.2 毫秒，子调用合计约 0.5 秒",
+        "该函数自身总耗时约 1.2 秒，子调用总耗时约 0.5 秒",
+        "该函数自身总耗时约 0.5 秒，但不包含任何子调用"
+      ],
+      "answer": 0,
+      "explanation": "tottime 是自身总耗时，0.5 秒除以 1000 次约为 0.5 毫秒；cumtime 包含子调用，因此子调用总耗时约为 1.2 - 0.5 = 0.7 秒。",
+      "error_tag": "统计字段计算错误",
+      "variant_group": "输出字段理解"
+    },
+    {
+      "kp": "py.perf.profiling_cprofile",
+      "type": "single_choice",
+      "question": "关于性能分析对程序运行的影响，以下说法正确的是？",
+      "options": [
+        "分析过程不会影响程序行为，可以完全真实地反映原始性能",
+        "分析会带来额外开销，可能改变程序运行时间，应结合多次测量综合判断",
+        "分析只会影响内存占用，不会影响运行时间",
+        "分析结果中的时间单位一定是秒，且不受任何开销影响"
+      ],
+      "answer": 1,
+      "explanation": "性能分析本身有开销，会拖慢程序，因此结果用于相对比较和热点定位，不应被当作绝对精确时间。",
+      "error_tag": "对分析开销认识不足",
+      "variant_group": "性能分析基本认知"
+    },
+    {
+      "kp": "py.perf.profiling_cprofile",
+      "type": "single_choice",
+      "question": "要分析一段代码中各个函数的调用次数和耗时，以下哪种方式最直接？",
+      "options": [
+        "在代码中插入大量 print 语句输出时间",
+        "使用性能分析工具对目标代码段进行统计并输出报告",
+        "使用断言 assert 检查每行代码是否执行",
+        "使用 try/except 捕获每一行可能出现的异常"
+      ],
+      "answer": 1,
+      "explanation": "性能分析工具可以系统性地统计函数调用次数与耗时，print、assert、异常捕获都不是性能分析手段。",
+      "error_tag": "分析手段选择错误",
+      "variant_group": "性能分析基本认知"
+    },
+    {
+      "kp": "py.perf.profiling_cprofile",
+      "type": "single_choice",
+      "question": "以下关于 cProfile 与 profile 模块区别的描述，正确的是？",
+      "options": [
+        "cProfile 是纯 Python 实现，profile 是 C 实现",
+        "cProfile 是 C 实现，开销相对较小，通常优先使用",
+        "两者完全等价，没有任何实现和性能差异",
+        "profile 只能分析函数，cProfile 只能分析模块"
+      ],
+      "answer": 1,
+      "explanation": "cProfile 基于 C 实现，开销较小，是推荐使用的分析器；profile 是纯 Python 实现，开销更大。",
+      "error_tag": "模块区别混淆",
+      "variant_group": "分析器选择"
+    },
+    {
+      "kp": "py.perf.profiling_cprofile",
+      "type": "single_choice",
+      "question": "在使用性能分析工具得到报告后，若要进一步以图形化方式查看调用关系，通常可以借助哪个标准库模块？",
+      "options": [
+        "pstats",
+        "statistics",
+        "traceback",
+        "inspect"
+      ],
+      "answer": 0,
+      "explanation": "pstats 可以读取保存的统计文件并对数据进行排序、过滤等处理，常与分析工具配合使用。",
+      "error_tag": "配套模块混淆",
+      "variant_group": "结果查看与处理"
+    },
+    {
+      "kp": "py.perf.profiling_cprofile",
+      "type": "single_choice",
+      "question": "以下哪段代码能够对函数 func 的调用进行分析并打印统计结果？",
+      "options": [
+        "import cProfile; cProfile.run('func()')",
+        "import cProfile; cProfile.analyze(func)",
+        "import cProfile; cProfile.profile(func)",
+        "import cProfile; cProfile.trace(func)"
+      ],
+      "answer": 0,
+      "explanation": "cProfile.run() 接受代码字符串并执行后输出统计；analyze、profile、trace 不是该模块提供的这些用法。",
+      "error_tag": "API 误用",
+      "variant_group": "程序内调用"
+    },
+    {
+      "kp": "py.perf.py_spy",
+      "type": "single_choice",
+      "question": "某 CPU 密集型函数对大数据进行反复字符串拼接，团队想量化它真正的性能瓶颈。下列做法中最能可靠地定位「哪一行代码耗时最多」的是？",
+      "options": [
+        "在代码各段插入 print 打印当前时间并肉眼比较",
+        "使用 cProfile 运行程序，再查看累计耗时（cumtime）与自身耗时（tottime）排序",
+        "把程序跑两遍，比较总耗时差",
+        "增加一个循环计数器统计执行次数"
+      ],
+      "answer": 1,
+      "explanation": "cProfile 是标准库中的确定性性能分析器，能给出每个函数的调用次数、tottime 与 cumtime，适合定位热点函数与代码行。print 打时间只能粗略分区，循环计数器只反映次数不反映耗时，跑两遍比较总耗时无法定位到函数级别。",
+      "error_tag": "概念混淆",
+      "variant_group": "profiler_tool_choice"
+    },
+    {
+      "kp": "py.perf.py_spy",
+      "type": "single_choice",
+      "question": "某函数在性能分析报告里显示 tottime 很小但 cumtime 极大。最合理的解释是？",
+      "options": [
+        "该函数自身计算量大，但被调用的次数很少",
+        "该函数本身几乎不耗时，但它的时间主要花在调用其他被调函数上",
+        "分析器把该函数的时间统计错了，应忽略 cumtime",
+        "该函数被递归调用，分析器无法统计"
+      ],
+      "answer": 1,
+      "explanation": "tottime 是函数自身代码耗时（不含子调用），cumtime 是包含子调用的累计耗时。tottime 小、cumtime 大，说明耗时在它调用的下游函数里，应继续下钻。",
+      "error_tag": "概念混淆",
+      "variant_group": "tottime_vs_cumtime"
+    },
+    {
+      "kp": "py.perf.py_spy",
+      "type": "fill_blank",
+      "question": "标准库中提供函数级性能剖析（统计各函数调用次数与耗时）的模块名是 ______。",
+      "options": [],
+      "answer": [
+        "cProfile",
+        "profile",
+        "cprofile"
+      ],
+      "explanation": "cProfile 是 CPython 标准库中推荐的确定性性能分析器，profile 是同功能但纯 Python 实现的旧模块。二者都能统计函数级调用次数与耗时。",
+      "error_tag": "记忆缺失",
+      "variant_group": "profiler_module_name"
+    },
+    {
+      "kp": "py.perf.py_spy",
+      "type": "fill_blank",
+      "question": "要可靠地测量一段极短代码的执行时间，标准库中常用的模块是 ______（用于多次重复计时以降低噪声）。",
+      "options": [],
+      "answer": [
+        "timeit",
+        "Timeit"
+      ],
+      "explanation": "timeit 模块通过重复运行代码片段并多次取最小值的方法，降低单次测量的噪声，是测量短小代码片段的标准工具。",
+      "error_tag": "记忆缺失",
+      "variant_group": "timeit_module_name"
+    },
+    {
+      "kp": "py.perf.py_spy",
+      "type": "fill_blank",
+      "question": "在性能剖析输出中，表示「函数自身代码（不含其调用的子函数）所花时间」的列通常缩写为 ______。",
+      "options": [],
+      "answer": [
+        "tottime",
+        "tot time",
+        "自身耗时"
+      ],
+      "explanation": "cProfile/pstats 的输出中，tottime 是函数自身代码耗时，不含子调用；cumtime 是包含子调用的累计耗时。区分两者是阅读剖析结果的关键。",
+      "error_tag": "记忆缺失",
+      "variant_group": "tottime_vs_cumtime"
+    },
+    {
+      "kp": "py.perf.py_spy",
+      "type": "code_reading",
+      "question": "阅读下面代码，说明它在做什么，以及为什么这不属于可靠的性能测量：\n\n```python\nimport time\nstart = time.time()\nresult = compute()\nprint(time.time() - start)\n```",
+      "options": [],
+      "answer": "它用 time.time() 单次测量 compute() 的耗时。time.time() 基于系统时钟，可能受系统时间调整影响，不单调；单次测量没有重复，容易受调度、GC、缓存预热等噪声影响，因此结果不稳定、不可靠。应改用 time.perf_counter()，并对可重复的调用用 timeit 做多次重复取最小值。",
+      "explanation": "关键点有二：一是计时器选择（应使用单调的 perf_counter 而非可能回拨的 time.time），二是单次测量缺少重复，无法压低噪声。",
+      "error_tag": "概念混淆",
+      "variant_group": "timer_choice"
+    },
+    {
+      "kp": "py.perf.py_spy",
+      "type": "code_reading",
+      "question": "阅读下面代码，指出输出中 `outer` 与 `inner` 的 tottime 和 cumtime 大致关系，并解释原因：\n\n```python\ndef inner():\n    for _ in range(1000):\n        pass\n\ndef outer():\n    for _ in range(10):\n        inner()\n```\n\n（假设用 cProfile 分别剖析 inner 与 outer）",
+      "options": [],
+      "answer": "inner 的 tottime 大、cumtime 与 tottime 接近（它几乎不做子调用）；outer 的 tottime 很小，但 cumtime 明显大于 tottime，因为它自身的循环代码很轻，绝大部分时间花在多次调用 inner 上。结论：outer 的耗时主要出现在被调用的 inner 中，热点在 inner。",
+      "explanation": "cumtime 包含子调用时间，tottime 不含。outer 自身只是循环调用 inner，所以自身耗时小、累计耗时长；inner 的实际计算在自身，故 tottime 高。",
+      "error_tag": "概念混淆",
+      "variant_group": "tottime_vs_cumtime"
+    },
+    {
+      "kp": "py.perf.py_spy",
+      "type": "code_reading",
+      "question": "阅读下面两种写法，说明哪种通常更快，以及为什么（从循环开销与属性查找角度）：\n\n```python\n# 写法 A\nfor i in range(len(items)):\n    do(items[i])\n\n# 写法 B\nfor item in items:\n    do(item)\n```",
+      "options": [],
+      "answer": "写法 B 通常更快。写法 A 每次迭代都要调用 len、构造索引、再执行一次下标访问 items[i]，多出多次字节码操作；写法 B 直接迭代迭代器，只做一次取值并把元素绑定到 item，省去索引构造与下标访问，循环开销更小。",
+      "explanation": "直接迭代把「取下一个元素」交给迭代器协议，比手写索引 + 下标访问的字节码更少；在高频循环中这些节省会累积。",
+      "error_tag": "概念混淆",
+      "variant_group": "loop_optimization"
+    },
+    {
+      "kp": "py.perf.py_spy",
+      "type": "code_reading",
+      "question": "下面代码用 timeit 测量两种字符串拼接方式，请说明它测量的到底是什么，以及为什么要在循环外先构造好 parts：\n\n```python\nimport timeit\nparts = [\"a\"] * 1000\nt1 = timeit.timeit(lambda: \"\".join(parts), number=1000)\nt2 = timeit.timeit(lambda: sum(parts, \"\"), number=1000)\n```",
+      "options": [],
+      "answer": "它测量的是「在给定 parts 已构造好的前提下，两种拼接方式各执行 1000 次的总耗时」。把 parts 放在计时循环外，是为了让被测区间只包含目标操作（拼接）本身，不含输入构造开销，否则测量的就不只是拼接性能，结果会失真。",
+      "explanation": "性能测量的核心原则之一是隔离目标操作：准备数据应在计时区间外完成，否则会把准备开销计入，导致结论误导。",
+      "error_tag": "边界错误",
+      "variant_group": "measurement_bias"
+    },
+    {
+      "kp": "py.perf.py_spy",
+      "type": "scenario",
+      "question": "你的服务接口 P99 延迟突然升高，团队怀疑某段处理逻辑变慢，但尚无证据。请描述你会如何一步步定位性能瓶颈，并说明每一步为什么这样做。",
+      "options": [],
+      "answer": null,
+      "explanation": "先粗后细、先测量后优化是定位性能问题的通用方法：用分段计时/日志粗测圈定大致范围；再用函数级剖析（如 cProfile）找出热点；对热点下钻到行级；定位后在受控环境做优化前后对比，确认收益，而不是凭猜测改代码。",
+      "error_tag": "方法错误",
+      "variant_group": "profiling_workflow",
+      "required_keywords": [
+        "分段计时",
+        "函数级剖析",
+        "热点",
+        "行级下钻",
+        "优化前后对比"
+      ]
+    },
+    {
+      "kp": "py.perf.py_spy",
+      "type": "scenario",
+      "question": "同事在本地用一次 time.time() 的测量结果，声称自己把某函数优化快了 30%，并据此合并了代码。你会指出哪些测量方法上的问题，建议怎样重新验证？",
+      "options": [],
+      "answer": null,
+      "explanation": "单次 time.time() 测量不可靠：计时器可能受系统时间调整影响且不单调；单次结果易被调度、GC、缓存预热等噪声左右。应改用单调计时器、在相同受控环境下用 timeit 或多次重复取统计值，对优化前后做同条件对比，才能得出可信结论。",
+      "error_tag": "边界错误",
+      "variant_group": "measurement_noise",
+      "required_keywords": [
+        "time.time",
+        "缓存"
+      ]
+    },
+    {
+      "kp": "py.perf.py_spy",
+      "type": "scenario",
+      "question": "你在一个需要频繁调用的关键小函数上加性能剖析，发现它本身执行很快，但整体程序在启用剖析后明显变慢。请解释原因，并说明应如何调整剖析策略以得到更接近真实情况的结果。",
+      "options": [],
+      "answer": null,
+      "explanation": "剖析器在每个函数进入/退出时触发回调，对被高频调用的小函数而言，回调开销占比可能远高于函数本身，从而放大其耗时并拖慢整体。可用抽样类分析器降低开销、缩小剖析范围、或在受控条件下对比启用/不启用剖析的结果来校正。",
+      "error_tag": "概念混淆",
+      "variant_group": "profiler_overhead",
+      "required_keywords": [
+        "性能剖析",
+        "回调开销",
+        "高频调用",
+        "抽样分析器",
+        "剖析范围"
+      ]
+    },
+    {
+      "kp": "py.perf.py_spy",
+      "type": "single_choice",
+      "question": "关于 timeit 与 cProfile 的用途区别，下列说法正确的是？",
+      "options": [
+        "两者都可用来统计每个函数的调用次数",
+        "timeit 适合测量小段代码的重复执行耗时，cProfile 适合知道程序里各函数的时间分布",
+        "timeit 只能用于多线程代码，cProfile 只能用于单线程",
+        "cProfile 的测量精度不如 timeit，所以定位热点时应优先用 timeit"
+      ],
+      "answer": 1,
+      "explanation": "timeit 通过多次重复运行取最小值来测量一段表达式/语句的执行时间，噪声小但粒度粗；cProfile 提供函数级/行级的时间与调用次数分布，用于定位热点。二者用途不同，不能互相替代。",
+      "error_tag": "概念混淆",
+      "variant_group": "timeit_vs_profiler"
+    },
+    {
+      "kp": "py.perf.py_spy",
+      "type": "single_choice",
+      "question": "你想在运行中的服务里低开销地监控某关键路径耗时，而不是做完整的函数级剖析，最合适的是？",
+      "options": [
+        "用 sys.setprofile 注册回调，记录进入/退出函数的时间",
+        "在关键代码前后调用 time.perf_counter() 并记录差值",
+        "用 dis 反汇编函数字节码",
+        "用 sys.settrace 逐行跟踪所有代码"
+      ],
+      "answer": 1,
+      "explanation": "sys.settrace 逐行跟踪开销极大；sys.setprofile 仍是全函数级回调，开销高于手动打点；dis 只做静态反汇编。对少量关键路径用 perf_counter 手动计时开销最小、最可控。",
+      "error_tag": "边界错误",
+      "variant_group": "low_overhead_timing"
+    },
+    {
+      "kp": "py.perf.py_spy",
+      "type": "single_choice",
+      "question": "代码 `for i in range(N): total += data[i]` 在性能剖析中显示大量时间花在索引取值与循环开销上。使用哪种改写通常能获得明显加速且保持语义？",
+      "options": [
+        "改用 while 循环手写索引",
+        "改用 for x in data: total += x（直接迭代可迭代对象）",
+        "把 data 转成字符串再解析",
+        "给循环加 try/except 捕获异常"
+      ],
+      "answer": 1,
+      "explanation": "直接迭代省去每次下标访问与 range 取值，通常更快；while 手写索引开销更大；转字符串再解析是反向操作；try/except 与加速无关且可能掩盖错误。",
+      "error_tag": "概念混淆",
+      "variant_group": "loop_optimization"
+    },
+    {
+      "kp": "py.perf.py_spy",
+      "type": "single_choice",
+      "question": "对一段需要反复调用的短小函数做计时对比时，下列哪种测量方式最不易被启动/预热噪声误导？",
+      "options": [
+        "只调用一次并用 time.time() 记录",
+        "用 timeit.repeat 多次重复，取各轮最小值",
+        "用 time.clock() 取单次结果",
+        "直接用 os.times() 的总和"
+      ],
+      "answer": 1,
+      "explanation": "timeit.repeat 会重复多轮并返回每轮耗时，取最小值可有效排除因调度、GC、缓存预热等引入的偶发高值噪声。单次测量和已废弃的 time.clock 都不适合。",
+      "error_tag": "边界错误",
+      "variant_group": "measurement_noise"
+    },
+    {
+      "kp": "py.perf.py_spy",
+      "type": "multi_choice",
+      "question": "以下哪些是使用性能分析工具（profiler）时常见且需要注意的「偏差来源」？",
+      "options": [
+        "分析器本身引入的额外开销，可能改变程序的时间分布",
+        "分析结果受被分析程序运行环境（如解释器版本、机器负载）影响",
+        "对短小函数而言，函数调用回调的开销占比可能被放大",
+        "分析器会自动把 I/O 阻塞时间从统计中剔除，因此结果永远精确"
+      ],
+      "answer": [
+        0,
+        1,
+        2
+      ],
+      "explanation": "分析器有额外开销，会扭曲时间分布；不同环境结果不可直接横向比较；对被频繁调用的小函数，回调开销占比高，可能失真。分析器不会自动剔除 I/O 阻塞，也不会让结果「永远精确」，故 D 错误。",
+      "error_tag": "概念混淆",
+      "variant_group": "profiler_overhead"
+    },
+    {
+      "kp": "py.perf.py_spy",
+      "type": "multi_choice",
+      "question": "关于在 Python 中度量代码执行时间，下列说法正确的有？",
+      "options": [
+        "time.perf_counter() 提供单调、分辨率较高的计时器，适合测量耗时",
+        "time.time() 可能受系统时钟调整影响，不适合精确测量时间间隔",
+        "timeit 适合测量极短代码片段，会自动做多次重复以降低噪声",
+        "time.process_time() 统计的是挂钟时间，包含进程等待 I/O 的时间"
+      ],
+      "answer": [
+        0,
+        1,
+        2
+      ],
+      "explanation": "perf_counter 单调且分辨率高，适合测间隔；time() 会受系统时钟调整影响；timeit 会自动重复以降低噪声。process_time 统计的是 CPU 时间，不含 I/O 等待，故 D 错误。",
+      "error_tag": "概念混淆",
+      "variant_group": "timers_semantics"
+    },
+    {
+      "kp": "py.perf.py_spy",
+      "type": "multi_choice",
+      "question": "你想定位一个程序中「哪一部分最慢」，下列思路合理的有？",
+      "options": [
+        "先用粗粒度计时（分段计时）圈定大致范围，再对热点区域细粒度剖析",
+        "用 cProfile 得到函数级热点后，再逐步下钻到更细的函数或代码行",
+        "在优化前后用相同环境、相同输入做对比基准测试，避免凭感觉判断",
+        "直接用最快的算法重写全部代码，不需要先做任何测量"
+      ],
+      "answer": [
+        0,
+        1,
+        2
+      ],
+      "explanation": "定位性能问题的通用流程是：粗测圈定范围 → 细测下钻热点 → 在受控环境下做前后对比。不测量就重写一切属于盲目优化，违反「先度量、后优化」原则。",
+      "error_tag": "方法错误",
+      "variant_group": "profiling_workflow"
+    },
+    {
+      "kp": "py.perf.py_spy",
+      "type": "multi_choice",
+      "question": "以下哪些做法会在性能测量中引入「让被测代码显得更快或更慢」的系统性偏差？",
+      "options": [
+        "在计时循环外预先构造好输入数据，循环内只做目标操作",
+        "把本应统计在内的准备工作（数据构造、结果合并）排除在计时区间之外",
+        "对同一代码用不同数据规模分别测量并混在一起比较结论",
+        "测量时同时运行大量其他负载程序，导致机器整体繁忙"
+      ],
+      "answer": [
+        1,
+        2,
+        3
+      ],
+      "explanation": "把准备工作排除在计时外会让结果偏乐观，属于选择性计时偏差；用不同数据规模混在一起比较结论不成立；机器被其他负载干扰会让结果偏慢且不可复现。选项 A 是合理做法（隔离目标操作），不是偏差来源。",
+      "error_tag": "边界错误",
+      "variant_group": "measurement_bias"
+    }
+  ]
+}

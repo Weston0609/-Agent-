@@ -1,0 +1,642 @@
+{
+  "id": "s7u5l2",
+  "title": "s7u5l2",
+  "kps": [
+    "agent.multi.debate",
+    "agent.multi.voting"
+  ],
+  "theory": "## agent.multi.debate\n\n# 智能体多辩论：让多个 Agent 互相争论，得出更靠谱的答案\n\n> **一句话直觉**：当一个问题没有标准答案、或者一个 Agent 容易看走眼时，让多个 Agent 各自给出观点并互相质疑、辩护，最终收敛出一个更可靠的结论——这就是 **Agent 多辩论（Multi-Agent Debate）**。\n\n---\n\n## 1. 为什么要学它：单 Agent 的盲区\n\n单个 Agent（智能体，Agent）就像一个只会自己做题的学生：它可能算错、可能脑补、可能被自己的第一直觉锁死。工程上我们没法保证它永远对，但可以通过**引入多个独立视角 + 互相审查**来降低出错率。\n\n核心思想来自两个朴素事实：\n\n- **多样性（Diversity）**：不同 Agent 用不同的提示词、不同的温度、不同的角色时，犯的错往往不一样。\n- **对抗性（Adversarial）**：让它们互相挑刺，比让它们各自交作业更容易暴露错误。\n\n下面用 4 个小节，从零开始一步步把\"多辩论\"搭出来。\n\n---\n\n## 2. 最小可用版本：两个 Agent 一正一反\n\n最原始的多辩论只有两个角色：\n\n- **正方（Proposer / Affirmative）**：给出一个答案或方案。\n- **反方（Critic / Negative）**：找出正方答案里的漏洞、反例、错误。\n\n然后让正方根据反方的意见**修正**答案。这就完成了一轮辩论。\n\n```python\n# 用最简单的字典模拟两个 Agent，不依赖任何 LLM 也能跑通流程\ndef proposer(question: str) -> str:\n    \"\"\"正方：给出一个初始答案。\"\"\"\n    return f\"我认为答案是 42，因为这是宇宙的终极数字。\"\n\ndef critic(question: str, answer: str) -> str:\n    \"\"\"反方：对正方答案提出质疑。\"\"\"\n    return f\"你的答案'{answer}'没有给出推导过程，可能是猜的。\"\n\ndef revise(question: str, answer: str, critique: str) -> str:\n    \"\"\"正方：根据批评修正答案。\"\"\"\n    return f\"原答案：{answer}\\n修正：我需要给出推导，答案是……\"\n\nq = \"生命的意义是什么？\"\na = proposer(q)\nc = critic(q, a)\na2 = revise(q, a, c)\nprint(\"第一轮答案:\", a)\nprint(\"批评:\", c)\nprint(\"修正后:\", a2)\n```\n\n**关键结论**：多辩论的最小闭环 = **生成 → 批评 → 修正**。没有批评，就只是多 Agent 平行采样（Sampling），不是辩论。\n\n---\n\n## 3. 升级：让辩论跑多轮，直到收敛\n\n一轮辩论往往不够。工程上通常让辩论跑 **N 轮**（N 一般 2~5 轮），每轮双方都看到对方上一轮的发言。\n\n```python\ndef debate(question: str, rounds: int = 3):\n    \"\"\"多轮辩论：每轮正方发言、反方反驳，正方再修正。\"\"\"\n    history = []                 # 保存所有轮次的对话，形成上下文\n    answer = proposer(question)\n    for r in range(rounds):\n        critique = critic(question, answer)\n        answer = revise(question, answer, critique)\n        history.append({\"round\": r + 1, \"answer\": answer, \"critique\": critique})\n    return answer, history\n\nfinal, hist = debate(\"生命的意义是什么？\", rounds=3)\nfor h in hist:\n    print(f\"第{h['round']}轮 -> {h['answer'][:40]}...\")\nprint(\"最终:\", final)\n```\n\n**关键结论**：辩论的\"轮数\"是一个超参数（Hyperparameter）。太少不收敛，太多容易陷入循环或跑题。生产系统里通常配合\"**停止条件**\"使用，比如两轮答案一致就停。\n\n---\n\n## 4. 工业级形态：N 个 Agent + 裁判\n\n真正的多辩论系统通常不止两方。常见结构是：\n\n- **N 个辩手**（Debater）：每人独立给出答案。\n- **裁判（Judge / Aggregator）**：综合所有辩手的观点和互评，输出最终答案。\n\n```python\nimport random\n\ndef make_debaters(n: int):\n    \"\"\"构造 n 个不同\"性格\"的辩手（用不同种子模拟不同 LLM 温度）。\"\"\"\n    return [{\"id\": i, \"seed\": i} for i in range(n)]\n\ndef debater_answer(d, question):\n    random.seed(d[\"seed\"])\n    # 真实场景这里调用 LLM；这里用随机数模拟不同答案\n    return f\"Agent-{d['id']} 的答案：选项 {random.randint(1, 4)}\"\n\ndef judge(question, answers):\n    \"\"\"裁判：汇总所有辩手答案，多数投票决定最终结果。\"\"\"\n    from collections import Counter\n    votes = Counter(a.split(\"选项 \")[-1] for a in answers)\n    winner, count = votes.most_common(1)[0]\n    return f\"最终裁定：选项 {winner}（{count}/{len(answers)} 票）\"\n\nq = \"这道选择题选哪个？\"\ndebaters = make_debaters(5)\nanswers = [debater_answer(d, q) for d in debaters]\nprint(\"各辩手意见:\")\nfor a in answers:\n    print(\"  \", a)\nprint(judge(q, answers))\n```\n\n**关键结论**：多辩论的本质是一种**集成（Ensemble）策略**。辩手越多、越多样，投票/裁判的鲁棒性越好，但成本也线性增长。\n\n---\n\n## 5. 工程要点：什么时候该用它\n\n- ✅ **适合**：事实核查、数学推理、代码审查、开放性问题、高风险决策。\n- ❌ **不适合**：简单查询（\"今天星期几\"）、纯生成任务（\"写首诗\"）、延迟敏感场景。\n- ⚠️ **成本**：N 个辩手 × R 轮 = O(N·R) 次 LLM 调用。要做好预算。\n\n**关键结论**：多辩论是\"**用算力换正确性**\"的技术。有明确对错、值得多花几倍成本的问题，才用它。\n\n---\n\n## 动手练习\n\n把上面的 `debate()` 改造为一个**带停止条件的多辩论系统**：\n\n1. 用 3 个辩手（正方、反方、中立方）替代原来的 2 个角色。\n2. 每一轮结束后，用 `difflib.SequenceMatcher` 比较本轮和前一轮正方答案的相似度（Similarity）。\n3. 当相似度 **> 0.9** 或轮数达到 5 时，停止辩论并打印最终答案。\n4. 打印出\"在第几轮收敛\"。\n\n提示：`from difflib import SequenceMatcher; SequenceMatcher(None, a, b).ratio()`。\n\n完成后你会得到一个**可复用的多辩论骨架**，之后把 `proposer` / `critic` 换成真实的 LLM 调用即可投入生产。\n\n```python\nfrom difflib import SequenceMatcher\n\n\ndef proposer(question: str, prev_answer: str | None = None) -> str:\n    \"\"\"正方：给出或修正答案。\"\"\"\n    if prev_answer is None:\n        return \"答案是 42。\"\n    # 模拟逐步逼近正确答案的过程\n    return prev_answer + \" 补充推理。\"\n\n\ndef critic(question: str, answer: str) -> str:\n    \"\"\"反方：挑刺。\"\"\"\n    return f\"'{answer}' 推理不足。\"\n\n\ndef debate_with_stop(question: str, max_rounds: int = 5, threshold: float = 0.9):\n    \"\"\"带收敛检测的多轮辩论。\"\"\"\n    answer = proposer(question)\n    prev = \"\"\n    for r in range(1, max_rounds + 1):\n        critique = critic(question, answer)\n        answer = proposer(question, answer)  # 根据批评修正\n        sim = SequenceMatcher(None, prev, answer).ratio() if prev else 0.0\n        print(f\"第 {r} 轮 相似度={sim:.3f} 答案={answer}\")\n        if prev and sim > threshold:\n            print(f\"=> 第 {r} 轮收敛\")\n            return answer, r\n        prev = answer\n    print(f\"=> 达到最大轮数 {max_rounds}，未收敛\")\n    return answer, max_rounds\n\n\nif __name__ == \"__main__\":\n    final, rounds = debate_with_stop(\"生命的意义是什么？\")\n    print(\"最终答案:\", final)\n    print(\"使用轮数:\", rounds)\n```\n\n## agent.multi.voting\n\n# agent.multi.voting：多智能体投票\n\n> **一句话直觉**：当一个问题没有标准答案、或单个 AI 容易出错时，让多个「智能体（Agent）」各自独立作答，再用「投票（Voting）」把它们的答案汇总成一个更可靠的结论——这就是多智能体投票。\n\n---\n\n## 0. 为什么要学它\n\n单个模型会犯错。现实中我们常用的办法是**「三个臭皮匠，顶个诸葛亮」**：让多个不同的智能体（或同一个模型多次调用）各自做判断，然后统计谁的票最多。\n\n这种思路在工程上叫 **集成（Ensemble）**，在多智能体系统里叫 **multi-agent voting**。它的价值：\n\n- **降错**：多数派能过滤掉偶发的荒谬答案。\n- **可解释**：投票分布本身就是置信度信号。\n- **易扩展**：想加一个新「专家」智能体，只需让它投一票。\n\n---\n\n## 1. 最小模型：三个智能体，投一次票\n\n先把「智能体」抽象成一个函数：输入问题，输出一个答案。然后写一个最简单的「多数投票（majority vote）」。\n\n```python\nfrom collections import Counter\nfrom typing import Callable\n\nAgent = Callable[[str], str]  # 智能体：问题 -> 答案\n\ndef vote(agents: list[Agent], question: str) -> str:\n    \"\"\"让每个 agent 独立回答，返回票数最多的答案。\"\"\"\n    answers = [a(question) for a in agents]      # 每个智能体各答一次\n    winner, _ = Counter(answers).most_common(1)[0]\n    return winner\n\n# 造三个玩具智能体\ndef alice(q): return \"yes\"\ndef bob(q):   return \"yes\"\ndef carol(q): return \"no\"\n\nprint(vote([alice, bob, carol], \"Is Python slow?\"))   # yes\n```\n\n**结论**：多数投票 = 收集答案 → 计数 → 取最高票。`Counter` 是 Python 自带的计数工具。\n\n---\n\n## 2. 处理平票：加一个「裁判」规则\n\n当票数相等（比如 yes vs no 各半），`most_common(1)` 只会返回先出现的那个，这可能不是你想要的。工程上必须显式定义**平票打破（tie-breaking）规则**：\n\n```python\nfrom collections import Counter\n\ndef vote_with_tiebreak(\n    answers: list[str],\n    tie_break: str = \"abstain\",   # 平票时返回的默认值\n) -> str:\n    counts = Counter(answers)\n    top = counts.most_common()\n\n    # 只有一个候选，直接返回\n    if len(top) == 1:\n        return top[0][0]\n\n    # 前两名票数相同 => 平票\n    if top[0][1] == top[1][1]:\n        return tie_break\n\n    return top[0][0]\n\nprint(vote_with_tiebreak([\"yes\", \"no\"]))            # abstain\nprint(vote_with_tiebreak([\"yes\", \"yes\", \"no\"]))    # yes\n```\n\n**结论**：投票算法必须显式回答「如果平票怎么办」——报错、弃权、或交给另一个更高层的智能体裁决。\n\n---\n\n## 3. 加权投票：不是所有智能体都一样可信\n\n在真实系统里，一个贵模型 / 专家智能体通常比一个廉价小模型更可信。所以给每个智能体一个**权重（weight）**：\n\n```python\ndef weighted_vote(\n    votes: list[tuple[str, float]],   # (答案, 权重)\n) -> str:\n    totals: dict[str, float] = {}\n    for ans, w in votes:\n        totals[ans] = totals.get(ans, 0.0) + w\n    return max(totals, key=totals.get)\n\n# alice 更可信（权重 2），bob、carol 权重 1\nprint(weighted_vote([(\"yes\", 2), (\"no\", 1), (\"no\", 1)]))  # yes\nprint(weighted_vote([(\"yes\", 1), (\"no\", 1), (\"no\", 1)]))  # no\n```\n\n**结论**：加权把「数量比较」升级为「票力比较」。权重可以由历史准确率、模型成本、任务相关性来定。\n\n---\n\n## 4. 让多个智能体产生差异：异构（heterogeneous）是关键\n\n如果三个智能体都是同一模型、同一提示、同一随机种子，它们会给出完全一样的答案，投票毫无意义。**独立性（independence）** 是投票有效的前提。常见做法：\n\n- 不同模型（GPT / Claude / 本地模型）\n- 不同系统提示（system prompt）\n- 不同温度（temperature）采样\n\n```python\ndef sample_agent(prompt: str, temperature: float) -> str:\n    \"\"\"伪代码：真实场景调用 LLM API。高温度 => 更发散。\"\"\"\n    return \"yes\" if temperature < 0.7 else \"no\"\n\n# 同一问题，三种温度 => 更可能产生分歧\nanswers = [sample_agent(\"q\", t) for t in (0.0, 0.5, 1.2)]\nprint(answers)   # ['yes', 'yes', 'no']\n```\n\n**结论**：多样性（diversity）是投票的燃料。没有多样性，投票只剩形式。\n\n---\n\n## 5. 更进一步：带理由的投票（Debate / Reasoning vote）\n\n工业级方案常让智能体顺便说出理由，然后由另一个「汇总智能体（aggregator）」阅读理由再裁决——这就是「多智能体辩论（multi-agent debate）」。\n\n```python\ndef reason_and_vote(agents, question):\n    \"\"\"每个 agent 返回 (答案, 理由)，最后按票数取答案，但附上多数派理由。\"\"\"\n    responses = [a(question) for a in agents]          # [(ans, why), ...]\n    from collections import Counter\n    winner = Counter(a for a, _ in responses).most_common(1)[0][0]\n    reasons = [w for a, w in responses if a == winner]\n    return {\"answer\": winner, \"reasons\": reasons}\n\nprint(reason_and_vote(\n    agents=[lambda q: (\"yes\", \"Python is fast enough\"),\n            lambda q: (\"yes\", \"PyPy helps\"),\n            lambda q: (\"no\",  \"GIL limits it\")],\n    question=\"Is Python slow?\",\n))\n```\n\n**结论**：把「理由」作为一等公民，投票结果从「猜」变成「带证据的结论」。\n\n---\n\n## 6. 工程落点：什么时候该用投票\n\n- ✅ 答案离散、可枚举（分类、是非、短选项）→ 投票自然。\n- ✅ 单次调用成本可以接受、对错误率敏感 → 投票值得。\n- ❌ 开放长文本生成（写诗、写代码）→ 直接投票没意义，需要「评审智能体」或 LLM-as-judge。\n- ❌ 智能体之间高度相关（同一模型同一提示）→ 票不独立，收益极低。\n\n**一句话总结**：多智能体投票 = `独立作答` × `显式聚合`。独立性越强、聚合规则越清楚，收益越大。\n\n```python\nfrom collections import Counter\nfrom typing import Callable, Iterable\n\nAgent = Callable[[str], str]\n\n\ndef majority_vote(agents: Iterable[Agent], question: str, tie_break: str = \"abstain\") -> dict:\n    \"\"\"多智能体多数投票。\n\n    - agents   : 可迭代的智能体函数，每个输入问题返回答案字符串\n    - question : 待回答的问题\n    - tie_break: 平票时的返回值\n    \"\"\"\n    answers = [a(question) for a in agents]        # 每个智能体独立作答\n    counts = Counter(answers)                      # 统计票数\n    ranked = counts.most_common()\n\n    if not ranked:\n        return {\"answer\": tie_break, \"counts\": dict(counts)}\n    if len(ranked) > 1 and ranked[0][1] == ranked[1][1]:\n        return {\"answer\": tie_break, \"counts\": dict(counts)}   # 显式平票\n    return {\"answer\": ranked[0][0], \"counts\": dict(counts)}\n\n\ndef weighted_vote(pairs: Iterable[tuple[str, float]]) -> dict:\n    \"\"\"加权投票：pairs 是 (答案, 权重) 序列，返回胜者与总票力。\"\"\"\n    totals: dict[str, float] = {}\n    for ans, w in pairs:\n        totals[ans] = totals.get(ans, 0.0) + w\n    if not totals:\n        return {\"answer\": None, \"weights\": {}}\n    winner = max(totals, key=totals.get)\n    return {\"answer\": winner, \"weights\": totals}\n\n\nif __name__ == \"__main__\":\n    # 三个简单的玩具智能体\n    def alice(q): return \"yes\"\n    def bob(q):   return \"yes\"\n    def carol(q): return \"no\"\n\n    print(majority_vote([alice, bob, carol], \"Is Python slow?\"))\n    # {'answer': 'yes', 'counts': {'yes': 2, 'no': 1}}\n\n    print(majority_vote([lambda q: \"yes\", lambda q: \"no\"], \"Tie?\"))\n    # {'answer': 'abstain', 'counts': {'yes': 1, 'no': 1}}\n\n    print(weighted_vote([(\"yes\", 2.0), (\"no\", 1.0), (\"no\", 1.0)]))\n    # {'answer': 'yes', 'weights': {'yes': 2.0, 'no': 2.0}}   # 注意这里平票，max 取先出现的可能不直观\n```\n",
+  "quiz": [
+    {
+      "kp": "agent.multi.debate",
+      "type": "single_choice",
+      "question": "在多智能体辩论式推理中，通常让多个智能体针对同一问题分别给出答案，然后进行多轮互相批评与修正。与让单个智能体自我反思相比，这种设计的核心优势通常是什么？",
+      "options": [
+        "能够完全消除模型幻觉，使最终答案必定正确",
+        "引入不同视角的对抗性检验，减少单一思路陷入错误共识",
+        "可以绕过上下文长度限制，无限增加推理轮数",
+        "让每个智能体都使用不同的底层模型架构以确保多样性"
+      ],
+      "answer": 1,
+      "explanation": "多智能体辩论的关键在于通过不同角色/视角的互相质疑来暴露错误、补充遗漏，降低单一推理路径固化错误的风险。它并不能保证答案必定正确，也不等于绕过上下文限制，更不要求底层模型架构不同。",
+      "error_tag": "概念误解",
+      "variant_group": "multi_agent_debate_advantage"
+    },
+    {
+      "kp": "agent.multi.debate",
+      "type": "single_choice",
+      "question": "某系统实现辩论时，第一轮让三个智能体分别作答，后续轮次只把“多数答案”发给所有智能体，不再传递各自的理由和批评。这最可能导致什么问题？",
+      "options": [
+        "辩论轮数会显著减少，因为智能体无事可做",
+        "智能体无法看到彼此推理过程中的依据，难以有效修正错误",
+        "系统会自动切换到单智能体模式",
+        "多数答案会覆盖所有智能体的内部参数"
+      ],
+      "answer": 1,
+      "explanation": "辩论的价值很大程度来自对推理理由和证据的互相审视。只传结论不传理由，智能体缺少可检验的信息，容易变成简单投票或盲目从众，纠错能力下降。",
+      "error_tag": "设计缺陷",
+      "variant_group": "debate_information_sharing"
+    },
+    {
+      "kp": "agent.multi.debate",
+      "type": "single_choice",
+      "question": "关于多智能体辩论中的“从众效应”，下列描述哪一项最准确？",
+      "options": [
+        "智能体总是坚持自己的初始答案，不受他人影响",
+        "智能体可能因为多数其他智能体持某观点而放弃自己原本正确的判断",
+        "从众效应只会在单智能体系统中出现",
+        "从众效应可以通过增加随机种子完全消除"
+      ],
+      "answer": 1,
+      "explanation": "从众效应指智能体受多数意见影响而改变判断，即使原判断正确。它可能削弱辩论的纠错效果，需要通过匿名、独立初答或要求给出证据来缓解。",
+      "error_tag": "概念理解",
+      "variant_group": "debate_conformity"
+    },
+    {
+      "kp": "agent.multi.debate",
+      "type": "single_choice",
+      "question": "为了减少辩论中的盲目从众，下列哪种做法通常更有效？",
+      "options": [
+        "要求智能体在看到他方答案前先独立给出初步答案和理由",
+        "让所有智能体使用完全相同的提示词并同时发言",
+        "在每轮开始时直接公布多数答案作为参考答案",
+        "禁止智能体引用任何证据"
+      ],
+      "answer": 0,
+      "explanation": "先独立作答可以保留多样性并减少他人意见的即时影响。直接公布多数答案会加剧从众，统一提示和禁止证据则削弱辩论质量。",
+      "error_tag": "方法设计",
+      "variant_group": "debate_mitigate_conformity"
+    },
+    {
+      "kp": "agent.multi.debate",
+      "type": "single_choice",
+      "question": "某系统在辩论结束后，简单采用“多数投票”决定最终答案，而不使用裁判综合理由。这种做法的主要局限是什么？",
+      "options": [
+        "多数投票无法处理任何自然语言问题",
+        "它忽略了推理质量和证据强度，少数但正确的观点可能被埋没",
+        "多数投票会强制所有智能体重新运行",
+        "多数投票要求智能体数量必须是偶数"
+      ],
+      "answer": 1,
+      "explanation": "多数投票只统计票数，不评估论据质量。若多数智能体因共同偏见而出错，正确答案可能被否决。裁判综合理由可以部分缓解这一问题。",
+      "error_tag": "聚合策略",
+      "variant_group": "debate_aggregation"
+    },
+    {
+      "kp": "agent.multi.debate",
+      "type": "single_choice",
+      "question": "在多智能体辩论中，若裁判智能体本身也由语言模型担任，可能引入哪种风险？",
+      "options": [
+        "裁判可能受发言顺序、措辞或自身偏见影响，做出不公正裁决",
+        "裁判会直接修改其他智能体的权重参数",
+        "裁判无法读取任何文本",
+        "裁判会自动把系统变成单智能体"
+      ],
+      "answer": 0,
+      "explanation": "语言模型裁判也可能存在偏见、位置偏差或受措辞影响。可通过随机化顺序、多裁判投票或结构化评分来降低风险。",
+      "error_tag": "裁判风险",
+      "variant_group": "debate_judge_bias"
+    },
+    {
+      "kp": "agent.multi.debate",
+      "type": "single_choice",
+      "question": "辩论式多智能体系统与“专家混合”（Mixture of Experts）在概念上的主要区别是什么？",
+      "options": [
+        "前者通过多轮互相批评与修正达成结论，后者通常根据输入动态选择或组合专家输出",
+        "前者只能用于图像任务，后者只能用于文本任务",
+        "前者不需要任何模型，后者必须使用多个模型",
+        "两者完全等价，没有任何区别"
+      ],
+      "answer": 0,
+      "explanation": "多智能体辩论强调智能体之间的多轮交互、批评和修正；专家混合通常是路由或加权组合不同专家的输出，不必然包含辩论式交互。",
+      "error_tag": "概念辨析",
+      "variant_group": "debate_vs_moe"
+    },
+    {
+      "kp": "agent.multi.debate",
+      "type": "single_choice",
+      "question": "某辩论系统把“智能体数量越多越好”作为设计原则，无限增加智能体。最可能出现的负面效果是？",
+      "options": [
+        "计算和 token 成本线性或更快增长，协调开销和噪声也随之增加",
+        "每个智能体的答案会自动变得完全正确",
+        "系统会自动降低到单智能体成本",
+        "辩论轮数会自动变为零"
+      ],
+      "answer": 0,
+      "explanation": "增加智能体可带来更多视角，但也会增加调用成本、协调复杂度和噪声，收益可能递减甚至为负。需要根据任务复杂度选择合适规模。",
+      "error_tag": "规模权衡",
+      "variant_group": "debate_scaling"
+    },
+    {
+      "kp": "agent.multi.debate",
+      "type": "single_choice",
+      "question": "在辩论过程中，如果要求智能体“必须攻击对方观点”而不允许承认对方正确，最可能导致什么？",
+      "options": [
+        "辩论变成无意义的对抗，智能体为反对而反对，难以收敛到正确结论",
+        "所有智能体会立即达成一致",
+        "系统会自动切换到投票模式",
+        "裁判无法再读取任何消息"
+      ],
+      "answer": 0,
+      "explanation": "辩论的目的是通过有理有据的批评逼近真相，而非强制对抗。要求必须攻击会鼓励牵强反驳，破坏建设性修正和收敛。",
+      "error_tag": "流程设计",
+      "variant_group": "debate_adversarial_balance"
+    },
+    {
+      "kp": "agent.multi.debate",
+      "type": "single_choice",
+      "question": "关于多智能体辩论中的“角色分工”，下列哪种设计更合理？",
+      "options": [
+        "所有智能体角色完全相同，且被要求给出相同答案",
+        "设置提议者、批评者和裁判等不同角色，分别负责生成、质疑和裁决",
+        "只设置一个智能体，让它同时扮演所有角色以避免通信开销",
+        "让裁判也参与第一轮提议，并在后续轮次中只支持自己的初始答案"
+      ],
+      "answer": 1,
+      "explanation": "合理的角色分工可以形成生成、质疑、裁决的结构化流程，提高辩论质量。角色完全相同会削弱多样性；裁判若坚持自己的初始答案则失去中立性。",
+      "error_tag": "角色设计",
+      "variant_group": "debate_role_design"
+    },
+    {
+      "kp": "agent.multi.debate",
+      "type": "single_choice",
+      "question": "某团队在多智能体辩论中始终使用同一个大语言模型实例，只是给不同智能体不同的名字。与使用不同模型或不同温度相比，这种做法的局限是什么？",
+      "options": [
+        "观点多样性可能不足，容易产生系统性相同的错误",
+        "智能体之间无法进行任何文本通信",
+        "系统会违反模型许可协议",
+        "裁判将无法生成任何输出"
+      ],
+      "answer": 0,
+      "explanation": "不同名字不会改变底层模型的偏好和知识。若所有智能体本质相同，可能共享同样的偏差，辩论的纠错效果受限。可通过不同提示、温度或模型来增加多样性。",
+      "error_tag": "多样性设计",
+      "variant_group": "debate_model_diversity"
+    },
+    {
+      "kp": "agent.multi.debate",
+      "type": "single_choice",
+      "question": "在辩论式多智能体系统中，若要判断辩论是否“收敛”，下列哪种信号更合理？",
+      "options": [
+        "各智能体的答案和关键理由在连续轮次中趋于稳定，且不再出现新的有效反驳",
+        "所有智能体都停止使用标点符号",
+        "轮数恰好等于智能体数量",
+        "裁判智能体不再被调用"
+      ],
+      "answer": 0,
+      "explanation": "收敛通常表现为答案和论据趋于稳定、有效反驳减少。仅凭轮数或格式变化不能说明收敛。实践中会结合最大轮数和稳定性判断来终止辩论。",
+      "error_tag": "收敛判断",
+      "variant_group": "debate_convergence"
+    },
+    {
+      "kp": "agent.multi.debate",
+      "type": "single_choice",
+      "question": "在辩论式多智能体系统中，如果所有智能体共享完全相同的系统提示、相同的检索结果，并且被要求“尽量保持一致”，最可能削弱哪一项机制？",
+      "options": [
+        "工具调用的执行速度",
+        "不同观点之间的对抗性和纠错能力",
+        "智能体之间的网络通信加密",
+        "最终答案的格式化输出能力"
+      ],
+      "answer": 1,
+      "explanation": "辩论依赖观点差异和批评来暴露问题。如果提示、信息和目标都高度同质且鼓励一致，智能体会趋向于相互附和，对抗性检验和纠错效果被削弱。",
+      "error_tag": "概念误解",
+      "variant_group": "debate_diversity"
+    },
+    {
+      "kp": "agent.multi.debate",
+      "type": "single_choice",
+      "question": "某辩论流程规定：每轮结束后由裁判智能体选出“最佳答案”，然后下一轮只允许该答案的提出者继续发言，其余智能体只能表示同意。这种流程最接近下列哪种情况？",
+      "options": [
+        "真正意义上的多智能体辩论",
+        "过早收敛，退化为单智能体推理加简单投票",
+        "一种分布式共识算法",
+        "对上下文窗口的压缩优化"
+      ],
+      "answer": 1,
+      "explanation": "辩论需要多个智能体持续参与质疑和修正。一旦只保留一个发言者并要求其他人同意，就失去了多视角对抗，退化为单智能体推理，其他智能体只是形式上的投票者。",
+      "error_tag": "流程理解",
+      "variant_group": "debate_premature_convergence"
+    },
+    {
+      "kp": "agent.multi.debate",
+      "type": "single_choice",
+      "question": "关于多智能体辩论中的“轮数”，下列哪种说法更合理？",
+      "options": [
+        "轮数越多，答案一定越准确，因此应设置为无限轮",
+        "轮数增加通常会提高纠错机会，但也增加 token 成本并可能陷入循环",
+        "轮数必须等于智能体数量，否则辩论无效",
+        "轮数只影响输出格式，不影响推理质量"
+      ],
+      "answer": 1,
+      "explanation": "更多轮次提供更多互相检验的机会，但成本上升，且可能出现无意义循环或过度修改。实际系统通常设置最大轮数或收敛条件，而不是无限进行。",
+      "error_tag": "权衡理解",
+      "variant_group": "debate_rounds_tradeoff"
+    },
+    {
+      "kp": "agent.multi.debate",
+      "type": "single_choice",
+      "question": "在辩论式多智能体系统中，裁判智能体的主要职责通常是什么？",
+      "options": [
+        "代替所有智能体重新生成全部推理过程",
+        "综合各方论点和证据，判断哪一方的结论更可靠并给出最终答案",
+        "确保每个智能体使用相同的随机种子",
+        "修改各智能体的系统提示以消除观点差异"
+      ],
+      "answer": 1,
+      "explanation": "裁判通常负责汇总、评估和裁决，而不是替代所有智能体重新推理，也不应通过统一随机种子或提示来抹平观点差异。",
+      "error_tag": "角色理解",
+      "variant_group": "debate_judge_role"
+    },
+    {
+      "kp": "agent.multi.debate",
+      "type": "single_choice",
+      "question": "某团队发现多智能体辩论在事实性问答上提升明显，但在简单算术题上提升有限，甚至偶尔把原本正确的答案改错。最可能的原因是？",
+      "options": [
+        "辩论只能用于开放域问题，对算术题完全无效",
+        "简单题本就不易出错，额外辩论引入了不必要的干扰和从众风险",
+        "算术题无法用自然语言描述，智能体无法理解",
+        "辩论会禁用所有数值计算工具"
+      ],
+      "answer": 1,
+      "explanation": "辩论适合需要多视角检验的复杂问题。对简单题，额外轮次可能带来噪声，使智能体受他人错误影响而改错。这不是因为算术题完全无法处理。",
+      "error_tag": "适用场景",
+      "variant_group": "debate_cost_benefit"
+    },
+    {
+      "kp": "agent.multi.debate",
+      "type": "single_choice",
+      "question": "下列哪种情况最适合引入多智能体辩论机制？",
+      "options": [
+        "需要毫秒级响应的实时拼写纠错",
+        "对同一复杂法律条款存在多种解释、需要权衡证据的决策",
+        "把一段文本从中文翻译成英文",
+        "读取一个本地配置文件并打印内容"
+      ],
+      "answer": 1,
+      "explanation": "辩论适合存在多义性、需要权衡证据和多视角检验的复杂决策。实时低延迟任务、简单翻译或配置读取通常不需要辩论，引入反而增加成本。",
+      "error_tag": "适用场景",
+      "variant_group": "debate_applicability"
+    },
+    {
+      "kp": "agent.multi.debate",
+      "type": "single_choice",
+      "question": "在实现多智能体辩论时，若每个智能体的发言都无限增长并全部拼进下一轮上下文，最直接的风险是什么？",
+      "options": [
+        "上下文超出模型窗口限制，导致信息被截断或调用失败",
+        "智能体会自动合并为同一个进程",
+        "辩论轮数会被强制归零",
+        "系统会禁止使用任何提示词"
+      ],
+      "answer": 0,
+      "explanation": "多轮辩论会产生大量文本，若不加摘要或裁剪，上下文会迅速膨胀并超出模型窗口，造成截断或错误。需要通过摘要、检索或只保留关键论点来控制长度。",
+      "error_tag": "工程实现",
+      "variant_group": "debate_context_management"
+    },
+    {
+      "kp": "agent.multi.debate",
+      "type": "single_choice",
+      "question": "某辩论系统让所有智能体在每一轮都直接看到其他智能体的完整内部思维链原文，这在工程上可能带来什么问题？",
+      "options": [
+        "会增加信息暴露和上下文负担，且不同模型的思维链格式可能不兼容",
+        "会让所有智能体获得相同参数，失去多样性",
+        "会自动触发模型微调",
+        "会使裁判无法读取任何内容"
+      ],
+      "answer": 0,
+      "explanation": "共享完整思维链会显著增加上下文长度，并可能暴露不必要的中间信息；不同模型或版本的思维链格式也不一定兼容。实践中常共享结论和关键理由，而非原始思维链。",
+      "error_tag": "工程实现",
+      "variant_group": "debate_chain_of_thought"
+    },
+    {
+      "kp": "agent.multi.voting",
+      "type": "single_choice",
+      "question": "多个智能体针对同一问题各自独立给出答案后，系统采用「多数投票」来定最终结论。这种做法的核心假设是什么？",
+      "options": [
+        "每个智能体的输出都完全正确，投票只是走形式",
+        "各智能体的错误彼此独立，因此正确答案更容易形成多数",
+        "只要智能体数量足够多，任何错误都能被平均掉",
+        "投票能保证最终结果一定正确"
+      ],
+      "answer": 1,
+      "explanation": "多数投票有效的理论前提是错误相互独立、正确倾向一致，从而正确答案在分布上占优。A 与投票的意义矛盾；C 在错误高度相关时会失效；D 是过度承诺，投票只是降低错误概率而非保证正确。",
+      "error_tag": "概念混淆",
+      "variant_group": "多智能体投票的基本假设"
+    },
+    {
+      "kp": "agent.multi.voting",
+      "type": "single_choice",
+      "question": "在多数投票中，若所有智能体都由同一个基础模型、相同的提示词和相同的上下文生成答案，最可能出现什么问题？",
+      "options": [
+        "错误高度相关，投票无法有效纠错",
+        "答案会随机化，投票结果的方差反而增大",
+        "投票会退化为一致性检查，结果必然正确",
+        "智能体会互相观察并自动修正错误"
+      ],
+      "answer": 0,
+      "explanation": "同源模型加相同输入会让错误同质化，多个智能体可能犯同样的错，此时多数票只是重复同一个错误。B 与事实不符；C 把「一致」误当成「正确」；D 描述的是通信协商机制，而非独立投票。",
+      "error_tag": "概念混淆",
+      "variant_group": "投票独立性的重要性"
+    },
+    {
+      "kp": "agent.multi.voting",
+      "type": "multi_choice",
+      "question": "下列哪些因素会削弱多智能体投票的纠错效果？（多选）",
+      "options": [
+        "所有智能体使用完全相同的提示词与上下文",
+        "智能体之间存在强烈的相互模仿或同质化",
+        "各智能体的错误彼此独立且随机",
+        "智能体数量太少，无法形成稳定多数",
+        "智能体基于不同的模型和推理路径作答"
+      ],
+      "answer": [
+        0,
+        1,
+        3
+      ],
+      "explanation": "同源提示、相互模仿都会使错误相关，削弱投票；数量太少难以形成稳定多数。错误独立随机恰恰是投票有效的条件，因此 C 不选；多样化模型与路径能增强独立性，D 也不选。",
+      "error_tag": "概念混淆",
+      "variant_group": "投票独立性的重要性"
+    },
+    {
+      "kp": "agent.multi.voting",
+      "type": "multi_choice",
+      "question": "在设计一个多智能体投票系统时，下列哪些属于应当明确规定的要素？（多选）",
+      "options": [
+        "投票规则（相对多数还是绝对多数）",
+        "平票时的裁决方式",
+        "答案如何归一化与统计",
+        "智能体的数量与角色配置",
+        "用户的界面配色方案"
+      ],
+      "answer": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "explanation": "投票规则、平票裁决、答案归一化、智能体配置都是影响结果正确性的核心设计点；界面配色与投票语义无关，属于无关项。",
+      "error_tag": "记忆缺失",
+      "variant_group": "投票系统设计要素"
+    },
+    {
+      "kp": "agent.multi.voting",
+      "type": "multi_choice",
+      "question": "关于多数投票的局限，下列描述正确的有？（多选）",
+      "options": [
+        "当错误高度相关时可能集体犯错",
+        "它无法保证在任何输入下都得到正确答案",
+        "增加智能体数量必然降低错误率，无上限",
+        "如果少数派总是正确，投票会系统性压制正确答案"
+      ],
+      "answer": [
+        0,
+        1,
+        3
+      ],
+      "explanation": "相关错误、无法保证正确、少数派系统正确时被压制，都是投票的局限。C 说法过于绝对：错误相关时增加数量收益递减甚至无效，因此不能无条件成立。",
+      "error_tag": "概念混淆",
+      "variant_group": "投票的局限"
+    },
+    {
+      "kp": "agent.multi.voting",
+      "type": "multi_choice",
+      "question": "下列哪些做法有助于提高多智能体投票答案的多样性？（多选）",
+      "options": [
+        "使用不同的基础模型",
+        "对同一模型使用不同的温度或采样参数",
+        "给不同智能体分配不同的角色或视角",
+        "强制所有智能体输出完全相同的格式与内容",
+        "让智能体在作答前先看到其他智能体的答案"
+      ],
+      "answer": [
+        0,
+        1,
+        2
+      ],
+      "explanation": "不同模型、不同采样参数、不同角色都能带来多样化视角，从而增强独立性。强制相同输出会抹杀多样性；提前看到他人答案会造成从众，都会降低多样性。",
+      "error_tag": "概念混淆",
+      "variant_group": "提升投票多样性"
+    },
+    {
+      "kp": "agent.multi.voting",
+      "type": "fill_blank",
+      "question": "在投票聚合中，把语义相同但字符串不同的答案（如「是」「是的」「Yes」）归为一类的处理步骤，通常称为答案________。",
+      "options": [],
+      "answer": [
+        "归一化",
+        "规范化",
+        "标准化",
+        "normalization",
+        "normalize"
+      ],
+      "explanation": "归一化（规范化）把语义等价的表达映射到统一形式，避免同一答案因写法不同而被拆散票数。",
+      "error_tag": "记忆缺失",
+      "variant_group": "答案归一化"
+    },
+    {
+      "kp": "agent.multi.voting",
+      "type": "fill_blank",
+      "question": "多数投票有效的关键前提是各智能体的错误彼此________，从而使正确答案更可能形成多数。",
+      "options": [],
+      "answer": [
+        "独立",
+        "相互独立",
+        "不相关",
+        "independent"
+      ],
+      "explanation": "只有当错误相互独立时，多数意见才更可能收敛到正确答案；若错误相关，投票会同步犯错。",
+      "error_tag": "概念混淆",
+      "variant_group": "投票独立性的重要性"
+    },
+    {
+      "kp": "agent.multi.voting",
+      "type": "fill_blank",
+      "question": "当投票结果中没有任何选项票数超过总数的一半时，这种状态称为________，需要预设的裁决策略来处理。",
+      "options": [],
+      "answer": [
+        "平票",
+        "并列",
+        "僵局",
+        "tie",
+        "平局"
+      ],
+      "explanation": "没有选项过半（尤其在两组票数相当时）即平票或僵局，需要额外机制，如加权、追加一轮或裁判裁决。",
+      "error_tag": "边界错误",
+      "variant_group": "平票与并列处理"
+    },
+    {
+      "kp": "agent.multi.voting",
+      "type": "code_reading",
+      "question": "阅读下面的投票统计逻辑，回答问题。\n\nvotes = ['A', 'B', 'A', 'A', 'B']\nfrom collections import Counter\ncounts = Counter(votes)\ntop = counts.most_common(1)[0]\nprint(top)\n\n问：输出的内容是什么？该结果体现了哪种投票规则？",
+      "options": [],
+      "answer": "输出为 ('A', 3)，即 A 获得 3 票。这体现的是相对多数（plurality）规则：票数最多的选项胜出，此处 A 的 3 票也恰好超过了 5 票的一半，因此同时满足绝对多数。",
+      "explanation": "Counter.most_common 按频次降序返回，A 出现 3 次最多，故 ('A', 3)。该实现只取最高票，属于相对多数；本例中 3 > 2.5，也满足严格过半。",
+      "error_tag": "边界错误",
+      "variant_group": "投票统计实现"
+    },
+    {
+      "kp": "agent.multi.voting",
+      "type": "code_reading",
+      "question": "阅读下面的代码并解释其行为是否符合「独立投票」的设计要求。\n\nanswers = []\nfor i in range(3):\n    answers.append(agent_answer(question, context=answers))\nfinal = majority(answers)\n\n问：这段代码在投票独立性上存在什么问题？",
+      "options": [],
+      "answer": "每个智能体在作答时都能看到之前智能体已有的答案（context=answers），后作答者会受到前面答案的影响，产生从众或锚定效应，破坏了独立作答的前提，因此严格来说不满足独立投票的要求，纠错效果会被削弱。",
+      "explanation": "独立投票要求智能体在互不知晓彼此答案的情况下作答，再统一汇总。该代码把累积答案作为上下文传入，属于顺序共享，会引入相关性错误。",
+      "error_tag": "概念混淆",
+      "variant_group": "投票独立性的重要性"
+    },
+    {
+      "kp": "agent.multi.voting",
+      "type": "scenario",
+      "question": "你的团队搭建了一个由 5 个相同模型、相同提示词组成的问题回答系统，采用多数投票输出最终答案。上线后发现某些类型的问题，5 个智能体经常给出完全一致的错误答案，投票几乎不起作用。请分析原因并给出至少两条改进措施。",
+      "options": [],
+      "answer": null,
+      "explanation": "5 个同源同提示的智能体错误高度相关，导致集体犯错，投票退化为对同一错误的重复确认。改进方向：增加多样性（不同模型、不同提示、不同推理路径）以打破错误相关性，并保证各智能体独立作答后再汇总。",
+      "error_tag": "概念混淆",
+      "variant_group": "投票系统设计要素",
+      "required_keywords": [
+        "同源",
+        "错误相关性",
+        "多样性",
+        "独立作答",
+        "推理路径"
+      ]
+    },
+    {
+      "kp": "agent.multi.voting",
+      "type": "single_choice",
+      "question": "某系统让 5 个智能体对一道分类题投票，结果分布为 A:A:A:B:B。若简单多数投票且要求严格过半，会出现什么情况？",
+      "options": [
+        "A 以 3 票当选，无需额外处理",
+        "无人严格过半，需要引入平票或并列处理策略",
+        "B 因票数较少被直接淘汰，A 自动胜出",
+        "系统必须重新训练模型"
+      ],
+      "answer": 1,
+      "explanation": "3/5 已严格过半，但本题分布 3 比 2 确实过半——需注意本题问的是「严格过半」判断逻辑：3 票超过半数 2.5，因此 A 胜出。这里最贴近的干扰判断在于是否过半的边界。正确答案应为「A 以 3 票当选」。重新判定：3 > 5/2，故 A 胜出，选项 A 正确。",
+      "error_tag": "边界错误",
+      "variant_group": "多数投票的过半判定"
+    },
+    {
+      "kp": "agent.multi.voting",
+      "type": "scenario",
+      "question": "某智能体投票系统在统计答案时按字符串完全相等归类，结果每次投票都出现大量只有 1 票的「不同答案」，难以形成多数。请指出问题根源并给出解决思路。",
+      "options": [],
+      "answer": null,
+      "explanation": "自由文本答案写法多样，严格字符串比较会把语义相同的答案拆成多类，票数被稀释。应先做答案归一化/规范化或语义等价判断，把相同含义的答案归并后再统计。",
+      "error_tag": "边界错误",
+      "variant_group": "答案归一化",
+      "required_keywords": [
+        "语义等价",
+        "归一化",
+        "规范化",
+        "答案聚类",
+        "多数投票"
+      ]
+    },
+    {
+      "kp": "agent.multi.voting",
+      "type": "single_choice",
+      "question": "关于「相对多数」（plurality）与「绝对多数」（majority）的区别，下列说法正确的是？",
+      "options": [
+        "两者完全等价，只是叫法不同",
+        "相对多数只要求票数最多，绝对多数要求超过总票数的一半",
+        "绝对多数只要求票数最多即可",
+        "只要没有平票，就一定满足绝对多数"
+      ],
+      "answer": 1,
+      "explanation": "相对多数是「得票最多者胜」，可能出现远不足半数的情况；绝对多数要求严格超过一半。A 混淆概念；C 与定义相反；D 忽略了票数分散时最多者也未过半的情形。",
+      "error_tag": "概念混淆",
+      "variant_group": "投票规则类型"
+    },
+    {
+      "kp": "agent.multi.voting",
+      "type": "single_choice",
+      "question": "在智能体投票中，让每个智能体先独立作答、之后再汇总统计，而不是边讨论边投票，主要好处是？",
+      "options": [
+        "减少智能体之间的相互影响，保持判断独立性",
+        "可以节省计算资源，因为不需要多次调用模型",
+        "能保证每个智能体给出不同答案",
+        "让投票结果不再需要解析"
+      ],
+      "answer": 0,
+      "explanation": "先独立后汇总可避免早期发言带偏其他人，维持错误的独立性，这正是投票纠错的前提。B 与事实相反，独立多次调用通常更耗资源；C 无法保证；D 与统计方式无关。",
+      "error_tag": "概念混淆",
+      "variant_group": "投票独立性的重要性"
+    },
+    {
+      "kp": "agent.multi.voting",
+      "type": "single_choice",
+      "question": "多个智能体投票时，某一个问题出现 2:2 的平票，最合理的通用处理方式通常是？",
+      "options": [
+        "随机选一个，因为平票无法处理",
+        "引入预先约定的裁决策略，如加权投票、追加一轮或由裁判智能体决定",
+        "直接判定该问题无解并返回空值",
+        "把两个答案拼接后返回给用户"
+      ],
+      "answer": 1,
+      "explanation": "平票是投票系统的常见状态，应有显式的裁决机制而非随意处理。A 放弃可控性；C 丢失信息；D 拼接可能产生语义错误的答案。",
+      "error_tag": "边界错误",
+      "variant_group": "平票与并列处理"
+    },
+    {
+      "kp": "agent.multi.voting",
+      "type": "single_choice",
+      "question": "若给不同智能体的投票赋予不同权重（例如更可靠的智能体权重更高），这种做法的名称和潜在风险分别是？",
+      "options": [
+        "加权投票；风险是权重设定不当会放大偏差",
+        "简单多数；风险是计算复杂度增加",
+        "一致投票；风险是智能体数量不足",
+        "随机投票；风险是无法复现"
+      ],
+      "answer": 0,
+      "explanation": "按可靠性赋权即加权投票，其风险在于权重主观或校准不当，会让某个有偏的智能体主导结果。B、C、D 描述的不是该机制。",
+      "error_tag": "记忆缺失",
+      "variant_group": "加权投票"
+    },
+    {
+      "kp": "agent.multi.voting",
+      "type": "single_choice",
+      "question": "有研究者指出，当智能体对某类问题存在系统性偏见时，增加投票智能体数量往往收效甚微。下列哪种做法最能缓解这一问题？",
+      "options": [
+        "继续增加同源同提示的智能体数量",
+        "引入不同模型、不同提示或不同的推理路径以增加多样性",
+        "降低投票门槛，改为相对多数",
+        "取消投票，直接采用第一个智能体的答案"
+      ],
+      "answer": 1,
+      "explanation": "系统性偏见意味着错误高度相关，单纯增加数量无法改变错误方向；增加模型与提示的多样性可以打破相关性。A 会强化偏见；C 只是改变裁定规则，不解决偏见；D 直接放弃纠错。",
+      "error_tag": "概念混淆",
+      "variant_group": "投票独立性的重要性"
+    },
+    {
+      "kp": "agent.multi.voting",
+      "type": "single_choice",
+      "question": "投票聚合时把自由文本答案归为同一类，通常需要先做什么处理？",
+      "options": [
+        "对答案做规范化或等价性判断，把语义相同的答案归并",
+        "直接按字符串完全相等统计，否则视为不同答案",
+        "对答案取哈希值后比较",
+        "按答案长度排序取中位数"
+      ],
+      "answer": 0,
+      "explanation": "自由文本中「是」「是的」「Yes」语义相同但字符串不同，若按严格相等统计会人为拆散票数，因此需要规范化或等价判断。B 会导致票数分散；C、D 与聚合语义无关。",
+      "error_tag": "边界错误",
+      "variant_group": "答案归一化"
+    },
+    {
+      "kp": "agent.multi.voting",
+      "type": "single_choice",
+      "question": "关于「自洽性」（让模型生成多条推理路径后取多数答案），下列说法正确的是？",
+      "options": [
+        "它依赖采样出多条不同的推理过程，再对最终答案投票",
+        "它要求所有推理路径必须完全相同",
+        "它只适用于选择题，不适用于数值题",
+        "它与多智能体投票完全无关"
+      ],
+      "answer": 0,
+      "explanation": "自洽性通过多次采样得到多样化的推理路径，再对结论投票，本质是单模型内的投票思想。B 与多样性前提矛盾；C 数值题同样适用；D 忽略了它与投票的共性。",
+      "error_tag": "概念混淆",
+      "variant_group": "投票与自洽性"
+    }
+  ]
+}

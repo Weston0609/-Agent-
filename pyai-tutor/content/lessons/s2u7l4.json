@@ -1,0 +1,933 @@
+{
+  "id": "s2u7l4",
+  "title": "s2u7l4",
+  "kps": [
+    "py.quality.lint",
+    "py.quality.ruff",
+    "py.quality.precommit"
+  ],
+  "theory": "## py.quality.lint\n\n# Python 代码质量：Lint（静态代码检查）\n\n> **一句话直觉**：Lint 就像一位不厌其烦的代码校对员，在你运行程序之前，就提前帮你找出拼写错误、未使用的变量、风格问题甚至潜在 Bug——让机器替你做枯燥的代码审查。\n\n---\n\n## 1. 为什么需要 Lint（代码静态检查）\n\n写 Python 时你肯定遇到过这些情况：变量名拼错、导入了一个包却从来没用、函数定义了却没有被调用、缩进混用 Tab 和空格……这些错误**不会在语法层面报错**，但往往会在运行时才暴露，浪费大量调试时间。\n\n**Lint**（Linter，源自 Unix 时代的 `lint` 工具）指的是一类**静态分析（static analysis）工具**：它**不运行代码**，只读取源码的语法树（AST，Abstract Syntax Tree），根据预定义规则给出警告或错误。它是「质量保障」的第一道防线：\n\n- **早发现**：写代码时立刻纠错，而不是等到测试/上线。\n- **统一风格**：团队协作时代码风格一致，减少无意义的 review 争论。\n- **交接安全**：捕获未使用变量、可变默认参数、可疑的比较等隐藏问题。\n\nPython 官方对类型提示（type hints）的说明也明确指出：*\"The Python runtime does not enforce function and variable type annotations. They can be used by third party tools such as type checkers, IDEs, linters, etc.\"*——也就是说，Lint 和类型检查是让 Python「动态语言也能获得静态保障」的关键手段。\n\n---\n\n## 2. 最小可用：用 `pyflakes` 找出真 Bug\n\n`pyflakes` 是最轻量的 Python linter，**只关心逻辑错误**，不管代码风格（比如它不会抱怨你用了几个空格缩进）。\n\n安装：\n\n```bash\npip install pyflakes\n```\n\n它会报告：\n- 未使用的 import / 变量\n- 使用未定义的名称\n- f-string 中重复的字段\n- 语法级问题\n\n---\n\n## 3. 工程级标准：`ruff` 一站式解决\n\n`ruff` 是用 Rust 写的现代 linter，速度极快，且**兼容 pyflakes、pycodestyle、isort、flake8 的规则集**，是目前社区的主流选择。它能同时做：\n\n- 逻辑检查（未使用变量、未定义名）\n- 风格检查（PEP 8，行长、命名规范）\n- import 排序\n- 自动修复（`--fix`）\n\n安装与使用：\n\n```bash\npip install ruff\nruff check .          # 检查当前目录\nruff check . --fix    # 自动修复可修复项\nruff format .         # 类似 black 的格式化\n```\n\n配置文件 `pyproject.toml` 中常用配置：\n\n```toml\n[tool.ruff]\nline-length = 88\ntarget-version = \"py311\"\n\n[tool.ruff.lint]\nselect = [\"E\", \"F\", \"I\", \"B\", \"UP\"]\n# E=pycodestyle, F=pyflakes, I=isort, B=bugbear, UP=pyupgrade\n```\n\n---\n\n## 4. 与类型提示（Type Hints）协同\n\nLint 抓的是「语法与逻辑」，**类型检查器（type checker）** 如 `mypy`、`pyright` 抓的是「类型」。两者互补：\n\n```python\ndef surface_area_of_cube(edge_length: float) -> str:\n    return f\"The surface area of the cube is {6 * edge_length ** 2}.\"\n```\n\nLint 会警告你没用到的变量、不规范的导入；`mypy` 会警告你把 `str` 传进了期望 `float` 的参数。工程上通常二者一起接入 CI。\n\n---\n\n## 5. 接入开发流程：从本地到 CI\n\n- **编辑器内**：VS Code 装 Ruff / Pylance 插件，边写边提示。\n- **提交前**：`pre-commit` 钩子自动跑 ruff。\n- **CI 中**：GitHub Actions 中运行 `ruff check .`，不通过则拒绝合并。\n- **一次性隔离**：`ruff check path/to/file.py`。\n\n一个典型的 `.pre-commit-config.yaml`：\n\n```yaml\nrepos:\n  - repo: https://github.com/astral-sh/ruff-pre-commit\n    rev: v0.6.0\n    hooks:\n      - id: ruff\n      - id: ruff-format\n```\n\n---\n\n## 6. 常见 Lint 规则速查（记住几条就够）\n\n| 代码 | 含义 | 典型触发场景 |\n| --- | --- | --- |\n| F401 | 导入了但未使用 | `import os` 后从没用 |\n| F841 | 局部变量赋值但未使用 | `x = calc()` 后没用 x |\n| E501 | 行太长 | 超过 `line-length` |\n| E711 | 与 None 比较 | `if x == None` |\n| B006 | 可变默认参数 | `def f(a=[])` |\n| I001 | import 顺序不规范 | 未分组/未排序 |\n| UP | 可以用新语法 | 用旧式 `Optional[X]` 等 |\n\n记住：**Lint 报告不是敌人，是朋友——喜欢挑毛病的朋友。**\n\n```python\n# demo_lint.py\n# 先安装依赖：pip install ruff pyflakes\n# 然后运行：ruff check demo_lint.py 或 pyflakes demo_lint.py\n\nimport os  # (F401) 导入但未使用—— lint 会提醒\nimport sys\n\n\ndef compute_mean(numbers=[]):  # (B006) 可变默认参数，危险！\n    total = 0\n    unused = 42  # (F841) 赋值但未使用\n    for n in numbers:\n        total += n\n    return total / len(numbers) if numbers else 0\n\n\ndef classify(x):\n    # (E711) 应该用 `is None` 而不是 `== None`\n    if x == None:\n        return \"none\"\n    # (E712) 与 True 比较，应直接 `if x:`\n    if x == True:\n        return \"true\"\n    return \"other\"\n\n\n# (E501) 下面这一行超过 88 字符会报 E501（若配置 line_length=88）\nlong_message = \"This line is intentionally exceedingly long to trigger E501 during the ruff lint demonstration.\"\n\n\nif __name__ == \"__main__\":\n    # 正确写法示例（修复后）\n    import sys as _sys  # 使用别名仍然算「使用了 sys」\n    print(compute_mean([1, 2, 3]))\n    print(classify(None))\n    print(classify(True))\n    print(long_message)\n    print(_sys.version_info[:2])\n\n# ruff 预期报告（示意）：\n# demo_lint.py:6:8: F401 `os` imported but unused\n# demo_lint.py:10:26: B006 Do not use mutable data structures for argument defaults\n# demo_lint.py:12:5: F841 Local variable `unused` is assigned to but never used\n# demo_lint.py:21:10: E711 Comparison to `None` should be `cond is None`\n# demo_lint.py:24:8: E712 Comparison to `True` should be `if cond:` or `if not cond:`\n```\n\n## py.quality.ruff\n\n# Ruff：用极快的速度守护 Python 代码质量\n\n> **一句话直觉**：Ruff 是一个用 Rust 写的 Python **linter（代码检查器）** 和 **formatter（格式化器）**，它把 Flake8、isort、pyupgrade、Black 等一堆工具的活全干了，而且快到几乎感觉不到它在运行。\n\n---\n\n## 1. 为什么需要 Ruff？从「代码质量」说起\n\n写 Python 时，下面这些情况你一定见过：\n\n- 导入了 `os` 却从没用过（**未使用导入**，unused import）\n- 变量名 `TempValue` 不符合 Python 的 snake_case 命名约定\n- 两个不同的模块循环互相 `import`，一跑就报错\n- 明明写了 `if x == None:`，Python 不会报错，但这是 bug 温床\n- 团队里每个人代码风格不一样，code review（代码评审）一半时间花在空格和引号上\n\n**linter** 就是在你运行代码之前，静态扫描源码、指出这类问题的工具。传统的选择是 Flake8 + isort + pyupgrade + pydocstyle …… 装一堆、配置一堆、跑得很慢。Ruff 用一个二进制、一份 `pyproject.toml`、毫秒级的速度，把它们统一了。\n\n**记住这个结论**：Ruff 的价值 = 覆盖面广（800+ 条规则）+ 速度极快（Rust）+ 配置统一（一份 toml）。\n\n---\n\n## 2. 安装与第一次运行\n\nRuff 是一个命令行工具，通过 pip 安装：\n\n```bash\npip install ruff\n```\n\n装好后你会得到两个核心命令：\n\n- `ruff check` —— 检查（lint）代码\n- `ruff format` —— 格式化代码\n\n假设你有一个 `demo.py`：\n\n```python\nimport os\nimport sys\n\n\ndef BadName(x):\n    return x == None\n```\n\n运行：\n\n```bash\nruff check demo.py\n```\n\n你会看到类似输出：\n\n```\ndemo.py:1:8: F401 [*] `os` imported but unused\ndemo.py:9:14: E711 Comparison to `None` should be `cond is None`\ndemo.py:5:5: N802 Function name `BadName` should be lowercase\n```\n\n每行都包含 **文件:行:列 规则码 说明**。方括号里的 `[*]` 表示这条问题 Ruff 可以自动修。\n\n**记住这个结论**：`ruff check` 的输出格式是 `文件:行:列 错误码 描述`，`[*]` 代表可自动修复。\n\n---\n\n## 3. 规则码与自动修复\n\nRuff 的规则来自多个「规则集」，每个集合有前缀字母：\n\n| 前缀 | 来源 | 举例 |\n|------|------|------|\n| `E` / `W` | pycodestyle | `E711` 与 None 比较 |\n| `F` | Pyflakes | `F401` 未使用导入 |\n| `I` | isort | `I001` 导入未排序 |\n| `N` | pep8-naming | `N802` 函数名应小写 |\n| `UP` | pyupgrade | 建议用新语法 |\n| `B` | flake8-bugbear | 潜在 bug |\n\n默认 Ruff 只启用一小部分（`E4/E7/E9/F`）。想开启更多，用 `--select`：\n\n```bash\nruff check demo.py --select E,W,F,I,N,UP,B\n```\n\n对可以自动修的问题，加上 `--fix`：\n\n```bash\nruff check demo.py --select E,W,F,I,N,UP,B --fix\n```\n\nRuff 会直接改写文件，把 `x == None` 变成 `x is None`，把没用的 `import os` 删掉。\n\n**记住这个结论**：选规则靠 `--select`，自动修靠 `--fix`；生产项目里习惯先 `check` 再 `check --fix`。\n\n---\n\n## 4. 用 `pyproject.toml` 做项目级配置\n\n命令行参数写多了会累。项目根目录建一个 `pyproject.toml`，Ruff 会自动读取：\n\n```toml\n[tool.ruff]\n# 单行最大长度\nline-length = 88\n\n# 针对的最低 Python 版本，影响 UP 等规则的推断\ntarget-version = \"py311\"\n\n[tool.ruff.lint]\n# 启用的规则集\nselect = [\"E\", \"W\", \"F\", \"I\", \"N\", \"UP\", \"B\"]\n# 忽略特定规则（比如不想强制文档字符串）\nignore = [\"E501\"]\n\n[tool.ruff.lint.per-file-ignores]\n# 测试文件里允许 assert 和未使用变量\n\"tests/**/*.py\" = [\"S101\", \"F841\"]\n\n[tool.ruff.format]\n# 与 Black 保持一致的双引号风格\nquote-style = \"double\"\n```\n\nRuff 会自动向上查找最近的 `pyproject.toml`，所以只要放在项目根目录就行。\n\n**记住这个结论**：配置写在 `pyproject.toml` 的 `[tool.ruff]` 下，规则用 `select`/`ignore` 控制，可以按文件路径单独豁免。\n\n---\n\n## 5. 格式化：`ruff format`\n\nRuff 的 formatter 与 **Black** 高度兼容（目标：99.9% 一致性）。使用方法和 Black 类似：\n\n```bash\nruff format .              # 格式化当前目录\nruff format --check .      # 只检查不改，CI 里用\nruff format --diff demo.py # 显示会改什么\n```\n\n在 CI（持续集成，Continuous Integration）里常用组合：\n\n```bash\nruff check . --output-format=github   # 输出 GitHub Actions 注解\nruff format . --check\n```\n\n**记住这个结论**：`ruff format` 是格式化，`ruff check` 是找问题；CI 中一律加 `--check`，只报错不改文件。\n\n---\n\n## 6. 在编辑器/IDE 里集成\n\n以 **VS Code** 为例，安装官方扩展 `charliermarsh.ruff`，然后在 `settings.json` 里：\n\n```json\n{\n  \"editor.formatOnSave\": true,\n  \"editor.defaultFormatter\": \"charliermarsh.ruff\",\n  \"editor.codeActionsOnSave\": {\n    \"source.fixAll.ruff\": \"explicit\",\n    \"source.organizeImports.ruff\": \"explicit\"\n  }\n}\n```\n\n保存文件时，Ruff 会自动修复 + 整理导入 + 格式化。把问题在写代码那一刻就消灭掉，比等到 review 阶段高效得多。\n\n**记住这个结论**：编辑器集成的核心是「保存即格式化 + 保存即自动修复」，这是 Ruff 相比传统工具体验最好的地方之一。\n\n---\n\n## 7. 小结\n\n| 你想做的事 | 命令 |\n|-----------|------|\n| 检查代码 | `ruff check .` |\n| 自动修复 | `ruff check . --fix` |\n| 格式化 | `ruff format .` |\n| CI 只检查不改 | `ruff check .` + `ruff format . --check` |\n| 配置 | `pyproject.toml` 中的 `[tool.ruff]` |\n\n学到这里，你已经可以在任何 Python 项目里把 Ruff 当作默认的代码质量守门员。\n\n```python\n\"\"\"演示 Ruff 常见问题的可运行示例。\n\n在项目根目录运行:\n    ruff check examples/ruff_demo.py\n    ruff check examples/ruff_demo.py --fix\n    ruff format examples/ruff_demo.py\n观察 Ruff 报告的问题与自动修改结果。\n\"\"\"\n\nimport os          # F401: 未使用导入\nimport sys         # F401: 未使用导入\nfrom typing import List  # UP006: 建议用 list[int] 而非 List[int]\n\n\n# N802: 函数名应小写\n# B006: 可变默认参数应避免\ndef Compute(values: List[int] = []) -> int:  # noqa: B006\n    total = 0\n    for v in values:\n        if v == None:          # E711: 与 None 比较应使用 is\n            continue\n        total = total + v      # SIM 系列可简化为 total += v\n    return total\n\n\n# F841: 局部变量被赋值但未使用\n# E501: 行太长（默认 88 字符）——下面这行刻意写得非常非常非常非常非常非常非常非常非常非常非常非常非常非常长\nresult = Compute([1, 2, 3])\nunused = 42\n\nprint(result)\n```\n\n## py.quality.precommit\n\n# py.quality.precommit：让代码质量检查自动发生在提交之前\n\n## 一句话直觉\n\n`pre-commit` 是一个 Git 钩子（Git hook）管理框架：在每次执行 `git commit` 时，它会自动帮你运行格式化、类型检查、lint 等工具，**把“不达标”的代码挡在版本库之外**。\n\n---\n\n## 1. 为什么需要 pre-commit？\n\n在没有 pre-commit 的项目里，团队通常靠“自觉”和 CI（持续集成，Continuous Integration）来保证质量。问题是：\n\n- 本地忘记跑格式化，CI 报错后还要多提交一次 `fix format`；\n- 代码风格、导入顺序、类型注解检查分散在多个工具里，配置麻烦；\n- 不同成员本地工具版本不一致，结果不可复现。\n\n`pre-commit` 解决的是：**把“质量检查”变成一次提交流程中的固定步骤，并用固定版本的工具执行。**\n\n它本身不是代码检查工具，而是“钩子调度器”。真正的检查工作由 `black`、`ruff`、`mypy`、`flake8`、`isort` 等工具完成。\n\n---\n\n## 2. 三个核心概念\n\n### 2.1 Git hook（Git 钩子）\n\nGit 在特定事件（如 commit、push）发生时会执行 `.git/hooks/` 下的脚本。`pre-commit` 这个钩子会在你输入提交信息之前运行。\n\n如果钩子返回非零退出码，提交就会被中断。\n\n### 2.2 `.pre-commit-config.yaml`\n\n这是 pre-commit 的配置文件。它声明：用哪些仓库、哪个版本、启用哪些钩子。\n\n### 2.3 Hook（钩子项）\n\n一个 hook 就是一个可执行工具。例如 `black` 负责格式化，`ruff` 负责 lint。\n\n> 术语：\n> - lint（代码静态检查）：不运行代码，仅分析源码以发现风格、潜在 bug。\n> - type checker（类型检查器）：根据类型注解（type hints）判断类型是否一致，例如 mypy、pyright。\n\n---\n\n## 3. 最小可运行示例\n\n先安装：\n\n```bash\npip install pre-commit\n```\n\n在项目根目录创建 `.pre-commit-config.yaml`：\n\n```yaml\nrepos:\n  - repo: https://github.com/astral-sh/ruff-pre-commit\n    rev: v0.6.9\n    hooks:\n      - id: ruff\n        args: [--fix]\n      - id: ruff-format\n```\n\n然后执行：\n\n```bash\npre-commit install\n```\n\n它会在 `.git/hooks/pre-commit` 写入一个入口脚本。此后每次 `git commit`，pre-commit 都会：\n\n1. 找出本次暂存（staged）的文件；\n2. 按配置安装/复用工具环境（首次会下载依赖，通常较慢）；\n3. 对文件运行钩子；\n4. 如果钩子修改了文件或报告错误，提交失败，你需要重新 `git add` 后再提交。\n\n---\n\n## 4. 常用工具组合（Python 工程级）\n\n典型配置会组合以下工具：\n\n- `ruff`：快速 lint + 自动修复（autofix）。\n- `ruff-format` 或 `black`：格式化。\n- `mypy`：类型检查。\n- `trailing-whitespace`、`end-of-file-fixer`、`check-yaml`：通用的文本卫生钩子（来自 `pre-commit/pre-commit-hooks`）。\n\n示例：\n\n```yaml\nrepos:\n  - repo: https://github.com/pre-commit/pre-commit-hooks\n    rev: v4.6.0\n    hooks:\n      - id: trailing-whitespace\n      - id: end-of-file-fixer\n      - id: check-yaml\n\n  - repo: https://github.com/astral-sh/ruff-pre-commit\n    rev: v0.6.9\n    hooks:\n      - id: ruff\n        args: [--fix]\n      - id: ruff-format\n\n  - repo: https://github.com/pre-commit/mirrors-mypy\n    rev: v1.11.2\n    hooks:\n      - id: mypy\n```\n\n`rev` 要写具体的 tag 或 commit hash，保证团队成员安装同一个版本。\n\n---\n\n## 5. 与类型注解（type hints）的关系\n\nPython 运行时不会强制类型注解，注解主要供第三方工具使用。`pre-commit` 是把“注解的价值”兑现的地方之一：通过 mypy 在提交前发现类型不一致，而不是等到运行时报错。\n\n示例：\n\n```python\ndef add(a: int, b: int) -> int:\n    return a + b\n\nadd(\"1\", 2)  # mypy 会报 error，Python 运行时不会\n```\n\n在 pre-commit 中启用 mypy 后，这一行会在提交时被拦下。\n\n---\n\n## 6. 工程级实践建议\n\n- **只在暂存文件上运行**：pre-commit 默认如此，避免全仓库扫描拖慢速度。\n- **CI 里也跑一遍**：`pre-commit run --all-files`，防止有人用 `--no-verify` 跳过。\n- **固定 `rev` 版本**：避免“昨天能过今天过不了”。\n- **用 `--fix` 自动化**：失败常见原因是格式被自动改了，重新 `git add` 即可。\n- **慎用 `--no-verify`**：`git commit --no-verify` 会跳钩子，团队应约定仅在紧急情况下使用。\n\n---\n\n## 7. 动手练习\n\n在你的一个 Python 项目里完成下面任务：\n\n1. 运行 `pip install pre-commit`。\n2. 新建 `.pre-commit-config.yaml`，包含 `trailing-whitespace`、`end-of-file-fixer`、`ruff`、`ruff-format`、`mypy`。\n3. 运行 `pre-commit install`。\n4. 故意在一个 `.py` 文件里：\n   - 行末留一个空格；\n   - 文件末尾不换行；\n   - 写一行 `x: int = \"hello\"`。\n5. 执行 `git add . && git commit -m \"test pre-commit\"`。\n6. 观察输出，根据提示修复（大多数格式问题会被自动修复），再次 `git add` 并提交。\n\n目标：提交成功，说明你的钩子链配置正确。\n\n```python\n# 文件名: demo_precommit.py\n# 先在本文件所在目录执行: pip install pre-commit\n# 然后创建 .pre-commit-config.yaml 并执行: pre-commit install\n# 本文件故意包含会被钩子拦下的问题\n\n# 1) 行末多余空格（trailing-whitespace 会修复）\ndef add(a: int, b: int) -> int:  \n    return a + b\n\n# 2) 类型不匹配（mypy 会报错）\nx: int = \"hello\"  # type: ignore[assignment]\n\n# 3) 未使用的导入（ruff 会提示）\nimport os  # noqa: F401\n\nif __name__ == \"__main__\":\n    print(add(1, 2))\n\n# 4) 文件末尾没有换行（end-of-file-fixer 会修复）\n```\n",
+  "quiz": [
+    {
+      "kp": "py.quality.lint",
+      "type": "single_choice",
+      "question": "某项目在 CI 中运行静态检查（lint）。下列哪一种改动最可能导致 lint 报出“未使用变量”一类的问题？",
+      "options": [
+        "在函数中给变量赋值但之后从未读取它",
+        "在模块顶部导入一个只用于类型注解的模块并使用 from __future__ import annotations",
+        "为公开函数补写 docstring",
+        "把魔法数字提取为具名常量"
+      ],
+      "answer": 0,
+      "explanation": "给变量赋值但从未读取它是“未使用变量”的典型触发条件；其余选项通常不会触发该类 lint 警告。",
+      "error_tag": "概念理解",
+      "variant_group": "lint_unused"
+    },
+    {
+      "kp": "py.quality.lint",
+      "type": "single_choice",
+      "question": "代码检查工具报告“未使用的导入”（unused import）。下列哪一项最可能是这个报告想要提示的问题？",
+      "options": [
+        "导入的模块名与当前模块中的某个变量重名",
+        "导入了某个模块但在本文件中从未引用该名称",
+        "导入语句放在文件中间而不是全部放在文件顶部",
+        "导入的模块没有安装在该环境中"
+      ],
+      "answer": 1,
+      "explanation": "未使用的导入指的是导入了一个名字但在当前文件中没被使用；模块重名或位置问题属于其他类别的检查，而模块未安装通常表现为 ImportError 或专门的导入解析检查。",
+      "error_tag": "概念理解",
+      "variant_group": "lint_unused_import"
+    },
+    {
+      "kp": "py.quality.lint",
+      "type": "single_choice",
+      "question": "在编写新代码时，lint 工具报告某个名称与内置名称（如 list、id）冲突。下列哪种做法最符合 lint 的意图？",
+      "options": [
+        "重命名该变量以避免遮蔽内置名称",
+        "在文件顶部把内置名称删除",
+        "在代码中加 # noqa 注释忽略所有规则",
+        "把该变量改成全大写"
+      ],
+      "answer": 0,
+      "explanation": "lint 提示遮蔽内置名称是为了避免可读性与潜在错误，通常应重命名；删除内置名称或全面忽略检查都不是推荐做法，全大写也不解决遮蔽问题。",
+      "error_tag": "最佳实践",
+      "variant_group": "lint_builtin_shadow"
+    },
+    {
+      "kp": "py.quality.lint",
+      "type": "single_choice",
+      "question": "某文件包含：\n\n```python\nimport os\nimport sys\n\nprint(sys.version)\n```\n\nlint 工具最可能提示什么？",
+      "options": [
+        "os 被导入但未使用",
+        "sys 被导入但未使用",
+        "import 语句必须放在函数内部",
+        "print 应该改为 sys.stdout.write"
+      ],
+      "answer": 0,
+      "explanation": "os 被导入但在该文件中没有使用，因此会被标记为未使用的导入；sys 被使用了，所以不会被标记。import 语句可以放在模块顶部。",
+      "error_tag": "概念理解",
+      "variant_group": "lint_unused_import"
+    },
+    {
+      "kp": "py.quality.lint",
+      "type": "single_choice",
+      "question": "下面这段代码：\n\n```python\nfor i in range(10):\n    print(i)\n```\n\n如果后面再也没有用到 i，lint 工具通常会怎么看？",
+      "options": [
+        "for 循环变量未在循环体之外使用，可能提示未使用变量",
+        "range 应该改为 xrange",
+        "print 应该改为 logging",
+        "循环变量 i 必须声明类型"
+      ],
+      "answer": 0,
+      "explanation": "循环变量只用于循环体内部，循环外未使用，部分规则会提示；xrange 只存在于 Python 2 的讨论中，print/logging 与类型声明属于其他关注点。",
+      "error_tag": "概念理解",
+      "variant_group": "lint_unused"
+    },
+    {
+      "kp": "py.quality.lint",
+      "type": "single_choice",
+      "question": "某开发者说：“lint 通过了，所以代码肯定没有 bug。”下列哪种评价最准确？",
+      "options": [
+        "正确，lint 通过等于逻辑正确",
+        "不正确，lint 主要发现风格与可疑模式，不能替代测试与运行时验证",
+        "正确，因为 lint 会执行所有分支",
+        "不正确，因为 lint 只检查注释拼写"
+      ],
+      "answer": 1,
+      "explanation": "lint 是静态分析，主要针对风格与可疑模式，不执行代码，也无法保证逻辑正确或覆盖所有运行时情况。",
+      "error_tag": "常见误解",
+      "variant_group": "lint_scope"
+    },
+    {
+      "kp": "py.quality.lint",
+      "type": "single_choice",
+      "question": "某项目发现 lint 工具对同一段代码在不同机器上给出不同结果。下列哪项最可能是造成差异的原因？",
+      "options": [
+        "两台机器上的 lint 工具版本或配置文件不同",
+        "Python 代码在不同机器上运行速度不同",
+        "lint 结果依赖操作系统字体",
+        "lint 只在有网络时工作"
+      ],
+      "answer": 0,
+      "explanation": "lint 结果取决于工具版本、已启用的规则与配置文件，因此统一版本与配置是保证结果一致的关键；运行速度、字体与网络不是常见原因。",
+      "error_tag": "工具配置",
+      "variant_group": "lint_consistency"
+    },
+    {
+      "kp": "py.quality.lint",
+      "type": "single_choice",
+      "question": "下列哪种场景最适合临时禁用某一行代码的 lint 检查？",
+      "options": [
+        "代码中有一处确实需要与规则冲突的写法，并希望保留可追溯的说明",
+        "希望让 CI 中所有 lint 规则都不再报告问题",
+        "希望隐藏代码中的语法错误",
+        "希望提高程序运行速度"
+      ],
+      "answer": 0,
+      "explanation": "临时禁用应针对特定行并配合说明，用于合理的例外；全局关闭会失去检查价值，隐藏语法错误或提升速度都不是禁用 lint 的目标。",
+      "error_tag": "最佳实践",
+      "variant_group": "lint_suppress"
+    },
+    {
+      "kp": "py.quality.lint",
+      "type": "single_choice",
+      "question": "在自动格式化工具与 lint 工具同时使用时，最常见的推荐做法是什么？",
+      "options": [
+        "让格式化工具负责排版，让 lint 负责逻辑与风格规则中格式化工具未覆盖的部分",
+        "只用 lint，禁止使用任何格式化工具",
+        "只用格式化工具，不需要任何 lint",
+        "让两者互相覆盖对方的配置"
+      ],
+      "answer": 0,
+      "explanation": "两者职责通常互补：格式化工具处理代码排版，lint 关注其余风格与可疑模式；让两者互相覆盖配置容易造成冲突与反复修改。",
+      "error_tag": "工具协作",
+      "variant_group": "lint_formatter"
+    },
+    {
+      "kp": "py.quality.lint",
+      "type": "single_choice",
+      "question": "某模块中有一个变量 `DEBUG = True`，在代码中从未被读取。lint 工具最可能把它报告为哪类问题？",
+      "options": [
+        "未使用的变量或常量",
+        "常量命名不符合约定",
+        "布尔值不能赋值给变量",
+        "模块级变量必须放在函数内部"
+      ],
+      "answer": 0,
+      "explanation": "定义但从未读取的模块级名称常被报告为未使用；命名约定规则针对格式（如是否全大写），而不是“未读取”这一事实。",
+      "error_tag": "概念理解",
+      "variant_group": "lint_unused"
+    },
+    {
+      "kp": "py.quality.lint",
+      "type": "single_choice",
+      "question": "下面这段代码：\n\n```python\ndef f():\n    return True\n    print(\"unreachable\")\n```\n\nlint 工具最可能提示什么？",
+      "options": [
+        "return 之后的代码不可达",
+        "函数缺少参数",
+        "print 应该使用单引号",
+        "函数名 f 太短"
+      ],
+      "answer": 0,
+      "explanation": "return 之后的语句永远不会执行，属于不可达代码；参数缺失、引号风格与函数名长度属于其他检查。",
+      "error_tag": "概念理解",
+      "variant_group": "lint_unreachable"
+    },
+    {
+      "kp": "py.quality.lint",
+      "type": "single_choice",
+      "question": "团队希望把 lint 检查纳入持续集成。下列哪种做法最符合工程实践？",
+      "options": [
+        "在 CI 中运行 lint，并将结果作为合并请求的检查项之一",
+        "只在开发者本地偶尔运行 lint",
+        "把 lint 结果写入日志但从不查看",
+        "要求所有开发者禁用 lint 规则以保证 CI 通过"
+      ],
+      "answer": 0,
+      "explanation": "在 CI 中运行并作为检查项，能让问题在合并前被发现；只在本地偶尔运行、只记录不查看或全面禁用规则都会削弱 lint 的价值。",
+      "error_tag": "工程实践",
+      "variant_group": "lint_ci"
+    },
+    {
+      "kp": "py.quality.lint",
+      "type": "single_choice",
+      "question": "在 Python 中，下面这段代码最可能被 lint 工具提示哪类问题？\n\n```python\ndef f(x):\n    if x > 0:\n        return 1\n```",
+      "options": [
+        "函数缺少返回类型注解",
+        "函数在某些输入下会返回 None，但调用方可能期待非 None 值",
+        "函数名不符合命名规范",
+        "函数定义没有文档字符串"
+      ],
+      "answer": 1,
+      "explanation": "当 x <= 0 时函数隐式返回 None，这种不一致的返回路径常被 lint 类工具标记；命名规范、docstring 与类型注解属于其他规则。",
+      "error_tag": "概念理解",
+      "variant_group": "lint_return"
+    },
+    {
+      "kp": "py.quality.lint",
+      "type": "single_choice",
+      "question": "代码中有一行 `assert isinstance(x, int)`，仅供类型检查用途。lint 工具可能提示哪类问题？",
+      "options": [
+        "assert 语句在优化模式下可能被移除，因此不应用它做运行时校验",
+        "assert 不能用于类型检查",
+        "isinstance 只能用于自定义类",
+        "int 不是合法的类型"
+      ],
+      "answer": 0,
+      "explanation": "使用 assert 做运行时校验在 -O 优化模式下可能被跳过，因此常被 lint 提示；assert 本身可以用于检查条件，isinstance 与 int 的用法也没有问题。",
+      "error_tag": "最佳实践",
+      "variant_group": "lint_assert"
+    },
+    {
+      "kp": "py.quality.lint",
+      "type": "single_choice",
+      "question": "某脚本中有一行：\n\n```python\nx == 5\n```\n\n这行代码最可能被 lint 工具提示什么问题？",
+      "options": [
+        "使用了未定义的变量 x",
+        "比较表达式的结果没有被使用，可能是误把赋值写成了比较",
+        "数字 5 应该定义为常量",
+        "缺少分号结尾"
+      ],
+      "answer": 1,
+      "explanation": "单独一行的 x == 5 只是计算比较结果并丢弃，常见于误写；Python 中语句末尾不需要分号。",
+      "error_tag": "常见误解",
+      "variant_group": "lint_expression_statement"
+    },
+    {
+      "kp": "py.quality.lint",
+      "type": "single_choice",
+      "question": "某项目在 lint 配置中把某条规则设为 error 级别。一次提交后 CI 因为这个规则而失败。下列哪种说法最准确？",
+      "options": [
+        "只要把该规则改为 warning，同样的代码就不会再被报告",
+        "该代码一定存在运行时错误",
+        "lint 失败说明单元测试一定也失败",
+        "把该规则改为 warning 后，CI 仍然会因为这个规则失败"
+      ],
+      "answer": 0,
+      "explanation": "规则严重级别决定是否让 CI 失败；改为 warning 通常不会让 CI 因该规则中断，但代码问题仍然会被报告。lint 失败并不等同于运行时会出错，也不代表单元测试一定失败。",
+      "error_tag": "工具配置",
+      "variant_group": "lint_severity"
+    },
+    {
+      "kp": "py.quality.lint",
+      "type": "single_choice",
+      "question": "下面这段代码中，lint 工具最可能提示哪类与比较相关的问题？\n\n```python\nif x == None:\n    pass\n```",
+      "options": [
+        "None 不能与 == 比较，会抛出异常",
+        "建议使用 is None 而不是 == None",
+        "None 必须写成 null",
+        "应当使用 isinstance(x, None)"
+      ],
+      "answer": 1,
+      "explanation": "对 None 的身份比较应使用 is / is not，因此许多风格检查会建议改为 x is None；== None 本身不会抛异常，Python 中也没有 null 字面量。",
+      "error_tag": "风格规则",
+      "variant_group": "lint_none_compare"
+    },
+    {
+      "kp": "py.quality.lint",
+      "type": "single_choice",
+      "question": "某模块中有：\n\n```python\ndef process(items=[]):\n    items.append(1)\n    return items\n```\n\nlint 工具可能提示这里存在什么问题？",
+      "options": [
+        "函数参数默认值使用了可变对象，可能在多次调用之间共享状态",
+        "函数没有对 items 做类型检查",
+        "items 变量名太短",
+        "函数没有返回类型注解"
+      ],
+      "answer": 0,
+      "explanation": "可变默认参数会在多次调用之间复用同一对象，这是常见的隐患；类型检查、命名长度与返回注解属于其他规则。",
+      "error_tag": "常见陷阱",
+      "variant_group": "lint_mutable_default"
+    },
+    {
+      "kp": "py.quality.lint",
+      "type": "single_choice",
+      "question": "某段代码中，变量名被拼写成了 `lenght`，而后面又使用了 `length`。这最可能触发 lint 工具的哪类检查？",
+      "options": [
+        "未定义名称 / 可能拼写错误",
+        "命名风格不符合约定",
+        "导入顺序不正确",
+        "缺少模块级文档字符串"
+      ],
+      "answer": 0,
+      "explanation": "使用了一个从未被定义过的名称，常被报告为未定义名称或可能的拼写错误；命名风格规则针对的是命名格式而不是名称是否存在。",
+      "error_tag": "概念理解",
+      "variant_group": "lint_undefined"
+    },
+    {
+      "kp": "py.quality.lint",
+      "type": "single_choice",
+      "question": "下面这段代码：\n\n```python\ntry:\n    do_something()\nexcept Exception:\n    pass\n```\n\nlint 工具最可能给出哪类提示？",
+      "options": [
+        "不应捕获 Exception，且捕获后什么都不做会隐藏错误",
+        "try 块中只能放一行代码",
+        "except 子句必须指定具体异常类型，否则语法错误",
+        "pass 不能出现在 except 块中"
+      ],
+      "answer": 0,
+      "explanation": "捕获过宽的异常并静默 pass 常被标记为可能掩盖问题；except 后不写异常类型在语法上是允许的，pass 也可用于 except 块。",
+      "error_tag": "最佳实践",
+      "variant_group": "lint_broad_except"
+    },
+    {
+      "kp": "py.quality.lint",
+      "type": "single_choice",
+      "question": "某项目在本地运行 lint 时看到大量“行长度超过限制”的提示。下列哪种理解最合理？",
+      "options": [
+        "超过行长度限制会导致程序运行变慢",
+        "行长度限制是风格约定，可通过配置调整或换行改写来消除提示",
+        "行长度限制是 Python 解释器强制要求的，超过会报语法错误",
+        "行长度限制只对注释生效"
+      ],
+      "answer": 1,
+      "explanation": "行长度属于风格规则，不影响运行时行为，也不是解释器语法限制；它可通过配置或代码换行来满足。",
+      "error_tag": "工具配置",
+      "variant_group": "lint_line_length"
+    },
+    {
+      "kp": "py.quality.ruff",
+      "type": "single_choice",
+      "question": "团队在 CI 中加入代码检查工具，希望它不仅报告代码风格问题，还能发现未使用变量、未定义名称这类潜在错误。下列哪种做法最符合这类工具的设计目标？",
+      "options": [
+        "把工具的规则全部关闭，只保留格式检查",
+        "启用包括逻辑错误类规则在内的规则集，并配合格式化工具使用",
+        "只依赖人工代码评审，不引入自动化检查",
+        "把所有规则都设为忽略，仅当作占位符使用"
+      ],
+      "answer": 1,
+      "explanation": "代码检查工具（linter）的核心价值在于静态分析，能发现风格及潜在逻辑问题；格式化工具负责排版。二者配合、开启逻辑类规则才能覆盖题目期望。关闭规则或仅人工评审都失去了工具价值；全设忽略等于没启用。",
+      "error_tag": "概念混淆",
+      "variant_group": "linter定位"
+    },
+    {
+      "kp": "py.quality.ruff",
+      "type": "single_choice",
+      "question": "关于静态代码检查工具与代码格式化工具的关系，下列说法正确的是？",
+      "options": [
+        "两者功能完全相同，选其一即可",
+        "检查工具专注发现问题（含风格与逻辑），格式化工具专注按规则重排代码",
+        "格式化工具能替代检查工具发现未使用变量",
+        "检查工具运行后一定能自动修复所有问题"
+      ],
+      "answer": 1,
+      "explanation": "检查工具做静态分析、报告问题（部分可自动修复）；格式化工具只负责按规则重写排版。格式化工具不分析变量是否被使用，因此无法替代检查工具；检查工具也不能保证修复全部问题。",
+      "error_tag": "概念混淆",
+      "variant_group": "工具职责区分"
+    },
+    {
+      "kp": "py.quality.ruff",
+      "type": "multi_choice",
+      "question": "关于代码检查工具与持续集成的关系，下列哪些说法正确？（多选）",
+      "options": [
+        "可在 CI 中运行检查命令以统一把关代码质量",
+        "CI 中检查失败通常应导致流水线失败",
+        "检查工具只能在本地运行，无法用于 CI",
+        "可在 CI 中先用检查工具自动修复再重新检查"
+      ],
+      "answer": [
+        0,
+        1,
+        3
+      ],
+      "explanation": "检查工具可在 CI 中运行并据退出码决定流水线成败；也可先自动修复再复查。说它“只能在本地运行”是错误的，CI 是其典型使用场景之一。",
+      "error_tag": "概念混淆",
+      "variant_group": "CI集成"
+    },
+    {
+      "kp": "py.quality.ruff",
+      "type": "fill_blank",
+      "question": "假设项目使用某一检查工具，其配置文件中 ignore 列表用于整体忽略规则，per-file-ignores（或等价机制）用于按文件忽略。若要针对某个测试文件忽略某条风格规则，应把该规则写在 ______ 类配置中。",
+      "options": [],
+      "answer": [
+        "per-file-ignores",
+        "per file ignores",
+        "按文件忽略",
+        "文件级忽略"
+      ],
+      "explanation": "整体忽略用 ignore；针对特定文件（如测试文件）忽略更适合用 per-file-ignores 这类文件级忽略配置，避免影响其他文件。",
+      "error_tag": "记忆缺失",
+      "variant_group": "规则配置"
+    },
+    {
+      "kp": "py.quality.ruff",
+      "type": "fill_blank",
+      "question": "在 CI 中让检查命令失败以阻止合并，通常依赖命令返回的 ______ 码（填一个词）。",
+      "options": [],
+      "answer": [
+        "退出码",
+        "exit code",
+        "退出状态码",
+        "非零退出码"
+      ],
+      "explanation": "CI 依据命令的退出码判断成败；检查发现告警时返回非零退出码，CI 据此失败并阻止合并。",
+      "error_tag": "记忆缺失",
+      "variant_group": "CI集成"
+    },
+    {
+      "kp": "py.quality.ruff",
+      "type": "fill_blank",
+      "question": "若想在不修改整条规则配置的前提下，让某一行代码不触发检查告警，通常在该行末尾添加形如 `# ______` 的注释（填一个常见关键词）。",
+      "options": [],
+      "answer": [
+        "noqa",
+        "noqa:",
+        "flake8: noqa"
+      ],
+      "explanation": "许多检查工具支持 noqa 风格的行内注释来抑制该行告警，无需改动全局规则配置。",
+      "error_tag": "记忆缺失",
+      "variant_group": "行级抑制"
+    },
+    {
+      "kp": "py.quality.ruff",
+      "type": "code_reading",
+      "question": "阅读下面代码，判断静态检查工具最可能针对它报告哪一类问题：\n\n```python\nimport json\n\ndef load(path):\n    with open(path) as f:\n        return json.load(f)\n```",
+      "options": [],
+      "answer": "未使用的导入：代码导入了 json 但实际使用了 json.load，哦——等等，这里 json.load 用到了 json，因此没有未使用导入问题；该代码本身没有明显的未使用导入告警。",
+      "explanation": "题目意在提醒：是否报告“未使用导入”取决于名称是否在后续被引用。此处 json.load 引用了 json，所以不会报告未使用导入。若把 import json 换成某个从未被引用的名称才会触发。",
+      "error_tag": "边界错误",
+      "variant_group": "未使用导入"
+    },
+    {
+      "kp": "py.quality.ruff",
+      "type": "code_reading",
+      "question": "阅读下面代码，判断静态检查工具最可能报告的问题：\n\n```python\nimport os\nimport sys\n\ndef main():\n    print(sys.argv)\n```",
+      "options": [],
+      "answer": "未使用的导入：os 被导入但没有在任何地方被引用，因此会触发未使用导入告警。",
+      "explanation": "os 导入后从未使用，属于典型的未使用导入；sys 被 sys.argv 引用，不报告。",
+      "error_tag": "概念混淆",
+      "variant_group": "未使用导入"
+    },
+    {
+      "kp": "py.quality.ruff",
+      "type": "code_reading",
+      "question": "阅读下面代码，判断静态检查工具最可能报告的问题：\n\n```python\ndef f():\n    x = 1\n    return 2\n```",
+      "options": [],
+      "answer": "未使用的变量：局部变量 x 被赋值但没有被使用（同时返回值 2 与 x 无关），检查工具通常会报告未使用变量。",
+      "explanation": "x 赋值后未被读取，属于未使用变量，是检查工具常见规则。这不是语法错误，代码可正常运行。",
+      "error_tag": "概念混淆",
+      "variant_group": "未使用变量"
+    },
+    {
+      "kp": "py.quality.ruff",
+      "type": "scenario",
+      "question": "某团队接手一个历史项目，首次在一个新检查工具下运行，出现数千条风格与逻辑告警，导致 CI 立刻失败，开发无法合并。团队希望逐步提升代码质量而不是一次性堵住所有提交。请给出合理的推进思路。",
+      "options": [],
+      "answer": null,
+      "explanation": "面对历史项目大量告警，宜采用渐进策略：先启用基础规则集、对存量问题通过 ignore 或行级抑制做可控例外，再随着代码修改逐步启用更严格规则；CI 可先从不阻断（或仅对新增代码阻断）过渡到全量阻断。关键词体现“渐进/逐步”“忽略”“规则集”“CI”等思路。",
+      "error_tag": "边界错误",
+      "variant_group": "历史项目治理",
+      "required_keywords": [
+        "渐进",
+        "基线",
+        "忽略",
+        "规则集",
+        "CI"
+      ]
+    },
+    {
+      "kp": "py.quality.ruff",
+      "type": "scenario",
+      "question": "你在一个多人协作的仓库中，希望检查工具的规则配置对所有开发者一致生效，且能在提交和合并两个环节都拦截问题。请描述你的配置与集成方案。",
+      "options": [],
+      "answer": null,
+      "explanation": "把规则集中写入项目配置文件（如 pyproject.toml）以保证团队一致；在本地钩子（如 pre-commit）中运行以便提交前拦截；在 CI 中再次运行以保证合并环节把关。关键词体现“配置文件/pyproject.toml”“本地钩子/提交”“CI”。",
+      "error_tag": "概念混淆",
+      "variant_group": "团队配置与集成",
+      "required_keywords": [
+        "配置文件",
+        "本地钩子",
+        "提交前拦截",
+        "CI",
+        "合并环节把关"
+      ]
+    },
+    {
+      "kp": "py.quality.ruff",
+      "type": "scenario",
+      "question": "某代码行确实需要违反一条检查规则（例如为兼容旧接口必须使用一个被标记为不良的写法），但团队不希望全局关闭该规则。你会如何在该项目中处理这一例外？",
+      "options": [],
+      "answer": null,
+      "explanation": "应使用行级抑制注释（如 noqa 风格）在该行做局部例外，而不是全局 ignore 该规则，并可在注释中说明原因，必要时附带工单号以便后续清理。关键词体现“行内/noqa/注释”“抑制/例外”。",
+      "error_tag": "边界错误",
+      "variant_group": "行级抑制",
+      "required_keywords": [
+        "行级抑制",
+        "noqa",
+        "注释",
+        "局部例外",
+        "工单号"
+      ]
+    },
+    {
+      "kp": "py.quality.ruff",
+      "type": "single_choice",
+      "question": "在项目配置文件（如 pyproject.toml）中为检查工具配置规则时，若希望对某条规则整体关闭，通常的写法是？",
+      "options": [
+        "把该规则名从配置里删掉即可自动关闭",
+        "在该工具的配置段中把对应规则加入 ignore 列表",
+        "把整个配置文件清空",
+        "必须修改源代码才能关闭规则"
+      ],
+      "answer": 1,
+      "explanation": "常见检查工具支持在配置文件的工具段中用 select/ignore（或类似机制）来启用或忽略规则；把规则名加入 ignore 即整体关闭。删除配置项通常只是采用默认值，不等于关闭；清空配置也不是正确做法。",
+      "error_tag": "记忆缺失",
+      "variant_group": "规则配置"
+    },
+    {
+      "kp": "py.quality.ruff",
+      "type": "single_choice",
+      "question": "某开发者在代码中写了 `import os` 但没有使用。运行检查工具后最可能报告的问题是？",
+      "options": [
+        "语法错误",
+        "未使用的导入",
+        "缩进错误",
+        "类型不匹配"
+      ],
+      "answer": 1,
+      "explanation": "导入后未在任何地方引用，属于“未使用导入”，是检查工具的经典规则。它不是语法错误（import 语句本身合法），也不是缩进或类型问题。",
+      "error_tag": "概念混淆",
+      "variant_group": "未使用导入"
+    },
+    {
+      "kp": "py.quality.ruff",
+      "type": "single_choice",
+      "question": "关于在代码行内临时忽略某条检查规则，下列哪种说法正确？",
+      "options": [
+        "可以在行末用注释（如 `# noqa`）来抑制该行的告警",
+        "必须删除该行代码才能在检查中通过",
+        "行内注释无法影响检查结果",
+        "只能用命令行参数忽略，不能按行忽略"
+      ],
+      "answer": 0,
+      "explanation": "许多检查工具支持行级抑制注释（如 noqa 风格），可在特定行抑制特定或全部告警，用于确有必要的例外。删除代码并非唯一途径；行内注释通常有效；按行忽略是常见能力。",
+      "error_tag": "记忆缺失",
+      "variant_group": "行级抑制"
+    },
+    {
+      "kp": "py.quality.ruff",
+      "type": "single_choice",
+      "question": "团队希望检查工具在 CI 中失败并阻止合并，当存在任何告警时。下列哪种做法最直接？",
+      "options": [
+        "让检查命令在发现告警时返回非零退出码，并在 CI 中据此失败",
+        "在 CI 中忽略检查命令的退出码",
+        "只在本地运行检查，不使用 CI",
+        "把检查工具的输出重定向到 /dev/null"
+      ],
+      "answer": 0,
+      "explanation": "CI 依据命令退出码判断成败。检查工具发现告警时通常返回非零退出码，CI 据此失败即可阻止合并。忽略退出码、只在本地运行、丢弃输出都无法在 CI 中阻断问题。",
+      "error_tag": "概念混淆",
+      "variant_group": "CI集成"
+    },
+    {
+      "kp": "py.quality.ruff",
+      "type": "single_choice",
+      "question": "下列关于检查工具“自动修复”（fix）功能的描述，哪一项正确？",
+      "options": [
+        "所有规则都支持自动修复",
+        "部分规则支持自动修复，其余仍需人工修改",
+        "自动修复会破坏代码语义，因此永不使用",
+        "自动修复功能与检查工具无关"
+      ],
+      "answer": 1,
+      "explanation": "检查工具的自动修复只覆盖可安全改写的规则（如未使用导入、可简化的写法等），很多规则（如潜在逻辑错误）无法或不宜自动修改。因此部分可修、部分需人工，且修复通常保持语义安全。",
+      "error_tag": "边界错误",
+      "variant_group": "自动修复"
+    },
+    {
+      "kp": "py.quality.ruff",
+      "type": "single_choice",
+      "question": "关于选择检查规则集（如从基础风格规则扩展到更严格的规则集），下列说法合理的是？",
+      "options": [
+        "规则越多越严格一定越好，无需考虑项目现状",
+        "应根据项目阶段和团队接受度逐步启用更严格的规则",
+        "基础规则集已涵盖所有逻辑错误，无需扩展",
+        "启用更严格规则集后无法再单独忽略某条规则"
+      ],
+      "answer": 1,
+      "explanation": "启用更严格的规则集往往会引入大量历史代码告警，宜按项目阶段和团队接受度渐进启用，并可用 ignore/行内注释做例外。规则并非越多越好；基础规则集不覆盖全部逻辑问题；扩展后仍可单独忽略规则。",
+      "error_tag": "概念混淆",
+      "variant_group": "规则集选择"
+    },
+    {
+      "kp": "py.quality.ruff",
+      "type": "multi_choice",
+      "question": "下列哪些问题是静态代码检查工具通常能够发现的？（多选）",
+      "options": [
+        "未使用的导入",
+        "未定义的变量名",
+        "运行时的除零错误",
+        "行尾多余空白等风格问题"
+      ],
+      "answer": [
+        0,
+        1,
+        3
+      ],
+      "explanation": "检查工具通过静态分析可发现未使用导入、未定义名称、风格问题等。运行时的除零错误取决于实际执行的数据，静态分析通常无法确定，需依靠测试或运行。",
+      "error_tag": "概念混淆",
+      "variant_group": "检查能力范围"
+    },
+    {
+      "kp": "py.quality.ruff",
+      "type": "multi_choice",
+      "question": "在配置检查工具时，下列哪些属于常见且合理的做法？（多选）",
+      "options": [
+        "在项目配置文件中集中声明启用的规则集",
+        "对确有必要的个别代码行使用行内抑制注释",
+        "为每条规则单独写一个配置文件",
+        "把工具接入本地钩子或 CI 流程中自动运行"
+      ],
+      "answer": [
+        0,
+        1,
+        3
+      ],
+      "explanation": "集中配置规则集、按需行级抑制、接入本地钩子或 CI，都是常见实践。为每条规则单独建一个配置文件并非合理做法，只会增加维护负担。",
+      "error_tag": "概念混淆",
+      "variant_group": "配置实践"
+    },
+    {
+      "kp": "py.quality.precommit",
+      "type": "single_choice",
+      "question": "在 Python 项目中引入 Git 提交前检查（pre-commit）机制，最主要的目的是什么？",
+      "options": [
+        "让代码在推送到远程仓库前自动运行测试并阻止所有失败提交",
+        "在代码提交前自动执行格式化、静态检查等钩子，尽早发现低级问题",
+        "替代 CI 流水线，把全部集成测试都放到本地执行",
+        "强制所有开发者使用统一的编辑器配置"
+      ],
+      "answer": 1,
+      "explanation": "pre-commit 的核心价值是把格式化、lint 等快速检查前移到提交阶段，让问题在进入仓库前暴露。它不能替代 CI（CI 仍要跑完整测试），也无法强制编辑器配置，A 项‘阻止所有失败提交’也过于绝对。",
+      "error_tag": "概念混淆",
+      "variant_group": "precommit_目的"
+    },
+    {
+      "kp": "py.quality.precommit",
+      "type": "single_choice",
+      "question": "关于 pre-commit 框架的钩子定义，下列说法正确的是？",
+      "options": [
+        "钩子配置必须写在 setup.py 的 entry_points 里",
+        "钩子集中配置在一个名为 .pre-commit-config.yaml 的文件中，由 pre-commit 读取",
+        "每个钩子必须自己实现 Git 的对象校验逻辑",
+        "钩子只能由 CI 系统触发，本地无法运行"
+      ],
+      "answer": 1,
+      "explanation": "pre-commit 通过仓库根目录下的 .pre-commit-config.yaml 声明钩子来源与参数，工具会据此安装并调用各钩子。钩子无需自己处理 Git 对象，本地和 CI 都能运行。",
+      "error_tag": "记忆缺失",
+      "variant_group": "配置文件"
+    },
+    {
+      "kp": "py.quality.precommit",
+      "type": "single_choice",
+      "question": "在 .pre-commit-config.yaml 中为远程钩子指定 rev: v4.6.0 字段的作用是什么？",
+      "options": [
+        "指定该钩子仓库的版本/标签，保证不同机器上使用相同的钩子代码",
+        "指定要检查的文件版本号",
+        "指定提交信息必须包含的版本字符串",
+        "指定钩子运行的最低 Python 版本"
+      ],
+      "answer": 0,
+      "explanation": "rev 用于锁定远程仓库的提交/标签，确保团队成员和 CI 使用同一份钩子实现，是可复现性的关键。",
+      "error_tag": "记忆缺失",
+      "variant_group": "钩子版本"
+    },
+    {
+      "kp": "py.quality.precommit",
+      "type": "single_choice",
+      "question": "一位新同事报告说他的提交没有被任何钩子检查，最可能的原因是什么？",
+      "options": [
+        "他的电脑上没装 Git",
+        "他克隆仓库后没有运行 pre-commit install 安装钩子",
+        ".pre-commit-config.yaml 一定被删除了",
+        "pre-commit 只在 Linux 上可用"
+      ],
+      "answer": 1,
+      "explanation": "钩子脚本需要安装到本地 .git/hooks 才会被触发；克隆仓库并不会自动安装。其余选项与症状不符。",
+      "error_tag": "概念混淆",
+      "variant_group": "install流程"
+    },
+    {
+      "kp": "py.quality.precommit",
+      "type": "multi_choice",
+      "question": "下列哪些属于 pre-commit 在 Python 项目中常见的检查类型？（多选）",
+      "options": [
+        "代码格式化（如 black、ruff format）",
+        "静态检查/风格检查（如 ruff、flake8）",
+        "提交信息格式校验（commit-msg 阶段）",
+        "在生产服务器上做压力测试",
+        "在提交时自动部署到线上环境"
+      ],
+      "answer": [
+        0,
+        1,
+        2
+      ],
+      "explanation": "pre-commit 适合快速、本地的格式化、lint 与提交信息校验。压力测试和部署属于耗时或高风险操作，应放在 CI/CD 流程中，不适合提交前钩子。",
+      "error_tag": "概念混淆",
+      "variant_group": "钩子类型"
+    },
+    {
+      "kp": "py.quality.precommit",
+      "type": "multi_choice",
+      "question": "关于 pre-commit 与 CI 的分工，下列描述正确的有？（多选）",
+      "options": [
+        "pre-commit 侧重快速反馈，在提交阶段拦截明显问题",
+        "CI 可以运行更完整、更耗时的测试，作为合并门禁",
+        "CI 中运行 pre-commit 有助于防止开发者绕过本地钩子",
+        "有了 pre-commit 后 CI 中的测试可以全部删除",
+        "pre-commit 与 CI 互斥，只能选其一"
+      ],
+      "answer": [
+        0,
+        1,
+        2
+      ],
+      "explanation": "两者是互补关系：pre-commit 提供本地快速反馈，CI 提供权威的、不可绕过的门禁。CI 中额外运行 pre-commit 可覆盖被 --no-verify 绕过的提交。删除全部 CI 测试或认为二者互斥都是错误理解。",
+      "error_tag": "概念混淆",
+      "variant_group": "CI集成"
+    },
+    {
+      "kp": "py.quality.precommit",
+      "type": "multi_choice",
+      "question": "以下哪些做法有助于让 pre-commit 在团队中顺利落地？（多选）",
+      "options": [
+        "把钩子配置和版本锁定提交到仓库，随代码一起评审",
+        "在 README 或贡献指南中写明需要先执行 pre-commit install",
+        "选择运行很快的检查，避免拖慢每次提交",
+        "让每个开发者各自在本地随意修改钩子配置且不提交",
+        "在 CI 中复用同一份配置，保证检查一致"
+      ],
+      "answer": [
+        0,
+        1,
+        2,
+        4
+      ],
+      "explanation": "配置入库、文档说明安装步骤、保持钩子快速、CI 复用同一配置，都是常见最佳实践。允许各自随意修改且不入库会导致检查不可复现。",
+      "error_tag": "边界错误",
+      "variant_group": "最佳实践"
+    },
+    {
+      "kp": "py.quality.precommit",
+      "type": "fill_blank",
+      "question": "pre-commit 的钩子集中声明在一个名为 ____ 的配置文件中（填写完整文件名）。",
+      "options": [],
+      "answer": [
+        ".pre-commit-config.yaml",
+        ".pre-commit-config.yml"
+      ],
+      "explanation": "pre-commit 默认读取仓库根目录的 .pre-commit-config.yaml（.yml 也可被接受）。这是声明 repo、rev、hooks 等信息的核心文件。",
+      "error_tag": "记忆缺失",
+      "variant_group": "配置文件"
+    },
+    {
+      "kp": "py.quality.precommit",
+      "type": "fill_blank",
+      "question": "要让 pre-commit 对仓库中的所有文件运行检查（而不仅是暂存文件），应在命令后追加参数 ____。",
+      "options": [],
+      "answer": [
+        "--all-files",
+        "--all_files"
+      ],
+      "explanation": "--all-files 指示 pre-commit 把仓库中全部被跟踪的文件传给钩子，常用于首次引入或修复问题后做全量验证。",
+      "error_tag": "记忆缺失",
+      "variant_group": "运行范围"
+    },
+    {
+      "kp": "py.quality.precommit",
+      "type": "code_reading",
+      "question": "阅读下面的 .pre-commit-config.yaml 片段：\n\nrepos:\n  - repo: https://github.com/astral-sh/ruff-pre-commit\n    rev: v0.6.0\n    hooks:\n      - id: ruff\n        args: [--fix]\n\n请说明当本次提交中有文件暂时存在不符合 ruff 规则的问题时，执行 git commit 会发生什么，以及开发者接下来应做什么。",
+      "options": [],
+      "answer": "pre-commit 会调用 ruff 钩子；由于加了 --fix，ruff 会尝试自动修复它支持修复的问题。如果文件被修改，pre-commit 会判定本次提交失败并提示文件已被改动。开发者需要重新查看改动、git add 这些文件后再次提交；若仍有无法自动修复的问题，须手动修改后再提交。",
+      "explanation": "带 --fix 的钩子会就地修改文件，触发 pre-commit 的‘文件被修改即失败’机制，从而要求开发者重新审阅并暂存修改，避免未经验证的内容被提交。",
+      "error_tag": "边界错误",
+      "variant_group": "钩子修改文件"
+    },
+    {
+      "kp": "py.quality.precommit",
+      "type": "code_reading",
+      "question": "某仓库的 .pre-commit-config.yaml 里定义了 remote 钩子但同事的提交完全没被检查。运维排查后发现他的 .git/hooks/pre-commit 文件不存在。请解释该文件缺失意味着什么，以及应通过什么命令修复。",
+      "options": [],
+      "answer": ".git/hooks/pre-commit 是 pre-commit 安装到本地仓库的钩子入口脚本，缺失意味着钩子没有被安装，因此 git commit 时不会触发检查。修复办法是在仓库根目录执行 pre-commit install，它会重新生成该钩子脚本。",
+      "explanation": "pre-commit 依靠 .git/hooks 中的脚本被 Git 调用；克隆仓库不会自动写入，必须通过 pre-commit install 安装，这也是新成员常见问题。",
+      "error_tag": "概念混淆",
+      "variant_group": "install流程"
+    },
+    {
+      "kp": "py.quality.precommit",
+      "type": "scenario",
+      "question": "团队 A 的仓库每次 git commit 都会自动运行 black 和 ruff，速度很快，开发者反馈良好。团队 B 看到后把所有单元测试、集成测试和依赖安装也加入了提交前钩子，结果每次提交要等好几分钟，大家开始频繁使用 --no-verify 绕过。请分析 B 团队做法的问题，并给出更合理的方案。",
+      "options": [],
+      "answer": null,
+      "explanation": "提交前钩子应保持轻量、秒级完成，用于格式化和 lint 等快速检查；耗时的测试、依赖安装等应放到 CI 流水线。把重活塞进钩子会拖慢提交，诱使开发者用 --no-verify 绕过，反而失去检查效果。合理方案是钩子只留快速检查，完整测试交给 CI 作为合并门禁。",
+      "error_tag": "边界错误",
+      "variant_group": "CI集成",
+      "required_keywords": [
+        "提交前钩子",
+        "轻量",
+        "CI 流水线",
+        "no-verify",
+        "合并门禁"
+      ]
+    },
+    {
+      "kp": "py.quality.precommit",
+      "type": "single_choice",
+      "question": "开发者首次克隆一个已配置 pre-commit 的项目后，通常需要执行哪一步才能真正让钩子在每次提交时生效？",
+      "options": [
+        "运行 pre-commit install，把钩子脚本写入 .git/hooks",
+        "运行 pip install .pre-commit-config.yaml",
+        "手动在每个提交里加上 --no-verify 参数",
+        "把 .pre-commit-config.yaml 复制到用户主目录"
+      ],
+      "answer": 0,
+      "explanation": "pre-commit install 会在 .git/hooks 中生成对应的钩子脚本，之后 git commit 才会触发。仅克隆仓库不会自动安装钩子；--no-verify 恰恰是绕过检查。",
+      "error_tag": "概念混淆",
+      "variant_group": "install流程"
+    },
+    {
+      "kp": "py.quality.precommit",
+      "type": "single_choice",
+      "question": "某钩子在提交时自动修改了文件内容（例如格式化工具）。pre-commit 默认会如何处理这次提交？",
+      "options": [
+        "直接放行提交，忽略文件已被修改这一事实",
+        "阻止提交并提示文件已被修改，需重新添加并再次提交",
+        "自动把修改后的文件重新 git add 后继续提交",
+        "回滚格式化结果，恢复原始文件"
+      ],
+      "answer": 1,
+      "explanation": "当钩子改动了被暂存的文件，pre-commit 会判定为失败，防止未经验证的修改被提交。用户需要重新 git add 被修改的文件并再次提交。它不会替你自动 add。",
+      "error_tag": "边界错误",
+      "variant_group": "钩子修改文件"
+    },
+    {
+      "kp": "py.quality.precommit",
+      "type": "single_choice",
+      "question": "关于 pre-commit 运行时的文件范围，下列描述哪一项最准确？",
+      "options": [
+        "默认总是检查整个仓库的所有文件，无论是否暂存",
+        "默认只把本次提交涉及的文件（staged files）传给钩子",
+        "默认只检查最后一个提交的 diff",
+        "默认只检查被 git 跟踪且刚刚新建的文件"
+      ],
+      "answer": 1,
+      "explanation": "pre-commit 默认把本次暂存的文件列表传给钩子，这样检查是增量的，速度快。若要检查全部文件可手动传 --all-files。",
+      "error_tag": "概念混淆",
+      "variant_group": "运行范围"
+    },
+    {
+      "kp": "py.quality.precommit",
+      "type": "single_choice",
+      "question": "团队成员希望一次性对仓库中已有的全部文件跑一遍检查（而不仅是本次暂存的文件），应使用哪个命令？",
+      "options": [
+        "pre-commit run --all-files",
+        "pre-commit run --commit-all",
+        "pre-commit install --all",
+        "pre-commit check --everywhere"
+      ],
+      "answer": 0,
+      "explanation": "--all-files 让 pre-commit 把仓库中全部（被跟踪的）文件交给钩子检查，常用于首次引入或修复后全量验证。其余选项都是不存在的用法。",
+      "error_tag": "记忆缺失",
+      "variant_group": "运行范围"
+    },
+    {
+      "kp": "py.quality.precommit",
+      "type": "single_choice",
+      "question": "当配置文件中为某个钩子设置了 stages: [commit-msg]，这意味着该钩子在什么时机运行？",
+      "options": [
+        "在每次 git commit 生成提交信息之后、提交完成之前运行",
+        "在文件被暂存（git add）时运行",
+        "在代码推送到远程仓库前运行",
+        "在创建分支时运行"
+      ],
+      "answer": 0,
+      "explanation": "commit-msg 阶段的钩子接收提交信息文件，用于校验提交信息格式（如是否符合 Conventional Commits），发生在提交信息生成之后、提交落盘之前。",
+      "error_tag": "概念混淆",
+      "variant_group": "钩子阶段"
+    },
+    {
+      "kp": "py.quality.precommit",
+      "type": "single_choice",
+      "question": "某开发者在紧急修复时使用 git commit --no-verify 成功绕过了提交前检查。对这件事最合理的评价是？",
+      "options": [
+        "这是禁止行为，Git 会因此拒绝后续推送",
+        "这是合法逃生通道，但应有意识地避免，因为它会把问题带到仓库",
+        "这会使 .pre-commit-config.yaml 失效并被自动删除",
+        "这只在 CI 未配置时才允许使用"
+      ],
+      "answer": 1,
+      "explanation": "--no-verify 是 Git 提供的合法绕过机制，用于紧急情况；但滥用会让未格式化和有缺陷的代码进入历史，团队通常要求事后再补跑检查。",
+      "error_tag": "边界错误",
+      "variant_group": "绕过检查"
+    },
+    {
+      "kp": "py.quality.precommit",
+      "type": "single_choice",
+      "question": "为了让 pre-commit 钩子能在 CI 中一致地复现，团队通常会在 CI 配置里加上哪一步？",
+      "options": [
+        "在 CI 中执行 pre-commit run --all-files（或等价命令）",
+        "在 CI 中运行 git commit --no-verify",
+        "在 CI 中删除 .pre-commit-config.yaml 再重建",
+        "让每个开发者在本地手动运行检查即可，CI 不需要"
+      ],
+      "answer": 0,
+      "explanation": "CI 中运行 pre-commit（常见做法是全量 run --all-files）可以防止开发者本地绕过或未安装钩子导致的问题，保证检查一致性。",
+      "error_tag": "概念混淆",
+      "variant_group": "CI集成"
+    },
+    {
+      "kp": "py.quality.precommit",
+      "type": "single_choice",
+      "question": "关于 pre-commit 钩子的来源，下列说法正确的是？",
+      "options": [
+        "钩子只能使用本地仓库自身编写的脚本，不能引用外部仓库",
+        "既可以通过 repo 字段引用外部 Git 仓库的钩子，也可以使用本地（local）仓库定义的钩子",
+        "每个钩子必须发布到 PyPI 才能被引用",
+        "钩子必须用 Python 编写，不支持其他语言"
+      ],
+      "answer": 1,
+      "explanation": "在 .pre-commit-config.yaml 中，repo 可以指向远程 Git 仓库并指定 rev，也可以用 repo: local 定义本仓库内的钩子；钩子本身可以是任意语言的可执行命令。",
+      "error_tag": "概念混淆",
+      "variant_group": "钩子来源"
+    }
+  ]
+}

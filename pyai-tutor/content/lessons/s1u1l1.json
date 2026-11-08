@@ -1,0 +1,1260 @@
+{
+  "id": "s1u1l1",
+  "title": "s1u1l1",
+  "kps": [
+    "py.env.install",
+    "py.env.venv",
+    "py.env.pip",
+    "py.hello.print"
+  ],
+  "theory": "## py.env.install\n\n# py.env.install：从零搭建可复现的 Python 开发环境\n\n## 一句话直觉\n\n**写 Python 代码之前，你首先得让 Python 能在你的电脑上跑起来，并且每个项目用到的第三方库互不打架——这就是 `py.env.install` 要解决的事。**\n\nPython 本身很小，真正让它强大的是成千上万的第三方包（package）。但如果你把所有包都塞进同一个全局环境，不同项目的依赖（dependency）很快会冲突。工程级做法是：**为每个项目建一个独立的虚拟环境（virtual environment），再在其中安装依赖。**\n\n本讲按照“装解释器 → 建虚拟环境 → 装包 → 固定依赖 → 复现”的顺序，层层递进。\n\n---\n\n## 第 1 节｜安装 Python 解释器（Interpreter）\n\n**解释器**是运行 `.py` 文件的程序。官方推荐从 [python.org](https://www.python.org/downloads/) 下载。\n\n- Windows：安装时**务必勾选 “Add Python to PATH”**，否则命令行找不到 `python`。\n- macOS：可用官方安装包，或用 Homebrew：`brew install python`。\n- Linux：多数发行版自带的 `python3` 即可；建议用 `sudo apt install python3 python3-pip python3-venv`。\n\n验证安装是否成功：\n\n```bash\npython --version      # Windows\npython3 --version     # macOS / Linux\n```\n\n> 说明：macOS 与多数 Linux 上系统命令是 `python3`，本节命令请按你的系统替换。\n\n---\n\n## 第 2 节｜pip 与虚拟环境\n\n**pip** 是 Python 的官方包管理器（package manager）。**虚拟环境** 是一个独立目录，里面有一套隔离的 Python 与 pip，不会污染全局。\n\nPython 3.3+ 自带 `venv` 模块。标准工作流：\n\n```bash\n# 1. 进入项目目录\ncd my_project\n\n# 2. 创建名为 .venv 的虚拟环境（名字任意，约定用 .venv）\npython3 -m venv .venv\n\n# 3. 激活它\nsource .venv/bin/activate      # macOS / Linux\n.venv\\Scripts\\activate         # Windows (cmd/PowerShell)\n\n# 4. 激活后提示符前会出现 (.venv)\n# 5. 退出\n# deactivate\n```\n\n判断是否激活成功：`python -c \"import sys; print(sys.prefix)\"` 应输出 `.venv` 目录路径。\n\n---\n\n## 第 3 节｜用 pip 安装第三方包\n\n```bash\n# 安装单个包\npip install requests\n\n# 安装指定版本（生产环境强烈建议）\npip install \"requests==2.32.3\"\n\n# 一次安装多个\npip install requests httpx rich\n\n# 升级 pip 自身\npython -m pip install --upgrade pip\n\n# 查看已安装\npip list\n```\n\n安装完成后即可导入：\n\n```python\nimport requests\nprint(requests.__version__)\n```\n\n---\n\n## 第 4 节｜固定依赖：requirements.txt\n\n只写下包名不够——以后别人（或未来的你）在另一台机器上安装时，可能拿到不同版本，导致行为不一致。解决办法是**冻结**（freeze）当前版本列表：\n\n```bash\n# 生成依赖清单\npip freeze > requirements.txt\n\n# 别人拿到项目后，一键还原\npip install -r requirements.txt\n```\n\n`requirements.txt` 内容示例：\n\n```\nrequests==2.32.3\nhttpx==0.27.2\nrich==13.9.4\n```\n\n---\n\n## 第 5 节｜工程级实践清单\n\n1. **每个项目一个虚拟环境**，目录名用 `.venv`，并写进 `.gitignore`。\n2. **不要用 `sudo pip install`**：会污染系统 Python，很多发行版已拒绝执行。\n3. **锁定版本**：把 `requirements.txt` 提交到 Git。\n4. **大型项目考虑现代工具**：`pip-tools`、`poetry`、`uv`、`pdm` 提供更严格的锁定与解析。\n5. **依赖来源**：默认走 [PyPI](https://pypi.org/)。国内网络慢可加镜像：\n   ```bash\n   pip install -i https://pypi.tuna.tsinghua.edu.cn/simple requests\n   ```\n\n---\n\n## 常见误区（Pitfalls）\n\n- **忘了激活虚拟环境**：装包装到了全局，项目却 import 失败。激活后再 `pip install`。\n- **Windows PowerShell 激活被策略阻止**：执行 `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned` 后重试。\n- **`pip` 与 `python` 对应不上**：永远用 `python -m pip ...` 而非裸 `pip ...`，可避免装错解释器。\n- **提交 `.venv` 到 Git**：体积巨大且无意义，写进 `.gitignore`。\n- **不锁版本**：某天上游发新版，代码意外报错。\n- **删掉 `.venv` 后忘了重建**：`pip install -r requirements.txt` 即可复原。\n\n---\n\n## 动手练习\n\n**任务：从零创建一个可复现的小项目。**\n\n1. 新建目录 `hello-env` 并进入。\n2. 创建虚拟环境 `.venv`，激活它。\n3. 安装 `rich` 的任意版本，并升级 `pip`。\n4. 写一个 `app.py`，用 `rich` 打印一句彩色问候：\n   ```python\n   from rich import print\n   print(\"[bold magenta]Hello, Python environment![/bold magenta]\")\n   ```\n5. 运行 `python app.py`，确认输出正常。\n6. 执行 `pip freeze > requirements.txt`。\n7. **验证隔离性**：删除 `.venv`，重新创建并激活，运行 `pip install -r requirements.txt`，再次 `python app.py`，确认一切正常。\n8. 提交最终目录结构（`app.py` + `requirements.txt` + `.gitignore`，忽略 `.venv/`）。\n\n```python\n\"\"\"\n演示 py.env.install 的完整流程（在已激活的虚拟环境中运行本脚本）：\n  1) 检查当前解释器是否为虚拟环境\n  2) 打印已安装的第三方包\n  3) 探测 requirements.txt 是否存在\n注意：本脚本只做检查，不执行安装；安装请用命令行 pip。\n\"\"\"\nimport sys\nimport importlib.metadata as md\nfrom pathlib import Path\n\n\ndef in_virtualenv() -> bool:\n    \"\"\"判断当前解释器是否运行在虚拟环境中。\"\"\"\n    # venv/virtualenv 会设置 sys.prefix != sys.base_prefix\n    return sys.prefix != sys.base_prefix\n\n\ndef list_packages(limit: int = 10) -> list[tuple[str, str]]:\n    \"\"\"列出已安装的第三方包（名称, 版本），最多 limit 个。\"\"\"\n    dists = sorted(\n        ((d.metadata[\"Name\"], d.version) for d in md.distributions()),\n        key=lambda x: x[0].lower(),\n    )\n    return dists[:limit]\n\n\ndef main() -> None:\n    print(f\"Python 版本      : {sys.version.split()[0]}\")\n    print(f\"解释器路径       : {sys.executable}\")\n    print(f\"sys.prefix       : {sys.prefix}\")\n    print(f\"是否虚拟环境     : {in_virtualenv()}\")\n\n    req = Path(\"requirements.txt\")\n    print(f\"requirements.txt : {'存在' if req.exists() else '不存在'}\")\n\n    print(\"\\n前若干个已安装的包：\")\n    for name, ver in list_packages(10):\n        print(f\"  - {name}=={ver}\")\n\n\nif __name__ == \"__main__\":\n    main()\n```\n\n## py.env.venv\n\n# py.env.venv：Python 虚拟环境入门\n\n> **一句话直觉**：虚拟环境（virtual environment）就是给你的每个 Python 项目一个独立的“小房间”，让不同项目依赖的包互不打架。\n\n---\n\n## 1. 为什么需要虚拟环境？\n\n假设你同时开发两个项目：\n- 项目 A 需要 `requests==2.25.0`\n- 项目 B 需要 `requests==2.31.0`\n\n如果所有包都装在系统 Python 里，后装的版本会覆盖前一个，项目 A 可能直接崩溃。虚拟环境让每个项目拥有独立的 `site-packages`（第三方包的安装目录），从根源上消除依赖冲突（dependency conflict）。\n\n```python\n# 演示：查看当前 Python 解释器所在位置\nimport sys\n\nprint(sys.executable)          # 系统 Python 的路径\nprint(sys.prefix)              # 当前环境的根目录\n# 如果 sys.prefix 指向项目下的 .venv，说明你正处在虚拟环境中\n```\n\n---\n\n## 2. venv 是什么？\n\n`venv` 是 Python 标准库（standard library）自带的模块，从 Python 3.3 起可用。它能在指定目录下生成一个独立的 Python 环境：\n- 复制一份 Python 解释器（interpreter）的入口；\n- 创建独立的 `site-packages` 目录；\n- 提供激活脚本（activation script），让 shell 的 `python` / `pip` 优先指向该环境。\n\n```python\n# 查看 venv 是否可用（标准库自带，无需安装）\nimport venv\n\nprint(venv.__file__)\n# 输出类似：/usr/lib/python3.11/venv/__init__.py\n# 只要 Python 版本 >= 3.3，venv 就天然存在\n```\n\n---\n\n## 3. 创建与激活：命令行三步走\n\n虚拟环境通过命令行创建和激活，这是每个 Python 工程师的基本功。\n\n```bash\n# 第 1 步：在项目根目录创建虚拟环境，目录名通常叫 .venv\npython -m venv .venv\n\n# 第 2 步：激活（不同平台命令不同）\n# macOS / Linux\nsource .venv/bin/activate\n# Windows (PowerShell)\n# .venv\\Scripts\\Activate.ps1\n# Windows (cmd)\n# .venv\\Scripts\\activate.bat\n\n# 第 3 步：验证并安装依赖\nwhich python        # 应指向 .venv/bin/python\npip install requests==2.25.0\n\n# 退出虚拟环境\ndeactivate\n```\n\n激活后，`python` 与 `pip` 都指向 `.venv` 内部，所有安装的包只影响本项目。\n\n---\n\n## 4. 在 Python 代码中感知虚拟环境\n\n程序运行时可以通过 `sys.prefix` 与 `sys.base_prefix` 判断自己是否在虚拟环境中。这是工具链（如 pip、poetry）常用的技巧。\n\n```python\nimport sys\n\ndef in_venv() -> bool:\n    \"\"\"判断当前解释器是否运行在虚拟环境中。\n    原理：虚拟环境中 sys.prefix != sys.base_prefix。\n    \"\"\"\n    return sys.prefix != sys.base_prefix\n\nprint(\"当前是否在 venv 中：\", in_venv())\nprint(\"当前 prefix     ：\", sys.prefix)\nprint(\"基础 prefix     ：\", sys.base_prefix)\n```\n\n---\n\n## 5. 依赖固化：requirements.txt\n\n团队协作时，需要把依赖固定下来，让其他人一键复现环境。\n\n```bash\n# 导出当前环境所有依赖及精确版本\npip freeze > requirements.txt\n\n# 在新机器上复现环境\npython -m venv .venv\nsource .venv/bin/activate\npip install -r requirements.txt\n```\n\n`requirements.txt` 通常与 `.venv` 一起被纳入版本控制策略：`.venv` 要写进 `.gitignore`，`requirements.txt` 要提交到仓库。\n\n---\n\n## 动手练习\n\n**任务**：为一个名为 `hello-venv` 的小项目创建独立环境，并验证依赖隔离。\n\n步骤：\n1. 新建目录 `hello-venv`，进入该目录。\n2. 执行 `python -m venv .venv` 创建虚拟环境。\n3. 激活它（macOS/Linux 用 `source .venv/bin/activate`）。\n4. 写入一个 `check.py`，内容使用第 4 节的 `in_venv()` 函数，运行并确认输出 `True`。\n5. 执行 `pip install requests`，再用 `pip freeze > requirements.txt`，查看 `requirements.txt` 内容。\n6. 执行 `deactivate` 退出，再运行 `python check.py`，确认输出 `False`（回到系统环境）。\n7. 把 `.venv/` 加入 `.gitignore`，把 `check.py` 和 `requirements.txt` 提交到 Git。\n\n**验收标准**：能在几秒内解释“为什么激活后 `pip list` 看到的内容不同”，并能独立为任意新项目重复这套流程。\n\n## py.env.pip\n\n# py.env.pip：Python 包管理的起点\n\n> **一句话直觉**：`pip` 是 Python 的\"应用商店\"，让你用一行命令把全世界共享的第三方库装进自己的项目——不会用它，你就只能用标准库造轮子。\n\n---\n\n## 1. 为什么需要 pip？（Why）\n\nPython 自带的标准库（standard library）已经很强，但真正的工程能力来自**生态**：`requests` 发 HTTP、`numpy` 做数值、`pandas` 分析数据、`fastapi` 写服务。这些都不是 Python 自带的，需要从 [PyPI](https://pypi.org/)（Python Package Index，Python 包索引）下载安装。\n\n`pip` 就是官方推荐的安装器（package installer），全称 **\"Pip Installs Packages\"**。它是你从\"会写 Python\"到\"能用 Python 做工程\"的第一道门槛。\n\n**核心心智模型**：\n\n```\n你  ──pip install──▶  PyPI（云端仓库）──下载──▶ 你的 Python 环境 site-packages/\n```\n\n---\n\n## 2. 检查与基础命令：pip 在哪里、能做什么\n\n### 2.1 确认 pip 是否可用\n\n```bash\npython -m pip --version\n# 输出示例：pip 24.x from .../site-packages/pip (python 3.12)\n```\n\n> **推荐永远写 `python -m pip` 而不是裸 `pip`**：这样能保证 pip 与你当前调用的 `python` 解释器绑定，避免\"装了但 import 不到\"的经典事故。\n\n### 2.2 四个高频命令\n\n| 命令 | 作用 |\n|---|---|\n| `pip install <pkg>` | 安装包 |\n| `pip uninstall <pkg>` | 卸载包 |\n| `pip list` | 列出已安装包 |\n| `pip show <pkg>` | 查看某包的版本、依赖、安装位置 |\n\n用 Python 代码验证 pip 是否在解释器里可用（本章节第一个可运行示例）：\n\n```python\nimport subprocess\nimport sys\n\n# 用当前解释器调用 pip，保证一致性\nresult = subprocess.run(\n    [sys.executable, \"-m\", \"pip\", \"--version\"],\n    capture_output=True, text=True\n)\nprint(\"returncode:\", result.returncode)\nprint(result.stdout.strip())\n```\n\n---\n\n## 3. 隔离：虚拟环境（virtual environment）\n\n### 3.1 为什么必须隔离？\n\n假设 A 项目要 `requests==2.28`，B 项目要 `requests==2.31`。如果都装进全局 Python，必然冲突。**虚拟环境**为每个项目创建一份独立的 `site-packages`，互不干扰。\n\n### 3.2 创建与激活\n\n```bash\n# 创建：在项目目录下生成 .venv 文件夹\npython -m venv .venv\n\n# 激活\n# Windows (PowerShell):  .venv\\Scripts\\Activate.ps1\n# macOS / Linux:         source .venv/bin/activate\n\n# 激活后提示符会出现 (.venv)，此时 pip install 只影响当前项目\ndeactivate   # 退出\n```\n\n> **工程惯例**：每个项目一个 `.venv`，并把 `.venv/` 写进 `.gitignore`，不要提交到 Git。\n\n---\n\n## 4. 版本控制与可复现：`requirements.txt`\n\n### 4.1 三种写法\n\n```\nrequests             # 任意版本\nrequests==2.31.0     # 精确锁定（生产环境推荐）\nrequests>=2.28,<3    # 区间约束\n```\n\n### 4.2 导出与还原\n\n```bash\npip freeze > requirements.txt          # 导出当前环境的精确版本\npip install -r requirements.txt        # 在别的机器上完整复现\n```\n\n这一步是团队协作与 CI/CD 的基石——没有它，\"我本地能跑\"就是常态。\n\n---\n\n## 5. pip 与 Python 程序的关系：在代码里查询包信息\n\npip 安装的包，最终会出现在 `sys.path` 能搜到的 `site-packages` 目录里。用 `importlib.metadata` 可以在运行时查询已安装包的版本和元数据——这是写\"自检脚本\"的常用手法。\n\n> 小结：`pip` 负责\"装\"，`venv` 负责\"隔\"，`requirements.txt` 负责\"锁\"，三者构成 Python 环境管理的三件套。\n\n```python\n\"\"\"\n演示：用 Python 代码查询当前环境里已安装的包信息。\n无需第三方依赖，标准库即可运行。\n\"\"\"\nfrom importlib import metadata\n\n# 1) 查询某个包是否已安装（以 pip 自身为例，它总是存在）\ntry:\n    dist = metadata.distribution(\"pip\")\n    print(f\"pip version: {dist.version}\")\n    print(f\"安装位置: {dist.locate_file('')}\")\nexcept metadata.PackageNotFoundError:\n    print(\"未找到 pip\")\n\n# 2) 列出前 10 个已安装的包（按字母序）\ninstalled = sorted(\n    (d.metadata[\"Name\"], d.version) for d in metadata.distributions()\n)\nprint(\"\\n已安装包（前 10 个）:\")\nfor name, version in installed[:10]:\n    print(f\"  {name}=={version}\")\n\n# 3) 检查某个常用第三方包是否可用（不 import，避免副作用）\nfor pkg in [\"requests\", \"numpy\", \"flask\"]:\n    try:\n        v = metadata.version(pkg)\n        print(f\"\\n{pkg} 已安装，版本 {v}\")\n    except metadata.PackageNotFoundError:\n        print(f\"\\n{pkg} 未安装，可执行：python -m pip install {pkg}\")\n```\n\n## py.hello.print\n\n# py.hello.print：从 `print` 理解程序与世界的第一次对话\n\n> **一句话直觉**：`print` 是程序向外部世界说出的第一句话——学会它，你就能让代码“开口”，并且开始验证你写的每一行逻辑。\n\n---\n\n## 0. 为什么第一课是 `print`？\n\n学习任何语言，第一步都不是语法本身，而是**获得反馈（feedback）**。在 Python 里，`print` 是最简单、最直接的反馈工具：它把值写到标准输出（standard output，通常就是终端/命令行窗口）。\n\n没有 `print`，你写的变量、表达式、分支和循环都像在黑屋子里运行。有了 `print`，你能观察、调试、验证，从而建立“代码 → 结果”的直觉。\n\n---\n\n## 1. 最小可用惊喜：`print` 就是“打印”\n\n`print` 是 Python 的内置函数（built-in function），你无须 `import` 就能用。\n\n```python\n# 最基本的用法：把字符串打印到屏幕\nprint(\"Hello, Python!\")\n```\n\n运行后终端会显示：\n\n```text\nHello, Python!\n```\n\n**关键结论**：`print` 把参数转换成人类可读的文本，再输出到标准输出。\n\n---\n\n## 2. `print` 可以打印“值”，不只是一句话\n\n你不需要手动把数字、布尔值、列表转成字符串——`print` 会自动做**字符串化（string conversion）**。\n\n```python\n# 打印不同类型的值：字符串、整数、浮点数、布尔值、列表\nprint(\"整句话\")\nprint(42)\nprint(3.14)\nprint(True)\nprint([1, 2, 3])\n```\n\n输出：\n\n```text\n整句话\n42\n3.14\nTrue\n[1, 2, 3]\n```\n\n**关键结论**：`print` 接受任意类型的对象，并在输出前调用其人类友好的文本表示。\n\n---\n\n## 3. 多个值、分隔符与结尾：`sep` 和 `end`\n\n`print` 可以一次打印多个值，默认用空格分隔。你还可以用 `sep`（separator，分隔符）和 `end`（结尾字符）改变行为。\n\n```python\n# 多个值：默认用空格分隔\nprint(\"姓名:\", \"小明\", \"年龄:\", 18)\n\n# 自定义分隔符：用 \" | \" 隔开\nprint(\"苹果\", \"香蕉\", \"橘子\", sep=\" | \")\n\n# end 默认是换行符 \\n；改成空字符串，下一句 print 会接在同一行\nprint(\"加载中\", end=\"\")\nprint(\"...\", end=\"\")\nprint(\"完成!\")\n```\n\n输出：\n\n```text\n姓名: 小明 年龄: 18\n苹果 | 香蕉 | 橘子\n加载中...完成!\n```\n\n**关键结论**：`sep` 控制多个参数之间的连接方式；`end` 控制这次 `print` 结束后追加什么字符。\n\n---\n\n## 4. 让输出“有结构”：f-string 格式化\n\n工程里很少只打印裸变量。更常见的是把变量嵌进一句话，用 **f-string（formatted string literal，格式化字符串字面量）**。\n\n```python\n# f-string：在字符串前加 f，用 {} 嵌入表达式\nname = \"Alice\"\nscore = 95.5\n\nprint(f\"学生 {name} 的分数是 {score}\")\nprint(f\"分数保留一位小数：{score:.1f}\")\n```\n\n输出：\n\n```text\n学生 Alice 的分数是 95.5\n分数保留一位小数：95.5\n```\n\n**关键结论**：`print` 负责输出，f-string 负责在输出前把值安全、清晰地组合成文本。\n\n---\n\n## 5. 工程级视角：`print` 不是日志（logging）\n\n`print` 适合学习和临时调试，但它有几个工程限制：\n\n- 无法方便地分级（debug/info/warning/error）；\n- 无法自动带上时间、模块、行号；\n- 无法按环境（开发/生产）过滤；\n- 大量输出时性能和管理都不如 `logging`。\n\n所以工程中常见的做法是：学习和快速验证用 `print`，正式项目用 `logging`。\n\n```python\n# 快速调试可以用 print\nx = 10\ny = 0\n\nprint(\"调试：x =\", x, \"y =\", y)\n\n# 正式项目更推荐 logging（这里只做对比，不展开）\nimport logging\nlogging.basicConfig(level=logging.INFO)\nlogging.info(\"x=%s y=%s\", x, y)\n```\n\n**关键结论**：`print` 是起点，不是终点。理解它的边界，是从“会写代码”走向“会做工程”的第一步。\n\n---\n\n## 动手练习\n\n**任务：写一个“个人名片打印器”**\n\n1. 新建一个文件 `card.py`。\n2. 定义三个变量：`name`（字符串）、`age`（整数）、`hobby`（字符串）。\n3. 用 `print` 和 f-string 输出一张三行名片，例如：\n\n```text\n====================\n姓名：小明\n年龄：18\n爱好：写代码\n====================\n```\n\n4. 再额外打印一行：把 `age` 加 1，输出“明年我 19 岁”。\n\n**验收标准**：终端输出必须包含 5 行，且姓名、年龄、爱好来自变量，而不是写死在字符串里。\n\n---\n\n## 小结\n\n- `print` 是 Python 的**内置函数**，负责把值输出到标准输出。\n- 它能自动处理多种类型，支持多参数、`sep` 和 `end`。\n- f-string 让输出更可读、更工程化。\n- `print` 适合学习和调试，正式项目应逐步过渡到 `logging`。\n\n```python\n# 一个可直接运行的完整示例：展示 print 的核心用法\n\nname = \"小明\"\nage = 18\nhobby = \"写代码\"\n\n# 1) 基本打印\nprint(\"Hello, Python!\")\n\n# 2) 多值 + 自定义分隔符\nprint(\"姓名:\", name, \"年龄:\", age, sep=\" | \")\n\n# 3) end 控制结尾，让两次 print 接在同一行\nprint(\"加载中\", end=\"\")\nprint(\"...\", end=\"\")\nprint(\"完成!\")\n\n# 4) f-string 格式化输出\nprint(f\"{name} 的爱好是 {hobby}。\")\nprint(f\"明年他 {age + 1} 岁。\")\n\n# 5) 打印一个列表和布尔值\nprint([1, 2, 3])\nprint(age > 10)\n```\n",
+  "quiz": [
+    {
+      "kp": "py.env.install",
+      "type": "single_choice",
+      "question": "在命令行中执行 `pip install requests` 时，pip 默认会从哪里获取并安装这个包？",
+      "options": [
+        "从 Python 官方标准库目录中复制",
+        "从配置的包索引（默认是 PyPI）下载对应发行包并安装",
+        "从当前工作目录中查找同名 .py 文件直接加载",
+        "从操作系统自带的软件仓库中安装"
+      ],
+      "answer": 1,
+      "explanation": "pip 是 Python 的包安装工具，默认从配置的索引（通常为 PyPI）解析并下载发行包（wheel/sdist）后安装，而不是从标准库或当前目录加载文件。",
+      "error_tag": "概念混淆",
+      "variant_group": "pip_install_basics"
+    },
+    {
+      "kp": "py.env.install",
+      "type": "single_choice",
+      "question": "某同学在全局环境里直接执行 `pip install numpy` 后，发现另一个项目因为 numpy 版本升级而运行失败。以下哪种做法最能从根源上避免这类问题？",
+      "options": [
+        "每次安装都加上 --force-reinstall 参数",
+        "把 numpy 卸载后再重新安装旧版本",
+        "为每个项目创建独立的虚拟环境，在各自环境内安装依赖",
+        "把 numpy 源码复制到项目目录里随项目一起提交"
+      ],
+      "answer": 2,
+      "explanation": "全局安装会让所有项目共享同一版本，容易产生版本冲突。为每个项目使用独立虚拟环境可隔离依赖，从根本上避免相互影响。",
+      "error_tag": "概念混淆",
+      "variant_group": "env_isolation"
+    },
+    {
+      "kp": "py.env.install",
+      "type": "multi_choice",
+      "question": "以下哪些情况会导致 `import 某第三方包` 失败？（多选）",
+      "options": [
+        "该包从未在当前使用的解释器环境中安装",
+        "安装该包时使用的 pip 属于另一个解释器环境",
+        "包已安装但名字写错（大小写或拼写错误）",
+        "该包已安装且版本满足当前 Python 版本要求"
+      ],
+      "answer": [
+        0,
+        1,
+        2
+      ],
+      "explanation": "未安装、装错环境、名字拼写错误都会导致导入失败；若已安装且版本兼容，导入会成功。",
+      "error_tag": "边界错误",
+      "variant_group": "import_failure_causes"
+    },
+    {
+      "kp": "py.env.install",
+      "type": "multi_choice",
+      "question": "关于在离线环境下安装 Python 包，以下哪些说法合理？（多选）",
+      "options": [
+        "可以事先在有网环境用 pip 下载 wheel 文件，再拷贝到离线机器安装",
+        "离线机器上的 pip 无法从 PyPI 拉取包，需要指定本地文件或目录",
+        "只要包名写对，离线环境下 pip 仍能自动联网获取",
+        "可以在有网环境构建好 wheel，然后离线安装以规避本地编译依赖"
+      ],
+      "answer": [
+        0,
+        1,
+        3
+      ],
+      "explanation": "离线时 pip 无法访问远端索引，需要提供本地 wheel/目录。预先构建 wheel 可避免目标机器缺少编译工具链。C 项与离线前提矛盾。",
+      "error_tag": "概念混淆",
+      "variant_group": "offline_install"
+    },
+    {
+      "kp": "py.env.install",
+      "type": "fill_blank",
+      "question": "在项目根目录下，若已把依赖写入 requirements.txt，可使用命令 `pip install ____ requirements.txt` 一次性安装全部依赖。",
+      "options": [],
+      "answer": [
+        "-r",
+        "--requirement",
+        "-r ",
+        "--requirement="
+      ],
+      "explanation": "pip 通过 -r/--requirement 指定需求文件，从文件中读取并安装依赖列表。",
+      "error_tag": "记忆缺失",
+      "variant_group": "requirements_file"
+    },
+    {
+      "kp": "py.env.install",
+      "type": "fill_blank",
+      "question": "Python 3 标准库自带的虚拟环境创建模块名是 ____（填写模块名，不要带 python 前缀）。",
+      "options": [],
+      "answer": [
+        "venv"
+      ],
+      "explanation": "Python 3 从 3.3 起在标准库中提供了 venv 模块用于创建虚拟环境。",
+      "error_tag": "记忆缺失",
+      "variant_group": "venv_creation"
+    },
+    {
+      "kp": "py.env.install",
+      "type": "fill_blank",
+      "question": "在虚拟环境的 bin（Windows 为 Scripts）目录下，用于激活该环境、使当前 shell 的 python 指向该环境解释器的脚本，在类 Unix 系统上通常叫 ____。",
+      "options": [],
+      "answer": [
+        "activate",
+        "activate.sh"
+      ],
+      "explanation": "虚拟环境提供 activate 脚本，source 该脚本后当前 shell 的解释器路径切换到该环境。",
+      "error_tag": "记忆缺失",
+      "variant_group": "activate_env"
+    },
+    {
+      "kp": "py.env.install",
+      "type": "code_reading",
+      "question": "阅读下面的命令序列，说明最终 `pip --version` 报告的是哪个环境的 pip，并说明原因：\n\n$ python -m venv .venv\n$ source .venv/bin/activate\n$ python -m pip install requests\n$ pip --version\n",
+      "options": [],
+      "answer": "报告的是 .venv 这个虚拟环境中的 pip。因为激活 .venv 后，shell 的 PATH 优先指向 .venv 的 bin 目录，pip 与 python 都指向该虚拟环境；且用 python -m pip 安装的 requests 也装进了该环境。",
+      "explanation": "激活虚拟环境后，PATH 被前置，pip 与 python 均解析到虚拟环境内的可执行文件，因此 pip 属于该虚拟环境，安装也落在其 site-packages。",
+      "error_tag": "边界错误",
+      "variant_group": "activate_env"
+    },
+    {
+      "kp": "py.env.install",
+      "type": "code_reading",
+      "question": "阅读下面的命令，说明 `pip install` 会把包装到哪里、为什么：\n\n$ /usr/bin/python3 -m pip install --user tabulate\n",
+      "options": [],
+      "answer": "会安装到当前用户级的 site-packages（用户目录下的 Python 用户包目录），而不是系统全局 site-packages。因为使用了 --user，pip 将包安装到用户目录，避免写入系统目录；-m pip 保证使用的是 /usr/bin/python3 对应的 pip。",
+      "explanation": "--user 将安装限定在当前用户可见的用户站点目录，配合 `python -m pip` 确保了安装目标解释器与所调用的解释器一致。",
+      "error_tag": "边界错误",
+      "variant_group": "pip_user_install"
+    },
+    {
+      "kp": "py.env.install",
+      "type": "scenario",
+      "question": "团队里一位新同事克隆了项目，直接执行 `pip install -r requirements.txt` 后运行程序，却报出某个依赖的版本不兼容错误，而他并没有改动任何代码。作为负责人，你会怎么排查与解决，并说明为什么这样做？",
+      "options": [],
+      "answer": null,
+      "explanation": "典型原因是他在全局环境中安装，且此前已存在不满足约束的旧版本，或 requirements.txt 未固定版本。应先用独立虚拟环境隔离，确认 pip 与解释器一致，再核对依赖版本约束并补全固定版本。",
+      "error_tag": "概念混淆",
+      "variant_group": "requirements_file",
+      "required_keywords": [
+        "虚拟环境",
+        "版本",
+        "requirements.txt",
+        "解释器"
+      ]
+    },
+    {
+      "kp": "py.env.install",
+      "type": "scenario",
+      "question": "CI 流水线需要离线机器上安装一个含 C 扩展的第三方包，构建机没有可用的编译工具链。你会如何准备并以何种方式安装？为什么？",
+      "options": [],
+      "answer": null,
+      "explanation": "应在有网且有编译环境处预先构建好 wheel，再拷贝到离线机器用本地 wheel 安装，从而规避目标机器缺编译工具链的问题，也保证依赖版本一致。",
+      "error_tag": "边界错误",
+      "variant_group": "offline_install",
+      "required_keywords": [
+        "wheel",
+        "离线",
+        "预构建",
+        "本地"
+      ]
+    },
+    {
+      "kp": "py.env.install",
+      "type": "single_choice",
+      "question": "关于 `python -m venv myenv` 这条命令，下列说法正确的是？",
+      "options": [
+        "它会下载并安装 myenv 这个第三方包",
+        "它会创建一个名为 myenv 的目录，其中包含一套独立的 Python 运行环境",
+        "它会把当前解释器升级到最新版本",
+        "它只能用于 Python 2，Python 3 需要使用 virtualenv"
+      ],
+      "answer": 1,
+      "explanation": "venv 是标准库模块，`python -m venv myenv` 会在 myenv 目录下创建独立的 Python 环境（含解释器链接、pip 等），与下载第三方包无关。",
+      "error_tag": "概念混淆",
+      "variant_group": "venv_creation"
+    },
+    {
+      "kp": "py.env.install",
+      "type": "single_choice",
+      "question": "你执行了 `pip install` 某个包，但运行时仍然 `ModuleNotFoundError`。检查发现 pip 属于 A 环境，而运行脚本用的是 B 环境的解释器。最直接的修复方式是？",
+      "options": [
+        "在脚本里用 try/except 包住 import",
+        "把包名重新拼写一遍再安装",
+        "用 B 环境对应的 python 执行 `python -m pip install 包名`",
+        "把该包的源码手动复制到 site-packages 之外"
+      ],
+      "answer": 2,
+      "explanation": "问题根源是安装目标和运行目标不是同一个解释器。使用 `python -m pip` 可确保 pip 属于当前解释器，从而安装到正确的环境。",
+      "error_tag": "边界错误",
+      "variant_group": "pip_target_interpreter"
+    },
+    {
+      "kp": "py.env.install",
+      "type": "single_choice",
+      "question": "在项目根目录下通常会有 `requirements.txt`，它的典型作用是？",
+      "options": [
+        "记录项目源码中所有函数的定义",
+        "声明项目所依赖的包及其版本约束，便于他人复现环境",
+        "保存 Python 解释器的编译参数",
+        "列出项目所有的测试用例名称"
+      ],
+      "answer": 1,
+      "explanation": "requirements.txt 用于声明依赖及版本，配合 `pip install -r requirements.txt` 可以复现依赖环境。",
+      "error_tag": "记忆缺失",
+      "variant_group": "requirements_file"
+    },
+    {
+      "kp": "py.env.install",
+      "type": "single_choice",
+      "question": "执行 `pip install 'requests==2.31.0'` 与 `pip install 'requests>=2.31.0'` 的主要区别是？",
+      "options": [
+        "前者精确锁定到该版本，后者允许安装不低于该版本的任意兼容版本",
+        "两者完全等价，只是书写风格不同",
+        "前者安装源码，后者安装二进制包",
+        "前者安装到全局，后者安装到虚拟环境"
+      ],
+      "answer": 0,
+      "explanation": "== 是精确版本约束，>= 是最低版本约束。二者只影响版本解析，与安装来源或环境无关。",
+      "error_tag": "概念混淆",
+      "variant_group": "version_constraint"
+    },
+    {
+      "kp": "py.env.install",
+      "type": "single_choice",
+      "question": "较新版本的 pip 在执行 `pip install` 时默认会优先使用哪种发行格式（若可用）？",
+      "options": [
+        "源码分发包 sdist（.tar.gz）",
+        "二进制轮子 wheel（.whl）",
+        "操作系统原生安装包（.deb / .msi）",
+        "压缩后的 .pyc 字节码文件"
+      ],
+      "answer": 1,
+      "explanation": "wheel 是预编译的二进制分发格式，安装时无需本地构建。pip 默认优先选择 wheel，只有在没有匹配 wheel 时才回退到 sdist。",
+      "error_tag": "记忆缺失",
+      "variant_group": "wheel_vs_sdist"
+    },
+    {
+      "kp": "py.env.install",
+      "type": "single_choice",
+      "question": "关于 `pip install --upgrade 包名`，下列说法正确的是？",
+      "options": [
+        "它只在一个新的虚拟环境中生效",
+        "它会把已安装的该包升级到满足约束的较新版本，而不是重复安装旧版本",
+        "它会卸载该包及其所有依赖",
+        "它等价于 `pip uninstall 包名`"
+      ],
+      "answer": 1,
+      "explanation": "--upgrade 会让 pip 在解析依赖时允许替换已安装版本为更新的版本，而非固定保留旧版本。",
+      "error_tag": "概念混淆",
+      "variant_group": "pip_upgrade"
+    },
+    {
+      "kp": "py.env.install",
+      "type": "multi_choice",
+      "question": "以下哪些做法有助于让一个 Python 项目的依赖环境可复现？（多选）",
+      "options": [
+        "在 requirements.txt 中记录依赖并固定版本",
+        "把项目依赖安装到全局 site-packages 而不做任何记录",
+        "使用虚拟环境隔离项目依赖",
+        "在文档中说明所用的 Python 版本"
+      ],
+      "answer": [
+        0,
+        2,
+        3
+      ],
+      "explanation": "记录并固定依赖、隔离环境、说明解释器版本都有助于复现；无记录的全局安装恰恰是环境不可复现的常见原因。",
+      "error_tag": "概念混淆",
+      "variant_group": "requirements_file"
+    },
+    {
+      "kp": "py.env.install",
+      "type": "multi_choice",
+      "question": "关于虚拟环境，下列说法正确的有？（多选）",
+      "options": [
+        "虚拟环境拥有自己独立的 site-packages，安装的包默认只影响该环境",
+        "激活虚拟环境后，命令行中的 python 通常指向该环境的解释器",
+        "虚拟环境会自动隔离操作系统级别的系统库（如 libc）",
+        "无论是否激活，只要用 `python -m pip` 都能保证装到当前解释器对应环境"
+      ],
+      "answer": [
+        0,
+        1,
+        3
+      ],
+      "explanation": "虚拟环境隔离的是 Python 层面的包与解释器，不隔离操作系统系统库，因此 C 项错误。用 `python -m pip` 可确保 pip 与解释器一致。",
+      "error_tag": "边界错误",
+      "variant_group": "env_isolation"
+    },
+    {
+      "kp": "py.env.venv",
+      "type": "single_choice",
+      "question": "关于 Python 标准库中的 venv 模块，下列说法正确的是？",
+      "options": [
+        "venv 是第三方库，必须先 pip install venv 才能使用",
+        "venv 是标准库模块，可用 python -m venv 命令创建虚拟环境",
+        "venv 只能创建 Python 3.3 以下版本的虚拟环境",
+        "venv 创建的虚拟环境必须联网才能激活"
+      ],
+      "answer": 1,
+      "explanation": "venv 自 Python 3.3 起加入标准库，无需额外安装，可用 python -m venv <目录> 创建虚拟环境。A 错在它是标准库；C 错在版本方向相反；D 激活与网络无关。",
+      "error_tag": "概念混淆",
+      "variant_group": "venv_basic"
+    },
+    {
+      "kp": "py.env.venv",
+      "type": "single_choice",
+      "question": "在项目目录下执行 python -m venv .venv 后，通常激活该虚拟环境的正确做法是？",
+      "options": [
+        "直接运行 python，会自动进入虚拟环境",
+        "在 Windows 上执行 .venv\\Scripts\\activate，在类 Unix 上执行 source .venv/bin/activate",
+        "执行 .venv/activate.py",
+        "把 .venv 目录加入 PYTHONPATH 即可，无需激活"
+      ],
+      "answer": 1,
+      "explanation": "venv 的激活脚本位于 Scripts（Windows）或 bin（类 Unix）下。修改 PYTHONPATH 不等于激活，也不会切换解释器与 pip。",
+      "error_tag": "记忆缺失",
+      "variant_group": "venv_activate"
+    },
+    {
+      "kp": "py.env.venv",
+      "type": "single_choice",
+      "question": "使用 python -m venv --upgrade env 的典型目的是？",
+      "options": [
+        "把 env 中已安装的第三方包升级到最新版",
+        "就地更新 env 环境，使其与运行该命令所用的 Python 解释器版本保持一致",
+        "把 env 环境复制到另一个目录",
+        "把 env 环境导出为 requirements.txt"
+      ],
+      "answer": 1,
+      "explanation": "--upgrade 用于升级环境本身（如跟随新的基础解释器版本），并非升级其中的第三方包（那是 pip 的职责）。",
+      "error_tag": "概念混淆",
+      "variant_group": "venv_options"
+    },
+    {
+      "kp": "py.env.venv",
+      "type": "multi_choice",
+      "question": "以下关于 venv 虚拟环境的说法，哪些是正确的？（多选）",
+      "options": [
+        "虚拟环境是一个包含独立解释器入口和 site-packages 的目录",
+        "激活虚拟环境会修改当前 shell 的 PATH，使 python/pip 指向该环境",
+        "删除虚拟环境目录即等于卸载该环境",
+        "虚拟环境创建后必须联网才能使用",
+        "虚拟环境能让不同项目使用互不冲突的依赖版本"
+      ],
+      "answer": [
+        0,
+        1,
+        2,
+        4
+      ],
+      "explanation": "venv 的本质是目录，激活通过 PATH 生效，删除目录即移除环境，核心价值是依赖隔离。使用虚拟环境完全不需要联网。",
+      "error_tag": "概念混淆",
+      "variant_group": "venv_isolation"
+    },
+    {
+      "kp": "py.env.venv",
+      "type": "multi_choice",
+      "question": "创建或使用虚拟环境时，下列哪些做法是合理的？（多选）",
+      "options": [
+        "每个项目使用独立的虚拟环境",
+        "把虚拟环境目录加入 .gitignore",
+        "依赖清单（如 requirements.txt）提交到版本库",
+        "为了避免重建，把 .venv 一起提交以便他人直接使用",
+        "升级基础 Python 后，必要时用 --upgrade 更新已有环境"
+      ],
+      "answer": [
+        0,
+        1,
+        2,
+        4
+      ],
+      "explanation": "按项目隔离环境、忽略环境目录、提交依赖清单是通行实践；提交 .venv 会因平台差异和体积带来问题，不推荐。",
+      "error_tag": "边界错误",
+      "variant_group": "venv_workflow"
+    },
+    {
+      "kp": "py.env.venv",
+      "type": "multi_choice",
+      "question": "关于虚拟环境的激活脚本与 PATH，下列描述正确的有？（多选）",
+      "options": [
+        "Windows 下激活脚本在 Scripts 目录，类 Unix 下在 bin 目录",
+        "激活脚本会把环境的可执行目录置于 PATH 前面",
+        "未激活时直接使用环境的绝对路径 python 也是可行的",
+        "激活脚本会修改项目源码",
+        "激活是使用虚拟环境的唯一途径"
+      ],
+      "answer": [
+        0,
+        1,
+        2
+      ],
+      "explanation": "激活主要靠 PATH 前置实现；直接调用 .venv/bin/python 也可使用环境，所以激活并非唯一途径。激活脚本不会改动项目源码。",
+      "error_tag": "概念混淆",
+      "variant_group": "venv_activate"
+    },
+    {
+      "kp": "py.env.venv",
+      "type": "multi_choice",
+      "question": "下列哪些选项或行为有助于保持虚拟环境的隔离性？（多选）",
+      "options": [
+        "创建时不使用 --system-site-packages",
+        "在激活状态下用该环境的 pip 安装依赖",
+        "用全局 pip 安装项目依赖",
+        "在依赖清单中明确记录所需包与版本",
+        "多处项目共用同一个虚拟环境目录"
+      ],
+      "answer": [
+        0,
+        1,
+        3
+      ],
+      "explanation": "默认隔离（不加 --system-site-packages）、在环境内安装、用清单声明依赖都能维持隔离与可复现。全局 pip 安装和多项目共用环境都会破坏隔离。",
+      "error_tag": "边界错误",
+      "variant_group": "venv_isolation"
+    },
+    {
+      "kp": "py.env.venv",
+      "type": "fill_blank",
+      "question": "在项目根目录创建名为 .venv 的虚拟环境，应执行的命令是：python -m ____ .venv（填写模块名）。",
+      "options": [],
+      "answer": [
+        "venv"
+      ],
+      "explanation": "标准做法是 python -m venv .venv，venv 是标准库中负责创建虚拟环境的模块。",
+      "error_tag": "记忆缺失",
+      "variant_group": "venv_basic"
+    },
+    {
+      "kp": "py.env.venv",
+      "type": "fill_blank",
+      "question": "在类 Unix 系统上激活位于 .venv 的虚拟环境，应执行的命令是：source .venv/____/activate（填写目录名）。",
+      "options": [],
+      "answer": [
+        "bin",
+        "bin/"
+      ],
+      "explanation": "类 Unix 下可执行文件与激活脚本位于 bin 目录；Windows 下则位于 Scripts 目录。",
+      "error_tag": "记忆缺失",
+      "variant_group": "venv_activate"
+    },
+    {
+      "kp": "py.env.venv",
+      "type": "fill_blank",
+      "question": "虚拟环境目录中记录基础解释器路径与版本等创建信息的配置文件名为 ____.cfg（填写文件名主体）。",
+      "options": [],
+      "answer": [
+        "pyvenv",
+        "pyvenv.cfg"
+      ],
+      "explanation": "该文件是 pyvenv.cfg，描述环境创建时所用的解释器信息，不是依赖清单。",
+      "error_tag": "记忆缺失",
+      "variant_group": "venv_structure"
+    },
+    {
+      "kp": "py.env.venv",
+      "type": "code_reading",
+      "question": "阅读以下终端会话，回答问题：\n$ python -m venv env\n$ python -c \"import sys; print(sys.prefix)\"\n假设当前 shell 未执行任何激活命令，输出会指向全局解释器前缀还是 env 环境前缀？为什么？",
+      "options": [],
+      "answer": "会指向全局解释器前缀。因为创建虚拟环境不会自动激活；未激活时当前 shell 中的 python 仍解析为全局解释器，sys.prefix 反映的是该全局环境。若希望指向 env，需要先激活（或在类 Unix 下直接执行 env/bin/python）。",
+      "explanation": "考察点是「创建」与「激活」是两步且相互独立，创建后不激活不改变当前 shell 的解释器解析。",
+      "error_tag": "边界错误",
+      "variant_group": "venv_activate"
+    },
+    {
+      "kp": "py.env.venv",
+      "type": "code_reading",
+      "question": "阅读以下两个命令并说明差异：\nA: python -m venv env\nB: python -m venv --system-site-packages env\n若随后在各自环境（已激活）中执行 import 某全局已安装的包，A 与 B 的结果会有什么不同？",
+      "options": [],
+      "answer": "A 创建的默认环境是隔离的，看不到全局 site-packages 中已安装的包，import 该包会失败（除非该环境内也装了）。B 使用 --system-site-packages，环境可以访问全局 site-packages，因此能 import 成功。",
+      "explanation": "考察隔离性开关。默认隔离；--system-site-packages 会放开对全局包的可见性，但这也可能引入版本不确定性。",
+      "error_tag": "概念混淆",
+      "variant_group": "venv_isolation"
+    },
+    {
+      "kp": "py.env.venv",
+      "type": "single_choice",
+      "question": "创建虚拟环境时使用 --system-site-packages 选项的含义是？",
+      "options": [
+        "禁止虚拟环境访问全局安装的包",
+        "让虚拟环境可以使用全局 site-packages 中已安装的包",
+        "把虚拟环境中的包安装到全局 site-packages",
+        "只在系统 Python 版本上创建环境"
+      ],
+      "answer": 1,
+      "explanation": "该选项使新环境继承全局 site-packages 的可见性。默认情况下虚拟环境是隔离的，不会看到全局包。",
+      "error_tag": "概念混淆",
+      "variant_group": "venv_isolation"
+    },
+    {
+      "kp": "py.env.venv",
+      "type": "scenario",
+      "question": "场景：新同事克隆了你的项目仓库，仓库里只有源码和 requirements.txt，没有 .venv。他直接运行 python app.py 后报 ModuleNotFoundError。请说明他应该如何正确搭建并运行环境，以及为什么直接运行会失败。",
+      "options": [],
+      "answer": null,
+      "explanation": "正确流程：用 python -m venv 创建环境 → 激活 → 用该环境的 pip 依据 requirements.txt 安装依赖 → 再运行程序。直接运行失败是因为依赖未被安装到当前全局解释器，虚拟环境尚未创建/激活，体现了依赖隔离的必要性。",
+      "error_tag": "边界错误",
+      "variant_group": "venv_workflow",
+      "required_keywords": [
+        "创建虚拟环境",
+        "激活",
+        "pip install",
+        "requirements.txt",
+        "隔离"
+      ]
+    },
+    {
+      "kp": "py.env.venv",
+      "type": "scenario",
+      "question": "场景：你在全局环境里曾用 pip install 过某个库的旧版本，现在项目需要该库的新版本。同事建议「哪个项目需要就全局升级一下就行」。请评价该建议，并给出基于虚拟环境的更稳妥方案。",
+      "options": [],
+      "answer": null,
+      "explanation": "全局升级会影响其他依赖旧版本的项目，可能造成版本冲突，是脆弱做法。更稳妥的是为该项目创建独立虚拟环境，在其中安装所需的新版本，并用 requirements.txt 固定依赖，从而实现项目间的依赖隔离。",
+      "error_tag": "概念混淆",
+      "variant_group": "venv_isolation",
+      "required_keywords": [
+        "虚拟环境",
+        "隔离",
+        "版本冲突",
+        "requirements.txt",
+        "全局"
+      ]
+    },
+    {
+      "kp": "py.env.venv",
+      "type": "single_choice",
+      "question": "下列关于虚拟环境隔离性的描述，哪一项是正确的？",
+      "options": [
+        "虚拟环境只隔离 pip，不隔离已安装的第三方包",
+        "在虚拟环境中 pip install 的包默认只安装到该环境，不影响全局",
+        "激活虚拟环境后，python 命令仍指向全局解释器",
+        "虚拟环境之间共享 site-packages 目录"
+      ],
+      "answer": 1,
+      "explanation": "虚拟环境的核心价值是依赖隔离：其 site-packages 独立，pip 安装落在环境内。激活后 python/pip 都指向该环境。",
+      "error_tag": "概念混淆",
+      "variant_group": "venv_isolation"
+    },
+    {
+      "kp": "py.env.venv",
+      "type": "single_choice",
+      "question": "删除虚拟环境最推荐的方式是？",
+      "options": [
+        "执行 pip uninstall venv",
+        "执行 python -m venv --delete <目录>",
+        "直接删除虚拟环境所在的整个目录",
+        "运行 deactivate 后环境即被删除"
+      ],
+      "answer": 2,
+      "explanation": "虚拟环境本质上是一个自包含目录，删除目录即可移除环境。deactivate 只是退出当前会话的激活状态，不删除环境。venv 没有 --delete 选项。",
+      "error_tag": "记忆缺失",
+      "variant_group": "venv_remove"
+    },
+    {
+      "kp": "py.env.venv",
+      "type": "single_choice",
+      "question": "关于虚拟环境目录中的 pyvenv.cfg 文件，说法正确的是？",
+      "options": [
+        "它是激活虚拟环境必须执行的脚本",
+        "它记录了该环境的基础解释器路径、版本等信息",
+        "它列出了环境内已安装的所有第三方包及其版本",
+        "它是 Python 源码文件，可被 import"
+      ],
+      "answer": 1,
+      "explanation": "pyvenv.cfg 描述环境的创建信息（如 home、version 等）。它不是可执行脚本，也不是依赖清单；依赖清单由 pip freeze 生成。",
+      "error_tag": "概念混淆",
+      "variant_group": "venv_structure"
+    },
+    {
+      "kp": "py.env.venv",
+      "type": "single_choice",
+      "question": "执行 python -m venv env 之后立即在未激活的终端里运行 pip install requests，最可能的后果是？",
+      "options": [
+        "requests 被安装进 env 虚拟环境",
+        "requests 被安装进全局解释器环境，因为未激活虚拟环境",
+        "命令会报错，提示必须先激活",
+        "pip 会自动激活 env 后再安装"
+      ],
+      "answer": 1,
+      "explanation": "创建虚拟环境不会自动激活。未激活时终端里的 pip 仍指向全局解释器，因此包会装到全局环境。",
+      "error_tag": "边界错误",
+      "variant_group": "venv_activate"
+    },
+    {
+      "kp": "py.env.venv",
+      "type": "single_choice",
+      "question": "下列关于 venv 与 conda 环境的对比，哪一项更准确？",
+      "options": [
+        "venv 可以管理非 Python 的系统级依赖，conda 不能",
+        "venv 面向 Python 包依赖隔离，conda 还能管理非 Python 的二进制依赖",
+        "两者本质相同，conda 只是 venv 的图形界面",
+        "venv 创建的环境不能被 pip 使用"
+      ],
+      "answer": 1,
+      "explanation": "venv 只隔离 Python 层面的包；conda 是跨语言的包与环境管理器，可管理如编译器、本地库等非 Python 依赖。",
+      "error_tag": "概念混淆",
+      "variant_group": "venv_vs_others"
+    },
+    {
+      "kp": "py.env.venv",
+      "type": "single_choice",
+      "question": "在虚拟环境已激活的终端中执行 deactivate，会发生什么？",
+      "options": [
+        "虚拟环境被删除",
+        "退出当前虚拟环境，终端恢复到激活前的解释器环境",
+        "卸载环境中所有已安装的包",
+        "重新创建虚拟环境"
+      ],
+      "answer": 1,
+      "explanation": "deactivate 只是退出激活状态，恢复 PATH 及相关环境变量，不会删除环境或卸载包。",
+      "error_tag": "概念混淆",
+      "variant_group": "venv_activate"
+    },
+    {
+      "kp": "py.env.venv",
+      "type": "single_choice",
+      "question": "团队要把虚拟环境对应的依赖信息提交到版本库以便他人复现，推荐做法是？",
+      "options": [
+        "把整个 .venv 目录提交进 Git",
+        "提交用 pip freeze 导出的 requirements.txt，并在 .gitignore 中忽略 .venv",
+        "只提交 pyvenv.cfg",
+        "提交虚拟环境中的 python 可执行文件"
+      ],
+      "answer": 1,
+      "explanation": "虚拟环境目录大且与平台相关，不应入库；依赖应通过 requirements.txt 等清单文件表达，他人可据此重建环境。",
+      "error_tag": "边界错误",
+      "variant_group": "venv_workflow"
+    },
+    {
+      "kp": "py.env.pip",
+      "type": "single_choice",
+      "question": "使用 pip 安装一个包时，以下哪条命令能把包安装到当前正在使用的 Python 环境中？",
+      "options": [
+        "python -m pip install 包名",
+        "python install pip 包名",
+        "pip install python 包名",
+        "install pip 包名"
+      ],
+      "answer": 0,
+      "explanation": "推荐使用 `python -m pip install 包名`，它会明确使用当前 python 解释器对应的 pip，避免多环境混乱。其他写法把模块名和参数顺序搞错，不是合法命令。",
+      "error_tag": "概念混淆",
+      "variant_group": "pip基本用法"
+    },
+    {
+      "kp": "py.env.pip",
+      "type": "single_choice",
+      "question": "在命令行中执行 `pip install requests` 时，pip 默认从哪里下载包？",
+      "options": [
+        "从本地 Python 安装目录中查找",
+        "从 Python 官方包索引 PyPI 下载",
+        "从 GitHub 仓库克隆源码编译",
+        "从操作系统自带的软件源安装"
+      ],
+      "answer": 1,
+      "explanation": "pip 默认从 PyPI（Python Package Index）下载包及其依赖。本地目录、GitHub、系统软件源都不是默认来源。",
+      "error_tag": "记忆缺失",
+      "variant_group": "pip下载来源"
+    },
+    {
+      "kp": "py.env.pip",
+      "type": "single_choice",
+      "question": "关于 `pip show 包名` 的输出，通常不包含以下哪一项？",
+      "options": [
+        "包的版本号",
+        "包的作者或主页信息",
+        "包的依赖列表",
+        "该包在 PyPI 上的累计下载量"
+      ],
+      "answer": 3,
+      "explanation": "`pip show` 会显示名称、版本、摘要、作者、主页、依赖等元数据，但不包含 PyPI 上的下载统计信息。",
+      "error_tag": "记忆缺失",
+      "variant_group": "pip查看状态"
+    },
+    {
+      "kp": "py.env.pip",
+      "type": "multi_choice",
+      "question": "以下哪些做法有助于避免不同项目之间依赖版本冲突？（多选）",
+      "options": [
+        "为每个项目创建独立的虚拟环境",
+        "用 requirements.txt 记录并固定依赖版本",
+        "把所有包都安装到系统全局环境",
+        "在项目中使用带版本约束的依赖声明"
+      ],
+      "answer": [
+        0,
+        1,
+        3
+      ],
+      "explanation": "虚拟环境隔离、固定版本记录、版本约束声明都能降低冲突。把包统统装进系统全局环境恰恰是冲突的主要来源。",
+      "error_tag": "概念混淆",
+      "variant_group": "依赖隔离"
+    },
+    {
+      "kp": "py.env.pip",
+      "type": "multi_choice",
+      "question": "关于 pip 安装包时可能出现的「包已存在」提示，以下处理方式合理的是？（多选）",
+      "options": [
+        "用 `pip install --upgrade 包名` 升级到较新版本",
+        "用 `pip install --force-reinstall 包名` 强制重新安装",
+        "直接忽略提示，因为已安装的版本一定满足需求",
+        "用 `pip show 包名` 先确认当前已安装的版本"
+      ],
+      "answer": [
+        0,
+        1,
+        3
+      ],
+      "explanation": "升级、强制重装、先确认版本都是合理做法。直接忽略提示并不安全，因为已安装版本可能不满足当前项目的版本要求。",
+      "error_tag": "边界错误",
+      "variant_group": "pip安装冲突"
+    },
+    {
+      "kp": "py.env.pip",
+      "type": "multi_choice",
+      "question": "以下哪些是 pip 的合法子命令？（多选）",
+      "options": [
+        "install",
+        "uninstall",
+        "list",
+        "compile"
+      ],
+      "answer": [
+        0,
+        1,
+        2
+      ],
+      "explanation": "`install`、`uninstall`、`list` 都是 pip 的子命令；`compile` 不是 pip 的子命令（Python 有 compileall 模块用于编译字节码，但那是另一回事）。",
+      "error_tag": "记忆缺失",
+      "variant_group": "pip子命令"
+    },
+    {
+      "kp": "py.env.pip",
+      "type": "multi_choice",
+      "question": "关于 `pip install --no-deps 包名`，下列说法正确的是？（多选）",
+      "options": [
+        "它只安装指定的包，不自动安装其依赖",
+        "使用后可能导致运行时缺少依赖而报错",
+        "它会自动把所有依赖降级到最低版本",
+        "它可用于只想单独获取某个包文件的场景"
+      ],
+      "answer": [
+        0,
+        1,
+        3
+      ],
+      "explanation": "`--no-deps` 就是不安装依赖，因此可能造成运行时缺依赖，也可用于只拿单个包。它并不做任何降级操作。",
+      "error_tag": "概念混淆",
+      "variant_group": "pip安装选项"
+    },
+    {
+      "kp": "py.env.pip",
+      "type": "fill_blank",
+      "question": "要查看当前环境中已安装的某个包的详细信息（版本、依赖等），应使用命令 `pip ______ 包名`。请填写缺失的子命令。",
+      "options": [],
+      "answer": [
+        "show"
+      ],
+      "explanation": "`pip show 包名` 用于显示已安装包的元数据。`list` 只列出名称和版本，信息不如 show 详细。",
+      "error_tag": "记忆缺失",
+      "variant_group": "pip查看状态"
+    },
+    {
+      "kp": "py.env.pip",
+      "type": "fill_blank",
+      "question": "要从一个需求文件批量安装依赖，可使用命令 `pip install ____ requirements.txt`。请填写缺少的选项/参数。",
+      "options": [],
+      "answer": [
+        "-r",
+        "--requirement",
+        "-r ",
+        " --requirement"
+      ],
+      "explanation": "`-r`（或长写 `--requirement`）用于指定需求文件，pip 会读取其中列出的包并安装。",
+      "error_tag": "记忆缺失",
+      "variant_group": "依赖记录"
+    },
+    {
+      "kp": "py.env.pip",
+      "type": "code_reading",
+      "question": "阅读以下命令：\n\n```\npip install requests==2.31.0\n```\n\n与直接写 `pip install requests` 相比，这条命令的主要区别是什么？请说明其作用。",
+      "options": [],
+      "answer": "该命令通过 `==` 指定了精确版本号，pip 会安装 requests 的 2.31.0 版本，而不是默认可用的最新版本。这有助于固定依赖版本、保证环境可复现。",
+      "explanation": "在需求规格中使用 `==` 表示精确版本匹配。直接安装不带版本约束时 pip 通常选择满足条件的最新版本，可能随发布时间变化。",
+      "error_tag": "概念混淆",
+      "variant_group": "版本约束"
+    },
+    {
+      "kp": "py.env.pip",
+      "type": "code_reading",
+      "question": "阅读以下依赖声明：\n\n```\nrequests>=2.28,<3.0\n```\n\n请说明 pip 在安装时会选择什么样的版本，以及这样写的目的。",
+      "options": [],
+      "answer": "pip 会选择版本号大于等于 2.28 且小于 3.0 的 requests 最新可用版本。这样写既保证获得包含所需修复的较新版本，又避免升级到可能存在不兼容变更的 3.0 及更高主版本。",
+      "explanation": "`>=` 和 `<` 组合形成版本区间，允许一定灵活性的同时防止跨主版本升级带来的破坏性变更。",
+      "error_tag": "概念混淆",
+      "variant_group": "版本约束"
+    },
+    {
+      "kp": "py.env.pip",
+      "type": "scenario",
+      "question": "团队中新同事拉取了项目代码，在本地用 `pip install -r requirements.txt` 安装依赖，但运行程序时仍报某个第三方库缺失。已知该库在 requirements.txt 中未列出但代码里确实 import 了它。请分析最可能的原因，并给出修复建议。",
+      "options": [],
+      "answer": null,
+      "explanation": "最常见原因是 requirements.txt 是从旧环境导出、遗漏了后来新增的依赖，或开发者手动维护时忘记添加。应在新环境中补全依赖并用 `pip freeze` 重新导出更新后的 requirements.txt。",
+      "error_tag": "边界错误",
+      "variant_group": "依赖记录",
+      "required_keywords": [
+        "requirements.txt",
+        "依赖",
+        "遗漏",
+        "freeze",
+        "导出",
+        "更新"
+      ]
+    },
+    {
+      "kp": "py.env.pip",
+      "type": "single_choice",
+      "question": "关于 `pip install` 与 `pip download` 的区别，下列说法正确的是？",
+      "options": [
+        "两者完全相同，只是名称不同",
+        "`pip install` 下载并安装，`pip download` 只下载不安装",
+        "`pip download` 下载并安装，`pip install` 只下载",
+        "`pip install` 只能装标准库，`pip download` 只能装第三方库"
+      ],
+      "answer": 1,
+      "explanation": "`pip install` 会下载并安装包；`pip download` 只把包文件下载到本地而不安装，常用于离线部署。两者都不限于标准库或第三方库。",
+      "error_tag": "概念混淆",
+      "variant_group": "pip子命令"
+    },
+    {
+      "kp": "py.env.pip",
+      "type": "scenario",
+      "question": "你在共享服务器上没有管理员权限，直接执行 `pip install 某包` 时报权限错误。你希望只为自己安装这个包，不影响其他用户。请说明应该采用的做法及理由。",
+      "options": [],
+      "answer": null,
+      "explanation": "应使用 `pip install --user 包名`，它把包安装到当前用户的主目录站点包目录，无需管理员权限，也不会改动系统全局环境，因此不影响其他用户。",
+      "error_tag": "边界错误",
+      "variant_group": "pip安装位置",
+      "required_keywords": [
+        "--user",
+        "用户目录",
+        "权限",
+        "隔离",
+        "全局环境"
+      ]
+    },
+    {
+      "kp": "py.env.pip",
+      "type": "single_choice",
+      "question": "执行 `pip list` 命令的作用是？",
+      "options": [
+        "列出当前环境中已安装的包及其版本",
+        "列出 PyPI 上所有可安装的包",
+        "列出 pip 支持的子命令",
+        "列出包的依赖关系树"
+      ],
+      "answer": 0,
+      "explanation": "`pip list` 显示当前环境中已安装的包和版本。查看依赖树应使用 `pip show` 或专门工具；查看 pip 子命令用 `pip help`。",
+      "error_tag": "记忆缺失",
+      "variant_group": "pip查看状态"
+    },
+    {
+      "kp": "py.env.pip",
+      "type": "single_choice",
+      "question": "要把已安装的某个包升级到最新版本，正确的命令是？",
+      "options": [
+        "pip update 包名",
+        "pip upgrade 包名",
+        "pip install --upgrade 包名",
+        "pip install --latest 包名"
+      ],
+      "answer": 2,
+      "explanation": "pip 没有独立的 `update` 或 `upgrade` 子命令，升级包要使用 `pip install --upgrade 包名`（可简写 `-U`）。`--latest` 也不是有效选项。",
+      "error_tag": "概念混淆",
+      "variant_group": "pip升级包"
+    },
+    {
+      "kp": "py.env.pip",
+      "type": "single_choice",
+      "question": "以下哪条命令用于卸载已安装的包？",
+      "options": [
+        "pip delete 包名",
+        "pip remove 包名",
+        "pip uninstall 包名",
+        "pip erase 包名"
+      ],
+      "answer": 2,
+      "explanation": "pip 卸载包使用 `pip uninstall 包名`。`delete`、`remove`、`erase` 都不是 pip 的子命令。",
+      "error_tag": "记忆缺失",
+      "variant_group": "pip卸载包"
+    },
+    {
+      "kp": "py.env.pip",
+      "type": "single_choice",
+      "question": "关于 `pip install --user 包名` 的说法，正确的是？",
+      "options": [
+        "把包安装到当前用户的主目录下，而非系统级目录",
+        "把包安装为所有用户都可用的系统级包",
+        "以 root 权限执行安装",
+        "把包安装到当前工作目录"
+      ],
+      "answer": 0,
+      "explanation": "`--user` 表示安装到用户级目录（如用户主目录下的站点包目录），无需管理员权限，也不会影响系统级环境。",
+      "error_tag": "概念混淆",
+      "variant_group": "pip安装位置"
+    },
+    {
+      "kp": "py.env.pip",
+      "type": "single_choice",
+      "question": "在一个项目目录下执行 `pip freeze > requirements.txt`，其作用是？",
+      "options": [
+        "把当前环境已安装包及版本写入 requirements.txt",
+        "把 requirements.txt 中的包全部安装一遍",
+        "锁定项目源代码的版本",
+        "冻结 pip 使其无法再安装新包"
+      ],
+      "answer": 0,
+      "explanation": "`pip freeze` 输出当前环境中已安装包及其精确版本，重定向到 requirements.txt 常用于记录依赖以便后续复现环境。反向操作是 `pip install -r requirements.txt`。",
+      "error_tag": "概念混淆",
+      "variant_group": "依赖记录"
+    },
+    {
+      "kp": "py.env.pip",
+      "type": "single_choice",
+      "question": "执行 `pip install -r requirements.txt` 的含义是？",
+      "options": [
+        "把当前环境所有包导出到 requirements.txt",
+        "按照 requirements.txt 中列出的依赖进行安装",
+        "只安装 requirements.txt 中缺少的标准库",
+        "删除 requirements.txt 中列出的包"
+      ],
+      "answer": 1,
+      "explanation": "`-r` 表示从给定的需求文件读取依赖列表并安装。导出用 `pip freeze`，删除用 `pip uninstall`。",
+      "error_tag": "概念混淆",
+      "variant_group": "依赖记录"
+    },
+    {
+      "kp": "py.env.pip",
+      "type": "single_choice",
+      "question": "当 pip 下载缓慢或无法访问默认源时，常采用的解决办法是？",
+      "options": [
+        "用 `pip install --index-url <镜像地址> 包名` 指定镜像源",
+        "用 `pip install --no-deps 包名` 跳过所有依赖",
+        "用 `pip install --force-reinstall 包名` 强制重装",
+        "用 `pip install --ignore-installed 包名` 忽略已装包"
+      ],
+      "answer": 0,
+      "explanation": "更换源应通过 `--index-url`（或 `-i`）指定镜像地址。`--no-deps` 只跳过依赖安装，`--force-reinstall`、`--ignore-installed` 解决的是重装/覆盖问题，都不能解决访问源的问题。",
+      "error_tag": "边界错误",
+      "variant_group": "pip源配置"
+    },
+    {
+      "kp": "py.hello.print",
+      "type": "single_choice",
+      "question": "print 函数的作用是：",
+      "options": [
+        "把数据保存到文件",
+        "把数据输出到控制台（标准输出）",
+        "从用户读取输入",
+        "计算表达式的值"
+      ],
+      "answer": 1,
+      "explanation": "print 用于把对象转换成文本显示到标准输出，不负责读取输入（那是 input 的职责），也不负责持久化存储。",
+      "error_tag": "概念混淆",
+      "variant_group": "print基本作用"
+    },
+    {
+      "kp": "py.hello.print",
+      "type": "single_choice",
+      "question": "执行 print(\"Hello\", \"World\") 后，屏幕上的输出是：",
+      "options": [
+        "HelloWorld",
+        "Hello World",
+        "Hello, World",
+        "Hello\\nWorld"
+      ],
+      "answer": 1,
+      "explanation": "print 在多个参数之间默认插入一个空格作为分隔符，因此是 Hello World。",
+      "error_tag": "概念混淆",
+      "variant_group": "print多参数分隔"
+    },
+    {
+      "kp": "py.hello.print",
+      "type": "multi_choice",
+      "question": "以下哪些 print 调用会在输出末尾添加换行以外的字符？",
+      "options": [
+        "print(\"a\", end=\"\")",
+        "print(\"a\", end=\"\\n\")",
+        "print(\"a\", end=\"--\")",
+        "print(\"a\")"
+      ],
+      "answer": [
+        0,
+        2
+      ],
+      "explanation": "end 参数决定末尾字符。end=\"\" 不换行，end=\"--\" 添加 --；end=\"\\n\" 和不传 end 都是默认换行，与题意（非换行字符）不符。",
+      "error_tag": "参数理解错误",
+      "variant_group": "print的end参数"
+    },
+    {
+      "kp": "py.hello.print",
+      "type": "multi_choice",
+      "question": "阅读代码：\nprint(\"a\", \"b\", \"c\", sep=\"*\")\nprint(\"end\")\n关于输出，正确的有？",
+      "options": [
+        "第一行输出 a*b*c",
+        "第一行输出 a b c",
+        "第二行输出 end",
+        "整体输出只有一行"
+      ],
+      "answer": [
+        0,
+        2
+      ],
+      "explanation": "sep=\"*\" 使第一行成为 a*b*c 并以换行结束，第二行独立输出 end，所以有两行。",
+      "error_tag": "参数理解错误",
+      "variant_group": "print的sep参数"
+    },
+    {
+      "kp": "py.hello.print",
+      "type": "fill_blank",
+      "question": "要让 print(\"Hello\") 输出后不换行，应把参数写作 print(\"Hello\", ____=\"\")。请填写下划线处的参数名。",
+      "options": [],
+      "answer": [
+        "end",
+        "END"
+      ],
+      "explanation": "控制输出结尾字符的参数名是 end，设为空字符串即可不换行。",
+      "error_tag": "记忆缺失",
+      "variant_group": "print的end参数"
+    },
+    {
+      "kp": "py.hello.print",
+      "type": "fill_blank",
+      "question": "print(\"a\", \"b\", \"c\", sep=____) 会输出 a-b-c。请填写 sep 的取值（不含引号）。",
+      "options": [],
+      "answer": [
+        "\"-\"",
+        "'-'",
+        "-"
+      ],
+      "explanation": "sep 的值是字符串，写成 \"-\" 或 '-'，输出时用短横线连接各参数。",
+      "error_tag": "参数理解错误",
+      "variant_group": "print的sep参数"
+    },
+    {
+      "kp": "py.hello.print",
+      "type": "fill_blank",
+      "question": "阅读代码后填空：\nprint(\"A\", \"B\")\n该语句在屏幕上显示的内容是 ____。",
+      "options": [],
+      "answer": [
+        "A B",
+        "A B\\n（即A空格B）"
+      ],
+      "explanation": "多参数默认以空格分隔，故显示 A B。",
+      "error_tag": "概念混淆",
+      "variant_group": "print多参数分隔"
+    },
+    {
+      "kp": "py.hello.print",
+      "type": "code_reading",
+      "question": "阅读代码，写出屏幕上的完整输出：\nprint(\"1\", end=\"\")\nprint(\"2\", end=\"\")\nprint(\"3\")",
+      "options": [],
+      "answer": "123",
+      "explanation": "前两次调用 end=\"\" 不换行，第三次默认换行；因此三个数字连成一行 123。",
+      "error_tag": "参数理解错误",
+      "variant_group": "print的end参数"
+    },
+    {
+      "kp": "py.hello.print",
+      "type": "code_reading",
+      "question": "阅读代码，写出屏幕上的完整输出：\nprint(\"py\", \"is\", \"fun\", sep=\"-\")",
+      "options": [],
+      "answer": "py-is-fun",
+      "explanation": "sep=\"-\" 将三个参数用短横线连接，输出 py-is-fun。",
+      "error_tag": "参数理解错误",
+      "variant_group": "print的sep参数"
+    },
+    {
+      "kp": "py.hello.print",
+      "type": "scenario",
+      "question": "工程场景：你在编写一段进度提示代码，需要用一个循环把当前进度百分比依次打印在**同一行**（每次更新覆盖不了光标，但要求不产生换行、数字之间用空格分隔），以便日志看起来紧凑。请问在使用 print 时应如何编写？请说明用到了哪些参数及其作用。",
+      "options": [],
+      "answer": null,
+      "explanation": "关键在于把 print 的 end 参数设为空字符串（或不换行的字符），从而不自动换行；若还需控制多参数间分隔，可用 sep 指定为空格。",
+      "error_tag": "概念混淆",
+      "variant_group": "print的end参数",
+      "required_keywords": [
+        "end",
+        "sep",
+        "空格",
+        "不换行"
+      ]
+    },
+    {
+      "kp": "py.hello.print",
+      "type": "scenario",
+      "question": "工程场景：某同事写了一段日志代码，希望每个字段用竖线 \"|\" 分隔并以换行结尾，但他写成了 print(a, b, sep=\"|\") 后发现分隔符没生效，输出仍是空格分隔。请分析最可能的原因，并给出正确写法。",
+      "options": [],
+      "answer": null,
+      "explanation": "最常见原因是 sep 参数名拼写错误、把分隔符写在字符串里而没有用 sep 关键字，或误以为默认就已生效；正确写法是 print(a, b, sep=\"|\")，确保关键字参数名和值都正确。",
+      "error_tag": "参数理解错误",
+      "variant_group": "print的sep参数",
+      "required_keywords": [
+        "sep",
+        "分隔",
+        "\"|\"",
+        "参数"
+      ]
+    },
+    {
+      "kp": "py.hello.print",
+      "type": "scenario",
+      "question": "工程场景：你需要输出一行由多个字符串拼接的结果，字符串之间不能有空格，例如把 \"a\"、\"b\"、\"c\" 输出为 abc。有同事建议用 print(\"a\", \"b\", \"c\")，但结果不对。请问应该怎样修改 print 调用（不改变参数个数）？并解释原理。",
+      "options": [],
+      "answer": null,
+      "explanation": "把 sep 设为空字符串 sep=\"\"，即可去掉参数之间默认的空格分隔，得到 abc。",
+      "error_tag": "参数理解错误",
+      "variant_group": "print的sep参数",
+      "required_keywords": [
+        "sep",
+        "空字符串",
+        "分隔符"
+      ]
+    },
+    {
+      "kp": "py.hello.print",
+      "type": "single_choice",
+      "question": "执行 print(\"a\", \"b\", sep=\"-\") 的输出是：",
+      "options": [
+        "a-b",
+        "a b",
+        "a,b",
+        "ab"
+      ],
+      "answer": 0,
+      "explanation": "sep 参数用于指定多个参数之间的分隔字符串，sep=\"-\" 时用短横线连接。",
+      "error_tag": "参数理解错误",
+      "variant_group": "print的sep参数"
+    },
+    {
+      "kp": "py.hello.print",
+      "type": "single_choice",
+      "question": "阅读代码：\nprint(\"a\")\nprint(\"b\")\n屏幕上的输出是：",
+      "options": [
+        "a b",
+        "ab",
+        "a\\nb\\n（即 a 和 b 各占一行）",
+        "a\\nb（同一行显示）"
+      ],
+      "answer": 2,
+      "explanation": "print 默认以换行结尾（end=\"\\n\"），因此每次调用都会换行，a 和 b 各占一行。",
+      "error_tag": "概念混淆",
+      "variant_group": "print默认换行"
+    },
+    {
+      "kp": "py.hello.print",
+      "type": "single_choice",
+      "question": "执行以下代码后，输出是什么？\nprint(\"a\", end=\"\")\nprint(\"b\")",
+      "options": [
+        "a\nb",
+        "ab",
+        "a b",
+        "a\\nb\\n"
+      ],
+      "answer": 1,
+      "explanation": "第一个 print 的 end 被设为空字符串，因此不换行；第二个 print 接着输出 b，最终显示 ab。",
+      "error_tag": "参数理解错误",
+      "variant_group": "print的end参数"
+    },
+    {
+      "kp": "py.hello.print",
+      "type": "single_choice",
+      "question": "下面哪段代码能在一行上输出 1 2 3（数字之间用空格分隔）？",
+      "options": [
+        "print(1, 2, 3)",
+        "print(\"1\"+\"2\"+\"3\")",
+        "print(1 2 3)",
+        "print(1; 2; 3)"
+      ],
+      "answer": 0,
+      "explanation": "print 接受多个参数并以空格分隔。选项 B 只输出 123，选项 C、D 是语法错误。",
+      "error_tag": "概念混淆",
+      "variant_group": "print多参数分隔"
+    },
+    {
+      "kp": "py.hello.print",
+      "type": "single_choice",
+      "question": "print(1 + 2) 的输出是：",
+      "options": [
+        "\"1 + 2\"",
+        "3",
+        "\"3\"（带引号）",
+        "报错"
+      ],
+      "answer": 1,
+      "explanation": "print 会先计算参数表达式的值，1+2 得到整数 3，然后打印其文本形式 3（不带引号）。",
+      "error_tag": "概念混淆",
+      "variant_group": "print表达式求值"
+    },
+    {
+      "kp": "py.hello.print",
+      "type": "single_choice",
+      "question": "关于 print 的返回值，正确的是：",
+      "options": [
+        "返回输出的字符串",
+        "返回输出的字符个数",
+        "返回 None",
+        "返回 True 表示成功"
+      ],
+      "answer": 2,
+      "explanation": "print 只负责输出，不返回有用结果，其返回值是 None。",
+      "error_tag": "记忆缺失",
+      "variant_group": "print返回值"
+    },
+    {
+      "kp": "py.hello.print",
+      "type": "single_choice",
+      "question": "阅读代码：\nprint(\"x\", \"y\", sep=\"\", end=\"!\")\n输出是：",
+      "options": [
+        "x y!",
+        "xy!",
+        "x-y!",
+        "xy"
+      ],
+      "answer": 1,
+      "explanation": "sep=\"\" 去掉了参数间分隔符，多余空格消失，得到 xy，再以 end=\"!\" 结尾。",
+      "error_tag": "参数理解错误",
+      "variant_group": "print的sep参数"
+    },
+    {
+      "kp": "py.hello.print",
+      "type": "multi_choice",
+      "question": "关于 print 函数，下列说法正确的有哪些？",
+      "options": [
+        "print 默认在参数之间用一个空格分隔",
+        "print 默认在输出末尾添加换行符",
+        "print 可以一次输出多个参数",
+        "print 的返回值是输出内容的字符串"
+      ],
+      "answer": [
+        0,
+        1,
+        2
+      ],
+      "explanation": "print 默认 sep=' '，默认 end='\\n'，可接受多个参数；但其返回值是 None，故选项 D 错误。",
+      "error_tag": "概念混淆",
+      "variant_group": "print综合特性"
+    }
+  ]
+}

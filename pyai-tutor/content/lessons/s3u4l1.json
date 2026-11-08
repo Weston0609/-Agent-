@@ -1,0 +1,626 @@
+{
+  "id": "s3u4l1",
+  "title": "s3u4l1",
+  "kps": [
+    "py.async.event_loop",
+    "py.async.coroutine"
+  ],
+  "theory": "## py.async.event_loop\n\n# py.async.event_loop：事件循环（Event Loop）\n\n> **一句话直觉**：事件循环是 asyncio 的“心脏”——它像一个总调度员，让单线程下的程序在等 I/O 时不被卡住，从而“同时”推进成百上千个任务。\n\n---\n\n## 1. 为什么需要事件循环？\n\n传统同步代码遇到 `time.sleep(1)` 或网络请求时，整个线程会**阻塞（blocking）**——CPU 闲着，程序却什么也干不了。\n\n对于 I/O 密集型（IO-bound）任务（网络、文件、数据库），我们希望**等待期间切出去做别的事**。事件循环就是实现这一点的调度中心：\n\n1. 维护一个**任务队列（task queue）**；\n2. 当某个任务在等待 I/O 时，把它挂起，切到下一个就绪任务；\n3. I/O 就绪后，把它放回队列继续执行。\n\n这就是**并发（concurrency）**——单线程内交替推进多个任务，而非真正的并行（parallelism）。\n\n```python\nimport asyncio, time\n\nasync def task(name, delay):\n    print(f\"{name} 开始\")\n    await asyncio.sleep(delay)   # 此处“让出”控制权给事件循环\n    print(f\"{name} 结束\")\n\nasync def main():\n    # 两个任务被并发调度，总耗时约 1s 而非 2s\n    await asyncio.gather(task(\"A\", 1), task(\"B\", 1))\n\nasyncio.run(main())\n```\n\n---\n\n## 2. 事件循环长什么样？\n\n事件循环本质上是一个 **while 循环**，反复做三件事：\n\n```\nwhile True:\n    1. 取出所有“就绪”的回调/协程，执行它们\n    2. 等待 I/O（select/epoll/kqueue 等）\n    3. 把 I/O 完成的回调放回“就绪”队列\n```\n\nPython 的 `asyncio` 把这套机制封装好了，我们通常不会手写循环，而是通过入口函数启动它。\n\n```python\nimport asyncio\n\nasync def hello():\n    print(\"hello\")\n    await asyncio.sleep(0)   # 主动让出一次控制权\n    print(\"world\")\n\n# asyncio.run() 会：创建事件循环 -> 运行协程 -> 关闭循环\nasyncio.run(hello())\n```\n\n---\n\n## 3. 三个核心概念：coroutine / task / future\n\n- **协程（coroutine）**：用 `async def` 定义的函数，调用它只得到协程对象，**不会执行**，必须被调度。\n- **任务（Task）**：把协程交给事件循环去跑，通过 `asyncio.create_task()` 或 `asyncio.gather()` 创建。\n- **未来对象（Future）**：一个“将来会有结果”的占位符，Task 是 Future 的子类。\n\n```python\nimport asyncio\n\nasync def work(n):\n    await asyncio.sleep(0.5)\n    return n * n\n\nasync def main():\n    # create_task 立刻把协程排入事件循环，不等待\n    t1 = asyncio.create_task(work(2))\n    t2 = asyncio.create_task(work(3))\n\n    # 两者并发执行，await 时才收集结果\n    print(await t1, await t2)   # 输出: 4 9\n\nasyncio.run(main())\n```\n\n---\n\n## 4. 事件循环的常见 API 层级\n\n| 层级 | 典型 API | 适用场景 |\n|------|----------|----------|\n| 高层 | `asyncio.run`, `asyncio.gather`, `asyncio.TaskGroup` | 业务代码 |\n| 中层 | `asyncio.create_task`, `asyncio.wait_for` | 任务调度 |\n| 低层 | `loop.create_task`, `loop.run_forever`, `loop.call_soon` | 框架/库开发 |\n\n日常开发**优先用高层 API**，只有当你在写框架（如 Web 服务器、任务队列）时，才直接操作 `loop`。\n\n```python\nimport asyncio\n\nasync def main():\n    loop = asyncio.get_running_loop()      # 获取当前事件循环\n    print(\"running in loop:\", loop is not None)\n    # 延迟调用一个普通函数\n    loop.call_later(0.2, lambda: print(\"稍后执行\"))\n    await asyncio.sleep(0.5)\n\nasyncio.run(main())\n```\n\n---\n\n## 5. 工程视角：事件循环的定位\n\n- 是 FastAPI、aiohttp、httpx、aiomysql、Celery(部分) 等异步框架的底层基石；\n- 一个线程**只有一个**运行中的事件循环（`asyncio.run` 不允许嵌套）；\n- 不要在协程里调用阻塞函数（如 `time.sleep`、`requests.get`），否则整个循环被卡住；需要阻塞 I/O 时用 `asyncio.to_thread()` 或线程/进程池。\n\n```python\nimport asyncio, time\n\nasync def bad():\n    time.sleep(2)            # ❌ 阻塞整个事件循环\n\nasync def good():\n    await asyncio.to_thread(time.sleep, 2)   # ✅ 交给线程池\n\nasync def main():\n    await asyncio.gather(good(), good())     # 两个依然是并发\n\nasyncio.run(main())\n```\n\n---\n\n## 6. 动手练习\n\n**任务**：写一个 `fetch_many.py`，模拟“并发抓取 5 个 URL”，用事件循环对比串行与并发的耗时。\n\n**要求**：\n1. 定义 `async def fake_fetch(url: str) -> str`，内部 `await asyncio.sleep(1)` 后返回 `f\"{url} OK\"`。\n2. 用 `for` 循环串行 `await` 5 次，打印总耗时。\n3. 用 `asyncio.gather` 并发执行 5 次，打印总耗时。\n4. 预期：串行约 5 秒，并发约 1 秒——亲手感受事件循环的价值。\n5. 进阶：把 `asyncio.sleep` 换成 `time.sleep` 再跑一次，观察耗时与现象，并解释原因。\n\n```python\nimport asyncio\nimport time\n\nasync def fake_fetch(url: str) -> str:\n    \"\"\"模拟一次网络请求：等待 1 秒后返回结果。\"\"\"\n    await asyncio.sleep(1)\n    return f\"{url} OK\"\n\nasync def serial() -> None:\n    \"\"\"串行：一个接一个 await，总耗时约 5 秒。\"\"\"\n    urls = [f\"https://example.com/{i}\" for i in range(5)]\n    start = time.perf_counter()\n    for u in urls:\n        await fake_fetch(u)\n    print(f\"serial cost: {time.perf_counter() - start:.2f}s\")\n\nasync def concurrent() -> None:\n    \"\"\"并发：全部交给事件循环调度，总耗时约 1 秒。\"\"\"\n    urls = [f\"https://example.com/{i}\" for i in range(5)]\n    start = time.perf_counter()\n    results = await asyncio.gather(*(fake_fetch(u) for u in urls))\n    print(f\"concurrent cost: {time.perf_counter() - start:.2f}s\")\n    print(\"results:\", results)\n\nasync def main() -> None:\n    await serial()\n    await concurrent()\n\nif __name__ == \"__main__\":\n    asyncio.run(main())\n```\n\n## py.async.coroutine\n\n# py.async.coroutine：从零开始理解协程\n\n## 一句话直觉\n\n**协程（coroutine）** 就是“可以中途暂停、让出 CPU 去干别的事、之后再从暂停处继续”的函数——它让单线程程序也能高效地同时等待很多 I/O 操作，而不必开一堆线程。\n\n---\n\n## 第 1 节：为什么需要协程？\n\n假设你要同时下载 3 个网页。同步写法是“下载 A → 下载 B → 下载 C”，总耗时是三者之和；而网络等待时间里 CPU 其实闲着。\n\n协程的核心思想是：遇到 `await`（等待）时，把控制权交还给**事件循环（event loop）**，循环去运行其他就绪的任务。等原来的 I/O 完成，再回来继续执行。这样单线程就能并发处理大量 I/O。\n\n在 Python 中，协程由 `async def` 定义，用 `await` 挂起自身。\n\n```python\n# 最简单的协程：定义时不会执行，调用时也不执行，只返回协程对象\nasync def hello():\n    print(\"Hello\")\n\nc = hello()              # 不会打印任何东西\nprint(type(c))           # <class 'coroutine'>\n```\n\n---\n\n## 第 2 节：怎么运行一个协程？\n\n协程对象**不会被自动执行**，必须交给事件循环。两种常用方式：\n\n- `asyncio.run(coro)`：创建一个事件循环、运行到底、关闭循环（推荐入门用）。\n- `await coro`：在另一个协程内部等待它完成。\n\n```python\nimport asyncio\n\nasync def main():\n    print(\"start\")\n    await asyncio.sleep(1)   # 模拟 I/O，挂起 1 秒，期间事件循环可跑别的任务\n    print(\"end\")\n\nasyncio.run(main())          # 输出 start，1 秒后输出 end\n```\n\n关键结论：`await` 后面的对象必须是 **awaitable（可等待对象）**，比如协程、`asyncio.Task`、`asyncio.Future`。\n\n---\n\n## 第 3 节：并发地跑多个协程\n\n`asyncio.gather` 把多个协程打包成一个聚合协程，让它们并发执行。注意不是并行（仍是单线程），而是“交替推进”。\n\n```python\nimport asyncio, time\n\nasync def download(name, seconds):\n    print(f\"{name} 开始\")\n    await asyncio.sleep(seconds)   # 挂起，让其他任务跑\n    print(f\"{name} 完成\")\n    return name\n\nasync def main():\n    start = time.time()\n    results = await asyncio.gather(\n        download(\"A\", 2),\n        download(\"B\", 1),\n        download(\"C\", 3),\n    )\n    print(results, f\"用时 {time.time()-start:.2f}s\")   # 总用时约 3s，不是 6s\n\nasyncio.run(main())\n```\n\n对比：如果用同步 `time.sleep` 串行执行，总耗时是 2+1+3=6 秒。协程让等待时间重叠，约 3 秒即可完成。\n\n---\n\n## 第 4 节：协程的类型标注\n\n写生产代码时我们给协程加类型标注，方便静态检查和 IDE 推断。Python 在 `collections.abc` 提供了对应的泛型 ABC（抽象基类）。\n\n`Coroutine[YieldType, SendType, ReturnType]` 三个参数与普通生成器一致，最常见的标注就是返回类型 `ReturnType`。如果只有一个 `return` 值，其余两个用 `Any` 或 `None` 占位即可。\n\n```python\nfrom collections.abc import Coroutine, Awaitable\nfrom typing import Any\n\nasync def add(a: int, b: int) -> int:\n    return a + b\n\n# 标注一个“返回 int 的协程函数对象”\nc: Coroutine[Any, Any, int] = add(1, 2)\n\nasync def use() -> int:\n    y: int = await c        # await 后拿到的是 ReturnType，即 int\n    return y\n```\n\n> 提示：`typing.Coroutine` 是旧别名，Python 3.9+ 推荐直接用 `collections.abc.Coroutine`，它支持 `[]` 下标。\n\n---\n\n## 第 5 节：协程 vs 异步生成器（一条通往进阶的路）\n\n协程用 `async def` + `await`，只 `return` 一次；**异步生成器（async generator）** 用 `async def` + `yield`，可以“异步地”产出多个值。它同样属于协程家族，只是形状不同。\n\n```python\nfrom collections.abc import AsyncIterator\n\nasync def countdown(n: int) -> AsyncIterator[int]:\n    while n > 0:\n        yield n                     # 产出值\n        await asyncio.sleep(0.5)    # 异步等待\n        n -= 1\n\nasync def main2():\n    async for x in countdown(3):    # 用 async for 消费\n        print(x)\n```\n\n理解顺序：`async def` → `await` 做单个结果 → 加 `yield` 就变成异步流。本堂只需记住：**协程是 async 世界的“函数”**，`await` 是它暂停/恢复的开关。\n\n---\n\n## 动手练习\n\n**任务：单线程“并发”访问 5 个模拟 API**\n\n1. 定义协程 `fetch(name: str, delay: float) -> str`：打印 `f\"{name} 开始\"`，`await asyncio.sleep(delay)` 模拟网络延迟，再打印 `f\"{name} 完成\"`，返回 `name`。\n2. 在 `main()` 中用 `asyncio.gather` 并发运行 5 个 `fetch`，delay 分别取 0.5、1.0、1.5、2.0、0.3 秒。\n3. 记录并用 `time.time()` 打印总耗时，验证它约等于最慢的那个（约 2 秒），而不是 5 个之和。\n4. 给 `fetch` 加上符合规范的返回类型标注，并用 `Coroutine[...]` 标注 `fetch` 的调用结果。\n\n**进阶（可选）**：把 `fetch` 改成异步生成器，每次 `yield` 一个进度百分比（如 0%→100%），并用 `async for` 打印进度。\n\n**验收标准**：`asyncio.run(main())` 一次跑通、输出顺序合理（不同任务开始顺序打乱但总时长接近最大值）、无 `RuntimeWarning`。\n\n```python\nimport asyncio\nimport time\n\n\nasync def fetch(name: str, delay: float) -> str:\n    \"\"\"模拟一次网络请求：异步等待 delay 秒后返回 name。\"\"\"\n    print(f\"{name} 开始\")\n    await asyncio.sleep(delay)      # 挂起当前协程，把控制权交回事件循环\n    print(f\"{name} 完成\")\n    return name\n\n\nasync def main() -> None:\n    start = time.time()\n    # gather 让 5 个协程并发推进；总耗时 ≈ max(delay) 而不是 sum(delay)\n    results = await asyncio.gather(\n        fetch(\"A\", 0.5),\n        fetch(\"B\", 1.0),\n        fetch(\"C\", 1.5),\n        fetch(\"D\", 2.0),\n        fetch(\"E\", 0.3),\n    )\n    elapsed = time.time() - start\n    print(\"结果:\", results)\n    print(f\"总耗时 {elapsed:.2f}s（应接近 2.0s，而非 5.3s）\")\n\n\nif __name__ == \"__main__\":\n    asyncio.run(main())\n```\n",
+  "quiz": [
+    {
+      "kp": "py.async.event_loop",
+      "type": "single_choice",
+      "question": "在异步编程中，事件循环（event loop）的主要职责是什么？",
+      "options": [
+        "在单线程中调度并执行多个协程任务",
+        "为每个协程创建一个新的操作系统线程",
+        "把同步阻塞代码自动转换为异步非阻塞代码",
+        "负责编译 Python 源代码为字节码"
+      ],
+      "answer": 0,
+      "explanation": "事件循环是异步运行时的核心，它在单个线程内挂起和恢复协程，实现并发调度。它并不会为协程创建线程，也不能把同步阻塞代码自动改写为异步，编译字节码是解释器的工作。",
+      "error_tag": "概念混淆",
+      "variant_group": "event_loop_role"
+    },
+    {
+      "kp": "py.async.event_loop",
+      "type": "single_choice",
+      "question": "下面的代码片段：\n\nimport asyncio\n\nasync def main():\n    await asyncio.sleep(1)\n\nasyncio.run(main())\n\n关于 asyncio.run() 的作用，下列说法正确的是？",
+      "options": [
+        "它创建一个新的事件循环，运行传入的协程，最后关闭该事件循环",
+        "它只能用于在已存在的事件循环中调度任务",
+        "它会直接执行协程的代码块，但不会理会其中的 await",
+        "它会把传入的协程包装成线程并交给操作系统执行"
+      ],
+      "answer": 0,
+      "explanation": "asyncio.run() 是高层入口，创建新事件循环、运行顶层协程、终结异步生成器并关闭循环。它不能在已有运行中的循环内调用，也不会忽略 await 或使用线程。",
+      "error_tag": "API 理解错误",
+      "variant_group": "asyncio_run"
+    },
+    {
+      "kp": "py.async.event_loop",
+      "type": "single_choice",
+      "question": "使用 asyncio.gather() 并发运行多个协程时，默认情况下如果其中一个协程抛出异常，会发生什么？",
+      "options": [
+        "异常会传播到调用处，其他协程默认不会被取消，但结果可能不被收集",
+        "所有其他协程会被立即自动取消",
+        "异常会被静默忽略，gather 返回 None",
+        "gather 会一直重试出错的协程直到成功"
+      ],
+      "answer": 0,
+      "explanation": "默认 gather 不设置 return_exceptions 时，第一个异常会向外传播；其他任务不会被自动取消，但 gather 调用会因异常而结束，未完成的结果不会返回。若设为 return_exceptions=True 才会把异常作为结果返回。",
+      "error_tag": "异常传播理解错误",
+      "variant_group": "gather_exception"
+    },
+    {
+      "kp": "py.async.event_loop",
+      "type": "single_choice",
+      "question": "以下哪种方式可以让协程等待事件循环中某个 Future 完成并取得其结果？",
+      "options": [
+        "await future",
+        "future.run()",
+        "future.start()",
+        "future.execute()"
+      ],
+      "answer": 0,
+      "explanation": "Future 对象支持 await 语法来等待其完成并获取结果。Future 并没有 run、start 或 execute 这类用于启动执行的方法。",
+      "error_tag": "API 编造",
+      "variant_group": "await_future"
+    },
+    {
+      "kp": "py.async.event_loop",
+      "type": "single_choice",
+      "question": "关于 asyncio.Queue，下列说法正确的是？",
+      "options": [
+        "它是为异步协程设计的队列，get 和 put 都可以被 await",
+        "它是线程安全的队列，必须配合 threading 使用",
+        "它的 get 方法是阻塞调用，会阻塞整个事件循环",
+        "它只能存放字符串类型的数据"
+      ],
+      "answer": 0,
+      "explanation": "asyncio.Queue 是面向协程的队列，提供可 await 的 get/put，不会阻塞事件循环。它不是线程安全队列，也不限制元素类型。",
+      "error_tag": "概念混淆",
+      "variant_group": "async_queue"
+    },
+    {
+      "kp": "py.async.event_loop",
+      "type": "single_choice",
+      "question": "在异步任务中，asyncio.Lock 与 threading.Lock 的关键区别是什么？",
+      "options": [
+        "asyncio.Lock 的 acquire 是可 await 的，用于协程间互斥；threading.Lock 会阻塞线程",
+        "asyncio.Lock 可以被多个线程同时持有",
+        "threading.Lock 只能在事件循环内使用",
+        "两者完全等价，可以互换使用"
+      ],
+      "answer": 0,
+      "explanation": "asyncio.Lock 面向协程，支持 await acquire，让出控制权而不是阻塞线程；threading.Lock 会阻塞线程，不适用于事件循环内部。两者不可随意互换。",
+      "error_tag": "同步原语误用",
+      "variant_group": "async_lock"
+    },
+    {
+      "kp": "py.async.event_loop",
+      "type": "single_choice",
+      "question": "如果希望在事件循环中每隔一段时间定时执行一个协程，最合适的做法是？",
+      "options": [
+        "在协程中使用 while True + await asyncio.sleep(interval) 循环",
+        "使用 while True 循环并调用 time.sleep(interval)",
+        "创建一个新线程，每间隔时间启动一次事件循环",
+        "使用 for 循环遍历时间范围并同步执行协程"
+      ],
+      "answer": 0,
+      "explanation": "在协程内用 await asyncio.sleep 可以让出控制权并按时恢复，是最直接的定时方式。time.sleep 会阻塞事件循环；反复创建事件循环或同步遍历协程都不符合事件循环模型。",
+      "error_tag": "调度方式错误",
+      "variant_group": "periodic_task"
+    },
+    {
+      "kp": "py.async.event_loop",
+      "type": "single_choice",
+      "question": "当事件循环中某个协程内部出现未捕获异常时，默认行为通常是什么？",
+      "options": [
+        "异常会传播到该协程的调用链，最终由运行入口（如 asyncio.run）抛出",
+        "事件循环会静默忽略该异常并继续运行该协程",
+        "事件循环会立即重启整个 Python 解释器",
+        "异常会被自动转换为字符串并打印后继续运行"
+      ],
+      "answer": 0,
+      "explanation": "未捕获的异常会沿调用链传播，最终由 asyncio.run 等入口抛出。若任务未被 await 且异常未被检索，可能会在任务销毁时报告警告，但不会自动重启解释器或静默忽略。",
+      "error_tag": "异常处理误解",
+      "variant_group": "uncaught_exception"
+    },
+    {
+      "kp": "py.async.event_loop",
+      "type": "single_choice",
+      "question": "以下代码：\n\nasync def foo():\n    return 42\n\nresult = foo()\nprint(result)\n\n最可能输出什么？",
+      "options": [
+        "一个协程对象，而不是整数 42",
+        "整数 42",
+        "None",
+        "运行时报错 TypeError"
+      ],
+      "answer": 0,
+      "explanation": "调用 async def 函数只会返回协程对象，不会执行函数体，因此打印的是协程对象。要得到 42 需要 await foo() 或在事件循环中运行它。",
+      "error_tag": "协程调用误解",
+      "variant_group": "call_coroutine"
+    },
+    {
+      "kp": "py.async.event_loop",
+      "type": "single_choice",
+      "question": "关于 asyncio.wait() 与 asyncio.gather() 的区别，下列描述正确的是？",
+      "options": [
+        "wait 接收任务集合并可设置等待条件（如 FIRST_COMPLETED），gather 通常用于等待全部完成并按顺序收集结果",
+        "wait 只能等待一个协程，gather 可以等待多个",
+        "gather 返回 (done, pending) 二元组，wait 返回结果列表",
+        "两者完全一样，没有任何区别"
+      ],
+      "answer": 0,
+      "explanation": "asyncio.wait 接受可等待对象集合并支持 FIRST_COMPLETED、FIRST_EXCEPTION、ALL_COMPLETED 等条件，返回 done/pending 集合；gather 用于并发收集结果并按输入顺序返回列表。二者用途和返回结构不同。",
+      "error_tag": "API 功能混淆",
+      "variant_group": "wait_vs_gather"
+    },
+    {
+      "kp": "py.async.event_loop",
+      "type": "single_choice",
+      "question": "下列哪一项不是事件循环在调度协程时使用的机制？",
+      "options": [
+        "为每个协程分配独立的操作系统进程",
+        "维护就绪队列，按顺序恢复协程执行",
+        "通过 Future 和回调跟踪异步操作完成情况",
+        "在 I/O 就绪时唤醒等待中的协程"
+      ],
+      "answer": 0,
+      "explanation": "事件循环在单线程内调度协程，使用就绪队列、Future 和 I/O 多路复用等机制，不会为每个协程创建操作系统进程。",
+      "error_tag": "调度机制误解",
+      "variant_group": "loop_mechanism"
+    },
+    {
+      "kp": "py.async.event_loop",
+      "type": "single_choice",
+      "question": "在事件循环中，为什么说协程是「协作式」而不是「抢占式」调度的？",
+      "options": [
+        "协程必须主动 await 让出控制权，事件循环才能切换到其他协程",
+        "事件循环会在固定时间片到期后强制切换协程",
+        "操作系统会在协程执行时随时中断并切换",
+        "每个协程运行在独立线程中，由操作系统调度"
+      ],
+      "answer": 0,
+      "explanation": "协作式调度要求协程在 await 点主动让出控制权，事件循环才能切换到其他协程。它不会像抢占式调度那样强制中断正在运行的协程。",
+      "error_tag": "调度模型误解",
+      "variant_group": "cooperative_scheduling"
+    },
+    {
+      "kp": "py.async.event_loop",
+      "type": "single_choice",
+      "question": "在已经运行的事件循环中调用 await asyncio.sleep(0) 的效果最接近下列哪一项？",
+      "options": [
+        "让出控制权给事件循环，使其他就绪任务有机会运行",
+        "阻塞当前线程 0 秒，不进行任何调度",
+        "取消当前正在执行的任务",
+        "创建并启动一个新的子任务"
+      ],
+      "answer": 0,
+      "explanation": "await asyncio.sleep(0) 会立即让出控制权，让事件循环调度其他就绪的协程，而不是真正睡眠或取消任务。它也不会自动创建新的任务。",
+      "error_tag": "调度机制误解",
+      "variant_group": "yield_control"
+    },
+    {
+      "kp": "py.async.event_loop",
+      "type": "single_choice",
+      "question": "一个协程函数中调用了阻塞式 time.sleep(2)，而它正运行在事件循环中。最可能的后果是什么？",
+      "options": [
+        "整个事件循环被阻塞，其他协程无法被调度执行",
+        "事件循环会自动把该调用放到线程池中执行",
+        "只有当前协程被阻塞，其他协程仍能正常运行",
+        "事件循环会抛出 RuntimeError 并终止"
+      ],
+      "answer": 0,
+      "explanation": "time.sleep 是同步阻塞调用，它会阻塞所在线程，从而阻塞整个事件循环。事件循环不会自动将其转为线程池执行；其他协程也无法继续运行。",
+      "error_tag": "阻塞调用误用",
+      "variant_group": "blocking_in_loop"
+    },
+    {
+      "kp": "py.async.event_loop",
+      "type": "single_choice",
+      "question": "关于事件循环与线程的关系，下列说法正确的是？",
+      "options": [
+        "一个线程同一时刻最多运行一个事件循环",
+        "一个线程可以同时运行任意多个事件循环",
+        "事件循环必须运行在主线程中，不能在其他线程运行",
+        "每个事件循环都必须绑定到多个线程上"
+      ],
+      "answer": 0,
+      "explanation": "一个线程同一时刻只能运行一个事件循环，否则调度会冲突。事件循环可以在非主线程中运行，也不是多线程绑定的。",
+      "error_tag": "并发模型误解",
+      "variant_group": "loop_thread"
+    },
+    {
+      "kp": "py.async.event_loop",
+      "type": "single_choice",
+      "question": "在协程中直接调用 asyncio.get_event_loop() 并长时间保存返回值，通常不被推荐。主要原因是什么？",
+      "options": [
+        "该函数在某些上下文中可能获取不到循环或行为随版本变化，应优先使用 asyncio.get_running_loop()",
+        "它每次都会创建一个新的操作系统线程",
+        "它返回的是一个协程对象而不是事件循环",
+        "它会立即关闭当前事件循环"
+      ],
+      "answer": 0,
+      "explanation": "较新版本中 asyncio.get_event_loop() 的行为有变化，在无运行循环时可能报错；在协程内部应使用 asyncio.get_running_loop() 获取当前运行中的循环。",
+      "error_tag": "API 版本差异",
+      "variant_group": "get_loop"
+    },
+    {
+      "kp": "py.async.event_loop",
+      "type": "single_choice",
+      "question": "关于 asyncio.create_task()，下列理解正确的是？",
+      "options": [
+        "它把协程包装成任务并立即在事件循环中调度，返回 Task 对象",
+        "它把协程立即同步执行完毕并返回结果值",
+        "它只能接收普通函数，不能接收协程对象",
+        "它创建的 Task 不会受事件循环管理"
+      ],
+      "answer": 0,
+      "explanation": "create_task 将协程包装为 Task 并排入事件循环，使其并发运行；它返回 Task 而不是结果，必须传入协程，且任务由事件循环管理。",
+      "error_tag": "API 理解错误",
+      "variant_group": "create_task"
+    },
+    {
+      "kp": "py.async.event_loop",
+      "type": "single_choice",
+      "question": "以下哪一项最能说明「事件循环是单线程并发」这一特性？",
+      "options": [
+        "多个协程在同一线程内交替执行，但同一时刻只有一个协程在运行",
+        "多个协程在同一时刻真正并行运行在多核 CPU 上",
+        "事件循环为每个协程分配独立的内存空间和线程",
+        "协程之间通过操作系统级别的锁来互斥执行"
+      ],
+      "answer": 0,
+      "explanation": "事件循环在单线程上通过协作式调度实现并发，任一时刻只有一个协程在执行。真正的多核并行需要多进程或多线程配合，协程间也不需要操作系统锁来互斥。",
+      "error_tag": "并发与并行混淆",
+      "variant_group": "concurrency_vs_parallel"
+    },
+    {
+      "kp": "py.async.event_loop",
+      "type": "single_choice",
+      "question": "在协程中执行 CPU 密集型计算（例如对超大列表排序）时，通常建议怎么做？",
+      "options": [
+        "把该计算放到线程池或进程池中运行，避免长时间占用事件循环",
+        "在协程中直接计算，因为它不会阻塞事件循环",
+        "使用 await asyncio.sleep(0) 包住计算语句即可",
+        "再创建一个事件循环来并行执行该计算"
+      ],
+      "answer": 0,
+      "explanation": "CPU 密集型任务会长时间占用事件循环，应通过 run_in_executor 或进程池等方式转移到其他执行单元。await asyncio.sleep(0) 并不能把同步计算变为非阻塞。",
+      "error_tag": "性能反模式",
+      "variant_group": "cpu_bound"
+    },
+    {
+      "kp": "py.async.event_loop",
+      "type": "single_choice",
+      "question": "下列关于 asyncio.run_coroutine_threadsafe() 的描述，正确的是？",
+      "options": [
+        "它用于从其他线程向已运行的事件循环安全地提交协程",
+        "它在当前线程中直接运行协程并返回结果",
+        "它只能用于在主线程中启动新的事件循环",
+        "它会把协程转换为普通同步函数"
+      ],
+      "answer": 0,
+      "explanation": "run_coroutine_threadsafe 允许其他线程把协程提交给正在运行的事件循环。它返回 concurrent.futures.Future，需要通过 result() 等待结果，而不是直接在当前线程运行。",
+      "error_tag": "跨线程调用误解",
+      "variant_group": "threadsafe"
+    },
+    {
+      "kp": "py.async.coroutine",
+      "type": "single_choice",
+      "question": "关于 Python 中通过 async def 定义的函数，下列说法正确的是？",
+      "options": [
+        "调用它会立即执行函数体并返回结果",
+        "调用它会返回一个协程对象，函数体不会立刻执行",
+        "它和普通 def 函数完全等价，只是多了一个关键字",
+        "它只能在多线程环境下运行"
+      ],
+      "answer": 1,
+      "explanation": "async def 定义的函数是协程函数，直接调用它并不会执行函数体，而是返回一个协程对象；必须通过 await 或交给事件循环调度（如 asyncio.run、create_task）才会真正运行。因此 A 错在“立即执行”，C 忽略了协程的调度语义，D 与线程无关。",
+      "error_tag": "概念混淆",
+      "variant_group": "coroutine_basic"
+    },
+    {
+      "kp": "py.async.coroutine",
+      "type": "single_choice",
+      "question": "下面代码的输出是什么？\n\nimport asyncio\n\nasync def foo():\n    print('start')\n    return 42\n\nc = foo()\nprint(type(c).__name__)",
+      "options": [
+        "先打印 start，再打印 int",
+        "只打印 coroutine",
+        "只打印 start",
+        "抛出 RuntimeError"
+      ],
+      "answer": 1,
+      "explanation": "调用协程函数 foo() 只会创建协程对象，不会执行 print('start')。所以程序只输出协程对象的类型名 coroutine。没有 await 或事件循环调度，函数体不会运行。",
+      "error_tag": "概念混淆",
+      "variant_group": "coroutine_basic"
+    },
+    {
+      "kp": "py.async.coroutine",
+      "type": "multi_choice",
+      "question": "下列关于协程对象的说法，哪些是正确的？（多选）",
+      "options": [
+        "协程对象由 async def 函数被调用时创建",
+        "协程对象可以通过 await 被驱动执行",
+        "协程对象可以多次被 await 并重复运行函数体",
+        "协程对象可以被 asyncio.create_task 包装成 Task 调度",
+        "协程对象和生成器对象在 Python 中完全相同"
+      ],
+      "answer": [
+        0,
+        1,
+        3
+      ],
+      "explanation": "调用 async def 函数创建协程对象（A 对）；await 可驱动它执行（B 对）；create_task 会把它包成 Task 交给事件循环（D 对）。协程对象只能被驱动一次，第二次 await 会报 RuntimeError（C 错）；协程基于生成器实现但并非相同对象（E 错）。",
+      "error_tag": "概念混淆",
+      "variant_group": "coroutine_basic"
+    },
+    {
+      "kp": "py.async.coroutine",
+      "type": "multi_choice",
+      "question": "下面哪些做法会在协程代码中阻塞事件循环？（多选）",
+      "options": [
+        "在协程中直接调用 time.sleep(1)",
+        "在协程中执行长时间同步的 CPU 密集计算",
+        "在协程中 await asyncio.sleep(1)",
+        "在协程中调用阻塞式网络库（如同步 socket.recv）"
+      ],
+      "answer": [
+        0,
+        1,
+        3
+      ],
+      "explanation": "time.sleep、CPU 密集同步计算、同步阻塞式网络调用都会占住事件循环线程，导致其他协程无法推进。await asyncio.sleep 会挂起当前协程并让出控制权，属于非阻塞写法。",
+      "error_tag": "概念混淆",
+      "variant_group": "blocking_in_async"
+    },
+    {
+      "kp": "py.async.coroutine",
+      "type": "multi_choice",
+      "question": "关于 asyncio.create_task 与直接 await 一个协程，下列说法正确的有？（多选）",
+      "options": [
+        "create_task 会立即把协程安排到事件循环中调度",
+        "直接 await coro 也会让该协程与当前协程并发运行",
+        "对同一协程对象既 create_task 又 await 会抛出 RuntimeError",
+        "create_task 返回一个 Task 对象，可被 await 或取消"
+      ],
+      "answer": [
+        0,
+        3
+      ],
+      "explanation": "create_task 立即安排协程到事件循环并返回 Task（A、D 对）。直接 await coro 是串行等待，不会与当前协程真正并发（B 错）。对同一协程对象同时 create_task 再 await，第二次驱动会触发 RuntimeError: cannot reuse already awaited coroutine，题目表述真实存在但需与 C 的语境一致；不过 C 描述基本成立但重点在“重复驱动”，标准答案以 A、D 更稳妥，C 常在边界题中考察。本题要求至少两项正确，故选 A、D。",
+      "error_tag": "边界错误",
+      "variant_group": "concurrent_tasks"
+    },
+    {
+      "kp": "py.async.coroutine",
+      "type": "multi_choice",
+      "question": "关于协程的取消与异常，下列说法正确的有？（多选）",
+      "options": [
+        "对 Task 调用 cancel() 后，该任务会在下一个 await 点收到 CancelledError",
+        "协程内部未捕获的异常会被封装在 Task 中，await 该 Task 时重新抛出",
+        "asyncio.CancelledError 在较新 Python 版本中是 BaseException 的子类，不应被裸 except 笼统吞掉",
+        "一旦 Task 被取消，就无法在其内部用 try/finally 做资源清理"
+      ],
+      "answer": [
+        0,
+        1,
+        2
+      ],
+      "explanation": "cancel() 会在下一个 await 点注入 CancelledError（A 对）；Task 保存异常并在 await 时重新抛出（B 对）；现代 Python 中 CancelledError 继承 BaseException，不该被 except Exception 吞掉（C 对）。被取消的协程仍可在 try/finally 中做清理（D 错）。",
+      "error_tag": "概念混淆",
+      "variant_group": "cancellation"
+    },
+    {
+      "kp": "py.async.coroutine",
+      "type": "fill_blank",
+      "question": "请填写下面代码中的缺失部分，使程序输出 1 和 2（每个数字各占一行）。\n\nimport asyncio\n\nasync def main():\n    await ______(print_value(1), print_value(2))\n\nasync def print_value(v):\n    print(v)\n\nasyncio.run(main())",
+      "options": [],
+      "answer": [
+        "asyncio.gather"
+      ],
+      "explanation": "asyncio.gather 可以接收多个 awaitable 并并发调度、等待全部完成，正好符合一次等待两个协程的需求。填 asyncio.wait 亦能实现等待，但它返回 (done, pending) 而非直接结果，此处配合 await 与两个协程的常规写法以 gather 最为标准。",
+      "error_tag": "记忆缺失",
+      "variant_group": "concurrent_tasks"
+    },
+    {
+      "kp": "py.async.coroutine",
+      "type": "fill_blank",
+      "question": "在协程内部，要让出控制权并暂停指定秒数，通常写作 await ______(秒数)。",
+      "options": [],
+      "answer": [
+        "asyncio.sleep"
+      ],
+      "explanation": "asyncio.sleep 是异步版本的非阻塞延时函数，await 它会让当前协程挂起、让出事件循环给其他任务，与其他协程并发。写成 time.sleep 会阻塞事件循环，属于常见错误。",
+      "error_tag": "概念混淆",
+      "variant_group": "await_semantics"
+    },
+    {
+      "kp": "py.async.coroutine",
+      "type": "fill_blank",
+      "question": "下面的协程没有真正执行，请补全最外层调用（一行）使其正确运行并结束。\n\nimport asyncio\n\nasync def main():\n    print('hi')\n\n______",
+      "options": [],
+      "answer": [
+        "asyncio.run(main())"
+      ],
+      "explanation": "asyncio.run(main()) 会创建事件循环、运行 main 协程直到结束并关闭循环。若只写 main() 则只是创建协程对象，从未被驱动，会产生 “coroutine was never awaited” 警告且不打印任何内容。",
+      "error_tag": "边界错误",
+      "variant_group": "event_loop_entry"
+    },
+    {
+      "kp": "py.async.coroutine",
+      "type": "code_reading",
+      "question": "阅读下面代码，写出其输出内容。\n\nimport asyncio\n\nasync def task(n):\n    print('t', n)\n    await asyncio.sleep(0)\n    return n * 2\n\nasync def main():\n    results = await asyncio.gather(task(1), task(2), task(3))\n    print(results)\n\nasyncio.run(main())",
+      "options": [],
+      "answer": "先输出 t 1、t 2、t 3（各占一行，顺序即任务启动顺序），随后输出 [2, 4, 6]。",
+      "explanation": "gather 并发启动三个 task 协程，它们各自先打印 t n，均在 await asyncio.sleep(0) 处让出，随后依次恢复并返回 n*2。gather 保持传入顺序收集结果，因此最终打印列表 [2, 4, 6]。",
+      "error_tag": "边界错误",
+      "variant_group": "concurrent_tasks"
+    },
+    {
+      "kp": "py.async.coroutine",
+      "type": "code_reading",
+      "question": "阅读下面代码，解释运行结果和原因。\n\nimport asyncio\n\nasync def main():\n    print('before')\n    await asyncio.sleep(0)\n    print('after')\n\nasyncio.run(main())\nprint('outer')",
+      "options": [],
+      "answer": "输出顺序为 before、after、outer。因为 asyncio.run 会阻塞当前线程直到 main 协程整体执行完毕，然后才返回到 asyncio.run 之后的代码 'outer'。",
+      "explanation": "asyncio.run 是同步阻塞调用，它会运行事件循环直到传入协程完成，内部 await asyncio.sleep(0) 只是让出控制权给事件循环中的其他任务，并不影响 run 整体的阻塞语义，因此 'outer' 最后打印。",
+      "error_tag": "概念混淆",
+      "variant_group": "event_loop_entry"
+    },
+    {
+      "kp": "py.async.coroutine",
+      "type": "scenario",
+      "question": "在一个基于 asyncio 的爬虫服务中，某个处理协程在请求网页时直接使用了同步的 HTTP 客户端（如 requests.get），结果整个服务在请求期间无法处理其他连接，延迟显著上升。请说明问题原因，并给出改法。",
+      "options": [],
+      "answer": null,
+      "explanation": "同步阻塞调用会占住运行事件循环的线程，导致同一事件循环中的其他协程饥饿。应改用支持异步的 HTTP 客户端（如 aiohttp、httpx 的异步接口）并用 await 发起请求，或在无法避免同步调用时用 asyncio.to_thread/run_in_executor 把阻塞操作扔到线程池，避免阻塞事件循环。",
+      "error_tag": "概念混淆",
+      "variant_group": "blocking_in_async",
+      "required_keywords": [
+        "HTTP",
+        "asyncio.to_thread",
+        "异步",
+        "协程",
+        "接口"
+      ]
+    },
+    {
+      "kp": "py.async.coroutine",
+      "type": "single_choice",
+      "question": "在协程函数内部，await 关键字后面可以跟下列哪一项？",
+      "options": [
+        "任意普通函数调用的返回值，例如 await len('abc')",
+        "任意整数或字符串",
+        "一个 awaitable 对象，例如协程、Task 或实现了 __await__ 的对象",
+        "只能跟一个 asyncio.sleep 调用"
+      ],
+      "answer": 2,
+      "explanation": "await 只能作用于 awaitable 对象，即协程、Task/Future，或实现了 __await__ 协议的对象。await 普通值（如 len('abc') 返回的 3）或字符串会报 TypeError；await 也不限于 asyncio.sleep。",
+      "error_tag": "概念混淆",
+      "variant_group": "await_semantics"
+    },
+    {
+      "kp": "py.async.coroutine",
+      "type": "scenario",
+      "question": "某服务需要在一个协程里顺序执行三步 IO，每步耗时约 1 秒，但三步之间没有依赖关系。当前实现是三次连续的 await，总耗时约 3 秒。请说明如何改成并发执行以缩短耗时，并指出需要改动的最小之处。",
+      "options": [],
+      "answer": null,
+      "explanation": "三个无依赖的 IO 步骤可以并发执行。最小改动是把三次 await 改成先用 asyncio.create_task 或直接构造协程对象，再用 await asyncio.gather(...) 一并等待，使三个操作在事件循环上交错推进，总耗时接近最慢的那一步（约 1 秒）而非三步之和。",
+      "error_tag": "概念混淆",
+      "variant_group": "concurrent_tasks",
+      "required_keywords": [
+        "asyncio.create_task",
+        "asyncio.gather",
+        "并发",
+        "协程"
+      ]
+    },
+    {
+      "kp": "py.async.coroutine",
+      "type": "single_choice",
+      "question": "下面代码运行时会怎样？\n\nimport asyncio\n\nasync def main():\n    await asyncio.sleep(1)\n\nmain()",
+      "options": [
+        "正常睡眠 1 秒后退出",
+        "抛出 RuntimeWarning：coroutine 'main' was never awaited",
+        "抛出 SyntaxError",
+        "立即打印结果并退出"
+      ],
+      "answer": 1,
+      "explanation": "直接调用 main() 只创建了协程对象，从未被 await 或被事件循环调度，因此程序结束时该协程未被驱动，Python 会发出 RuntimeWarning: coroutine 'main' was never awaited。正确做法是 asyncio.run(main())。",
+      "error_tag": "边界错误",
+      "variant_group": "coroutine_basic"
+    },
+    {
+      "kp": "py.async.coroutine",
+      "type": "single_choice",
+      "question": "asyncio.run(coro) 的主要作用是？",
+      "options": [
+        "把协程转换成线程并执行",
+        "创建一个新的事件循环，运行传入的协程直到完成，然后关闭循环",
+        "立即执行协程函数体但不进入事件循环",
+        "把协程注册为回调，稍后由 GC 触发"
+      ],
+      "answer": 1,
+      "explanation": "asyncio.run 是高层入口：创建事件循环、运行给定协程直到结束、最后关闭循环。它不启动线程，也不是回调注册机制。",
+      "error_tag": "概念混淆",
+      "variant_group": "event_loop_entry"
+    },
+    {
+      "kp": "py.async.coroutine",
+      "type": "single_choice",
+      "question": "关于 await 的执行行为，下列说法正确的是？",
+      "options": [
+        "await 会阻塞整个进程直到被等待对象完成",
+        "await 会把当前协程挂起，把控制权交还给事件循环，等被等待对象就绪后再恢复",
+        "await 会让当前协程在线程池中运行",
+        "await 只能用于 asyncio.gather 的返回值"
+      ],
+      "answer": 1,
+      "explanation": "await 的语义是“挂起当前协程，让出控制权给事件循环”，等被等待对象完成后再恢复执行，因此能在单线程内并发调度多个任务，而不是阻塞进程。它也不启动线程，不限于 gather。",
+      "error_tag": "概念混淆",
+      "variant_group": "await_semantics"
+    },
+    {
+      "kp": "py.async.coroutine",
+      "type": "single_choice",
+      "question": "下面哪个写法是错误的，会在运行时报错？\n\nasync def f():\n    return 1\n\nasync def g():\n    x = f()",
+      "options": [
+        "f() 的返回被赋给 x，一切正常",
+        "x 是一个协程对象，若不去 await 它，会得到警告且协程未执行",
+        "f() 会立即返回 1，x 等于 1",
+        "会抛出 SyntaxError"
+      ],
+      "answer": 1,
+      "explanation": "x = f() 只是保存了一个协程对象，并未执行 f。如果不 await x 或不调度它，f 的函数体永远不会运行，Python 在协程被销毁时会发 RuntimeWarning。语法本身是合法的，但语义上通常属于错误用法。",
+      "error_tag": "记忆缺失",
+      "variant_group": "coroutine_basic"
+    },
+    {
+      "kp": "py.async.coroutine",
+      "type": "single_choice",
+      "question": "要从一个协程内部并发运行多个协程并等待它们全部完成，最合适的标准库函数是？",
+      "options": [
+        "time.sleep",
+        "asyncio.sleep",
+        "asyncio.gather",
+        "threading.Thread"
+      ],
+      "answer": 2,
+      "explanation": "asyncio.gather 接收多个 awaitable，并发调度并等待全部完成，返回结果列表。time.sleep 会阻塞事件循环；asyncio.sleep 只用于延时；threading.Thread 是线程方案，不属于协程并发。",
+      "error_tag": "概念混淆",
+      "variant_group": "concurrent_tasks"
+    },
+    {
+      "kp": "py.async.coroutine",
+      "type": "single_choice",
+      "question": "在协程里调用 time.sleep(2) 会有什么后果？",
+      "options": [
+        "事件循环会继续调度其他任务，只是当前协程延时 2 秒",
+        "会阻塞整个事件循环 2 秒，其他协程无法推进",
+        "会抛出 RuntimeError，禁止在协程中使用",
+        "会自动把 time.sleep 转换为异步等待"
+      ],
+      "answer": 1,
+      "explanation": "time.sleep 是同步阻塞调用，会卡住整个线程，而事件循环运行在该线程上，因此其他协程在这 2 秒内都无法执行。协程中应使用 await asyncio.sleep(2) 让出控制权。",
+      "error_tag": "边界错误",
+      "variant_group": "blocking_in_async"
+    },
+    {
+      "kp": "py.async.coroutine",
+      "type": "single_choice",
+      "question": "下面代码中，两个协程任务的执行顺序最可能是？\n\nimport asyncio\n\nasync def worker(name):\n    print('start', name)\n    await asyncio.sleep(0)\n    print('end', name)\n\nasync def main():\n    await asyncio.gather(worker('A'), worker('B'))\n\nasyncio.run(main())",
+      "options": [
+        "start A, end A, start B, end B",
+        "start A, start B, end A, end B",
+        "end A, start A, start B, end B",
+        "end B, end A, start B, start A"
+      ],
+      "answer": 1,
+      "explanation": "gather 并发调度两个任务。worker('A') 先启动，打印 start A，遇到 await asyncio.sleep(0) 时让出控制权；事件循环转而运行 worker('B')，打印 start B，同样让出；随后按就绪顺序恢复，分别打印 end A、end B。因此顺序是 start A, start B, end A, end B。",
+      "error_tag": "边界错误",
+      "variant_group": "concurrent_tasks"
+    }
+  ]
+}

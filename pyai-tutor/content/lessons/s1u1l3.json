@@ -1,0 +1,966 @@
+{
+  "id": "s1u1l3",
+  "title": "s1u1l3",
+  "kps": [
+    "py.io.input",
+    "py.io.print_format",
+    "py.io.fstring"
+  ],
+  "theory": "## py.io.input\n\n# Python 的输入（input）：从键盘读取数据的第一步\n\n## 一句话直觉\n\n程序需要从外部拿数据才能“活”起来，而最简单的入口就是**让用户用键盘输入**——`input()` 就是 Python 给我们的那个“耳朵”。\n\n---\n\n## 1. 什么是输入（Input）？\n\n**输入（input）** 指的是程序从外部世界获取数据的过程。外部世界可以是：\n\n- 键盘（最常用，也是本篇重点）\n- 文件\n- 网络\n- 另一个程序\n\n在 Python 中，从键盘读取一行文本最简单的方式就是调用内置函数 `input()`。\n\n它的核心行为只有两点：\n\n1. **暂停程序运行**，等待用户在终端敲入内容并按下回车。\n2. **返回一个字符串**（str），内容是用户敲入的那一行（不包含结尾的换行符）。\n\n```python\n# 最简单的输入示例：等待用户输入，然后把内容原样打印出来\nname = input(\"请输入你的名字：\")  # 括号里的字符串是提示信息（prompt），会显示在终端上\nprint(\"你好，\" + name + \"！\")     # name 一定是一个 str 类型\n```\n\n运行效果（终端中）：\n\n```text\n请输入你的名字：小明\n你好，小明！\n```\n\n> 关键结论：**无论用户输入什么，`input()` 返回的永远是字符串。**\n\n---\n\n## 2. 为什么 `input()` 返回的总是字符串？\n\n因为键盘敲进来的本来就是**字符序列**，Python 不做任何“猜测”。即使你输入 `123`，它也只是三个字符 `'1'`、`'2'`、`'3'` 组成的字符串 `\"123\"`，而不是整数 `123`。\n\n如果你需要数字，必须自己做**类型转换（type conversion / casting）**：\n\n```python\n# 想要整数？用 int() 转换\nage_text = input(\"请输入你的年龄：\")  # 例如用户输入 18\nage = int(age_text)                  # 把字符串 \"18\" 转成整数 18\nprint(\"明年你\", age + 1, \"岁\")        # 现在可以做数学运算\n```\n\n如果用户输入的不是数字（比如 `abc`），`int()` 会抛出 `ValueError`。所以真实程序里通常要配合异常处理：\n\n```python\n# 更健壮的写法：用 try/except 处理非法输入\ntry:\n    age = int(input(\"请输入你的年龄：\"))\n    print(\"明年你\", age + 1, \"岁\")\nexcept ValueError:\n    print(\"你输入的不是一个整数，请重新运行程序。\")\n```\n\n这是工程中非常常见的模式：**输入 → 校验 → 转换 → 使用**。\n\n---\n\n## 3. `input()` 与其他输入源的对比\n\n`input()` 只是 Python 输入体系的“入门款”。理解它在整个体系中的位置，有助于你后面学文件、网络、异步 IO。\n\n| 输入源 | 典型方式 | 返回类型 | 是否需要等待 |\n| --- | --- | --- | --- |\n| 键盘 | `input()` | `str` | 是（阻塞） |\n| 文件 | `open().read()` | `str` 或 `bytes` | 是 |\n| 命令行参数 | `sys.argv` | `list[str]` | 否 |\n| 标准输入流 | `sys.stdin.readline()` | `str` | 是 |\n\n从类型系统的角度看，Python 标准库用 `typing.IO`、`typing.TextIO`、`typing.BinaryIO` 来描述“输入输出流”的类型；而 `io.Reader` 这类**协议（Protocol）** 则只要求实现一个 `read()` 方法，适合写更通用的函数签名：\n\n```python\nfrom typing import Iterable\n\n# 接收任何“可迭代的字符串流”（文件、sys.stdin、字符串列表都可以）\ndef read_config(stream: Iterable[str]) -> None:\n    for line in stream:\n        print(line.rstrip())\n\nread_config([\"host=localhost\", \"port=8080\"])\n```\n\n对于初学者，你只需要记住：**`input()` 是文本输入流的一种便捷封装**，底层同样是在读“流”。\n\n---\n\n## 4. 常见的输入处理模式\n\n实际工程里，`input()` 通常被包在各种模式中。掌握下面三种，就覆盖了绝大部分日常场景。\n\n### 4.1 读取一行并转换\n\n```python\n# 读取一个整数\nn = int(input(\"请输入一个整数：\"))\nprint(\"它的平方是\", n * n)\n```\n\n### 4.2 读取一行中的多个值（用 split 切分）\n\n```python\n# 输入形如 \"3 5\"，得到两个整数\na, b = input(\"请输入两个整数，用空格分隔：\").split()\na, b = int(a), int(b)\nprint(\"它们的和是\", a + b)\n```\n\n### 4.3 循环读取直到结束\n\n```python\n# 持续读取，直到用户输入空行\nlines = []\nwhile True:\n    line = input(\"输入内容（直接回车结束）：\")\n    if line == \"\":\n        break\n    lines.append(line)\nprint(\"你一共输入了\", len(lines), \"行\")\n```\n\n---\n\n## 5. 工程级视角：输入为什么容易出错？\n\n因为输入来自**不受你控制的外部世界**。用户可能：\n\n- 输入空字符串\n- 输入中文、emoji、控制字符\n- 输入超长文本\n- 直接关闭终端（触发 `EOFError`）\n\n因此工程代码中，输入处理通常要遵循三条原则：\n\n1. **永远先当作字符串处理，再做转换。**\n2. **转换必须捕获异常（`ValueError`、`EOFError`）。**\n3. **对输入长度、取值范围做校验，而不是直接信任。**\n\n```python\n# 一个简单的工程级输入函数：循环直到拿到合法整数\ndef read_int(prompt: str) -> int:\n    while True:\n        try:\n            return int(input(prompt))\n        except ValueError:\n            print(\"输入无效，请输入一个整数。\")\n        except EOFError:\n            print(\"\\n检测到输入结束，程序退出。\")\n            raise SystemExit(1)\n\nn = read_int(\"请输入一个整数：\")\nprint(\"你输入的是\", n)\n```\n\n这就是从“会用 `input()`”到“工程级输入处理”的差距：**健壮性来自对异常和边界的处理，而不是来自函数本身。**\n\n---\n\n## 动手练习\n\n**任务：写一个“简易成绩统计器”**\n\n要求：\n\n1. 用 `input()` 提示用户输入若干学生的成绩，每行一个。\n2. 输入空行表示结束。\n3. 把每一行转换成 `float`，如果某行不是合法数字，打印提示并跳过这一行。\n4. 最后输出：\n   - 有效成绩的个数\n   - 平均分（保留两位小数）\n   - 最高分和最低分\n5. 如果一条有效成绩都没有，输出“没有有效成绩”。\n\n示例运行：\n\n```text\n请输入成绩（直接回车结束）：90\n请输入成绩（直接回车结束）：85.5\n请输入成绩（直接回车结束）：abc\n输入无效，已跳过：abc\n请输入成绩（直接回车结束）：\n有效成绩个数：2\n平均分：87.75\n最高分：90.0\n最低分：85.5\n```\n\n提示：数字格式可以用 `f\"{value:.2f}\"` 保留两位小数。\n\n## py.io.print_format\n\n# `py.io.print_format`：把数据“好看地”送进输出流\n\n## 一句话直觉\n\n你写程序，最终总要**把结果给别人看**——可能是终端里的一行日志、文件里的一张表格、网页上的一段 JSON。`print` 和**格式化**（formatting，即把数据按指定样式转成字符串）就是 Python 与外界对话的“嘴”。学不好它，数据再对，输出也一塌糊涂；学好了它，调试、日志、报告都事半功倍。\n\n> 本讲知识点 ID 为 `py.io.print_format`，属于 s1u1l3。前置知识为无，因此从最基础的 `print` 讲起，逐步过渡到工程级格式化方案。\n\n---\n\n## 1. `print` 的本质：它只是往标准输出写字符串\n\n`print` 的签名大致是：\n\n```python\nprint(*objects, sep=' ', end='\\n', file=sys.stdout, flush=False)\n```\n\n关键理解三点：\n\n- 它把每个对象用 `str()` 转成字符串；\n- 用 `sep` 连接，末尾加 `end`；\n- 写到 `file` 指定的**流**（stream，即可写入的对象，如 `sys.stdout`、文件对象）。\n\n```python\n# 基础 print 行为\nprint(\"a\", \"b\", \"c\")                 # a b c\nprint(\"a\", \"b\", \"c\", sep=\"-\")         # a-b-c\nprint(\"no newline\", end=\"\")           # 不换行\nprint(\" -> continue\")                 # no newline -> continue\n```\n\n结论：`print` 不是“打印机”，而是“往流里写字符串”的快捷方式。\n\n---\n\n## 2. 三种格式化方式：`%`、`str.format`、f-string\n\nPython 历史上有三代格式化方案，今天都还会见到。\n\n### 2.1 `%` 风格（最古老，仍常见于日志）\n\n```python\nname = \"Alice\"\nage = 30\n# %s 表示按 str 插入，%d 表示按整数插入\nprint(\"Name: %s, Age: %d\" % (name, age))\n```\n\n### 2.2 `str.format`（Python 2.6+，灵活）\n\n```python\n# {} 占位，按位置或按名字填入\nprint(\"Name: {}, Age: {}\".format(name, age))\nprint(\"Name: {n}, Age: {a}\".format(n=name, a=age))\n```\n\n### 2.3 f-string（Python 3.6+，推荐）\n\n```python\n# 在字符串前加 f，{} 内可直接写表达式\nprint(f\"Name: {name}, Age: {age}\")\nprint(f\"Next year: {age + 1}\")  # 可内嵌表达式\n```\n\n工程建议：**新代码优先 f-string**，可读性最好、性能也最好。\n\n---\n\n## 3. 格式规格（format spec）：控制宽度、精度、对齐、类型\n\n格式化的核心威力在“**格式规格**”（format spec），写在 `:` 后面。\n\n```python\npi = 3.14159265\nprint(f\"{pi:.2f}\")        # 保留 2 位小数：3.14\nprint(f\"{pi:10.3f}\")      # 总宽 10，右对齐，保留 3 位：     3.142\nprint(f\"{pi:<10.3f}|\")    # 左对齐\nprint(f\"{pi:^10.3f}|\")    # 居中\nprint(f\"{42:05d}\")        # 补零到 5 位：00042\nprint(f\"{255:x}\")         # 十六进制：ff\nprint(f\"{255:b}\")         # 二进制：11111111\nprint(f\"{0.25:.1%}\")      # 百分比：25.0%\n```\n\n记忆口诀：`[[填充]对齐][符号][#][0][宽度][,][.精度][类型]`。\n\n---\n\n## 4. 写文件与重定向：`print(file=...)` 与 `open`\n\n`print` 可以写到任何“文件样对象”（file-like object）。\n\n```python\nwith open(\"out.txt\", \"w\", encoding=\"utf-8\") as f:\n    print(\"Hello, file\", file=f)\n    print(\"second line\", file=f)\n\n# 标准错误（stderr）常用于日志\nimport sys\nprint(\"warning!\", file=sys.stderr)\n```\n\n注意：`open` 时显式写 `encoding=\"utf-8\"` 是工程习惯，避免跨平台乱码。\n\n---\n\n## 5. 工程级：`logging` 与格式化的分工\n\n真正上生产时，**不要用 `print` 打日志**。用 `logging`：\n\n```python\nimport logging\nlogging.basicConfig(level=logging.INFO,\n                    format=\"%(asctime)s %(levelname)s %(message)s\")\nlogging.info(\"user %s logged in\", \"alice\")  # 推荐：延迟格式化\n```\n\n要点：\n\n- `logging` 的 `\"%s\" % arg` 风格是**延迟格式化**（lazy formatting），只有日志真的被输出时才拼接，性能友好。\n- 输出目标（终端/文件/网络）由 **handler** 决定，格式化只负责“长什么样”。\n- 这与 `print` 的格式化是同一套底层逻辑：把对象转文本，但分发与级别管理更专业。\n\n---\n\n## 6. 对象如何被格式化：`__str__` 与 `__format__`\n\n当 f-string 里写 `{obj}` 时，Python 调用对象的 `__format__` 方法；若没自定义，则回退到 `str(obj)`（即 `__str__`）。默认情况下 `object.__format__` 只接受空 spec。\n\n```python\nclass Money:\n    def __init__(self, amount):\n        self.amount = amount\n    def __format__(self, spec):\n        # 支持 {m:.2f} 这样的规格\n        return format(self.amount, spec) if spec else str(self.amount)\n\nm = Money(3.14159)\nprint(f\"{m:.2f}\")  # 3.14\n```\n\n这解释了一个常见现象：**自定义类如果没实现 `__format__`，`f\"{obj:>10}\"` 可能会报错**。\n\n---\n\n## 小结\n\n| 层次 | 工具 | 用途 |\n|---|---|---|\n| 基础 | `print` | 快速输出到终端 |\n| 格式化 | f-string / `format` / `%` | 控制文本长相 |\n| IO | `print(file=...)`、`open` | 写到文件/流 |\n| 工程 | `logging` | 分级、分发、延迟格式化 |\n| 扩展 | `__format__` / `__str__` | 自定义对象如何被格式化 |\n\n掌握这五步，你就从“能打印”走到了“会输出”。\n\n```python\n# py.io.print_format 综合示例\nimport sys\nimport logging\n\n# 1) print 的基本参数\nprint(\"A\", \"B\", \"C\", sep=\"|\", end=\"  <-- end\\n\")\n\n# 2) 三种格式化方式对比\nname, score = \"Alice\", 93.45678\nprint(\"%%  : Name: %s, Score: %.2f\" % (name, score))\nprint(\"fmt: Name: {}, Score: {:.2f}\".format(name, score))\nprint(f\"fstr: Name: {name}, Score: {score:.2f}\")\n\n# 3) 格式规格：宽度、对齐、进制、百分比\nprint(f\"|{name:>10}|{score:<8.3f}|\")\nprint(f\"hex={255:#x}, bin={255:b}, pct={0.256:.1%}\")\n\n# 4) 写文件 + 标准错误\nwith open(\"demo_out.txt\", \"w\", encoding=\"utf-8\") as f:\n    print(\"written to file\", file=f)\nprint(\"this goes to stderr\", file=sys.stderr)\n\n# 5) logging 的延迟格式化\nlogging.basicConfig(level=logging.INFO,\n                    format=\"%(levelname)s:%(message)s\")\nlogging.info(\"user %s scored %.2f\", name, score)\n\n# 6) 自定义 __format__\nclass Money:\n    def __init__(self, amount):\n        self.amount = amount\n    def __format__(self, spec):\n        return format(self.amount, spec) if spec else str(self.amount)\n\nm = Money(3.14159)\nprint(f\"Money: {m:.2f}\")\n```\n\n## py.io.fstring\n\n# Python f-string：让字符串拼接变得又快又优雅\n\n## 一句话直觉\n\n`f-string`（formatted string literal，格式化字符串字面量）让你把变量、表达式直接\"嵌\"进字符串里，写起来像填表格，读起来像自然语言。\n\n---\n\n## 1. 为什么需要 f-string？\n\n在 Python 里，把变量的值放进字符串是一件非常常见的事。早期的写法是：\n\n```python\nname = \"Alice\"\nage = 30\ntext = \"My name is \" + name + \" and I am \" + str(age) + \" years old.\"\nprint(text)\n```\n\n问题很明显：需要手动转换类型（`str(age)`）、需要拼接大量 `+` 号、引号容易数错。\n\nPython 3.6 引入了 **f-string**，把这件事变成：\n\n```python\nname = \"Alice\"\nage = 30\ntext = f\"My name is {name} and I am {age} years old.\"\nprint(text)\n```\n\n**核心结论**：在字符串前面加一个字母 `f`，字符串里的 `{}` 就会被当作 Python 表达式求值后插入。\n\n---\n\n## 2. 基本语法：`{}` 里可以放什么？\n\n`{}` 里可以放任何合法的 Python 表达式，不限于变量名。\n\n```python\nx = 6\nprint(f\"{x} 的平方是 {x ** 2}\")          # 6 的平方是 36\nprint(f\"1 + 2 = {1 + 2}\")                  # 1 + 2 = 3\nprint(f\"当前时间戳：{__import__('time').time():.2f}\")\n```\n\n**核心结论**：`{}` 内是\"表达式\"而不是\"变量名\"，可以做运算、调用函数、访问属性。\n\n---\n\n## 3. 格式化：冒号后面的\"小语言\"\n\n`{}` 里除了表达式，还可以用 `:` 指定**格式规格**（format spec），控制数字、对齐、精度等。\n\n```python\npi = 3.1415926\nprint(f\"{pi:.2f}\")        # 保留两位小数：3.14\nprint(f\"{pi:10.3f}\")      # 宽度 10，右对齐，3 位小数：     3.142\nprint(f\"{pi:<10.3f}END\")  # 左对齐\nprint(f\"{pi:^10.3f}END\")  # 居中对齐\n\npercent = 0.856\nprint(f\"{percent:.1%}\")    # 百分比：85.6%\n\nnum = 255\nprint(f\"{num:#x}\")        # 十六进制带前缀：0xff\nprint(f\"{num:08b}\")       # 二进制补零：11111111\n```\n\n**核心结论**：`{表达式:格式}` 是 f-string 最强大的部分，能直接完成过去 `format()` 才能做的事。\n\n---\n\n## 4. 进阶：自记录表达式与嵌套\n\nPython 3.8 起，`f\"{x=}\"` 会打印 `x=值` 的调试形式；f-string 还支持嵌套表达式。\n\n```python\nuser = \"Bob\"\nscore = 95.6789\n\n# 自记录表达式（self-documenting expression）\nprint(f\"{user=}, {score=:.2f}\")\n# 输出：user='Bob', score=95.68\n\n# 嵌套：用变量控制宽度\nwidth = 12\nprint(f\"{user:>{width}}\")   # 右对齐到 12 宽\n\n# 多行 f-string\nname = \"Carol\"\nmsg = (\n    f\"Hello, {name}!\\n\"\n    f\"Welcome to the f-string tutorial.\"\n)\nprint(msg)\n```\n\n**核心结论**：`=` 后缀是调试利器，嵌套让格式规格也能动态化。\n\n---\n\n## 5. 性能与可读性：为什么工程里首选 f-string\n\nf-string 在编译期就被优化为字节码拼接，通常比 `%`、`str.format()`、甚至 `+` 拼接更快。同时写法更短，减少了\"模板与参数分离\"导致的错位 bug。\n\n```python\nimport timeit\n\nvalue = 42\n\nfstr = timeit.timeit(\n    lambda: f\"value is {value}\", number=100_000\n)\nformat_str = timeit.timeit(\n    lambda: \"value is {}\".format(value), number=100_000\n)\npercent = timeit.timeit(\n    lambda: \"value is %d\" % value, number=100_000\n)\n\nprint(f\"f-string:  {fstr:.4f}s\")\nprint(f\"format():  {format_str:.4f}s\")\nprint(f\"% 运算符:  {percent:.4f}s\")\n```\n\n**核心结论**：在同样可读的情况下，f-string 通常是最快、最简洁的选择。\n\n---\n\n## 动手练习\n\n**任务**：编写一个 `receipt.py`，使用 f-string 打印一张小票。要求：\n\n1. 定义 3 个商品：名称、单价、数量。\n2. 用 f-string 输出表格格式：商品名左对齐宽度 10，单价右对齐宽度 8 保留两位小数，数量居中宽度 5，小计右对齐宽度 10 保留两位小数。\n3. 最后输出总价，保留两位小数，前面带 `¥`。\n4. 附加：用 `{变量=}` 调试输出原始数据一次。\n\n**参考输入数据**：\n\n```python\nitems = [\n    (\"apple\", 3.5, 2),\n    (\"banana\", 1.2, 5),\n    (\"coffee\", 18.0, 1),\n]\n```\n\n**期望输出示意**：\n\n```\napple        3.50  2     7.00\nbanana       1.20  5     6.00\ncoffee      18.00  1    18.00\n----------------------------\nTOTAL: ¥31.00\n```\n\n完成后可以尝试：用同一个 f-string 表达式，把单价改成 `:.2%`，看看输出如何变化。\n\n```python\n# -*- coding: utf-8 -*-\n\"\"\"\nf-string 综合示例：小票打印\n运行：python receipt.py\n\"\"\"\n\nitems = [\n    (\"apple\", 3.5, 2),\n    (\"banana\", 1.2, 5),\n    (\"coffee\", 18.0, 1),\n]\n\ntotal = 0.0\nprint(f\"{'Item':<10}{'Price':>8}{'Qty':^5}{'Subtotal':>10}\")\nprint(\"-\" * 28)\n\nfor name, price, qty in items:\n    subtotal = price * qty\n    total += subtotal\n    # 左对齐/右对齐/居中，浮点保留两位小数\n    print(f\"{name:<10}{price:>8.2f}{qty:^5d}{subtotal:>10.2f}\")\n\nprint(\"-\" * 28)\nprint(f\"TOTAL: ¥{total:.2f}\")\n\n# 自记录表达式，方便调试\nfirst_name = items[0][0]\nprint(f\"{first_name=} {total=:.2f}\")\n```\n",
+  "quiz": [
+    {
+      "kp": "py.io.input",
+      "type": "single_choice",
+      "question": "在 Python 中，内置函数 input() 的返回值总是哪种类型？",
+      "options": [
+        "int",
+        "str",
+        "由输入内容自动推断的类型",
+        "bytes"
+      ],
+      "answer": 1,
+      "explanation": "input() 无论用户输入数字还是文字，都返回字符串 str。若要得到数字需自行用 int()/float() 转换，Python 不会自动推断类型。",
+      "error_tag": "概念混淆",
+      "variant_group": "input_return_type"
+    },
+    {
+      "kp": "py.io.input",
+      "type": "single_choice",
+      "question": "下面代码运行后，用户输入 42 并回车，变量 x 的值是什么？\nx = input()",
+      "options": [
+        "整数 42",
+        "字符串 \"42\"",
+        "浮点数 42.0",
+        "报错 TypeError"
+      ],
+      "answer": 1,
+      "explanation": "input() 返回字符串，因此 x 是字符串 \"42\"，而不是数字。常见误解是以为它会根据内容自动转成 int。",
+      "error_tag": "概念混淆",
+      "variant_group": "input_return_type"
+    },
+    {
+      "kp": "py.io.input",
+      "type": "multi_choice",
+      "question": "关于 Python 内置 input() 函数，下列说法正确的有？",
+      "options": [
+        "它返回的总是字符串",
+        "可以传入一个提示字符串作为参数",
+        "它会自动把输入内容转换成数字或列表",
+        "到达输入流末尾时会抛 EOFError",
+        "它返回的字符串包含行尾换行符"
+      ],
+      "answer": [
+        0,
+        1,
+        3
+      ],
+      "explanation": "input() 返回 str、支持提示参数、EOF 时抛 EOFError 均正确。它不会自动转换类型（需手动 int()/split()），也不包含行尾换行符。",
+      "error_tag": "概念混淆",
+      "variant_group": "input_basic_semantics"
+    },
+    {
+      "kp": "py.io.input",
+      "type": "multi_choice",
+      "question": "下面哪些属于读取一行输入后常见的类型转换/切分方式？（多选）",
+      "options": [
+        "int(input())",
+        "input().split()",
+        "list(map(int, input().split()))",
+        "input().to_integer()",
+        "float(input())"
+      ],
+      "answer": [
+        0,
+        1,
+        2,
+        4
+      ],
+      "explanation": "int/float 转换、split 切分、map 批量转 int 都是真实存在的方式。input() 没有 to_integer() 方法，属于臆造 API。",
+      "error_tag": "概念混淆",
+      "variant_group": "input_split_convert"
+    },
+    {
+      "kp": "py.io.input",
+      "type": "multi_choice",
+      "question": "在在线判题或脚本环境中使用 input() 读数据时，哪些是需要注意的？（多选）",
+      "options": [
+        "输入内容默认是字符串，参与数值运算前常常需要转换",
+        "数据被重定向读完后继续读取会抛 EOFError",
+        "每调用一次 input() 通常消耗一整行输入",
+        "input() 会自动跳过空行读取下一非空行",
+        "输入可能包含多余空白，切分时可依赖不带参数的 split()"
+      ],
+      "answer": [
+        0,
+        1,
+        2,
+        4
+      ],
+      "explanation": "input() 不会自动跳过空行，空行会返回空字符串，因此选项 D 错误。其余都符合 input() 的读取与转换行为。",
+      "error_tag": "边界错误",
+      "variant_group": "input_reading_pitfalls"
+    },
+    {
+      "kp": "py.io.input",
+      "type": "multi_choice",
+      "question": "以下关于读取输入并处理的写法，哪些能正确把一行中空格分隔的整数放入列表？",
+      "options": [
+        "nums = list(map(int, input().split()))",
+        "nums = [int(x) for x in input().split()]",
+        "nums = int(input().split())",
+        "nums = input().split() 并通过 int() 逐个转换后再收集"
+      ],
+      "answer": [
+        0,
+        1,
+        3
+      ],
+      "explanation": "选项 A、B 是直接得到整数列表的常见写法；选项 D 先切分再逐个转换也正确；选项 C 把列表直接传给 int() 会报 TypeError。",
+      "error_tag": "概念混淆",
+      "variant_group": "input_split_convert"
+    },
+    {
+      "kp": "py.io.input",
+      "type": "fill_blank",
+      "question": "填空：要让用户输入被当作整数使用，常见写法是 x = ______(input())。请填写实现该转换的内置类型名。",
+      "options": [],
+      "answer": [
+        "int",
+        "int "
+      ],
+      "explanation": "input() 返回字符串，转整数需用内置类型 int()。float() 得到浮点数，不符合本题要求的整数。",
+      "error_tag": "记忆缺失",
+      "variant_group": "input_int_conversion"
+    },
+    {
+      "kp": "py.io.input",
+      "type": "fill_blank",
+      "question": "填空：要把一行中被空格分隔的多个字符串切分成列表，常用 input().______()。请填写方法名。",
+      "options": [],
+      "answer": [
+        "split",
+        "split ",
+        "split()"
+      ],
+      "explanation": "str.split() 不带参数时按任意空白切分，是读取一行多值的标准做法。",
+      "error_tag": "记忆缺失",
+      "variant_group": "input_split_convert"
+    },
+    {
+      "kp": "py.io.input",
+      "type": "fill_blank",
+      "question": "填空：Python 内置函数 ______ 用于从标准输入读取一行文本，返回字符串。请填写函数名。",
+      "options": [],
+      "answer": [
+        "input",
+        "input "
+      ],
+      "explanation": "input() 是读取一行标准输入的机制。注意不要与 sys.stdin.readline() 混淆，后者保留行尾换行符。",
+      "error_tag": "记忆缺失",
+      "variant_group": "input_basic_semantics"
+    },
+    {
+      "kp": "py.io.input",
+      "type": "code_reading",
+      "question": "阅读代码并写出输出（假设用户输入为 \"3 4\"）：\na, b = map(int, input().split())\nprint(a + b)",
+      "options": [],
+      "answer": "7",
+      "explanation": "input() 得到字符串 \"3 4\"，split() 切成 [\"3\", \"4\"]，map(int, ...) 转成 3 和 4，解包给 a、b，相加得 7 并打印。若忘记 int 转换会变成字符串拼接得到 \"34\"。",
+      "error_tag": "概念混淆",
+      "variant_group": "input_split_convert"
+    },
+    {
+      "kp": "py.io.input",
+      "type": "code_reading",
+      "question": "阅读代码并写出输出（假设用户输入为 \"5\"）：\nn = input()\nprint(n * 2)",
+      "options": [],
+      "answer": "55",
+      "explanation": "input() 返回字符串 \"5\"，字符串与整数相乘表示重复拼接，因此得到 \"55\" 而不是 10。要得到 10 需先写 int(input())。",
+      "error_tag": "概念混淆",
+      "variant_group": "input_return_type"
+    },
+    {
+      "kp": "py.io.input",
+      "type": "scenario",
+      "question": "你在编写一个命令行小工具，需要从标准输入读取用户输入的一行命令，并在用户按下 Ctrl+D（Unix，表示输入结束）或输入流读完时优雅退出程序而不是崩溃。目前代码直接调用 input() 读取，遇到文件末尾会抛出 EOFError。请说明你会如何处理这一场景。",
+      "options": [],
+      "answer": null,
+      "explanation": "到达输入流末尾时 input() 抛 EOFError，工程上通常用 try/except EOFError 捕获，在 except 分支中打印提示并退出（如 break、return 或 sys.exit()），避免程序因未处理异常直接崩溃。",
+      "error_tag": "边界错误",
+      "variant_group": "input_eof",
+      "required_keywords": [
+        "EOFError",
+        "try",
+        "except",
+        "退出"
+      ]
+    },
+    {
+      "kp": "py.io.input",
+      "type": "single_choice",
+      "question": "执行 nums = [int(v) for v in input().split()]，用户输入 \"1 2 3\"，nums 的结果是？",
+      "options": [
+        "[1, 2, 3]",
+        "[\"1\", \"2\", \"3\"]",
+        "\"123\"",
+        "报错，因为 split() 不作用于字符串"
+      ],
+      "answer": 0,
+      "explanation": "input() 得到 \"1 2 3\"，split() 按空白切分成字符串列表，再用 int 逐个转换得到整数列表 [1, 2, 3]。",
+      "error_tag": "概念混淆",
+      "variant_group": "input_split_convert"
+    },
+    {
+      "kp": "py.io.input",
+      "type": "single_choice",
+      "question": "关于 input() 的参数，下列说法正确的是？",
+      "options": [
+        "参数是必须提供的输入值",
+        "参数是可选的提示字符串，会打印到标准输出且不带换行",
+        "参数会被自动转换为数字",
+        "参数会被当作分隔符切分输入"
+      ],
+      "answer": 1,
+      "explanation": "input(prompt) 中的 prompt 是可选提示串，会先写到标准输出（通常是屏幕）且不自动换行，然后等待用户输入。它只是提示，不参与解析。",
+      "error_tag": "记忆缺失",
+      "variant_group": "input_prompt"
+    },
+    {
+      "kp": "py.io.input",
+      "type": "single_choice",
+      "question": "下面代码中，用户输入 \"hello world\" 并回车，输出是什么？\ns = input('请输入: ')\nprint(len(s))",
+      "options": [
+        "5",
+        "11",
+        "12",
+        "报错"
+      ],
+      "answer": 1,
+      "explanation": "\"hello world\" 长度为 11（含中间一个空格）。input() 不含行尾换行符，因此不是 12。提示串 '请输入: ' 不算入 s。",
+      "error_tag": "边界错误",
+      "variant_group": "input_no_newline"
+    },
+    {
+      "kp": "py.io.input",
+      "type": "single_choice",
+      "question": "用户直接按回车（不输入任何字符）时，input() 返回什么？",
+      "options": [
+        "None",
+        "空字符串 \"\"",
+        "换行符 \"\\n\"",
+        "抛出 EOFError"
+      ],
+      "answer": 1,
+      "explanation": "回车表示输入了一个空行，input() 返回空字符串 \"\"，而不是 None，也不包含换行符。只有在输入流到达文件末尾时才会抛 EOFError。",
+      "error_tag": "概念混淆",
+      "variant_group": "input_empty_line"
+    },
+    {
+      "kp": "py.io.input",
+      "type": "single_choice",
+      "question": "要从一行输入中读取两个整数 a 和 b，下面哪种写法最合适？",
+      "options": [
+        "a, b = input()",
+        "a = int(input()); b = int(input())",
+        "a, b = map(int, input().split())",
+        "a, b = input().split(int)"
+      ],
+      "answer": 2,
+      "explanation": "input().split() 得到两个字符串，再用 map(int, ...) 批量转换为整数并解包。选项 A 会按字符逐个解包字符串；选项 B 需要两行输入；选项 D 语法无效。",
+      "error_tag": "概念混淆",
+      "variant_group": "input_split_convert"
+    },
+    {
+      "kp": "py.io.input",
+      "type": "single_choice",
+      "question": "下面代码在什么情况下会抛出 EOFError？\ns = input()",
+      "options": [
+        "用户输入空行时",
+        "用户输入非数字字符时",
+        "输入流已到达末尾（如重定向文件读完）时",
+        "从标准输入读取时永远不会抛 EOFError"
+      ],
+      "answer": 2,
+      "explanation": "input() 在遇到文件末尾（EOF）而无更多数据可读时抛 EOFError。交互式终端下通常不出现，但管道、重定向或在线判题环境中很常见。",
+      "error_tag": "边界错误",
+      "variant_group": "input_eof"
+    },
+    {
+      "kp": "py.io.input",
+      "type": "single_choice",
+      "question": "关于 input() 的读取行为，下列说法正确的是？",
+      "options": [
+        "返回的字符串会保留行尾的换行符",
+        "返回的字符串会去掉行尾的换行符",
+        "会读取多个以空格分隔的token并组成列表",
+        "会自动去除首尾空格"
+      ],
+      "answer": 1,
+      "explanation": "input() 读取一行并去除行尾的换行符，但不会自动去除其它空白（首尾空格仍保留）。这与 sys.stdin.readline() 保留换行符不同。",
+      "error_tag": "概念混淆",
+      "variant_group": "input_no_newline"
+    },
+    {
+      "kp": "py.io.input",
+      "type": "single_choice",
+      "question": "执行 a = int(input('请输入一个数字: '))，若用户输入 \"abc\" 并回车，会发生什么？",
+      "options": [
+        "a 的值为 0",
+        "a 的值为字符串 \"abc\"",
+        "抛出 ValueError",
+        "抛出 EOFError"
+      ],
+      "answer": 2,
+      "explanation": "\"abc\" 不是合法整数表示，int() 转换失败会抛 ValueError。这是读取数字时常见的运行时错误，需要通过校验或异常处理避免。",
+      "error_tag": "边界错误",
+      "variant_group": "input_int_conversion_error"
+    },
+    {
+      "kp": "py.io.print_format",
+      "type": "single_choice",
+      "question": "阅读下面的代码，输出结果是什么？\nprint('a', 'b', sep='-')",
+      "options": [
+        "a-b",
+        "a b",
+        "ab",
+        "a, b"
+      ],
+      "answer": 0,
+      "explanation": "print 的 sep 参数指定多个对象之间的分隔符，默认是空格，这里设为 '-'，所以输出 a-b。",
+      "error_tag": "概念混淆",
+      "variant_group": "print_sep"
+    },
+    {
+      "kp": "py.io.print_format",
+      "type": "single_choice",
+      "question": "下面代码的输出是什么？\nprint('hello', end='')\nprint('world')",
+      "options": [
+        "hello world",
+        "helloworld",
+        "hello\\nworld",
+        "hello, world"
+      ],
+      "answer": 1,
+      "explanation": "end 参数指定 print 结束时的字符，默认是换行符。第一个 print 用 end='' 取消换行，因此两段输出连在一起为 helloworld。",
+      "error_tag": "概念混淆",
+      "variant_group": "print_end"
+    },
+    {
+      "kp": "py.io.print_format",
+      "type": "single_choice",
+      "question": "下面代码的输出是什么？\nprint('Result: {}'.format(3.14159))",
+      "options": [
+        "Result: 3.14159",
+        "Result: {}",
+        "Result: 3.14",
+        "报错：缺少格式说明"
+      ],
+      "answer": 0,
+      "explanation": "format 中的 {} 会按顺序替换为传入的参数，未指定格式说明符时使用默认的字符串表示，即 3.14159。",
+      "error_tag": "概念混淆",
+      "variant_group": "format_method"
+    },
+    {
+      "kp": "py.io.print_format",
+      "type": "single_choice",
+      "question": "下面代码的输出是什么？\nprint('{:.2%}'.format(0.1234))",
+      "options": [
+        "12.34%",
+        "0.12%",
+        "12%",
+        "1.23%"
+      ],
+      "answer": 0,
+      "explanation": "格式说明符 .2% 表示以百分数形式显示并保留两位小数：0.1234 → 12.34%。",
+      "error_tag": "概念混淆",
+      "variant_group": "format_method"
+    },
+    {
+      "kp": "py.io.print_format",
+      "type": "multi_choice",
+      "question": "关于 print 函数的关键字参数，下列说法正确的有？",
+      "options": [
+        "sep 用于指定多个输出对象之间的分隔符",
+        "end 用于指定输出结束时的字符，默认是换行",
+        "file 用于指定输出目标，默认是 sys.stdout",
+        "flush 用于强制刷新输出缓冲区",
+        "sep 和 end 必须同时指定"
+      ],
+      "answer": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "explanation": "sep、end、file、flush 都是 print 的合法关键字参数，各有明确含义；sep 和 end 都有默认值，无需同时指定，E 错误。",
+      "error_tag": "记忆缺失",
+      "variant_group": "print_params"
+    },
+    {
+      "kp": "py.io.print_format",
+      "type": "multi_choice",
+      "question": "下面的代码中，哪些写法能得到字符串 '3.14'？",
+      "options": [
+        "f'{3.14159:.2f}'",
+        "'{:.2f}'.format(3.14159)",
+        "'%.2f' % 3.14159",
+        "str(round(3.14159, 2))",
+        "f'{3.14159:.3f}'"
+      ],
+      "answer": [
+        0,
+        1,
+        2
+      ],
+      "explanation": "A、B、C 都能保留两位小数得到 '3.14'。D 中 round(3.14159, 2) 返回 3.14，但 str(3.14) 是 '3.14' 也正确——不过 round 可能引入二进制表示问题，某些数值下会不精确；在本题 3.14159 情形下 str(round(...)) 为 '3.14'，但作为格式化手段不如前三种可靠，标准答案是 A、B、C。E 保留三位小数得到 '3.142'。",
+      "error_tag": "概念混淆",
+      "variant_group": "float_print"
+    },
+    {
+      "kp": "py.io.print_format",
+      "type": "multi_choice",
+      "question": "关于 f-string，下列说法正确的有？",
+      "options": [
+        "f-string 需要在字符串前加 f 或 F 前缀",
+        "f-string 的花括号内可以写表达式",
+        "f-string 中可以指定格式说明符，如 {x:.2f}",
+        "f-string 中的花括号需要用 {{ 和 }} 转义输出字面花括号",
+        "f-string 只能用于 print 函数"
+      ],
+      "answer": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "explanation": "A-D 都是 f-string 的正确特性。f-string 是通用的字符串字面量语法，可用于任何需要字符串的地方，不限于 print，故 E 错误。",
+      "error_tag": "概念混淆",
+      "variant_group": "fstring_format"
+    },
+    {
+      "kp": "py.io.print_format",
+      "type": "fill_blank",
+      "question": "补全下面代码，使其输出 'a|b|c'：\nprint('a', 'b', 'c', ____='|')",
+      "options": [],
+      "answer": [
+        "sep",
+        "sep=",
+        "sep ="
+      ],
+      "explanation": "要让多个对象之间用 '|' 分隔，应使用 print 的 sep 参数，即 sep='|'。",
+      "error_tag": "记忆缺失",
+      "variant_group": "print_sep"
+    },
+    {
+      "kp": "py.io.print_format",
+      "type": "fill_blank",
+      "question": "补全下面的 f-string，使其输出 3.14159 保留两位小数的结果（即 3.14）：\nprint(f'{3.14159:____}')",
+      "options": [],
+      "answer": [
+        ".2f",
+        "0.2f",
+        ".2F"
+      ],
+      "explanation": "保留两位小数的定点格式说明符是 .2f，也可写作 .2F（输出大写不影响数字）。",
+      "error_tag": "记忆缺失",
+      "variant_group": "fstring_format"
+    },
+    {
+      "kp": "py.io.print_format",
+      "type": "code_reading",
+      "question": "阅读下面代码，写出输出结果：\nprint('x', 'y', sep='', end='!')\nprint('z')",
+      "options": [],
+      "answer": "xy!z",
+      "explanation": "第一个 print 用 sep='' 拼接 'x' 和 'y' 得到 'xy'，再用 end='!' 使结尾为感叹号不换行；第二个 print 输出 'z' 后换行。整体显示为 xy!z。",
+      "error_tag": "边界错误",
+      "variant_group": "print_sep_end"
+    },
+    {
+      "kp": "py.io.print_format",
+      "type": "code_reading",
+      "question": "阅读下面代码，写出输出结果（注意换行位置）：\nprint('a')\nprint('b', end='')\nprint('c')",
+      "options": [],
+      "answer": "a\nbc",
+      "explanation": "第一个 print 输出 'a' 并换行；第二个 print 输出 'b' 且 end='' 不换行；第三个 print 紧接着输出 'c' 再换行，因此第二行为 'bc'。",
+      "error_tag": "边界错误",
+      "variant_group": "print_end"
+    },
+    {
+      "kp": "py.io.print_format",
+      "type": "scenario",
+      "question": "工程场景：你在编写一个日志输出函数，需要把多条信息追加输出到指定文件中，且不希望每条信息之间自动换行（由调用方决定何时换行），同时希望输出立即写入文件以便实时查看。请说明应该如何使用 print 函数的相关参数来实现，并解释原因。",
+      "options": [],
+      "answer": null,
+      "explanation": "应使用 print 的 file 参数指定目标文件对象（需以写入模式打开，具有 write 方法），用 end='' 避免自动换行，用 flush=True 强制刷新缓冲区以便实时写入。file 参数接收的是文件类对象而不是路径字符串。",
+      "error_tag": "概念混淆",
+      "variant_group": "print_params",
+      "required_keywords": [
+        "file",
+        "end",
+        "flush",
+        "write"
+      ]
+    },
+    {
+      "kp": "py.io.print_format",
+      "type": "single_choice",
+      "question": "下面代码的输出是什么？\nprint(1, 2, 3, sep=', ', end='.\\n')",
+      "options": [
+        "1, 2, 3.\\n（换行）",
+        "1 2 3.\\n（换行）",
+        "1,2,3.（换行）",
+        "1, 2, 3.（不换行）"
+      ],
+      "answer": 0,
+      "explanation": "sep=', ' 使各个对象之间用逗号加空格分隔，end='.\\n' 使结束符为句点加换行，因此输出为 '1, 2, 3.' 后换行。",
+      "error_tag": "概念混淆",
+      "variant_group": "print_sep"
+    },
+    {
+      "kp": "py.io.print_format",
+      "type": "scenario",
+      "question": "工程场景：你需要向用户展示一组对齐的表格数据，包括姓名（左对齐、占 10 字符）和分数（右对齐、保留 2 位小数、占 8 字符）。请说明你会使用哪种格式化方式，并写出关键的格式说明符，解释每个部分的含义。",
+      "options": [],
+      "answer": null,
+      "explanation": "推荐使用 f-string。姓名用 {name:<10} 表示左对齐、宽度 10；分数用 {score:>8.2f} 表示右对齐、总宽度 8、保留两位小数。也可用 str.format 达到同样效果。<> 分别控制左右对齐方向，宽度数字控制占位，.2f 控制小数位数。",
+      "error_tag": "记忆缺失",
+      "variant_group": "fstring_format",
+      "required_keywords": [
+        "f-string",
+        "<",
+        ">",
+        ".2f",
+        "format"
+      ]
+    },
+    {
+      "kp": "py.io.print_format",
+      "type": "single_choice",
+      "question": "关于 f-string，下面哪种写法可以得到 'Pi is 3.14'？",
+      "options": [
+        "print(f'Pi is {3.14159:.2f}')",
+        "print('Pi is {3.14159:.2f}')",
+        "print(f'Pi is {3.14159:2f}')",
+        "print(f'Pi is {3.14159:.2}')"
+      ],
+      "answer": 0,
+      "explanation": "f-string 中使用 {value:.2f} 表示保留两位小数的定点格式。选项 B 缺少 f 前缀不会插值；C 的格式说明不完整；D 中 .2 对 float 不合法。",
+      "error_tag": "概念混淆",
+      "variant_group": "fstring_format"
+    },
+    {
+      "kp": "py.io.print_format",
+      "type": "single_choice",
+      "question": "下面代码的输出是什么？\nname = 'Tom'\nprint('Hello, %s!' % name)",
+      "options": [
+        "Hello, Tom!",
+        "Hello, %s!",
+        "Hello, name!",
+        "报错：缺少参数"
+      ],
+      "answer": 0,
+      "explanation": "百分号格式化中 %s 会用后面的 name 值替换，得到 'Hello, Tom!'。",
+      "error_tag": "概念混淆",
+      "variant_group": "percent_format"
+    },
+    {
+      "kp": "py.io.print_format",
+      "type": "single_choice",
+      "question": "下面代码的输出是什么？\nprint('{0}-{1}-{0}'.format('a', 'b'))",
+      "options": [
+        "a-b-a",
+        "a-b-b",
+        "0-1-0",
+        "报错：索引超出范围"
+      ],
+      "answer": 0,
+      "explanation": "str.format 中 {0} 表示第一个位置参数，可以重复引用，因此 'a' 被使用两次，输出 a-b-a。",
+      "error_tag": "概念混淆",
+      "variant_group": "format_method"
+    },
+    {
+      "kp": "py.io.print_format",
+      "type": "single_choice",
+      "question": "下面代码的输出结果是什么？\nx = 0.1 + 0.2\nprint(x)",
+      "options": [
+        "0.3",
+        "0.30000000000000004",
+        "0.30",
+        "0.3000000000000000"
+      ],
+      "answer": 1,
+      "explanation": "0.1 和 0.2 的二进制浮点表示存在误差，相加得到 0.30000000000000004。直接 print 会输出该完整结果，如需显示 0.3 应使用格式化。",
+      "error_tag": "边界错误",
+      "variant_group": "float_print"
+    },
+    {
+      "kp": "py.io.print_format",
+      "type": "single_choice",
+      "question": "下面代码会输出什么？\nprint('a', 'b', sep='', end='')\nprint('c')",
+      "options": [
+        "abc",
+        "a bc",
+        "ab\\nc",
+        "a, b, c"
+      ],
+      "answer": 0,
+      "explanation": "第一个 print 使用 sep='' 使 'a' 和 'b' 无分隔并拼接为 'ab'，end='' 使其不换行；第二个 print 输出 'c' 后换行。最终显示 abc（换行）。",
+      "error_tag": "边界错误",
+      "variant_group": "print_sep_end"
+    },
+    {
+      "kp": "py.io.print_format",
+      "type": "single_choice",
+      "question": "关于 print 函数的参数，下列说法正确的是？",
+      "options": [
+        "sep 参数只在传入多个位置参数时起作用",
+        "sep 参数可以设置为 None",
+        "end 参数不能为空字符串",
+        "file 参数必须是字符串文件路径"
+      ],
+      "answer": 0,
+      "explanation": "sep 只在有多个要打印的对象时插入到它们之间；只打印一个对象时 sep 不产生可见影响。sep 不能为 None（否则 TypeError）；end 可以为空字符串；file 必须是具有 write 方法的文件类对象而非路径字符串。",
+      "error_tag": "概念混淆",
+      "variant_group": "print_params"
+    },
+    {
+      "kp": "py.io.print_format",
+      "type": "single_choice",
+      "question": "下面代码的输出是什么？\nprint(f'{10:05d}')",
+      "options": [
+        "10",
+        "00010",
+        "10000",
+        "10.000"
+      ],
+      "answer": 1,
+      "explanation": "{10:05d} 中的 0 表示用零填充，5 表示总宽度为 5，d 表示十进制整数，因此输出 00010。",
+      "error_tag": "记忆缺失",
+      "variant_group": "fstring_format"
+    },
+    {
+      "kp": "py.io.fstring",
+      "type": "single_choice",
+      "question": "关于 Python f-string，下列说法正确的是？",
+      "options": [
+        "f-string 是 Python 2.6 引入的字符串格式化方式",
+        "f-string 中的表达式在字符串创建时就会被求值",
+        "f-string 只能嵌入变量名，不能嵌入任意表达式",
+        "f-string 必须写成 f('...') 这种函数调用的形式"
+      ],
+      "answer": 1,
+      "explanation": "f-string 是 Python 3.6 引入的，且在字符串被创建时即对花括号内的表达式求值；它可以嵌入任意合法表达式，且书写形式是 f'...' 或 F'...'，不是函数调用。",
+      "error_tag": "概念混淆",
+      "variant_group": "fstring_basics"
+    },
+    {
+      "kp": "py.io.fstring",
+      "type": "single_choice",
+      "question": "执行以下代码，输出是什么？\n\nname = \"Ada\"\nprint(f\"Hello, {name}!\")",
+      "options": [
+        "Hello, {name}!",
+        "Hello, Ada!",
+        "Hello, name!",
+        "报错：name 未定义"
+      ],
+      "answer": 1,
+      "explanation": "f-string 会把花括号中的 name 当作表达式求值，得到变量值 Ada，因此输出 Hello, Ada!。",
+      "error_tag": "概念混淆",
+      "variant_group": "fstring_basics"
+    },
+    {
+      "kp": "py.io.fstring",
+      "type": "single_choice",
+      "question": "以下代码中，f-string 与普通字符串拼接相比有一个显著区别，下列描述最准确的是？\n\nuser = \"bob\"\nmsg = f\"welcome, {user.upper()}\"",
+      "options": [
+        "f-string 会调用 repr 而不是 str",
+        "f-string 允许在占位符内写任意表达式，包括方法调用",
+        "f-string 中的表达式只能是数字",
+        "f-string 会在运行时重新解析字符串内容"
+      ],
+      "answer": 1,
+      "explanation": "f-string 的花括号内可以是任意合法表达式，包括属性访问、方法调用、函数调用等；它默认使用 str 转换；表达式在编译期被解析而非运行时重新解析。",
+      "error_tag": "概念混淆",
+      "variant_group": "fstring_expression"
+    },
+    {
+      "kp": "py.io.fstring",
+      "type": "multi_choice",
+      "question": "关于 f-string 的说法，下列正确的有？",
+      "options": [
+        "f-string 由 Python 3.6 引入",
+        "f-string 的花括号中可以调用函数",
+        "f-string 支持在冒号后指定格式说明符",
+        "f-string 中的表达式会在每次字符串被读取时重新求值",
+        "f-string 只能用于 print"
+      ],
+      "answer": [
+        0,
+        1,
+        2
+      ],
+      "explanation": "f-string 3.6 引入、可嵌表达式（含函数调用）、支持格式说明符。表达式在字面量求值时一次性计算并固化，不会每次读取重新求值；f-string 是普通字符串字面量，可用于任何需要字符串的地方，不限于 print。",
+      "error_tag": "概念混淆",
+      "variant_group": "fstring_basics"
+    },
+    {
+      "kp": "py.io.fstring",
+      "type": "multi_choice",
+      "question": "下列哪些是合法的 f-string 写法？（假设相关变量已定义）",
+      "options": [
+        "f\"{a + b}\"",
+        "f\"{name!r}\"",
+        "f\"{value:>10.3f}\"",
+        "f\"{a if a > b else b}\"",
+        "f\"{\""
+      ],
+      "answer": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "explanation": "f-string 支持表达式、!r 之类的转换符、格式说明符以及条件表达式。单个未配对的花括号会产生语法错误，必须写成 {{ 才能输出字面量大括号。",
+      "error_tag": "边界错误",
+      "variant_group": "fstring_escape"
+    },
+    {
+      "kp": "py.io.fstring",
+      "type": "multi_choice",
+      "question": "关于 f-string 的格式说明符，下列正确的有？",
+      "options": [
+        "格式说明符写在冒号 : 之后",
+        ":>10 表示右对齐、总宽度至少 10",
+        ":.3f 表示保留三位小数的定点数",
+        ":, 表示使用千位分隔符",
+        "格式说明符中不能引用变量"
+      ],
+      "answer": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "explanation": "格式说明符跟随冒号；> 对齐、数字为宽度；.3f 定点小数；逗号用于千位分隔。格式说明符中允许用嵌套花括号引用变量作为宽度/精度，所以「不能引用变量」错误。",
+      "error_tag": "记忆缺失",
+      "variant_group": "fstring_format_spec"
+    },
+    {
+      "kp": "py.io.fstring",
+      "type": "fill_blank",
+      "question": "补全代码，使输出为：x is 10.00\n\nx = 10\nprint(f\"x is {x:_______}\")",
+      "options": [],
+      "answer": [
+        ".2f",
+        ":.2f",
+        ".02f"
+      ],
+      "explanation": "要在 f-string 中把整数输出为保留两位小数的定点数，应在冒号后使用 .2f。填写时冒号可能已给出，所以接受 .2f 等形式。",
+      "error_tag": "记忆缺失",
+      "variant_group": "fstring_format_spec"
+    },
+    {
+      "kp": "py.io.fstring",
+      "type": "fill_blank",
+      "question": "补全 f-string，使其在变量 name 的值为 \"Ada\" 时输出：Hello, \"Ada\"!\n（即带双引号）\n\nname = \"Ada\"\nprint(f\"Hello, {name______}!\")",
+      "options": [],
+      "answer": [
+        "!r",
+        "！r"
+      ],
+      "explanation": "!r 是转换符，表示对表达式结果调用 repr，因此字符串会带上引号输出。",
+      "error_tag": "记忆缺失",
+      "variant_group": "fstring_conversion"
+    },
+    {
+      "kp": "py.io.fstring",
+      "type": "fill_blank",
+      "question": "补全代码，使 f-string 输出一个字面量左大括号 {\n\nprint(f\"_____\")",
+      "options": [],
+      "answer": [
+        "{{",
+        "{{}}",
+        "{{ }}"
+      ],
+      "explanation": "f-string 中用两个连续大括号 {{ 表示一个字面量 {，}} 表示 }。只写一个 { 会被解析为表达式开始，导致语法错误。",
+      "error_tag": "边界错误",
+      "variant_group": "fstring_escape"
+    },
+    {
+      "kp": "py.io.fstring",
+      "type": "code_reading",
+      "question": "阅读代码，写出输出结果：\n\nitems = [\"a\", \"b\"]\ni = 0\nprint(f\"{items[i]} at {i}\")\ni = 1\nprint(f\"{items[i]} at {i}\")",
+      "options": [],
+      "answer": "a at 0\nb at 1",
+      "explanation": "每条 print 执行时，f-string 会立即对表达式求值。第一条 i 为 0，输出 a at 0；随后 i 变为 1，第二条输出 b at 1。说明求值发生在字面量被执行的时刻，而不是之后。",
+      "error_tag": "概念混淆",
+      "variant_group": "fstring_evaluation"
+    },
+    {
+      "kp": "py.io.fstring",
+      "type": "code_reading",
+      "question": "阅读代码，写出输出结果：\n\nv = 5\ns = f\"{v:04d}\"\nv = 99\nprint(s)",
+      "options": [],
+      "answer": "0005",
+      "explanation": "f-string 在 s 被赋值时就完成了求值与格式化，结果 0005 已固化到字符串 s 中。之后修改 v 不会影响已生成的字符串，因此打印 0005 而非 0099。",
+      "error_tag": "概念混淆",
+      "variant_group": "fstring_evaluation"
+    },
+    {
+      "kp": "py.io.fstring",
+      "type": "scenario",
+      "question": "你在写一个日志函数，需要把用户输入的每个字段追加到一个字符串中，其中可能包含用户提供的、含有大括号 { 或 } 的文本片段。你计划用 f-string 拼接。请说明编写时要注意什么，以及推荐的做法。",
+      "options": [],
+      "answer": null,
+      "explanation": "f-string 中的 { } 具有特殊含义，会被当成表达式占位符。若用户文本中包含大括号，直接放入 f-string 会导致语法或逻辑问题。应当把用户数据作为变量传入占位符（例如 f\"{user_input}\"），而不是把用户内容直接作为 f-string 字面量的一部分；如确需在字面量中显示大括号，须写成 {{ 和 }}。也可以选择拼接或 format 来避免字面量大括号问题。",
+      "error_tag": "边界错误",
+      "variant_group": "fstring_escape",
+      "required_keywords": [
+        "大括号",
+        "转义",
+        "{{",
+        "表达式",
+        "不能",
+        "拼接"
+      ]
+    },
+    {
+      "kp": "py.io.fstring",
+      "type": "single_choice",
+      "question": "以下代码输出是什么？\n\nx = 3\ny = 4\nprint(f\"{x} + {y} = {x + y}\")",
+      "options": [
+        "{x} + {y} = {x + y}",
+        "3 + 4 = {x + y}",
+        "3 + 4 = 7",
+        "报错：f-string 中不能有算术运算"
+      ],
+      "answer": 2,
+      "explanation": "f-string 的花括号中可以嵌入任意表达式，包括算术运算，因此会先计算 x + y 得到 7，再拼接到字符串中。",
+      "error_tag": "概念混淆",
+      "variant_group": "fstring_expression"
+    },
+    {
+      "kp": "py.io.fstring",
+      "type": "scenario",
+      "question": "同事写了一个性能敏感的循环：每次迭代都执行 msg = f\"{a}-{b}-{c}\" 并把它存入列表。他抱怨说 f-string 会在拼接时反复计算表达式，导致慢。请判断他的理解是否正确，并解释 f-string 的求值时机。",
+      "options": [],
+      "answer": null,
+      "explanation": "他的理解不正确。f-string 是在该字面量被执行到时求值一次，结果即成为普通字符串，不会在后续被读取或使用时重新计算表达式。若循环体本身迭代多次，每次迭代都会重新执行该字面量，从而各自求值一次；但这不是「反复对同一字符串重算」。性能问题应关注循环内是否重复做了本可提出循环的无关计算。",
+      "error_tag": "概念混淆",
+      "variant_group": "fstring_evaluation",
+      "required_keywords": [
+        "不正确",
+        "字面量",
+        "求值",
+        "一次",
+        "固化",
+        "重新计算"
+      ]
+    },
+    {
+      "kp": "py.io.fstring",
+      "type": "single_choice",
+      "question": "要在 f-string 中输出一个字面量的大括号 {，正确写法是？",
+      "options": [
+        "f\"{\"",
+        "f\"{{\"",
+        "f\"\\{\"",
+        "f\"[[\""
+      ],
+      "answer": 1,
+      "explanation": "f-string 中需要写两个连续的大括号 {{ 来表示一个字面量左大括号，}} 表示右大括号。反斜杠转义在 f-string 的表达式部分不受支持，单个 { 会被当作表达式开始。",
+      "error_tag": "边界错误",
+      "variant_group": "fstring_escape"
+    },
+    {
+      "kp": "py.io.fstring",
+      "type": "single_choice",
+      "question": "以下代码的输出是什么？\n\npi = 3.14159\nprint(f\"{pi:.2f}\")",
+      "options": [
+        "3.14159",
+        "3.14",
+        "3.1",
+        "报错：.2f 不是合法格式说明符"
+      ],
+      "answer": 1,
+      "explanation": "冒号后的 .2f 是格式说明符，表示保留两位小数的定点表示，因此输出 3.14。",
+      "error_tag": "记忆缺失",
+      "variant_group": "fstring_format_spec"
+    },
+    {
+      "kp": "py.io.fstring",
+      "type": "single_choice",
+      "question": "以下代码在 Python 3.12 中执行，输出是什么？\n\nvalue = 42\nprint(f\"{value = }\")",
+      "options": [
+        "value =",
+        "value = 42",
+        "42",
+        "报错：= 不能出现在 f-string 中"
+      ],
+      "answer": 1,
+      "explanation": "Python 3.8 引入的调试语法在表达式后加 =，会同时输出表达式文本和其求值结果，因此输出 value = 42。注意等号与表达式之间、等号与结果之间的空格是默认行为。",
+      "error_tag": "记忆缺失",
+      "variant_group": "fstring_debug"
+    },
+    {
+      "kp": "py.io.fstring",
+      "type": "single_choice",
+      "question": "以下代码的输出是什么？\n\nwidth = 8\nprint(f\"|{'hi':>{width}}|\")",
+      "options": [
+        "|hi      |",
+        "|      hi|",
+        "|hi{width}|",
+        "报错：width 不能嵌套在格式说明符中"
+      ],
+      "answer": 1,
+      "explanation": "格式说明符中可以用嵌套花括号引用变量作为宽度，> 表示右对齐，因此 hi 在宽度 8 的字段中右对齐，前面补 6 个空格。",
+      "error_tag": "边界错误",
+      "variant_group": "fstring_nested"
+    },
+    {
+      "kp": "py.io.fstring",
+      "type": "single_choice",
+      "question": "以下代码的输出是什么？\n\nd = {\"k\": \"v\"}\nprint(f\"{d[\"k\"]}\")",
+      "options": [
+        "v",
+        "k",
+        "报错：f-string 中不能使用双引号索引",
+        "{'k': 'v'}"
+      ],
+      "answer": 0,
+      "explanation": "Python 3.12 起 f-string 支持在花括号表达式内使用与外部字符串相同类型的引号（PEP 701）。在更早版本中这段代码会因引号冲突而报语法错误。题目描述以 3.12 为环境，输出为 v。",
+      "error_tag": "边界错误",
+      "variant_group": "fstring_quote"
+    },
+    {
+      "kp": "py.io.fstring",
+      "type": "single_choice",
+      "question": "关于 f-string 中表达式的求值时机，下列说法正确的是？",
+      "options": [
+        "延迟求值，只有在字符串被打印时才计算",
+        "在字符串字面量被求值时立即计算，结果被固化到字符串中",
+        "每次访问该字符串对象都重新计算一次",
+        "只对变量名求值，函数调用会抛出异常"
+      ],
+      "answer": 1,
+      "explanation": "f-string 在字面量被求值（即代码执行到该处）时立即计算花括号内表达式，结果直接拼接进生成的字符串对象，之后不再重新计算。",
+      "error_tag": "概念混淆",
+      "variant_group": "fstring_evaluation"
+    },
+    {
+      "kp": "py.io.fstring",
+      "type": "single_choice",
+      "question": "以下代码的输出是什么？\n\nn = 255\nprint(f\"{n:x}\")",
+      "options": [
+        "ff",
+        "FF",
+        "0xff",
+        "255"
+      ],
+      "answer": 0,
+      "explanation": "格式说明符 x 表示小写十六进制，X 表示大写，不带 # 时不加 0x 前缀，因此 255 输出 ff。",
+      "error_tag": "记忆缺失",
+      "variant_group": "fstring_format_spec"
+    }
+  ]
+}

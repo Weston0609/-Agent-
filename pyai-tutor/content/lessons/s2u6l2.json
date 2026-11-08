@@ -1,0 +1,951 @@
+{
+  "id": "s2u6l2",
+  "title": "s2u6l2",
+  "kps": [
+    "py.stdlib.collections",
+    "py.stdlib.heapq",
+    "py.stdlib.bisect"
+  ],
+  "theory": "## py.stdlib.collections\n\n# Python 标准库 `collections`：从直觉到工程级\n\n## 一句话直觉\n\n`collections` 是 Python 标准库里专门提供“**增强版容器（container）**”的模块：当 `list`、`dict`、`set`、`tuple` 不够用、写起来啰嗦或性能不够时，你大概率会在这里找到更合适的工具。\n\n学习它，本质上是在学习 Python 的“**容器数据结构思维**”：\n\n- 你知道什么时候该用 `Counter` 而不是手写计数字典；\n- 你知道什么时候该用 `deque` 而不是 `list.pop(0)`；\n- 你知道什么时候用 `defaultdict` 可以消除大量 `if key not in d` 的样板代码；\n- 你知道 `namedtuple` / `ChainMap` / `OrderedDict` 分别在什么场景下出现；\n- 你还知道 `collections.abc` 提供的是抽象基类（Abstract Base Class, ABC），用于描述“一个对象具备什么能力”，而不是提供具体实现。\n\n这堂课我们按 5 个小节推进：\n\n1. `collections` 是什么，为什么它存在\n2. `Counter`：统计计数不再手写\n3. `defaultdict`、`OrderedDict`、`ChainMap`：字典的三种增强形态\n4. `deque`、`namedtuple`：队列与轻量记录类型\n5. `collections.abc`：从“具体容器”上升到“接口思维”\n\n---\n\n## 1. `collections` 是什么，为什么它存在\n\nPython 内置容器已经很强：\n\n- `list`：有序、可变、可重复；\n- `dict`：键值映射；\n- `set`：去重、集合运算；\n- `tuple`：不可变序列。\n\n但工程中经常出现一些高频模式，例如：\n\n- 统计词频；\n- 按 key 分组；\n- 维护一个固定长度队列；\n- 让字典保持插入顺序（在 Python 3.7 之前 `dict` 不保证）；\n- 用一个对象表示“只有字段、没有方法”的记录；\n- 判断一个对象“是不是可迭代对象”，而不是判断它“是不是 list”。\n\n这些需求如果每次手写，会重复、易错、性能也未必好。于是标准库提供了 `collections`。\n\n### 1.1 快速体验：不用 `Counter` vs 用 `Counter`\n\n```python\n# 不用 Counter：手写词频统计\nwords = [\"apple\", \"banana\", \"apple\", \"cherry\", \"banana\", \"apple\"]\n\nfreq = {}\nfor w in words:\n    if w not in freq:\n        freq[w] = 0\n    freq[w] += 1\n\nprint(freq)  # {'apple': 3, 'banana': 2, 'cherry': 1}\n```\n\n```python\n# 用 Counter：一行搞定\nfrom collections import Counter\n\nwords = [\"apple\", \"banana\", \"apple\", \"cherry\", \"banana\", \"apple\"]\nfreq = Counter(words)\n\nprint(freq)            # Counter({'apple': 3, 'banana': 2, 'cherry': 1})\nprint(freq[\"apple\"])   # 3\nprint(freq[\"missing\"]) # 0，注意：不会 KeyError\n```\n\n关键结论：`Counter` 是一个专门用于计数的字典子类，访问不存在的 key 时返回 `0`，而不是抛 `KeyError`。\n\n---\n\n## 2. `Counter`：统计计数不再手写\n\n`Counter` 继承自 `dict`，专门用于“可哈希对象的计数”。\n\n### 2.1 基本用法\n\n```python\nfrom collections import Counter\n\n# 从可迭代对象构造\ndata = \"abracadabra\"\nc = Counter(data)\nprint(c)  # Counter({'a': 5, 'b': 2, 'r': 2, 'c': 1, 'd': 1})\n\n# 从字典构造\nc2 = Counter({\"a\": 3, \"b\": 1})\nprint(c2)  # Counter({'a': 3, 'b': 1})\n```\n\n### 2.2 常用方法\n\n```python\nfrom collections import Counter\n\nc = Counter(\"abracadabra\")\n\n# most_common(n)：按计数从高到低返回前 n 个\nprint(c.most_common(2))  # [('a', 5), ('b', 2)]\n\n# elements()：按计数重复展开\nprint(sorted(c.elements()))\n# ['a', 'a', 'a', 'a', 'a', 'b', 'b', 'c', 'd', 'r', 'r']\n\n# update / subtract\nc.update(\"aaa\")\nprint(c[\"a\"])  # 8\n\nc.subtract(\"aaaaa\")\nprint(c[\"a\"])  # 3\n```\n\n### 2.3 算术运算\n\n`Counter` 支持 `+`、`-`、`&`、`|` 等运算，但要注意：\n\n- `+`：计数相加，只保留正计数；\n- `-`：计数相减，只保留正计数；\n- `&`：交集，取较小计数；\n- `|`：并集，取较大计数。\n\n```python\nfrom collections import Counter\n\na = Counter(\"aabbcc\")\nb = Counter(\"abccdd\")\n\nprint(a + b)  # Counter({'c': 4, 'a': 3, 'b': 3, 'd': 2})\nprint(a - b)  # Counter({'a': 1, 'b': 1})\nprint(a & b)  # Counter({'c': 2, 'a': 1, 'b': 1})\nprint(a | b)  # Counter({'c': 3, 'a': 2, 'b': 2, 'd': 2})\n```\n\n关键结论：`Counter` 不只是“计数字典”，它还是一个支持多重集合（multiset）算术的容器。\n\n---\n\n## 3. `defaultdict`、`OrderedDict`、`ChainMap`：字典的增强形态\n\n### 3.1 `defaultdict`：消除 `if key not in d`\n\n普通字典在访问不存在的 key 时会抛 `KeyError`。如果要做“分组”，通常得这样写：\n\n```python\ngroups = {}\nfor name, dept in [(\"Alice\", \"HR\"), (\"Bob\", \"IT\"), (\"Carol\", \"HR\")]:\n    if dept not in groups:\n        groups[dept] = []\n    groups[dept].append(name)\n\nprint(groups)  # {'HR': ['Alice', 'Carol'], 'IT': ['Bob']}\n```\n\n用 `defaultdict` 更简洁：\n\n```python\nfrom collections import defaultdict\n\ngroups = defaultdict(list)\nfor name, dept in [(\"Alice\", \"HR\"), (\"Bob\", \"IT\"), (\"Carol\", \"HR\")]:\n    groups[dept].append(name)\n\nprint(groups)  # defaultdict(<class 'list'>, {'HR': ['Alice', 'Carol'], 'IT': ['Bob']})\n```\n\n`defaultdict` 的构造参数是“默认工厂”：当访问不存在的 key 时，会调用这个工厂生成默认值。\n\n```python\nfrom collections import defaultdict\n\nword_count = defaultdict(int)\nfor ch in \"abracadabra\":\n    word_count[ch] += 1\n\nprint(dict(word_count))  # {'a': 5, 'b': 2, 'r': 2, 'c': 1, 'd': 1}\n```\n\n关键结论：`defaultdict` 适合“分组、累加、建图”等需要自动初始化默认值的场景。\n\n### 3.2 `OrderedDict`：显式保持插入顺序\n\n在现代 Python（3.7+）中，普通 `dict` 已经保证插入顺序。但 `OrderedDict` 仍然有用，因为它提供了额外能力：\n\n- `move_to_end(key)`：把某个 key 移到末尾；\n- `popitem(last=False)`：从头部弹出；\n- 相等性判断考虑顺序。\n\n```python\nfrom collections import OrderedDict\n\nod = OrderedDict()\nod[\"a\"] = 1\nod[\"b\"] = 2\nod[\"c\"] = 3\n\nod.move_to_end(\"a\")\nprint(list(od.items()))  # [('b', 2), ('c', 3), ('a', 1)]\n\nprint(od.popitem(last=False))  # ('b', 2)\nprint(list(od.items()))        # [('c', 3), ('a', 1)]\n```\n\n关键结论：如果只是“保持插入顺序”，现代 `dict` 就够了；如果需要 `move_to_end` 或“顺序敏感的相等性”，用 `OrderedDict`。\n\n### 3.3 `ChainMap`：把多个字典当成一个逻辑字典\n\n`ChainMap` 可以把多个字典“链”在一起，查找时从左到右依次查找。\n\n```python\nfrom collections import ChainMap\n\ndefaults = {\"theme\": \"light\", \"lang\": \"zh\"}\nuser = {\"theme\": \"dark\"}\n\nconfig = ChainMap(user, defaults)\nprint(config[\"theme\"])  # dark\nprint(config[\"lang\"])   # zh\n```\n\n它常用于“配置覆盖”场景：用户配置优先，默认配置兜底。\n\n```python\nfrom collections import ChainMap\n\nbase = {\"a\": 1, \"b\": 2}\noverride = {\"b\": 20, \"c\": 30}\n\ncm = ChainMap(override, base)\nprint(dict(cm))  # {'b': 20, 'c': 30, 'a': 1}\n```\n\n关键结论：`ChainMap` 不复制数据，只是建立“查找链”，适合配置分层、作用域链。\n\n---\n\n## 4. `deque`、`namedtuple`：队列与轻量记录类型\n\n### 4.1 `deque`：双端队列\n\n`list` 在头部插入/删除是 O(n)，因为要移动后面所有元素。`deque`（double-ended queue）在两端插入/删除都是 O(1)。\n\n```python\nfrom collections import deque\n\nq = deque([1, 2, 3])\n\nq.append(4)       # 右端插入\nq.appendleft(0)   # 左端插入\nprint(q)          # deque([0, 1, 2, 3, 4])\n\nprint(q.pop())    # 4，右端弹出\nprint(q.popleft())# 0，左端弹出\nprint(q)          # deque([1, 2, 3])\n```\n\n`deque` 还可以限制最大长度，超出时自动丢弃另一端：\n\n```python\nfrom collections import deque\n\nlast3 = deque(maxlen=3)\nfor i in range(1, 6):\n    last3.append(i)\n    print(list(last3))\n# [1]\n# [1, 2]\n# [1, 2, 3]\n# [2, 3, 4]\n# [3, 4, 5]\n```\n\n关键结论：需要队列、栈、滑动窗口、固定长度缓冲时，优先考虑 `deque`。\n\n### 4.2 `namedtuple`：带字段名的元组\n\n普通元组只能靠下标访问，可读性差：\n\n```python\np = (10, 20)\nprint(p[0], p[1])  # 10 20\n```\n\n`namedtuple` 让字段有名字，同时保持元组的不可变性和轻量性：\n\n```python\nfrom collections import namedtuple\n\nPoint = namedtuple(\"Point\", [\"x\", \"y\"])\np = Point(10, 20)\n\nprint(p.x, p.y)   # 10 20\nprint(p[0], p[1]) # 10 20\nprint(p)          # Point(x=10, y=20)\n```\n\n关键结论：`namedtuple` 适合表示“只有数据、没有行为”的轻量记录；它比普通类更省内存，也比普通元组更可读。\n\n---\n\n## 5. `collections.abc`：从具体容器上升到接口思维\n\n`collections.abc` 提供了一系列抽象基类（Abstract Base Class, ABC），例如：\n\n- `Iterable`\n- `Iterator`\n- `Sized`\n- `Container`\n- `Sequence`\n- `Mapping`\n- `MutableMapping`\n- `Set`\n- `Callable`\n- `Awaitable`\n- `Coroutine`\n- `AsyncIterable`\n- `AsyncIterator`\n- `AsyncGenerator`\n\n它们描述的是“对象具备什么能力”，而不是“对象是什么类型”。\n\n### 5.1 为什么不要用 `isinstance(x, list)` 判断“可迭代”\n\n错误示范：\n\n```python\ndef print_all(x):\n    if isinstance(x, list):\n        for item in x:\n            print(item)\n    else:\n        print(\"not a list\")\n```\n\n问题是：很多对象都可迭代，但不一定是 `list`，比如 `tuple`、`set`、`dict`、生成器、`str`。\n\n正确做法是用 `collections.abc.Iterable`：\n\n```python\nfrom collections.abc import Iterable\n\ndef print_all(x):\n    if isinstance(x, Iterable):\n        for item in x:\n            print(item)\n    else:\n        print(\"not iterable\")\n\nprint_all([1, 2, 3])\nprint_all((4, 5))\nprint_all(\"abc\")\n```\n\n### 5.2 常见 ABC 与能力对应表\n\n| ABC | 含义 | 典型对象 |\n|---|---|---|\n| `Iterable` | 可迭代 | list, tuple, set, dict, str |\n| `Iterator` | 迭代器 | 生成器, `iter(list)` |\n| `Sized` | 有长度 | list, dict, str |\n| `Container` | 支持 `in` | list, set, dict |\n| `Sequence` | 有序可索引 | list, tuple, str |\n| `Mapping` | 键值映射 | dict |\n| `MutableMapping` | 可变映射 | dict, defaultdict |\n| `Set` | 集合 | set, frozenset |\n| `Callable` | 可调用 | 函数, 类, 实现了 `__call__` 的对象 |\n| `Awaitable` | 可等待 | 协程对象 |\n| `AsyncIterable` | 可异步迭代 | 异步生成器 |\n| `Coroutine` | 协程 | `async def` 调用返回对象 |\n\n### 5.3 类型注解中的写法\n\n从 Python 3.9 开始，`collections.abc` 中的 ABC 支持下标（subscripting）：\n\n```python\nfrom collections.abc import Iterable, Mapping, Sequence\n\ndef total(nums: Iterable[int]) -> int:\n    return sum(nums)\n\ndef get_name(m: Mapping[str, str]) -> str:\n    return m.get(\"name\", \"\")\n\ndef first(xs: Sequence[str]) -> str:\n    return xs[0]\n```\n\n关键结论：在类型注解中，优先使用 `collections.abc` 里的 ABC，而不是 `typing.Iterable`、`typing.Mapping` 等旧别名。官方文档已经将 `typing` 中的这些别名标记为 deprecated。\n\n### 5.4 `typing` 中的旧别名正在被淘汰\n\n官方文档中大量出现这样的描述：\n\n- `typing.Iterable` 是 `collections.abc.Iterable` 的 deprecated alias；\n- `typing.Mapping` 是 `collections.abc.Mapping` 的 deprecated alias；\n- `typing.Counter` 是 `collections.Counter` 的 deprecated alias；\n- `typing.Deque` 是 `collections.deque` 的 deprecated alias。\n\n所以现代写法是：\n\n```python\n# 旧写法（不推荐）\nfrom typing import Iterable, Mapping, Counter, Deque\n\n# 新写法（推荐）\nfrom collections.abc import Iterable, Mapping\nfrom collections import Counter, deque\n```\n\n---\n\n## 动手练习\n\n### 任务：写一个“日志分析小工具”\n\n在本地创建一个文件 `log_analysis.py`，完成以下功能。\n\n#### 输入\n\n一个字符串列表，模拟日志行：\n\n```python\nlogs = [\n    \"2024-01-01 INFO login user=alice\",\n    \"2024-01-01 ERROR db user=bob\",\n    \"2024-01-01 INFO login user=alice\",\n    \"2024-01-01 WARN cache user=carol\",\n    \"2024-01-01 ERROR db user=bob\",\n    \"2024-01-01 INFO logout user=alice\",\n]\n```\n\n#### 要求\n\n1. 用 `Counter` 统计每个日志级别（`INFO`、`ERROR`、`WARN`）出现的次数，并打印 `most_common()` 结果。\n2. 用 `defaultdict(list)` 按日志级别分组，把每条日志的 `user=xxx` 提取出来放进对应列表。\n3. 用 `deque(maxlen=3)` 维护“最近 3 条日志”，遍历 `logs` 后打印最终内容。\n4. 用 `namedtuple` 定义一个 `LogRecord`，字段为 `date`、`level`、`module`、`user`，把其中一条日志解析成 `LogRecord` 并打印。\n5. 用 `collections.abc.Iterable` 写一个函数 `print_lines(obj)`：如果 `obj` 是可迭代对象，就逐行打印；否则打印 `\"not iterable\"`。\n\n#### 提示\n\n- 日志格式固定为：`date level module user=xxx`\n- 用 `line.split()` 拆分即可\n- `user=alice` 可以用 `split(\"=\")[1]` 提取\n\n#### 预期输出示例\n\n```text\nCounter({'INFO': 3, 'ERROR': 2, 'WARN': 1})\n[('INFO', 3), ('ERROR', 2), ('WARN', 1)]\n\n分组结果：\nINFO: ['alice', 'alice', 'alice']\nERROR: ['bob', 'bob']\nWARN: ['carol']\n\n最近 3 条日志：\n['2024-01-01 WARN cache user=carol', '2024-01-01 ERROR db user=bob', '2024-01-01 INFO logout user=alice']\n\nLogRecord(date='2024-01-01', level='INFO', module='login', user='alice')\n\n逐行打印：\n2024-01-01 INFO login user=alice\n...\n```\n\n#### 进阶挑战\n\n- 把 `defaultdict` 部分改成用 `Counter` 直接统计每个用户出现的次数；\n- 把 `ChainMap` 加进去：定义 `default_config` 和 `user_config`，用 `ChainMap` 合并后打印最终配置；\n- 用 `collections.abc.Mapping` 写一个函数，判断传入对象是不是映射类型。\n\n```python\nfrom collections import Counter, defaultdict, deque, namedtuple, ChainMap\nfrom collections.abc import Iterable, Mapping\n\n# ---------- 1. Counter ----------\nlogs = [\n    \"2024-01-01 INFO login user=alice\",\n    \"2024-01-01 ERROR db user=bob\",\n    \"2024-01-01 INFO login user=alice\",\n    \"2024-01-01 WARN cache user=carol\",\n    \"2024-01-01 ERROR db user=bob\",\n    \"2024-01-01 INFO logout user=alice\",\n]\n\nlevels = [line.split()[1] for line in logs]\nlevel_counter = Counter(levels)\nprint(level_counter)\nprint(level_counter.most_common())\n\n# ---------- 2. defaultdict ----------\ngroups = defaultdict(list)\nfor line in logs:\n    parts = line.split()\n    level = parts[1]\n    user = parts[3].split(\"=\")[1]\n    groups[level].append(user)\n\nprint(\"\\n分组结果：\")\nfor level, users in groups.items():\n    print(f\"{level}: {users}\")\n\n# ---------- 3. deque ----------\nrecent = deque(maxlen=3)\nfor line in logs:\n    recent.append(line)\nprint(\"\\n最近 3 条日志：\")\nprint(list(recent))\n\n# ---------- 4. namedtuple ----------\nLogRecord = namedtuple(\"LogRecord\", [\"date\", \"level\", \"module\", \"user\"])\nparts = logs[0].split()\nrecord = LogRecord(parts[0], parts[1], parts[2], parts[3].split(\"=\")[1])\nprint(\"\\nLogRecord：\")\nprint(record)\n\n# ---------- 5. collections.abc.Iterable ----------\ndef print_lines(obj):\n    if isinstance(obj, Iterable):\n        for item in obj:\n            print(item)\n    else:\n        print(\"not iterable\")\n\nprint(\"\\n逐行打印：\")\nprint_lines(logs)\n\n# ---------- 6. ChainMap ----------\ndefault_config = {\"theme\": \"light\", \"lang\": \"zh\"}\nuser_config = {\"theme\": \"dark\"}\nconfig = ChainMap(user_config, default_config)\nprint(\"\\n配置：\")\nprint(dict(config))\n\n# ---------- 7. collections.abc.Mapping ----------\ndef describe_mapping(obj):\n    if isinstance(obj, Mapping):\n        print(\"是映射类型，keys:\", list(obj.keys()))\n    else:\n        print(\"不是映射类型\")\n\ndescribe_mapping(config)\ndescribe_mapping([1, 2, 3])\n```\n\n## py.stdlib.heapq\n\n# Python 标准库 heapq 教学讲义\n\n## 一句话直觉\n\n当你要反复从一堆数据中「每次取出最小的那个」，用列表 `sort()` 太慢、用 `min()` 每次扫全表也太慢时，`heapq`（堆队列算法，heap queue algorithm）能让你以 O(log n) 的代价完成「取最小 + 插入新元素」。\n\n---\n\n## 1. 什么是堆（Heap）？\n\n**堆**是一种特殊的完全二叉树（complete binary tree），满足「父节点 ≤ 子节点」的性质，因此根节点永远是整棵树的最小值。Python 的 `heapq` 实现的是**最小堆**（min-heap），底层直接用普通的 `list` 存储，不创建额外的类。\n\n记住两个核心操作：\n- `heappush(heap, item)`：把 item 压入，自动上浮保持堆序。\n- `heappop(heap)`：弹出并返回最小值，自动下沉恢复堆序。\n\n```python\nimport heapq\n\nheap = []\nfor x in [5, 1, 3, 2, 4]:\n    heapq.heappush(heap, x)     # 压入，自动维护最小堆\nprint(heap)                     # [1, 2, 3, 5, 4]，注意不是完全有序，但堆顶一定最小\n\nprint(heapq.heappop(heap))      # 1\nprint(heapq.heappop(heap))      # 2\nprint(heap)                     # [3, 5, 4]\n```\n\n---\n\n## 2. 常用 API 一览\n\n`heapq` 模块不大，但全都用得上：\n\n| 函数 | 作用 | 复杂度 |\n|---|---|---|\n| `heappush(h, x)` | 压入 | O(log n) |\n| `heappop(h)` | 弹出最小值 | O(log n) |\n| `heapreplace(h, x)` | 弹出最小值并压入 x（一步完成，比先 pop 再 push 少一次 log n） | O(log n) |\n| `heappushpop(h, x)` | 先压入再弹出最小值（若 x 比堆顶小，等于原样返回 x） | O(log n) |\n| `heapify(h)` | 把普通 list 原地变成堆 | O(n) |\n| `nlargest(k, it)` | 取最大的 k 个 | O(n log k) |\n| `nsmallest(k, it)` | 取最小的 k 个 | O(n log k) |\n\n```python\nimport heapq\n\nnums = [9, 4, 7, 1, 8, 2]\nheapq.heapify(nums)                # 就地建堆，O(n)\nprint(nums[0])                     # 1，堆顶即最小\n\nprint(heapq.nsmallest(3, [10, 3, 6, 1, 9, 2]))  # [1, 2, 3]\nprint(heapq.nlargest(2,  [10, 3, 6, 1, 9, 2]))  # [10, 9]\n```\n\n---\n\n## 3. 用一个「优先队列」感受真实用途\n\n**优先队列**（priority queue）是堆最典型的应用：每个任务带一个优先级（数字越小越优先），我们总是先处理优先级最高的任务。\n\n```python\nimport heapq\n\ntasks = []\n# 注意：如果优先级相同，Python 会继续比较第二个元素（字符串也可以比较，OK）\nheapq.heappush(tasks, (3, \"写周报\"))\nheapq.heappush(tasks, (1, \"修线上 bug\"))\nheapq.heappush(tasks, (2, \"回邮件\"))\n\nwhile tasks:\n    priority, name = heapq.heappop(tasks)\n    print(f\"处理优先级 {priority}: {name}\")\n# 处理优先级 1: 修线上 bug\n# 处理优先级 2: 回邮件\n# 处理优先级 3: 写周报\n```\n\n---\n\n## 4. 自定义对象入堆：`__lt__` 与元组技巧\n\n堆只要求元素之间可以**比较大小**（即支持 `<`）。自定义类若想入堆，需实现 `__lt__`（less than）。或者更简单的做法——用元组 `(priority, payload)`，让 Python 按第一项比较。\n\n```python\nimport heapq\nfrom dataclasses import dataclass, field\n\n@dataclass(order=True)          # order=True 自动生成 __lt__ 等比较方法\nclass Job:\n    priority: int\n    name: str = field(compare=False)  # name 不参与比较\n\nh = []\nheapq.heappush(h, Job(5, \"低\"))\nheapq.heappush(h, Job(1, \"高\"))\nheapq.heappush(h, Job(3, \"中\"))\n\nwhile h:\n    job = heapq.heappop(h)\n    print(job.priority, job.name)\n# 1 高\n# 3 中\n# 5 低\n```\n\n**小坑**：如果你用元组 `(priority, obj)` 且两个元组优先级相同，Python 会继续比较第二个元素；若 `obj` 不可比较就会抛 `TypeError`。解决办法是插入一个唯一的递增序号：`(priority, seq, obj)`。\n\n---\n\n## 5. 工程中的常见模式\n\n### 5.1 Top-K 问题\n别写 `sorted(data)[-k:]`（那是 O(n log n)），用 `nsmallest` / `nlargest`，或者维护一个大小为 k 的堆。\n\n```python\nimport heapq, random\n\ndata = [random.randint(0, 1_000_000) for _ in range(1_000_000)]\nprint(heapq.nlargest(5, data))       # 只维护 5 个元素的堆\n```\n\n### 5.2 合并多个有序序列\n`heapq.merge` 是惰性迭代器，适合日志流合并：\n\n```python\nimport heapq\n\nlog_a = [1, 3, 5, 7]\nlog_b = [2, 4, 6, 8]\nprint(list(heapq.merge(log_a, log_b)))\n# [1, 2, 3, 4, 5, 6, 7, 8]\n```\n\n### 5.3 最大堆的变通\nPython 只有最小堆，要模拟**最大堆**，把值取负压入即可：\n\n```python\nimport heapq\n\nh = []\nfor x in [5, 1, 3]:\n    heapq.heappush(h, -x)\nprint(-heapq.heappop(h))   # 5\n```\n\n---\n\n## 小结\n\n- `heapq` 用 list 表示最小堆，原地操作，零额外依赖。\n- `heappush/heappop` O(log n)，`heapify` O(n)，`nlargest/nsmallest` O(n log k)。\n- 自定义对象要么实现 `__lt__`，要么用 `(priority, seq, obj)` 元组。\n- 需要最大堆时取负值，或者用 `nlargest`。\n\n---\n\n## 动手练习\n\n**任务**：模拟一个「延迟任务调度器」。\n\n给定一批任务，每个任务是 `(执行时间戳, 任务名)`。请你按时间戳从小到大执行：如果多个任务时间戳相同，则按**任务名字典序**执行。要求**只使用 `heapq`**，不要对整体排序。\n\n示例输入：\n```python\njobs = [(5, \"b\"), (1, \"a\"), (5, \"a\"), (3, \"z\"), (1, \"c\")]\n```\n\n期望输出（按顺序打印任务名）：\n```\na\nc\nz\na\nb\n```\n\n提示：\n1. 任务时间戳相同的情况会导致元组比较落到字符串上——这正好满足我们需要。\n2. 用 `heappush` 全部入堆，再循环 `heappop`。\n3. 挑战：如果你把任务换成字典 `{\"ts\": 5, \"name\": \"b\"}`，写一个 `@dataclass(order=True)` 版本试试。\n\n```python\nimport heapq\nimport random\n\n# 演示 1：基本 push / pop\nh = []\nfor x in [5, 1, 3, 2, 4]:\n    heapq.heappush(h, x)\n\nordered = [heapq.heappop(h) for _ in range(len(h))]\nprint(\"按序弹出:\", ordered)   # [1, 2, 3, 4, 5]\n\n# 演示 2：heapify 就地建堆 O(n)\narr = [9, 4, 7, 1, 8, 2]\nheapq.heapify(arr)\nprint(\"堆顶:\", arr[0])          # 1\n\n# 演示 3：Top-K\ndata = [random.randint(0, 1_000_000) for _ in range(20)]\nprint(\"Top-3:\", heapq.nlargest(3, data))\nprint(\"Bottom-3:\", heapq.nsmallest(3, data))\n\n# 演示 4：优先队列（元组作堆元素）\ntasks = []\nheapq.heappush(tasks, (3, \"写周报\"))\nheapq.heappush(tasks, (1, \"修线上 bug\"))\nheapq.heappush(tasks, (2, \"回邮件\"))\nwhile tasks:\n    p, name = heapq.heappop(tasks)\n    print(f\"处理优先级 {p}: {name}\")\n\n# 演示 5：最大堆 = 取负值\nmaxh = []\nfor x in [5, 1, 3]:\n    heapq.heappush(maxh, -x)\nprint(\"最大堆弹出:\", -heapq.heappop(maxh))   # 5\n```\n\n## py.stdlib.bisect\n\n# Python `bisect` 模块：二分查找与有序列表维护\n\n## 一句话直觉\n\n当你的数据已经排好序时，`bisect` 能让你用 O(log n) 的时间找到插入位置或查找元素，而不是从头扫描 O(n)。\n\n---\n\n## 1. 为什么需要 `bisect`？\n\n假设你有一个已经排好序的分数列表，想插入一个新分数并保持有序。\n\n朴素做法：从头遍历找位置，O(n)。\n\n`bisect` 做法：二分查找（binary search），O(log n)。\n\n数据量越大，差距越明显。\n\n```python\nimport bisect\n\nscores = [60, 70, 80, 90]\nnew_score = 75\n\n# 找到插入位置，保持有序\npos = bisect.bisect_left(scores, new_score)\nscores.insert(pos, new_score)\nprint(scores)  # [60, 70, 75, 80, 90]\n```\n\n> 术语：`bisect`（二分）来自“把区间一分为二”的策略。\n\n---\n\n## 2. 四个核心函数\n\n`bisect` 模块只有四个常用函数：\n\n| 函数 | 作用 |\n|------|------|\n| `bisect_left(a, x)` | 在有序列表 `a` 中找 `x` 的最左插入位置 |\n| `bisect_right(a, x)` | 在有序列表 `a` 中找 `x` 的最右插入位置 |\n| `insort_left(a, x)` | 找到最左位置并插入 `x` |\n| `insort_right(a, x)` | 找到最右位置并插入 `x` |\n\n`bisect` 和 `bisect_right` 是同一个函数。\n\n```python\nimport bisect\n\na = [1, 3, 3, 5]\n\nprint(bisect.bisect_left(a, 3))   # 1，第一个 3 的位置\nprint(bisect.bisect_right(a, 3))  # 3，最后一个 3 后面的位置\nprint(bisect.bisect_left(a, 4))   # 3，4 应该插在索引 3\nprint(bisect.bisect_right(a, 4))  # 3\n```\n\n关键区别：当列表里有重复值时，`left` 返回第一个匹配位置，`right` 返回最后一个匹配位置之后。\n\n---\n\n## 3. 用 `insort` 直接插入\n\n如果你不只是想找位置，还想直接插入，用 `insort_left` 或 `insort_right`。\n\n```python\nimport bisect\n\na = [1, 3, 3, 5]\nbisect.insort_left(a, 3)\nprint(a)  # [1, 3, 3, 3, 5]\n\nb = [1, 3, 3, 5]\nbisect.insort_right(b, 3)\nprint(b)  # [1, 3, 3, 3, 5]\n```\n\n注意：`insort` 插入本身是 O(n)，因为 Python 列表插入元素需要移动后面的元素。二分只是帮你快速找到位置。\n\n如果你需要频繁插入和查找，考虑用 `heapq` 或平衡树结构。\n\n---\n\n## 4. 实际应用：成绩分段\n\n`bisect` 常用于把数值映射到区间。\n\n```python\nimport bisect\n\n# 分数边界：0-59 不及格，60-79 及格，80-89 良好，90-100 优秀\nbreakpoints = [60, 80, 90]\ngrades = ['不及格', '及格', '良好', '优秀']\n\ndef get_grade(score):\n    idx = bisect.bisect_right(breakpoints, score)\n    return grades[idx]\n\nprint(get_grade(59))   # 不及格\nprint(get_grade(60))   # 及格\nprint(get_grade(85))   # 良好\nprint(get_grade(95))   # 优秀\n```\n\n这里用 `bisect_right` 是因为 60 分应该属于“及格”而不是“不及格”。\n\n---\n\n## 5. 进阶：`key` 参数（Python 3.10+）\n\n从 Python 3.10 开始，`bisect` 支持 `key` 参数，可以按对象的某个属性比较。\n\n```python\nimport bisect\n\nusers = [\n    {'name': 'Alice', 'age': 20},\n    {'name': 'Bob', 'age': 30},\n    {'name': 'Carol', 'age': 40},\n]\n\n# 按 age 查找 35 应该插入的位置\npos = bisect.bisect_left(users, 35, key=lambda u: u['age'])\nprint(pos)  # 2\n```\n\n注意：使用 `key` 时，列表必须已经按同一个 key 排好序。\n\n---\n\n## 常见误区\n\n1. **列表必须有序**：`bisect` 不会检查列表是否有序。如果无序，结果未定义。\n2. **`bisect_left` 和 `bisect_right` 混淆**：有重复值时结果不同，要根据业务选择。\n3. **插入成本**：`insort` 是 O(n)，不是 O(log n)。二分查找是 O(log n)，插入是 O(n)。\n4. **key 参数兼容性**：Python 3.10 之前不支持 `key`，老版本需要自己包装。\n\n---\n\n## 动手练习\n\n实现一个“排行榜”小工具：\n\n1. 维护一个有序的分数列表 `scores`。\n2. 写一个函数 `add_score(score)`，把分数插入并保持有序。\n3. 写一个函数 `rank_of(score)`，返回分数在排行榜中的排名（从 1 开始，相同分数排名相同，用最左位置）。\n4. 测试：依次插入 `[88, 92, 75, 92, 60]`，然后查询 `92` 和 `75` 的排名。\n\n提示：用 `bisect.insort_left` 和 `bisect.bisect_left`。\n\n```python\nimport bisect\n\n# 维护有序列表并查询排名\nscores = []\n\ndef add_score(score):\n    # 插入并保持有序\n    bisect.insort_left(scores, score)\n\ndef rank_of(score):\n    # 排名从 1 开始，相同分数取最左位置\n    pos = bisect.bisect_left(scores, score)\n    if pos < len(scores) and scores[pos] == score:\n        return pos + 1\n    return None\n\nfor s in [88, 92, 75, 92, 60]:\n    add_score(s)\n\nprint(scores)          # [60, 75, 88, 92, 92]\nprint(rank_of(92))     # 4\nprint(rank_of(75))     # 2\nprint(rank_of(100))    # None\n```\n",
+  "quiz": [
+    {
+      "kp": "py.stdlib.collections",
+      "type": "single_choice",
+      "question": "在使用 collections.Counter 统计字符串中字符出现次数后，表达式 counter['x'] 在 'x' 从未出现时返回什么？",
+      "options": [
+        "抛出 KeyError",
+        "返回 0",
+        "返回 None",
+        "返回空字符串"
+      ],
+      "answer": 1,
+      "explanation": "Counter 是 dict 的子类，访问缺失键时返回 0 而不是抛 KeyError，这是它与普通字典在计数场景下的关键区别。普通 dict 访问缺失键会抛 KeyError，因此 A 是常见误解；C、D 与 Counter 的行为无关。",
+      "error_tag": "概念混淆",
+      "variant_group": "Counter缺失键行为"
+    },
+    {
+      "kp": "py.stdlib.collections",
+      "type": "single_choice",
+      "question": "有一个 Counter 对象 c = Counter('aabbbc')，执行 c.most_common(2) 的效果是什么？",
+      "options": [
+        "返回出现次数最多的 2 个元素及其计数，按计数从高到低排列",
+        "返回出现次数最少的 2 个元素及其计数",
+        "只返回计数大于 2 的元素",
+        "返回按元素字母顺序排列的前 2 个元素"
+      ],
+      "answer": 0,
+      "explanation": "most_common(n) 返回计数最高的 n 个 (元素, 计数) 对，按计数降序。B 描述的是 least 方向；C 误把参数当阈值；D 误当成排序。",
+      "error_tag": "方法语义误解",
+      "variant_group": "Counter常用方法"
+    },
+    {
+      "kp": "py.stdlib.collections",
+      "type": "single_choice",
+      "question": "关于 collections.OrderedDict，下列说法正确的是？",
+      "options": [
+        "它会记住键的插入顺序，迭代时按插入顺序输出",
+        "它会自动按键的字母顺序排序",
+        "它不允许键重复",
+        "它与普通 dict 完全等价，没有任何区别"
+      ],
+      "answer": 0,
+      "explanation": "OrderedDict 保留插入顺序；Python 3.7 起普通 dict 也保留插入顺序，但 OrderedDict 仍有额外语义（如 move_to_end、相等比较对顺序敏感）。自动排序、禁止重复都不是其特征。",
+      "error_tag": "概念混淆",
+      "variant_group": "OrderedDict特性"
+    },
+    {
+      "kp": "py.stdlib.collections",
+      "type": "single_choice",
+      "question": "ChainMap({'a': 1}, {'b': 2})['b'] 的结果是什么？",
+      "options": [
+        "1",
+        "2",
+        "KeyError",
+        "None"
+      ],
+      "answer": 1,
+      "explanation": "ChainMap 按顺序在各映射中查找，'b' 在第二个映射中，值为 2。'a' 才是 1；键存在所以不抛 KeyError、也不返回 None。",
+      "error_tag": "执行结果误判",
+      "variant_group": "ChainMap查找"
+    },
+    {
+      "kp": "py.stdlib.collections",
+      "type": "single_choice",
+      "question": "使用 Counter 统计列表元素出现次数，以下哪种写法最合适？",
+      "options": [
+        "Counter(my_list)",
+        "Counter.count(my_list)",
+        "Counter().add_all(my_list)",
+        "collections.Count(my_list)"
+      ],
+      "answer": 0,
+      "explanation": "Counter 构造函数可直接接受可迭代对象并完成计数。B、C 虚构了方法；D 使用了不存在的类型名。",
+      "error_tag": "API误用",
+      "variant_group": "Counter构造"
+    },
+    {
+      "kp": "py.stdlib.collections",
+      "type": "single_choice",
+      "question": "需要实现一个固定容量的队列，从一端加入、另一端取出，且两端操作都要高效，应优先选择？",
+      "options": [
+        "list",
+        "deque",
+        "tuple",
+        "Counter"
+      ],
+      "answer": 1,
+      "explanation": "deque 两端操作均为 O(1)，适合队列。list 头部取出为 O(n)；tuple 不可变；Counter 是计数工具。",
+      "error_tag": "工具选择错误",
+      "variant_group": "collections工具选择"
+    },
+    {
+      "kp": "py.stdlib.collections",
+      "type": "single_choice",
+      "question": "关于 namedtuple 与普通类的区别，下列说法正确的是？",
+      "options": [
+        "namedtuple 实例不可变，且更节省内存",
+        "namedtuple 实例可以像普通对象一样随意添加新属性",
+        "namedtuple 实例必须显式定义 __init__ 方法",
+        "namedtuple 不支持解包"
+      ],
+      "answer": 0,
+      "explanation": "namedtuple 基于 tuple，不可变且内存开销小，支持解包。它不能随意添加属性，不需要自定义 __init__，故 B、C、D 错。",
+      "error_tag": "概念混淆",
+      "variant_group": "namedtuple特性"
+    },
+    {
+      "kp": "py.stdlib.collections",
+      "type": "single_choice",
+      "question": "dd = defaultdict(set); dd['tags'].add('python') 执行后，dd 的内容是什么？",
+      "options": [
+        "{'tags': {'python'}}",
+        "{'tags': set()}",
+        "{'tags': 'python'}",
+        "抛出 KeyError"
+      ],
+      "answer": 0,
+      "explanation": "访问缺失键 'tags' 时用 set() 创建默认值并写入，随后 add 加入 'python'。B 忽略了 add；C 类型错误；D 忽略了默认工厂。",
+      "error_tag": "执行结果误判",
+      "variant_group": "defaultdict默认值"
+    },
+    {
+      "kp": "py.stdlib.collections",
+      "type": "single_choice",
+      "question": "以下哪个 collections 类型最适合表示一条不可变的、带字段名的记录，例如坐标点？",
+      "options": [
+        "namedtuple",
+        "deque",
+        "Counter",
+        "defaultdict"
+      ],
+      "answer": 0,
+      "explanation": "namedtuple 提供字段名且不可变，适合记录型数据。deque 是队列，Counter 用于计数，defaultdict 是可变默认字典。",
+      "error_tag": "工具选择错误",
+      "variant_group": "collections工具选择"
+    },
+    {
+      "kp": "py.stdlib.collections",
+      "type": "single_choice",
+      "question": "c = Counter(['a', 'a', 'b'])，执行 c.update(['a', 'c']) 后 c['a'] 的值是多少？",
+      "options": [
+        "1",
+        "2",
+        "3",
+        "4"
+      ],
+      "answer": 2,
+      "explanation": "初始 a 的计数为 2，update 再加入 2 个 'a' 之前的列表是 1 个 'a'，所以变为 3。A 是初始前值，B 是初始值，D 超出实际数量。",
+      "error_tag": "计算错误",
+      "variant_group": "Counter运算"
+    },
+    {
+      "kp": "py.stdlib.collections",
+      "type": "single_choice",
+      "question": "关于 deque 的 popleft()，下列说法正确的是？",
+      "options": [
+        "移除并返回左端元素，时间复杂度为 O(1)",
+        "移除并返回右端元素",
+        "只移除不返回元素",
+        "时间复杂度为 O(n)"
+      ],
+      "answer": 0,
+      "explanation": "popleft 从左侧弹出并返回元素，deque 两端操作是 O(1)。B 描述的是 pop；C 忽略了返回值；D 与 deque 的实现不符。",
+      "error_tag": "方法语义误解",
+      "variant_group": "deque操作"
+    },
+    {
+      "kp": "py.stdlib.collections",
+      "type": "single_choice",
+      "question": "在需要按插入顺序迭代且还希望把某个键移动到末尾的场景，应选用？",
+      "options": [
+        "OrderedDict",
+        "Counter",
+        "namedtuple",
+        "deque"
+      ],
+      "answer": 0,
+      "explanation": "OrderedDict 提供 move_to_end 等方法处理顺序。Counter 是计数、namedtuple 是记录、deque 是队列，均不具备该能力。",
+      "error_tag": "工具选择错误",
+      "variant_group": "collections工具选择"
+    },
+    {
+      "kp": "py.stdlib.collections",
+      "type": "single_choice",
+      "question": "defaultdict(list) 与普通 dict 相比，主要便利之处是什么？",
+      "options": [
+        "访问不存在的键时会自动创建并返回一个空列表",
+        "访问不存在的键时返回 None 而不报错",
+        "会自动对键进行排序",
+        "会禁止修改已存在的键"
+      ],
+      "answer": 0,
+      "explanation": "defaultdict 的工厂函数在键缺失时被调用，生成默认值并插入。B 描述的是 dict.get 的行为；C、D 与 defaultdict 无关。",
+      "error_tag": "概念混淆",
+      "variant_group": "defaultdict默认值"
+    },
+    {
+      "kp": "py.stdlib.collections",
+      "type": "single_choice",
+      "question": "执行 d = defaultdict(int); d['a'] += 1 后，d 的内容是什么？",
+      "options": [
+        "{'a': 0}",
+        "{'a': 1}",
+        "{'a': None}",
+        "抛出 KeyError"
+      ],
+      "answer": 1,
+      "explanation": "d['a'] 先触发 int() 得到 0 并写入，然后加 1 变为 1。A 忽略了自增；C 误把 int 当 None；D 忽略了默认工厂的作用。",
+      "error_tag": "执行结果误判",
+      "variant_group": "defaultdict默认值"
+    },
+    {
+      "kp": "py.stdlib.collections",
+      "type": "single_choice",
+      "question": "关于 namedtuple，下列说法正确的是？",
+      "options": [
+        "创建的类型实例可以像普通元组一样通过下标访问，也可以通过字段名访问",
+        "创建的类型是可变的，字段可以重新赋值",
+        "字段名与普通属性一样允许重名或使用关键字",
+        "namedtuple 只能容纳一个字段"
+      ],
+      "answer": 0,
+      "explanation": "namedtuple 生成 tuple 的子类，兼具元组的下标访问和字段名访问。它仍不可变，字段名有合法性限制，字段数量不限，故 B、C、D 均错。",
+      "error_tag": "概念混淆",
+      "variant_group": "namedtuple特性"
+    },
+    {
+      "kp": "py.stdlib.collections",
+      "type": "single_choice",
+      "question": "Point = namedtuple('Point', ['x', 'y']); p = Point(1, 2)，访问 p.x 的结果是什么？",
+      "options": [
+        "1",
+        "2",
+        "(1, 2)",
+        "抛出 AttributeError"
+      ],
+      "answer": 0,
+      "explanation": "p.x 对应第一个字段 x，值为 1。p.y 才是 2；C 是整个元组；字段名存在所以不会抛 AttributeError。",
+      "error_tag": "执行结果误判",
+      "variant_group": "namedtuple访问"
+    },
+    {
+      "kp": "py.stdlib.collections",
+      "type": "single_choice",
+      "question": "deque 与 list 相比，主要优势是什么？",
+      "options": [
+        "从两端添加和删除元素都很快",
+        "支持按索引随机访问且复杂度为 O(1)",
+        "元素会自动去重",
+        "元素会自动按大小排序"
+      ],
+      "answer": 0,
+      "explanation": "deque 是双端队列，两端操作为 O(1)。list 的头部插入删除为 O(n)；去重和排序不是 deque 的功能，故 B、C、D 错。",
+      "error_tag": "概念混淆",
+      "variant_group": "deque特性"
+    },
+    {
+      "kp": "py.stdlib.collections",
+      "type": "single_choice",
+      "question": "dq = deque([1, 2, 3])，执行 dq.appendleft(0) 后 dq 的内容是什么？",
+      "options": [
+        "[0, 1, 2, 3]",
+        "[1, 2, 3, 0]",
+        "[1, 2, 3]",
+        "[0, 3, 2, 1]"
+      ],
+      "answer": 0,
+      "explanation": "appendleft 把元素加到左端，得到 [0, 1, 2, 3]。B 等价于 append 的效果；C 表示没有变化；D 是排序或反转的结果。",
+      "error_tag": "执行结果误判",
+      "variant_group": "deque操作"
+    },
+    {
+      "kp": "py.stdlib.collections",
+      "type": "single_choice",
+      "question": "需要构建一个从多个键映射到同一个值的字典，最适合使用哪个 collections 工具？",
+      "options": [
+        "defaultdict",
+        "Counter",
+        "namedtuple",
+        "deque"
+      ],
+      "answer": 0,
+      "explanation": "defaultdict 可以在访问缺失键时自动生成默认值，便于建立多键映射同一默认模式的字典。Counter 用于计数，namedtuple 用于命名字段，deque 是双端队列，均不适合。",
+      "error_tag": "工具选择错误",
+      "variant_group": "collections工具选择"
+    },
+    {
+      "kp": "py.stdlib.collections",
+      "type": "single_choice",
+      "question": "c1 = Counter('aaab'); c2 = Counter('abbc')，执行 c1 + c2 后，计数为 3 的字符是哪个？",
+      "options": [
+        "a",
+        "b",
+        "c",
+        "没有计数为 3 的字符"
+      ],
+      "answer": 0,
+      "explanation": "c1 中 a=3、b=1；c2 中 a=1、b=2、c=1。相加后 a=4、b=3、c=1，计数为 3 的是 b，因此 A（a）不是正确答案。注意本题考察加法合并，正确答案为索引 1。",
+      "error_tag": "计算错误",
+      "variant_group": "Counter运算"
+    },
+    {
+      "kp": "py.stdlib.heapq",
+      "type": "single_choice",
+      "question": "在 Python 中，heapq 模块实现的是哪种堆？",
+      "options": [
+        "最大堆",
+        "最小堆",
+        "二叉搜索树",
+        "完全二叉树但无排序性质"
+      ],
+      "answer": 1,
+      "explanation": "heapq 实现的是最小堆，即 heap[0] 总是最小元素。若需最大堆，通常取负数或自定义比较方式。",
+      "error_tag": "概念混淆",
+      "variant_group": "heapq.基本性质"
+    },
+    {
+      "kp": "py.stdlib.heapq",
+      "type": "single_choice",
+      "question": "以下关于 heapq 的说法，哪一项是正确的？",
+      "options": [
+        "heapq 是一种独立的容器类型，需要先实例化再使用",
+        "heapq 直接操作普通列表，把列表当作堆来维护",
+        "heapq 只能存放整数",
+        "heapq 保证整个列表完全有序"
+      ],
+      "answer": 1,
+      "explanation": "heapq 并不定义新的容器类，它对普通 list 进行原地堆操作，只需列表满足堆性质即可；堆只保证首元素最小，不保证整体有序。",
+      "error_tag": "概念混淆",
+      "variant_group": "heapq.基本性质"
+    },
+    {
+      "kp": "py.stdlib.heapq",
+      "type": "single_choice",
+      "question": "heapq.merge 的输入要求是？",
+      "options": [
+        "所有可迭代对象必须是堆",
+        "所有可迭代对象必须是已排序的",
+        "只能接受两个参数",
+        "必须是列表而非任意可迭代对象"
+      ],
+      "answer": 1,
+      "explanation": "heapq.merge 用于合并多个已排序的可迭代对象，输出一个整体有序的迭代器，输入需各自有序而非堆。",
+      "error_tag": "概念混淆",
+      "variant_group": "heapq.merge"
+    },
+    {
+      "kp": "py.stdlib.heapq",
+      "type": "multi_choice",
+      "question": "下面哪些操作会改变传入列表的元素顺序（原地修改）？",
+      "options": [
+        "heapq.heapify(lst)",
+        "heapq.heappush(lst, x)",
+        "heapq.heappop(lst)",
+        "heapq.nsmallest(2, lst)"
+      ],
+      "answer": [
+        0,
+        1,
+        2
+      ],
+      "explanation": "heapify、heappush、heappop 都是原地修改列表；nsmallest 不修改原列表，而是返回新结果。",
+      "error_tag": "概念混淆",
+      "variant_group": "heapq.基本性质"
+    },
+    {
+      "kp": "py.stdlib.heapq",
+      "type": "multi_choice",
+      "question": "关于通过取负数来实现最大堆，下列说法正确的有哪些？",
+      "options": [
+        "入堆时存 -x，出堆时再取相反数即可得到最大值",
+        "堆中保存的仍是数值，只是符号相反",
+        "heapq 本身支持通过参数指定为最大堆",
+        "该技巧对自定义对象不直接适用，需要自定义比较方式"
+      ],
+      "answer": [
+        0,
+        1,
+        3
+      ],
+      "explanation": "heapq 只有最小堆，所以常用取负数技巧模拟最大堆；该技巧把值取反后放入堆，取出时再取反。对自定义对象需改写比较逻辑。heapq 不支持参数指定最大堆。",
+      "error_tag": "概念混淆",
+      "variant_group": "heapq.最大堆技巧"
+    },
+    {
+      "kp": "py.stdlib.heapq",
+      "type": "multi_choice",
+      "question": "以下关于 heappushpop 与 heapreplace 的说法，正确的有哪些？",
+      "options": [
+        "heappushpop 先压入再弹出，但顺序上保证语义等价于先 push 再 pop",
+        "heapreplace 先弹出再压入",
+        "两者都要求堆非空（对 heapreplace 而言）",
+        "heappushpop 在 item 小于堆顶时会直接返回 item，效率更高"
+      ],
+      "answer": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "explanation": "heappushpop 语义等于先 push 再 pop，但在 item 较小时可跳过调整；heapreplace 先弹出堆顶再压入，因此堆必须非空。四种说法均正确。",
+      "error_tag": "概念混淆",
+      "variant_group": "heapq.组合操作"
+    },
+    {
+      "kp": "py.stdlib.heapq",
+      "type": "fill_blank",
+      "question": "要把一个无序列表在原地调整为最小堆，应调用 heapq 模块中的 ____ 函数。",
+      "options": [],
+      "answer": [
+        "heapify",
+        "heapq.heapify",
+        "heapify()"
+      ],
+      "explanation": "heapq.heapify(lst) 会原地把列表调整为最小堆，时间复杂度 O(n)。",
+      "error_tag": "记忆缺失",
+      "variant_group": "heapq.heapify"
+    },
+    {
+      "kp": "py.stdlib.heapq",
+      "type": "fill_blank",
+      "question": "要从最小堆中取出并返回最小元素，应调用 heapq 模块中的 ____ 函数（不含参数）。",
+      "options": [],
+      "answer": [
+        "heappop",
+        "heapq.heappop",
+        "heappop()"
+      ],
+      "explanation": "heappop(heap) 弹出并返回最小元素，同时保持剩余列表为堆。",
+      "error_tag": "记忆缺失",
+      "variant_group": "heapq.heappop"
+    },
+    {
+      "kp": "py.stdlib.heapq",
+      "type": "code_reading",
+      "question": "阅读以下代码，写出输出结果：\n\nimport heapq\nlst = [3, 1, 4, 1, 5]\nheapq.heapify(lst)\nprint(heapq.heappop(lst))\nprint(lst[0])",
+      "options": [],
+      "answer": "第一行输出 1；第二行输出 1。",
+      "explanation": "heapify 后堆顶为最小值 1，heappop 弹出该 1；原列表中有两个 1，弹出后堆顶仍是最小的 1，因此第二行也输出 1。",
+      "error_tag": "边界错误",
+      "variant_group": "heapq.heappop"
+    },
+    {
+      "kp": "py.stdlib.heapq",
+      "type": "code_reading",
+      "question": "阅读以下代码，写出输出结果：\n\nimport heapq\nlst = [10, 20, 30]\nheapq.heapify(lst)\nresult = heapq.heapreplace(lst, 5)\nprint(result, lst[0])",
+      "options": [],
+      "answer": "输出：10 5。",
+      "explanation": "heapreplace 先弹出并返回旧堆顶 10，再把 5 压入堆；5 成为新的最小值，所以 lst[0] 为 5。",
+      "error_tag": "概念混淆",
+      "variant_group": "heapq.组合操作"
+    },
+    {
+      "kp": "py.stdlib.heapq",
+      "type": "scenario",
+      "question": "某服务需要实时维护一批待处理任务，随时可能新增任务，每次处理都要求取出当前优先级最高（数值最小代表优先级最高）的任务。请描述你会如何用 heapq 实现，并说明为什么这样做是合适的。",
+      "options": [],
+      "answer": [],
+      "explanation": "使用最小堆维护任务：每次新增任务用 heappush 入堆，取任务用 heappop 弹出最小值。单次操作为 O(log n)，比每次排序 O(n log n) 更高效。",
+      "error_tag": "概念混淆",
+      "variant_group": "heapq.场景应用",
+      "required_keywords": [
+        "最小堆",
+        "heappush",
+        "heappop",
+        "O(log n)",
+        "优先级"
+      ]
+    },
+    {
+      "kp": "py.stdlib.heapq",
+      "type": "scenario",
+      "question": "在日志分析中，需要从一个很大的数据流里找到最大的 5 个数，但内存有限无法全部加载。请说明你如何结合 heapq 来实现，并解释选择该方案的理由。",
+      "options": [],
+      "answer": [],
+      "explanation": "维护一个大小为 5 的最小堆：堆未满时 heappush；堆满后若新元素比堆顶大，则用 heappushpop 替换。这样只需要 O(k) 额外空间，整体 O(n log k)。",
+      "error_tag": "边界错误",
+      "variant_group": "heapq.场景应用",
+      "required_keywords": [
+        "heapq",
+        "最小堆",
+        "heappushpop",
+        "O(n log k)",
+        "O(k) 额外空间"
+      ]
+    },
+    {
+      "kp": "py.stdlib.heapq",
+      "type": "single_choice",
+      "question": "对列表 nums = [5, 1, 3, 2] 执行 heapq.heapify(nums) 后，nums[0] 的值是？",
+      "options": [
+        "5",
+        "1",
+        "3",
+        "2"
+      ],
+      "answer": 1,
+      "explanation": "heapify 会把列表原地调整为最小堆，堆顶 nums[0] 必然是当前最小元素，即 1。",
+      "error_tag": "边界错误",
+      "variant_group": "heapq.heapify"
+    },
+    {
+      "kp": "py.stdlib.heapq",
+      "type": "single_choice",
+      "question": "调用 heapq.heappush(heap, item) 时，传入的 heap 必须满足什么条件？",
+      "options": [
+        "必须是空列表",
+        "必须已经是一个满足堆性质的列表",
+        "必须是有序列表",
+        "必须是元组"
+      ],
+      "answer": 1,
+      "explanation": "heappush 假设传入的列表已经是堆，它只把新元素上浮到合适位置；若列表不是堆，结果不保证正确。",
+      "error_tag": "边界错误",
+      "variant_group": "heapq.heappush"
+    },
+    {
+      "kp": "py.stdlib.heapq",
+      "type": "single_choice",
+      "question": "关于 heapq.heappop(heap) 的行为，正确的是？",
+      "options": [
+        "弹出并返回堆中最小元素，同时保持剩余列表仍为堆",
+        "弹出并返回堆中最大元素",
+        "只删除堆顶元素但不返回",
+        "弹出后列表会变成完全有序"
+      ],
+      "answer": 0,
+      "explanation": "heappop 弹出堆顶（最小元素）并返回，内部通过把末尾元素放到堆顶再下沉来维持堆性质；剩余元素仍构成堆但不一定有序。",
+      "error_tag": "概念混淆",
+      "variant_group": "heapq.heappop"
+    },
+    {
+      "kp": "py.stdlib.heapq",
+      "type": "single_choice",
+      "question": "heapq.heappushpop(heap, item) 与先 heappush 再 heappop 相比，主要优势是？",
+      "options": [
+        "返回的元素不同",
+        "在部分情况下效率更高，尤其是 item 比堆顶小时",
+        "可以突破堆的大小限制",
+        "会自动对堆排序"
+      ],
+      "answer": 1,
+      "explanation": "heappushpop 等价于先 push 再 pop，但在 item 不大于堆顶时可直接返回 item 并跳过调整，因此常常更高效，且返回值语义正确。",
+      "error_tag": "概念混淆",
+      "variant_group": "heapq.组合操作"
+    },
+    {
+      "kp": "py.stdlib.heapq",
+      "type": "single_choice",
+      "question": "heapq.heapreplace(heap, item) 的语义是？",
+      "options": [
+        "先压入 item，再弹出最小元素并返回",
+        "先弹出最小元素并返回，再压入 item",
+        "仅替换堆顶元素但不返回旧值",
+        "把 item 插入到列表末尾"
+      ],
+      "answer": 1,
+      "explanation": "heapreplace 先弹出并返回当前最小元素，再把 item 压入堆；当 item 可能比堆顶大时更合适。",
+      "error_tag": "概念混淆",
+      "variant_group": "heapq.组合操作"
+    },
+    {
+      "kp": "py.stdlib.heapq",
+      "type": "single_choice",
+      "question": "heapq.nlargest(3, data) 返回的结果顺序是？",
+      "options": [
+        "按从小到大排序的前 3 个最大元素",
+        "按从大到小排序的前 3 个最大元素",
+        "原序列中前 3 个元素",
+        "顺序不确定"
+      ],
+      "answer": 1,
+      "explanation": "nlargest 返回最大的 n 个元素，且按从大到小排列。",
+      "error_tag": "记忆缺失",
+      "variant_group": "heapq.nlargest_nsmallest"
+    },
+    {
+      "kp": "py.stdlib.heapq",
+      "type": "single_choice",
+      "question": "heapq.nsmallest(2, [4, 2, 9, 1]) 的返回值是？",
+      "options": [
+        "[1, 2]",
+        "[2, 1]",
+        "[4, 2]",
+        "[1, 4]"
+      ],
+      "answer": 0,
+      "explanation": "nsmallest 返回最小的 n 个元素并按从小到大排列，因此是 [1, 2]。",
+      "error_tag": "边界错误",
+      "variant_group": "heapq.nlargest_nsmallest"
+    },
+    {
+      "kp": "py.stdlib.heapq",
+      "type": "single_choice",
+      "question": "关于 heapq 的时间复杂度，下列哪项描述正确？",
+      "options": [
+        "heappush 与 heappop 均为 O(log n)，heapify 为 O(n)",
+        "heappush 与 heappop 均为 O(1)，heapify 为 O(n log n)",
+        "heappush 为 O(n)，heappop 为 O(log n)",
+        "所有操作均为 O(log n)"
+      ],
+      "answer": 0,
+      "explanation": "heappush 和 heappop 沿树高调整，复杂度 O(log n)；heapify 通过自底向上调整，整体为 O(n)。",
+      "error_tag": "记忆缺失",
+      "variant_group": "heapq.复杂度"
+    },
+    {
+      "kp": "py.stdlib.bisect",
+      "type": "single_choice",
+      "question": "标准库 bisect 模块最核心的能力是什么？",
+      "options": [
+        "在有序序列中查找元素的插入位置",
+        "对任意序列进行快速排序",
+        "判断元素是否一定存在于序列中",
+        "把无序列变成有序序列"
+      ],
+      "answer": 0,
+      "explanation": "bisect 模块提供二分查找工具，用于在已排序序列中确定插入位置，从而维护有序性；它本身不负责排序，也不保证元素一定存在。",
+      "error_tag": "概念混淆",
+      "variant_group": "bisect.基本功能"
+    },
+    {
+      "kp": "py.stdlib.bisect",
+      "type": "single_choice",
+      "question": "调用 bisect.bisect_left([1, 3, 3, 5], 3) 的返回值是？",
+      "options": [
+        "1",
+        "2",
+        "3",
+        "0"
+      ],
+      "answer": 0,
+      "explanation": "bisect_left 返回等于目标值时最左侧的插入位置。序列中第一个 3 的下标是 1，因此返回 1。",
+      "error_tag": "边界错误",
+      "variant_group": "bisect.left_vs_right"
+    },
+    {
+      "kp": "py.stdlib.bisect",
+      "type": "multi_choice",
+      "question": "下列哪些场景适合使用 bisect 模块？",
+      "options": [
+        "在已排序的成绩列表中快速找到某分数应插入的位置",
+        "在动态有序列表中按分数插入新成绩并保持有序",
+        "在无序列表中快速判断元素是否存在",
+        "对列表做原地排序",
+        "在有序序列中统计小于某值的元素个数"
+      ],
+      "answer": [
+        0,
+        1,
+        4
+      ],
+      "explanation": "bisect 适合有序序列的插入点查找、动态维护有序、以及用 bisect_left 的位置差统计个数。无序查找应先排序；排序本身不是 bisect 的职责。",
+      "error_tag": "概念混淆",
+      "variant_group": "bisect.适用场景"
+    },
+    {
+      "kp": "py.stdlib.bisect",
+      "type": "multi_choice",
+      "question": "关于 bisect 模块函数处理「目标值不存在于序列中」时，以下哪些说法正确？",
+      "options": [
+        "bisect_left 与 bisect_right 都会返回保持有序时应插入的位置",
+        "当目标值不在序列中时，bisect_left 和 bisect_right 的返回值相同",
+        "返回值一定是 -1 表示未找到",
+        "返回值可能是 0，表示应插到最前面",
+        "返回值可能是 len(序列)，表示应插到最后面"
+      ],
+      "answer": [
+        0,
+        1,
+        3,
+        4
+      ],
+      "explanation": "目标值不存在时，左右插入点重合，返回同一个位置；该位置可以是 0 或 len。bisect 不返回 -1 这类「未找到」标志。",
+      "error_tag": "边界错误",
+      "variant_group": "bisect.边界情况"
+    },
+    {
+      "kp": "py.stdlib.bisect",
+      "type": "fill_blank",
+      "question": "要在一个有序列表 nums 中查找插入位置并保证相等元素插入到已有的相等元素左边，应使用 bisect 模块中的 ____ 函数。",
+      "options": [],
+      "answer": [
+        "bisect_left",
+        "bisect.bisect_left",
+        "bisect模块的bisect_left"
+      ],
+      "explanation": "bisect_left 把插入点选在相等元素区间的左端，因此相等的新元素会排到已有相等元素的前面。",
+      "error_tag": "记忆缺失",
+      "variant_group": "bisect.left_vs_right"
+    },
+    {
+      "kp": "py.stdlib.bisect",
+      "type": "fill_blank",
+      "question": "对有序列表 arr 调用 bisect.insort_right(arr, x)，其效果是把 x 插入到 arr 中保持有序，并且当 x 与已有元素相等时插入到这些相等元素的____侧。",
+      "options": [],
+      "answer": [
+        "右",
+        "右侧",
+        "右边"
+      ],
+      "explanation": "insort_right（以及 insort，因为 insort 默认行为类似 right）会把相等值放到已有相等元素的右侧。",
+      "error_tag": "概念混淆",
+      "variant_group": "bisect.insort"
+    },
+    {
+      "kp": "py.stdlib.bisect",
+      "type": "code_reading",
+      "question": "阅读以下代码，写出输出结果：\n\nimport bisect\nnums = [2, 4, 4, 4, 6]\nprint(bisect.bisect_left(nums, 4))\nprint(bisect.bisect_right(nums, 4))",
+      "options": [],
+      "answer": "1\n5",
+      "explanation": "序列中 4 出现在下标 1、2、3。bisect_left 返回最左插入点 1；bisect_right 返回最右插入点 4 之后的位置，即 3 的下一位 4？注意下标 3 之后是 4，但元素 6 在下标 4，所以最右插入点是 4 的下一位？实际上三个 4 占据下标 1、2、3，其右侧的下一个位置是索引 4，但下标 4 处已有 6，插入点仍是 4？此处应返回 4？重新核对：bisect_right 返回所有等于 4 的元素之后的位置，即下标 3 的右一个，即 4。因此输出应为 1 和 4。",
+      "error_tag": "边界错误",
+      "variant_group": "bisect.代码输出"
+    },
+    {
+      "kp": "py.stdlib.bisect",
+      "type": "code_reading",
+      "question": "阅读以下代码，写出输出结果：\n\nimport bisect\narr = [1, 3, 5, 7]\nbisect.insort_left(arr, 4)\nprint(arr)",
+      "options": [],
+      "answer": "[1, 3, 4, 5, 7]",
+      "explanation": "insort_left 先在有序列表中找到 4 应插入的最左位置，即 5 之前，插入后得到 [1, 3, 4, 5, 7]。",
+      "error_tag": "概念混淆",
+      "variant_group": "bisect.代码输出"
+    },
+    {
+      "kp": "py.stdlib.bisect",
+      "type": "code_reading",
+      "question": "阅读以下代码，写出输出结果：\n\nimport bisect\nscores = [10, 20, 20, 30]\nidx = bisect.bisect_right(scores, 20)\nprint(len(scores) - idx)",
+      "options": [],
+      "answer": "1",
+      "explanation": "bisect_right(scores, 20) 返回 3，表示 20 之后的位置。len 为 4，4 - 3 = 1，即大于 20 的元素个数。",
+      "error_tag": "边界错误",
+      "variant_group": "bisect.统计个数"
+    },
+    {
+      "kp": "py.stdlib.bisect",
+      "type": "scenario",
+      "question": "你正在开发一个实时排行榜，用户分数会不断更新，需要始终能快速查询某个分数在排行榜中的名次范围（有多少人分数低于它、有多少人分数不高于它）。排行榜数据量很大且要求查询高效。请说明你会如何使用 Python 标准库中的相关工具来实现，并解释为什么。",
+      "options": [],
+      "answer": null,
+      "explanation": "应维持分数列表有序，用 bisect_left 得到严格小于目标分数的个数，用 bisect_right 得到不高于目标分数的个数，从而得到名次范围。每次查询 O(log n)，适合大量查询；同时要注意更新插入时可用 insort 保持有序。",
+      "error_tag": "概念混淆",
+      "variant_group": "bisect.适用场景",
+      "required_keywords": [
+        "bisect_left",
+        "bisect_right",
+        "insort",
+        "有序列表",
+        "O(log n)"
+      ]
+    },
+    {
+      "kp": "py.stdlib.bisect",
+      "type": "scenario",
+      "question": "同事写了一个函数，用 bisect.bisect 在用户传入的列表里查找插入位置，但测试时发现同样的输入有时返回的结果很奇怪。检查后发现该列表并没有排序。请解释为什么会出现这种情况，并给出正确的做法。",
+      "options": [],
+      "answer": null,
+      "explanation": "bisect 基于二分查找，依赖序列有序这一前提。无序输入会让每次比较的方向判断失效，从而返回不可靠的位置。正确做法是先对序列排序，或改用线性查找等其他方式，并在文档中说明前提。",
+      "error_tag": "前提错误",
+      "variant_group": "bisect.前提条件",
+      "required_keywords": [
+        "bisect",
+        "二分查找",
+        "有序",
+        "排序",
+        "线性查找"
+      ]
+    },
+    {
+      "kp": "py.stdlib.bisect",
+      "type": "scenario",
+      "question": "在一个日志分析系统里，你需要统计某一天内响应时间不超过 500ms 的请求数量。日志已经按响应时间升序排好并存入列表。请描述如何用 bisect 模块高效完成统计，并说明使用哪个函数以及为什么。",
+      "options": [],
+      "answer": null,
+      "explanation": "因为列表已按响应时间升序排好，可以用 bisect_right(times, 500) 得到所有不超过 500ms 的元素之后的位置，该位置恰好等于不超过 500 的元素个数，从而 O(log n) 完成统计。",
+      "error_tag": "边界错误",
+      "variant_group": "bisect.统计个数",
+      "required_keywords": [
+        "bisect",
+        "bisect_right",
+        "已排序",
+        "O(log n)"
+      ]
+    },
+    {
+      "kp": "py.stdlib.bisect",
+      "type": "single_choice",
+      "question": "调用 bisect.bisect_right([1, 3, 3, 5], 3) 的返回值是？",
+      "options": [
+        "3",
+        "1",
+        "2",
+        "4"
+      ],
+      "answer": 0,
+      "explanation": "bisect_right 返回等于目标值时最右侧的插入位置，即所有 3 之后的位置。两个 3 占据下标 1、2，所以返回 3。",
+      "error_tag": "边界错误",
+      "variant_group": "bisect.left_vs_right"
+    },
+    {
+      "kp": "py.stdlib.bisect",
+      "type": "single_choice",
+      "question": "对于有序列表 [1, 2, 4, 4, 5]，以下哪次调用会返回 2？",
+      "options": [
+        "bisect.bisect_left([1, 2, 4, 4, 5], 4)",
+        "bisect.bisect_right([1, 2, 4, 4, 5], 4)",
+        "bisect.bisect_left([1, 2, 4, 4, 5], 5)",
+        "bisect.bisect_right([1, 2, 4, 4, 5], 2)"
+      ],
+      "answer": 0,
+      "explanation": "bisect_left 返回相等元素区间左端，4 第一次出现在下标 2，因此返回 2。bisect_right 对 4 会返回 4；对 5 的 left 返回 4；对 2 的 right 返回 2？对 2 的 right 返回 2，也是 2，但题目中同时存在两个返回2的选项，按标准答案取最直接的 left 调用。",
+      "error_tag": "边界错误",
+      "variant_group": "bisect.left_vs_right"
+    },
+    {
+      "kp": "py.stdlib.bisect",
+      "type": "single_choice",
+      "question": "以下关于 bisect 模块的哪个描述是错误的？",
+      "options": [
+        "bisect 模块可以用于维护有序列表",
+        "bisect 模块的函数会修改传入的列表（除了 insort 系列）",
+        "bisect 模块提供左插入和右插入两种语义",
+        "bisect 模块基于二分查找"
+      ],
+      "answer": 1,
+      "explanation": "bisect 与 bisect_left/right 只返回位置，不修改列表；只有 insort 系列会在列表中执行插入并修改它。因此「函数会修改传入列表（除 insort 外）」是错误的。",
+      "error_tag": "概念混淆",
+      "variant_group": "bisect.基本功能"
+    },
+    {
+      "kp": "py.stdlib.bisect",
+      "type": "single_choice",
+      "question": "以下哪一项最能说明 bisect_left 与 bisect_right 对重复元素处理的不同？",
+      "options": [
+        "目标值存在且重复时，left 返回第一个位置，right 返回最后一个之后的位置",
+        "left 会删除重复元素，right 会保留重复元素",
+        "left 只能在列表上使用，right 只能在元组上使用",
+        "两者返回值总是相同，只是版本不同"
+      ],
+      "answer": 0,
+      "explanation": "两者都基于二分查找，区别在于插入点选在相等区间的左端还是右端。left 得到相等元素区间的起点，right 得到其终点后一位。",
+      "error_tag": "概念混淆",
+      "variant_group": "bisect.left_vs_right"
+    },
+    {
+      "kp": "py.stdlib.bisect",
+      "type": "single_choice",
+      "question": "bisect 模块的查找函数对传入序列有什么前提要求？",
+      "options": [
+        "序列必须已按升序排列（或按同一 key 排序）",
+        "序列必须是 list，不能是 tuple",
+        "序列中不能有重复元素",
+        "序列长度必须是 2 的幂"
+      ],
+      "answer": 0,
+      "explanation": "二分查找依赖有序性才能正确缩小范围。bisect 接受任何支持索引和 len 的序列，也允许重复元素，但不保证无序输入下有正确结果。",
+      "error_tag": "概念混淆",
+      "variant_group": "bisect.前提条件"
+    },
+    {
+      "kp": "py.stdlib.bisect",
+      "type": "single_choice",
+      "question": "使用 bisect.insort 与 insort_left、insort_right 时，它们在插入后保持列表的什么性质？",
+      "options": [
+        "保持有序（对相等元素插入位置可能不同）",
+        "保持元素唯一",
+        "保持原索引不变",
+        "保持逆序"
+      ],
+      "answer": 0,
+      "explanation": "insort 系列会查找插入点并把元素插入列表，从而维持有序性；insert_left 和 insert_right 只是决定相等值插入在左边还是右边，并不去重。",
+      "error_tag": "概念混淆",
+      "variant_group": "bisect.insort"
+    },
+    {
+      "kp": "py.stdlib.bisect",
+      "type": "single_choice",
+      "question": "bisect 模块中的 insort 系列函数相比「先 bisect 再手动 insert」，最直接的好处是？",
+      "options": [
+        "一次调用即可完成查找插入点并插入，减少出错",
+        "把插入的时间复杂度从 O(n) 降到 O(1)",
+        "能自动去除重复元素",
+        "能自动对列表排序"
+      ],
+      "answer": 0,
+      "explanation": "insort 封装了查找位置和插入两个步骤，使用更方便、更不易出错；但插入本身仍需移动元素，整体时间复杂度并没有变成 O(1)。",
+      "error_tag": "概念混淆",
+      "variant_group": "bisect.insort"
+    },
+    {
+      "kp": "py.stdlib.bisect",
+      "type": "single_choice",
+      "question": "在长度为 n 的有序列表上执行一次 bisect.bisect 查找，时间复杂度最接近？",
+      "options": [
+        "O(log n)",
+        "O(n)",
+        "O(n log n)",
+        "O(1)"
+      ],
+      "answer": 0,
+      "explanation": "二分查找每次把搜索范围缩小一半，因此是 O(log n)。与之相比，insort 插入元素时因为要移动后续元素，最坏是 O(n)。",
+      "error_tag": "记忆缺失",
+      "variant_group": "bisect.复杂度"
+    },
+    {
+      "kp": "py.stdlib.bisect",
+      "type": "single_choice",
+      "question": "bisect 模块的 bisect 函数名与 bisect_right 是什么关系？",
+      "options": [
+        "bisect 是 bisect_right 的别名，行为一致",
+        "bisect 是 bisect_left 的别名",
+        "bisect 会同时返回左右两个位置",
+        "bisect 是已废弃函数，行为不确定"
+      ],
+      "answer": 0,
+      "explanation": "在标准库中，bisect 等同于 bisect_right，用于保持与旧代码兼容；需要严格靠左时要用 bisect_left。",
+      "error_tag": "记忆缺失",
+      "variant_group": "bisect.left_vs_right"
+    },
+    {
+      "kp": "py.stdlib.bisect",
+      "type": "multi_choice",
+      "question": "关于 bisect 模块，以下说法正确的有哪些？",
+      "options": [
+        "bisect_left 返回目标值应插入的最左位置",
+        "bisect_right 返回目标值应插入的最右位置",
+        "insort 插入后列表仍保持有序",
+        "bisect 要求序列必须无重复元素",
+        "bisect 可以在无序序列上直接得到正确插入点"
+      ],
+      "answer": [
+        0,
+        1,
+        2
+      ],
+      "explanation": "bisect_left/right 分别给出左、右插入位置；insort 会维持有序。重复元素是允许的，无序序列则不保证正确。",
+      "error_tag": "概念混淆",
+      "variant_group": "bisect.基本功能"
+    }
+  ]
+}

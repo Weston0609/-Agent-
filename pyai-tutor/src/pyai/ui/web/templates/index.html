@@ -1,0 +1,1615 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>PIXEL PYTHON QUEST · Python &amp; AI 架构师离线学习系统</title>
+  <style>
+    /* 字体策略（2026-08 修可读性）：
+   --pixel 只用于纯拉丁/数字的装饰（编号、HP、VS、按钮英文），中文绝不上等宽像素字体——
+   Consolas 没有中文字形，浏览器会回退到别的字体，同一行出现几种字重，看起来就是「糊」。
+   --ui 才是正文与中文标题用的字体栈，优先系统中文字体，保证每个字都有真实字形。 */
+    :root { --bg:#10152c; --card:#202947; --fg:#f7f1d5; --muted:#abb6d5; --accent:#54e1ff; --ok:#83ed87; --warn:#ffd15c;
+            --pixel:ui-monospace,Consolas,"Courier New",monospace;
+            --ui:"Microsoft YaHei","PingFang SC","Hiragino Sans GB","Source Han Sans SC","Noto Sans CJK SC",system-ui,sans-serif;
+            --fs-min:13px; }
+    /* 全站正文继承可读字体；同时关掉会糊掉小字的次像素/合成加粗问题 */
+    html,body { font-family:var(--ui); -webkit-font-smoothing:antialiased; text-rendering:optimizeLegibility; }
+    * { box-sizing:border-box; }
+    body { margin:0; min-height:100vh; overflow-x:hidden; background:var(--bg); color:var(--fg); }
+    body::before { content:""; position:fixed; inset:0; z-index:-2; pointer-events:none; background:linear-gradient(#171a42 0 54%,#283d66 54% 70%,#161c37 70%); }
+    #pixel-sky { position:fixed; top:0; left:0; z-index:-1; width:100vw; height:100vh; pointer-events:none; image-rendering:pixelated; }
+    .wrap { max-width:1040px; margin:0 auto; padding:24px 16px 64px; }
+    h1 { font:26px/1.4 var(--ui); font-weight:800; letter-spacing:1px; color:var(--warn); margin:0 0 4px; text-shadow:3px 3px #9a3c6c; }
+    h2,h3 { font-family:var(--ui); }
+    .pixel-label,.chip,.sem>summary { font-family:var(--ui); font-weight:700; }
+    .sub { color:var(--muted); font-size:14px; margin-bottom:20px; }
+    .clock { font-variant-numeric:tabular-nums; color:var(--accent); }
+    .card { background:rgba(32,41,71,.95); border:3px solid #8792be; border-radius:0; box-shadow:5px 5px 0 #090d20; padding:18px; margin-bottom:18px; }
+    .card h2 { margin:0 0 12px; font-size:16px; line-height:1.6; color:var(--accent); }
+    .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(120px,1fr)); gap:12px; }
+    .stat { background:#10152c; border:2px solid #445177; border-radius:0; padding:12px; text-align:center; }
+    .stat .num { font:20px/1.5 var(--pixel); font-weight:700; overflow-wrap:anywhere; }
+    .stat .lbl { font-size:13px; color:var(--muted); margin-top:4px; }
+    .bar { height:12px; background:#10152c; border:2px solid #445177; border-radius:0; overflow:hidden; margin-top:10px; }
+    .bar > div { height:100%; background:repeating-linear-gradient(90deg,#83ed87 0 12px,#42ad77 12px 16px); transition:width .4s; }
+    button { background:var(--accent); color:#10203c; border:2px solid #fff3bf; border-radius:0; box-shadow:3px 3px 0 #090d20; padding:10px 16px; font-size:14px; font-weight:700; cursor:pointer; }
+    button:hover { transform:translate(-1px,-1px); filter:brightness(1.1); box-shadow:4px 4px 0 #090d20; }
+    button:disabled { opacity:.45; cursor:not-allowed; transform:none; box-shadow:2px 2px 0 #090d20; }
+    .lesson-list { display:flex; flex-direction:column; gap:8px; }
+    .lesson { background:#10152c; border:2px solid #445177; border-radius:0; padding:10px 14px; display:flex; justify-content:space-between; align-items:center; }
+    .lesson .tag { font-size:13px; padding:2px 8px; border-radius:0; }
+    .tag.new { background:#184c77; color:var(--accent); }
+    .tag.review { background:#78350f; color:var(--warn); }
+    .tag.warmup { background:#7c3aed; color:#e9d5ff; }
+    .tag.remedial { background:#881337; color:#fecdd3; }
+    .hint { color:var(--muted); font-size:13.5px; line-height:1.7; }
+    .kp { background:#10152c; border:2px solid #58658e; border-radius:0; padding:12px 14px; margin-bottom:10px; }
+    .kp h3 { margin:0 0 8px; font-size:16px; line-height:1.6; color:var(--accent); }
+    .kp pre,.lesson-step pre { white-space:pre-wrap; background:#080c1c; border:2px solid #445177; border-radius:0; padding:10px; font-size:13px; overflow-x:auto; }
+    .quiz-q { margin-bottom:16px; }
+    /* 题干可能带代码块（code_reading），必须保留换行与等宽，否则整段代码挤成一行。 */
+    .quiz-q .stem { margin:6px 0 10px; white-space:pre-wrap; font:13.5px/1.65 var(--pixel), var(--ui); }
+    .quiz-q .opts label { display:block; padding:6px 0; cursor:pointer; }
+    .quiz-q input[type=text] { width:100%; padding:8px; border-radius:0; border:2px solid #445177; background:#10152c; color:var(--fg); }
+    /* 试一试：学员改示例代码、跑、看真实输出。之前这套沙箱只在内容生成侧用过，学习者侧没有入口。 */
+    .lab { background:#0b1124; border:2px solid #54e1ff; border-radius:0; padding:12px; margin-top:12px; }
+    .lab h4 { margin:0 0 8px; font-size:14px; color:var(--accent); }
+    .lab textarea { width:100%; min-height:150px; box-sizing:border-box; background:#080c1c; color:var(--fg);
+      border:2px solid #445177; border-radius:0; padding:10px; font:13px/1.6 ui-monospace,Consolas,monospace; resize:vertical; }
+    .lab .lab-actions { display:flex; gap:8px; align-items:center; margin-top:8px; }
+    .lab .lab-out { margin-top:10px; padding:10px; background:#050813; border:2px solid #445177;
+      font:12.5px/1.6 ui-monospace,Consolas,monospace; white-space:pre-wrap; max-height:260px; overflow:auto; }
+    .lab .lab-out.bad { border-color:#f87171; color:#fecaca; }
+    .muted { color:var(--muted); }
+    #result { font-weight:600; }
+    .sem { background:#10152c; border:2px solid #445177; border-radius:0; padding:10px 12px; margin-bottom:10px; }
+    .sem>summary { cursor:pointer; font-weight:700; font-size:14px; line-height:2.2; list-style:none; }
+    .sem>summary::before { content:'▶ '; color:var(--warn); }
+    .sem[open]>summary::before { content:'▼ '; }
+    .sem .unit { margin:8px 0 0 10px; }
+    .sem .uname { font-size:13px; color:var(--muted); margin:8px 0 5px; }
+    .chips { display:flex; flex-wrap:wrap; gap:8px; }
+    .chip { font-size:13px; line-height:1.6; padding:7px 9px; border-radius:0; border:2px solid #596487; background:#080c1c; color:var(--muted); }
+    .chip.passed { background:#1c643f; border-color:#83ed87; color:#efffe5; cursor:pointer; }
+    .chip.unlocked { background:#174d7a; border-color:#54e1ff; color:#e6fbff; cursor:pointer; }
+    .chip.locked { opacity:.5; }
+    .chip.current { outline:3px solid var(--warn); animation:pixelPulse 1.2s steps(2,end) infinite; }
+    @keyframes pixelPulse { 50% { filter:brightness(1.45); } }
+    .game-head { display:flex; justify-content:space-between; align-items:center; gap:12px; flex-wrap:wrap; }
+    .game-map { position:relative; padding:28px 12px 18px; overflow:hidden; border:3px solid #8792be; background:linear-gradient(#19234b 0 67%,#387256 67% 73%,#7a4d44 73%); }
+    .game-map::after { content:""; position:absolute; left:0; right:0; bottom:0; height:28px; background:repeating-linear-gradient(90deg,#7a4d44 0 24px,#925c48 24px 48px); border-top:4px solid #d5a45f; pointer-events:none; }
+    .map-world { position:relative; z-index:1; display:flex; align-items:center; gap:18px; overflow-x:auto; padding:28px 16px 54px; }
+    .map-world::before { content:""; position:absolute; left:40px; right:40px; top:76px; height:8px; background:#f6d07a; box-shadow:0 5px 0 #885846; z-index:-1; }
+    .map-world::before { content:""; position:absolute; left:40px; right:40px; top:76px; height:8px; background:#f6d07a; box-shadow:0 5px 0 #885846; z-index:-1; }
+    .world-node { width:158px; min-height:96px; color:var(--fg); background:#27365b; border:4px solid #f1d795; box-shadow:4px 4px 0 #080c1c; cursor:pointer; font:14px/1.5 var(--ui); font-weight:700; padding:10px 8px; text-align:center; white-space:normal; }
+    .world-node.locked { filter:grayscale(.85); opacity:.6; cursor:not-allowed; }
+    .world-node.passed { background:#21674b; border-color:#9af19b; }
+    .world-node.current { transform:translateY(-10px); box-shadow:4px 4px 0 #080c1c,0 0 0 4px var(--warn); }
+    .world-node .node-icon { display:block; font:24px/1.3 system-ui,sans-serif; }
+    .world-node small { display:block; font:13px/1.5 var(--ui); font-weight:400; color:#e2ecff; }
+    .lesson-shell { display:grid; grid-template-columns:minmax(0,1fr) 220px; gap:16px; align-items:start; }
+    .lesson-main { min-width:0; }
+    .lesson-progress { display:flex; justify-content:space-between; align-items:center; gap:12px; font-size:14px; color:var(--muted); margin-bottom:10px; }
+    .lesson-progress .bar { flex:1; margin:0; }
+    .step-card { background:#10152c; border:3px solid #58658e; box-shadow:4px 4px 0 #080c1c; padding:20px; min-height:260px; }
+    .step-card h3 { font:18px/1.5 var(--ui); font-weight:800; color:var(--accent); margin:0 0 14px; }
+    .step-body { font-size:18px; line-height:1.95; overflow-wrap:anywhere; }
+    /* 讲义里的 --- 与 ## 是排版符号，转成真元素而不是让它们原样显示 */
+    .md-rule { border:0; height:3px; margin:20px 0; background:repeating-linear-gradient(90deg,#58658e 0 8px,transparent 8px 16px); }
+    .md-h { margin:20px 0 10px; font-size:17px; font-weight:800; color:var(--accent); line-height:1.5; }
+    .step-body code { font-family:var(--pixel); font-size:15px; }
+    .step-body p { margin:0 0 14px; }
+    .step-body ul,.step-body ol { padding-left:1.4em; }
+    .step-body li { margin:8px 0; }
+    .step-body code { background:#293451; border:1px solid #69769a; padding:1px 5px; color:#fff0ad; }
+    .step-body pre code { background:transparent; border:0; padding:0; color:#dff6ff; }
+    .step-body strong,.key-point { color:#fff09a; text-decoration:underline; text-decoration-color:#ffca57; text-decoration-thickness:3px; text-underline-offset:4px; }
+    .key-box { margin:16px 0; padding:12px 14px; background:#4d3920; border:3px solid #ffca57; color:#fff4ce; line-height:1.8; }
+    .key-box::before { content:'★ 重点记住  '; color:#ffe17a; font:14px var(--ui); font-weight:800; }
+    .tip-box { margin:14px 0; padding:10px 12px; background:#183b49; border-left:5px solid var(--accent); color:#dcf8ff; line-height:1.75; }
+    .lesson-side { position:sticky; top:14px; background:#10152c; border:2px solid #596487; padding:12px; }
+    .lesson-side h3 { font:15px/1.5 var(--ui); font-weight:800; color:var(--warn); margin:0 0 8px; }
+    .kp-nav { display:grid; gap:7px; }
+    .kp-nav button { font:14px/1.5 var(--ui); font-weight:600; padding:9px 7px; background:#27365b; color:var(--fg); text-align:left; box-shadow:2px 2px #080c1c; }
+    .kp-nav button.active { background:#176087; outline:2px solid var(--accent); }
+    .kp-nav button.done { background:#205a42; }
+    .step-actions { display:flex; justify-content:space-between; align-items:center; gap:10px; margin-top:18px; }
+    .step-actions .secondary { background:#465273; color:var(--fg); }
+    .quiz-intro { border:2px dashed var(--warn); padding:12px; margin-bottom:14px; color:#fff2be; }
+    @media(max-width:760px) { .lesson-shell { grid-template-columns:1fr; } .lesson-side { position:static; order:-1; } .kp-nav { display:flex; overflow-x:auto; } .kp-nav button { min-width:140px; } .game-map { min-height:210px; } }
+    .wm-tabs { display:flex; flex-wrap:wrap; gap:6px; margin-bottom:12px; }
+.wm-tab { flex:0 0 auto; padding:5px 10px; background:#27365b; color:var(--muted); font:13px/1.2 var(--ui); box-shadow:2px 2px 0 #080c1c; }
+.wm-tab:hover { color:var(--fg); }
+.wm-tab.active { background:var(--accent); color:#0a1020; font-weight:700; }
+.wm-tab.done { color:var(--ok); }
+.wm-tab.done.active { color:#0a1020; }
+.wm-head { font:14px/1.6 var(--ui); font-weight:700; color:var(--warn); margin-bottom:12px; }
+    .wm-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(52px,1fr)); gap:8px; }
+    .tile { position:relative; aspect-ratio:1/1; padding:0; background:#27365b; color:var(--fg); box-shadow:3px 3px 0 #080c1c; }
+    .tile .tile-no { position:absolute; top:2px; left:4px; font:12px var(--pixel); font-weight:700; opacity:.9; }
+    .tile .tile-mark { font-size:20px; }
+    .tile.unlocked { background:#176087; }
+    .tile.passed { background:#205a42; }
+    .tile.locked { background:#2a3151; color:#6b79a3; cursor:not-allowed; }
+    .tile.current { outline:3px solid var(--warn); animation:tile-pulse 1s steps(2,end) infinite; }
+    @keyframes tile-pulse { 50% { outline-color:var(--accent); } }
+    .wm-later { margin-top:12px; font:13px/1.7 var(--ui); color:var(--muted); }
+    /* ---- 独立页面（首页 / 课堂 / 闯关）---- */
+    .view { min-height:100vh; }
+    .view-class, .view-boss, .view-exam { padding:14px 18px 40px; max-width:1180px; margin:0 auto; }
+    .page-head { display:flex; align-items:center; gap:14px; margin-bottom:16px; flex-wrap:wrap; }
+    .page-head h2 { margin:0; font:18px/1.5 var(--ui); font-weight:800; color:var(--warn); flex:1; }
+    .back-btn { background:#465273; color:var(--fg); box-shadow:2px 2px 0 #090d20; padding:8px 14px; }
+    .side-block { margin-top:16px; }
+
+    /* ---- 课堂互动：白云气泡选项 ---- */
+    .cloud-pop { margin:20px 0 4px; animation:cloud-in .3s steps(3,end); }
+    @keyframes cloud-in { from { transform:translateY(14px); opacity:0; } }
+    .cloud-bubble { position:relative; background:#eef6ff; color:#16233d; border:3px solid #ffffff;
+                   box-shadow:5px 5px 0 #090d20; padding:16px 20px; font:16px/1.8 var(--ui); }
+    .cloud-bubble::after { content:''; position:absolute; left:26px; bottom:-16px;
+      width:0; height:0; border:9px solid transparent; border-top-color:#eef6ff; }
+    .cloud-ask { color:#2b5f9e; }
+    .cloud-opts { display:grid; gap:9px; margin:14px 0 0; }
+    .cloud-opt { display:flex; gap:10px; align-items:flex-start; text-align:left; width:100%;
+                 background:#fff; color:#16233d; border:2px solid #9fc2e8; box-shadow:2px 2px 0 #6f93bb;
+                 font:15px/1.6 var(--ui); padding:11px 14px; }
+    .cloud-opt:hover:not(:disabled) { background:#dcecff; }
+    .cloud-opt .k { color:#2b5f9e; }
+    .cloud-opt.right { background:#c8f5cd; border-color:#3fae57; }
+    .cloud-opt.wrong { background:#ffd6de; border-color:#d9536f; }
+    .cloud-verdict { margin-top:12px; border-left:6px solid var(--warn); background:#10152c;
+                     padding:11px 14px; font-size:14px; }
+    .cloud-verdict.good { border-left-color:var(--ok); }
+    .cloud-verdict.bad { border-left-color:#ff8fa8; }
+    .cloud-verdict .praise { color:var(--ok); font-weight:700; }
+    .cloud-verdict .comfort { color:#ffd6a0; font-weight:700; }
+    .cloud-verdict .why { color:var(--muted); margin-top:6px; font-size:14px; line-height:1.75; }
+
+    /* ---- 大白话卡片 ---- */
+    .plain-box { margin:16px 0; border:3px solid #f6d07a; background:#2a2416; padding:13px 16px; box-shadow:4px 4px 0 #090d20; }
+    .plain-box h4 { margin:0 0 9px; font:15px/1.5 var(--ui); font-weight:800; color:var(--warn); }
+    .plain-row { margin:8px 0; font-size:15.5px; line-height:1.75; }
+    .plain-row .who { color:var(--accent); font-weight:700; }
+    .plain-row em { color:#ffe9a8; font-style:normal; }
+
+    /* ---- 闯关页：街机左右对战 ---- */
+    .arcade-stage { display:grid; grid-template-columns:1fr auto 1fr; align-items:end; gap:10px;
+                    border:4px solid #58658e; background:linear-gradient(#1b2340 0%,#2a1d3d 60%,#3a1f33 100%);
+                    padding:18px 12px 10px; box-shadow:6px 6px 0 #080c1c; position:relative; overflow:hidden; }
+    .arcade-stage::before { content:''; position:absolute; inset:auto 0 0 0; height:56px;
+      background:repeating-linear-gradient(90deg,#3b2a4d 0 22px,#33243f 22px 44px);
+      border-top:3px solid #6b4f8a; }
+    .fighter { position:relative; text-align:center; z-index:1; }
+    .fighter-art { font-size:64px; line-height:1; transition:transform .12s steps(2,end); }
+    .fighter-name { font:13px/1.6 var(--pixel); font-weight:700; color:var(--muted); margin-top:6px; }
+    .fighter-hero .fighter-art { animation:hero-idle 1s steps(2,end) infinite; }
+    @keyframes hero-idle { 50% { transform:translateY(-6px); } }
+    .fighter-boss .fighter-art { filter:drop-shadow(0 0 10px #ff5c8a); animation:boss-bob 1.1s steps(2,end) infinite; }
+    @keyframes boss-bob { 50% { transform:translateY(-8px); } }
+    .fighter-boss.hurt .fighter-art { animation:boss-hurt .3s steps(2,end) 2; }
+    @keyframes boss-hurt { 50% { filter:drop-shadow(0 0 18px #ffd15c) brightness(2.2); transform:translateX(10px); } }
+    .fighter-boss.dead .fighter-art { filter:grayscale(1) drop-shadow(0 0 8px #83ed87); animation:none; transform:rotate(90deg); }
+    .fighter.lunge .fighter-art { transform:translateX(26px) scale(1.12); }
+    .fighter-hero.lunge .fighter-art { animation:none; transform:translateX(-26px) scale(1.12); }
+    .versus { font:20px/1 var(--pixel); font-weight:800; color:var(--warn); align-self:center;
+              text-shadow:3px 3px 0 #090d20; animation:vs-pulse .8s steps(2,end) infinite; }
+    @keyframes vs-pulse { 50% { color:#ff5c8a; } }
+    .combo-badge { margin-top:4px; font:14px/1.6 var(--pixel); font-weight:700; color:var(--warn); min-height:18px; }
+    .hit-fx { position:absolute; top:-4px; left:50%; transform:translateX(-50%);
+              font:18px/1 var(--pixel); font-weight:800; color:#ffd15c; opacity:0; pointer-events:none; }
+    .hit-fx.show { animation:hit-float .7s steps(5,end); }
+    @keyframes hit-float { 0% { opacity:1; transform:translate(-50%,0); } 100% { opacity:0; transform:translate(-50%,-42px); } }
+    .hp-row { display:grid; grid-template-columns:1fr 1fr; gap:14px; margin-top:14px; }
+    .hp-label { font:13px/1.5 var(--pixel); font-weight:700; color:var(--muted); margin-bottom:4px; }
+    .hp-bar { height:22px; background:#0b1020; border:3px solid #596487; box-shadow:2px 2px 0 #090d20; }
+    .hp-bar > div { height:100%; width:100%; transition:width .3s steps(4,end); }
+    .hp-bar.hero > div { background:repeating-linear-gradient(90deg,#83ed87 0 8px,#3fae57 8px 16px); }
+    .hp-bar.boss > div { background:repeating-linear-gradient(90deg,#ff5c8a 0 8px,#e03a6d 8px 16px); }
+    .boss-state { display:flex; justify-content:space-between; margin-top:8px; }
+    .boss-log { margin-top:14px; max-height:190px; overflow-y:auto; border:2px solid #414d73; background:#0d1226; padding:12px; font-size:14.5px; line-height:1.7; }
+    .boss-log div { padding:3px 0; border-bottom:1px dashed #263256; }
+    .boss-log .ok { color:var(--ok); }
+    .boss-log .bad { color:#ff8fa8; }
+    .boss-log .sys { color:var(--muted); }
+    .boss-log .win { color:var(--warn); font-weight:bold; }
+    @media(max-width:760px) { .arcade-stage { grid-template-columns:1fr; } .fighter-art { font-size:46px; } .hp-row { grid-template-columns:1fr; } }
+    @media(prefers-reduced-motion:reduce) { *,*::before,*::after { scroll-behavior:auto!important; animation-duration:.01ms!important; animation-iteration-count:1!important; } }
+  </style>
+</head>
+<body>
+<canvas id="pixel-sky" aria-hidden="true"></canvas>
+
+<!-- ========== 首页：选关 + 查看信息 ========== -->
+<div class="wrap view view-home" id="view-home">
+  <header class="game-head">
+    <div>
+      <h1>PIXEL PYTHON QUEST</h1>
+      <div class="sub">像素学院 · 40 分钟一关 · 离线学习 0 token · <span class="clock" id="clock">--</span></div>
+    </div>
+    <div class="pixel-label" style="font-size:15px;line-height:1.6;color:var(--warn)">★ <span id="map-progress">0/178</span></div>
+  </header>
+  <div class="sub">
+    学习者
+    <input id="user-input" type="text" placeholder="default" list="user-list"
+           style="width:130px;padding:5px 8px;border-radius:6px;border:1px solid #334155;background:#0f172a;color:var(--fg)">
+    <datalist id="user-list"></datalist>
+    <button style="padding:5px 12px" onclick="switchUser()">切换</button>
+    <span class="hint" id="user-hint"></span>
+  </div>
+
+  <div class="card game-head">
+    <h2>PLAYER ACTION</h2>
+    <div>
+      <button id="load-btn" onclick="enterClass()">▶ 开始当前关</button>
+      <button id="boss-btn" onclick="enterBoss()">⚔ 闯关</button>
+      <button onclick="resetAll()" class="secondary">↻ 重置进度</button>
+    </div>
+  </div>
+  <div class="hint" id="gate-hint" style="margin:-6px 0 14px"></div>
+
+  <div class="card" id="world-card">
+    <div class="game-head">
+      <h2>WORLD MAP · 选择关卡</h2>
+      <span class="hint">★ 当前关卡　✓ 已通关　全部关卡已开放</span>
+    </div>
+    <div id="world-map" class="game-map" aria-label="课程闯关地图"><div class="hint">地图载入中…</div></div>
+    <details style="margin-top:12px"><summary class="hint" style="cursor:pointer">展开课程树（全部关卡）</summary><div id="map" style="margin-top:10px"><div class="hint">载入中…</div></div></details>
+  </div>
+
+  <div class="card">
+    <h2>学习进度</h2>
+    <div class="grid">
+      <div class="stat"><div class="num" id="st-passed">-</div><div class="lbl">已掌握课</div></div>
+      <div class="stat"><div class="num" id="st-total">-</div><div class="lbl">总课数</div></div>
+      <div class="stat"><div class="num" id="st-kps">-</div><div class="lbl">知识点</div></div>
+      <div class="stat"><div class="num" id="st-next">-</div><div class="lbl">下一课</div></div>
+    </div>
+    <div class="bar"><div id="progress-bar" style="width:0%"></div></div>
+    <div class="hint" id="due-line" style="margin-top:10px"></div>
+  </div>
+
+  <div class="card">
+    <h2>章节考 / 学期考 <span class="hint" id="exam-line"></span></h2>
+    <div id="exam-box" class="lesson-list"><div class="hint">载入中…</div></div>
+  </div>
+
+  <div class="card">
+    <h2>到期复习 <span class="hint" id="review-line"></span></h2>
+    <div id="review-box" class="lesson-list"><div class="hint">载入中…</div></div>
+  </div>
+
+  <div class="card">
+    <h2>错题本 <span class="hint" id="error-line"></span></h2>
+    <div id="error-box" class="lesson-list"><div class="hint">载入中…</div></div>
+  </div>
+
+  <div class="card">
+    <h2>今日排课（自动 · 40 分钟/节）</h2>
+    <div id="schedule" class="lesson-list"></div>
+  </div>
+
+  <div class="card">
+    <h2>Token 计费（只有更新内容时才烧；离线学习恒为 0）</h2>
+    <div class="grid">
+      <div class="stat"><div class="num" id="tk-total">-</div><div class="lbl">累计 token</div></div>
+      <div class="stat"><div class="num" id="tk-month">-</div><div class="lbl">本月 token</div></div>
+      <div class="stat"><div class="num" id="tk-budget">-</div><div class="lbl">本月预算</div></div>
+      <div class="stat"><div class="num" id="tk-runs">-</div><div class="lbl">更新次数</div></div>
+      <div class="stat"><div class="num" id="tk-added">-</div><div class="lbl">新增 KP</div></div>
+      <div class="stat"><div class="num" id="tk-last">-</div><div class="lbl">最近一次 token</div></div>
+    </div>
+    <div class="hint" id="tk-line" style="margin-top:10px"></div>
+  </div>
+
+  <div class="card">
+    <h2>通知 <span class="hint" id="notif-count"></span></h2>
+    <div id="notifications" class="lesson-list"></div>
+    <div style="margin-top:10px"><button onclick="markNotifsRead()">✓ 全部已读</button></div>
+  </div>
+</div>
+
+<!-- ========== 课堂页：全屏学习（独立界面）========== -->
+<div class="view view-class" id="view-class" style="display:none">
+  <header class="page-head">
+    <button class="back-btn" onclick="goHome()">◀ 返回首页</button>
+    <h2 id="lessonTitle">WORLD 1-1</h2>
+    <span class="pixel-label" id="lesson-xp" style="font-size:15px;font-weight:700;color:var(--warn)"></span>
+  </header>
+  <div class="lesson-shell">
+    <div class="lesson-main">
+      <div class="lesson-progress"><span id="step-counter">知识点 1/1</span><div class="bar"><div id="step-bar" style="width:0%"></div></div></div>
+      <div id="content"></div>
+      <div id="step-actions" class="step-actions" style="display:none">
+        <button id="prev-step" class="secondary" onclick="moveStep(-1)">◀ 上一个</button>
+        <button id="next-step" onclick="moveStep(1)">继续 ▶</button>
+        <button id="class-boss-btn" onclick="goBoss(CURRENT_LESSON)" disabled>⚔ 挑战 BOSS</button>
+      </div>
+      <div id="lesson-note" class="hint" style="margin-top:14px"></div>
+    </div>
+    <aside class="lesson-side">
+      <h3>关卡知识点</h3>
+      <div class="kp-nav" id="kp-nav"></div>
+      <div class="side-block">
+        <h3>本知识点重点</h3>
+        <div id="side-plain" class="hint">载入后显示这一节的「一句话重点」。</div>
+      </div>
+    </aside>
+  </div>
+</div>
+
+<!-- ========== 闯关页：街机左右对战（独立界面）========== -->
+<div class="view view-boss" id="view-boss" style="display:none">
+  <header class="page-head">
+    <button class="back-btn" onclick="goHome()">◀ 返回首页</button>
+    <h2 id="boss-title">⚔ BOSS BATTLE</h2>
+    <span class="hint" id="boss-sub-label"></span>
+    <span class="hint" id="boss-need">通关线 85%</span>
+  </header>
+  <div class="arcade-stage" id="boss-card">
+    <div class="fighter fighter-hero" id="fighter-hero">
+      <div class="fighter-art">🧑💻</div>
+      <div class="fighter-name">YOU</div>
+      <div class="combo-badge" id="combo-badge"></div>
+    </div>
+    <div class="versus">VS</div>
+    <div class="fighter fighter-boss" id="fighter-boss">
+      <div class="fighter-art">👾</div>
+      <div class="fighter-name">BUG KING</div>
+      <div class="hit-fx" id="hit-fx"></div>
+    </div>
+  </div>
+  <div class="hp-row">
+    <div class="hp-box">
+      <div class="hp-label">HERO</div>
+      <div class="hp-bar hero"><div id="hero-hp" style="width:100%"></div></div>
+    </div>
+    <div class="hp-box">
+      <div class="hp-label">BOSS</div>
+      <div class="hp-bar boss"><div id="boss-hp" style="width:100%"></div></div>
+    </div>
+  </div>
+  <div class="boss-state">
+    <span class="hint" id="boss-round">回合 0/0</span>
+    <span class="hint" id="boss-hp-text"></span>
+  </div>
+  <div class="boss-log" id="boss-log"></div>
+  <div id="boss-question"></div>
+  <div class="step-actions" id="boss-actions" style="display:none">
+    <button id="boss-submit" onclick="bossAttack()">⚔ 出击</button>
+    <button class="secondary" onclick="bossRestart()">↻ 再战一局（换新题）</button>
+    <button class="secondary" onclick="goHome()">✕ 退出战斗</button>
+  </div>
+</div>
+
+<!-- ========== 考试页：章节考 / 学期考（一次一题，卷子可达 237 题）========== -->
+<div class="view view-exam" id="view-exam" style="display:none">
+  <header class="page-head">
+    <button class="back-btn" onclick="goHome()">◀ 返回首页</button>
+    <h2 id="exam-title">章节考</h2>
+    <span class="hint" id="exam-sub"></span>
+  </header>
+  <div class="wrap" style="max-width:860px">
+    <div class="lesson-progress"><span id="exam-counter">第 1/1 题</span><div class="bar"><div id="exam-bar" style="width:0%"></div></div></div>
+    <div id="exam-question"></div>
+    <div class="step-actions" id="exam-actions">
+      <button id="exam-prev" class="secondary" onclick="examMove(-1)">◀ 上一题</button>
+      <button id="exam-next" onclick="examMove(1)">下一题 ▶</button>
+      <button id="exam-submit" onclick="examSubmit()">📮 交卷</button>
+      <button class="secondary" onclick="goHome()">✕ 放弃</button>
+    </div>
+    <div id="exam-note" class="hint" style="margin-top:14px"></div>
+    <div id="exam-result"></div>
+  </div>
+</div>
+
+<script>
+let STATUS = null;
+let MAP = null;
+let CURRENT_LESSON = null;
+let CURRENT_KPS = [];
+let CURRENT_KP_INDEX = 0;
+let CURRENT_STEP_INDEX = 0;
+let LESSON_SECTIONS = [];
+let REACHED = 0;              // 本关已读到的小节数（只增不减）
+let INTERACTIONS = {};        // {kp_id: 互动题面}
+let IX_STATE = {};            // {kp_id: 'pending'|'right'|'wrong'}
+let PIXEL_FRAME = 0;
+let USER = localStorage.getItem('pyai_user') || '';
+let BUDGET = 0;
+
+// ---- 路由：#/home 首页、#/class/<lesson> 课堂页、#/boss/<lesson> 闯关页 ----
+// 单文件三视图，靠 hash 切换。全屏独立页（不再把课堂塞在首页小卡片里）。
+function currentRoute() {
+  const h = (location.hash || '').replace(/^#\/?/, '');
+  const [name, arg, arg2] = h.split('/');
+  if (name === 'class') return { view: 'class', arg: arg || null };
+  if (name === 'boss') return { view: 'boss', arg: arg || null };
+  if (name === 'exam') return { view: 'exam', arg: arg || null, arg2: arg2 || null };
+  return { view: 'home', arg: null };
+}
+
+function showView(name) {
+  document.getElementById('view-home').style.display = name === 'home' ? '' : 'none';
+  document.getElementById('view-class').style.display = name === 'class' ? '' : 'none';
+  document.getElementById('view-boss').style.display = name === 'boss' ? '' : 'none';
+  document.getElementById('view-exam').style.display = name === 'exam' ? '' : 'none';
+  window.scrollTo(0, 0);
+}
+
+function goHome() {
+  location.hash = '#/home';
+}
+
+function goClass(lessonId) {
+  location.hash = '#/class/' + encodeURIComponent(lessonId);
+}
+
+function goBoss(lessonId) {
+  location.hash = '#/boss/' + encodeURIComponent(lessonId);
+}
+
+function goExam(scope, scopeId) {
+  location.hash = '#/exam/' + encodeURIComponent(scope) + '/' + encodeURIComponent(scopeId);
+}
+
+async function route() {
+  const { view, arg, arg2 } = currentRoute();
+  if (view === 'class') {
+    if (!arg) { goHome(); return; }
+    showView('class');
+    await loadLesson(arg);
+  } else if (view === 'boss') {
+    if (!arg) { goHome(); return; }
+    showView('boss');
+    await startBoss(arg);
+  } else if (view === 'exam') {
+    if (!arg || !arg2) { goHome(); return; }
+    showView('exam');
+    await startExam(arg, arg2);
+  } else {
+    showView('home');
+    refreshStatus();
+    refreshMap();
+    refreshNotifications();
+    refreshExams();
+    refreshReview();
+    refreshErrors();
+  }
+}
+
+function api(path) {
+  return path + (path.includes('?') ? '&' : '?') + 'user=' + encodeURIComponent(USER || 'default');
+}
+
+function switchUser() {
+  USER = document.getElementById('user-input').value.trim();
+  localStorage.setItem('pyai_user', USER);
+  refreshStatus();
+  refreshMap();
+  refreshNotifications();
+  refreshExams();
+  refreshReview();
+  refreshErrors();
+  refreshUsers();
+}
+
+async function refreshUsers() {
+  const r = await fetch(api('/api/users'));
+  const d = await r.json();
+  const dl = document.getElementById('user-list');
+  dl.innerHTML = '';
+  for (const u of d.users || []) {
+    const o = document.createElement('option');
+    o.value = u.id;
+    dl.appendChild(o);
+  }
+}
+
+function fmtClock(iso) {
+  const d = new Date(iso);
+  const p = n => String(n).padStart(2,'0');
+  return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+}
+
+async function refreshStatus() {
+  const r = await fetch(api('/api/status'));
+  STATUS = await r.json();
+  BUDGET = STATUS.monthly_token_budget ?? 0;
+  document.getElementById('clock').textContent = fmtClock(STATUS.now);
+  document.getElementById('st-passed').textContent = STATUS.passed_lessons;
+  document.getElementById('st-total').textContent = STATUS.lessons;
+  document.getElementById('st-kps').textContent = STATUS.kps;
+  document.getElementById('st-next').textContent = STATUS.next_lesson || '全部通关';
+  // 全部通关后不是「没得学」——改成从第一关重学，按钮始终可用。
+  const entry = entryLesson();
+  document.getElementById('load-btn').textContent = STATUS.next_lesson ? `▶ 开始 ${STATUS.next_lesson}` : '▶ 重学第一关';
+  document.getElementById('load-btn').disabled = !entry;
+  if (CURRENT_LESSON && lessonState(CURRENT_LESSON) === 'passed')
+    document.getElementById('lesson-xp').textContent = '✓ STAGE CLEAR';
+  const pct = STATUS.lessons ? Math.round(100 * STATUS.passed_lessons / STATUS.lessons) : 0;
+  document.getElementById('progress-bar').style.width = pct + '%';
+  document.getElementById('due-line').textContent =
+    `到期复习 ${STATUS.due_reviews} 项${STATUS.remedial ? ' · 待补强：' + STATUS.remedial : ''}`;
+  document.getElementById('user-input').value = STATUS.user_id || '';
+  document.getElementById('user-hint').textContent = `当前：${STATUS.user_id}`;
+  renderTokenSpend(STATUS.token_spend || {});
+
+  const sched = document.getElementById('schedule');
+  sched.innerHTML = '';
+  if (!STATUS.day_plan || !STATUS.day_plan.length) {
+    sched.innerHTML = '<div class="hint">今日无排课</div>';
+  } else {
+    for (const e of STATUS.day_plan) {
+      const div = document.createElement('div');
+      div.className = 'lesson';
+      const tag = `<span class="tag ${e.type}">${e.type}</span>`;
+      div.innerHTML = `<span>${tag} ${e.title || e.lesson_id || ''}</span><span class="muted">${e.minutes}min · ${e.status}</span>`;
+      sched.appendChild(div);
+    }
+  }
+}
+
+function renderTokenSpend(ts) {
+  document.getElementById('tk-total').textContent = ts.tokens ?? 0;
+  document.getElementById('tk-month').textContent = ts.month_tokens ?? 0;
+  document.getElementById('tk-runs').textContent = ts.runs ?? 0;
+  document.getElementById('tk-added').textContent = ts.kps_added ?? 0;
+  document.getElementById('tk-last').textContent = ts.last ? ts.last.tokens_used : '—';
+  document.getElementById('tk-budget').textContent = BUDGET > 0 ? BUDGET : '不限';
+  document.getElementById('tk-line').textContent = ts.last
+    ? `最近一次 ${ts.last.kind} 更新：${ts.last.ended_at} [${ts.last.status}]；抓取/判分/上课均不烧 token`
+    : '尚未跑过更新（内容全部离线读取，0 token）';
+}
+
+function lessonState(id) {
+  for (const sem of (MAP && MAP.semesters) || [])
+    for (const u of sem.units)
+      for (const l of u.lessons) if (l.id === id) return l.state;
+  return null;
+}
+
+function setNote(text, ok) {
+  // 提示要写到当前视图自己的提示条上：课堂/Boss 用 lesson-note，考试页用 exam-note。
+  // 写死 lesson-note 的话，考试页报错会写进一个 display:none 的课堂页元素里 —— 静默失败。
+  const id = currentRoute().view === 'exam' ? 'exam-note' : 'lesson-note';
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.textContent = text || '';
+  el.style.color = ok === undefined ? '' : (ok ? 'var(--ok)' : 'var(--warn)');
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+// 把已缓存的讲义按原有标题与段落拆成小卡片；不生成新知识，不丢掉示例与提示。
+// ---- 代码示例讲解：整体在做什么 / 每块什么意思 / 为什么这么写 / 语法 / 容易忽略 ----
+function codeOverview(kp) {
+  const units = kp.code_units || [];
+  const out = [];
+  if (units.length && units[0].overview) out.push(`**这段在做什么：** ${units[0].overview}`);
+  out.push('```python\n' + String(kp.example_code || '').trim() + '\n```');
+  out.push(`这段代码共 ${units.length} 块、${String(kp.example_code || '').split('\n').length} 行，下面一块一块讲。`);
+  if (kp.code_error) out.push(`> ⚠️ 这段示例**本身有语法错误**（${kp.code_error}），已在讲解中如实标出，不要照抄。`);
+  return out.join('\n\n');
+}
+
+function codeUnitMd(u) {
+  const out = ['```python\n' + u.code + '\n```'];
+  out.push(`**什么意思：** ${u.meaning}`);
+  if (u.why) out.push(`**为什么这么写：** ${u.why}`);
+  if (u.syntax) out.push(`**语法：** ${u.syntax}`);
+  (u.gotchas || []).forEach(g => out.push(`> ⚠️ **容易忽略：** ${g}`));
+  return out.join('\n\n');
+}
+
+function codeSyntaxMd(notes) {
+  return notes.map(n => `- **${n}**`).join('\n');
+}
+
+function lessonSteps(kp) {if (!kp.ok) return [{title:'内容未就绪', body:'本知识点讲义尚未生成，请先运行系统更新。'}];
+  const lines = String(kp.explain || '').replace(/\r/g, '').split('\n');
+  const sections = [];
+  let title = kp.title !== kp.id ? kp.title : kp.id;
+  let body = [], fenced = false;
+  const flush = () => { if (body.join('').trim()) sections.push({title, body:body.join('\n').trim()}); body = []; };
+  for (const line of lines) {
+    if (/^\s*```/.test(line)) fenced = !fenced;
+    if (!fenced && /^#{1,3} +/.test(line)) {
+      flush(); title = line.replace(/^#{1,3} +/, '').trim();
+    } else { body.push(line); }
+  }
+  flush();
+  if (kp.pitfalls) sections.push({title:'常见坑 · 躲开陷阱',body:String(kp.pitfalls)});
+  if (kp.example_code) {
+    // 代码示例不留成一整块「你自己看」：先给总览，再一块一块讲清楚。
+    // 整段说明 + 完整代码都放进这里；后面的分页器不能再把它切开，否则「整体在做什么」会被重复和截断。
+    sections.push({title:'动手试一试 · 这段代码整体在做什么', body: codeOverview(kp), noSplit: true});
+    (kp.code_units || []).forEach(u => sections.push({title: `逐句讲解 · 第 ${u.index} 块（第 ${u.line_start}-${u.line_end} 行）`, body: codeUnitMd(u), noSplit: true}));
+    if ((kp.code_syntax || []).length) sections.push({title:'语法速查 · 这段代码用到了什么', body: codeSyntaxMd(kp.code_syntax), noSplit: true});
+  }
+  // 生成讲义里有的章节很长；仅在空行处拆，代码块不拆开，每屏控制在约 700 字以内。
+  const out = [];
+  for (const section of sections) {
+    // 代码讲解块自带完整代码，按长度再切会切坏代码（实测会出现半行 "你 ──pip install──▶"）。
+    if (section.noSplit) { out.push({title:section.title, body:section.body}); continue; }
+    const paragraphs = section.body.split(/\n\s*\n/);
+    let part = '', inCode = false;
+    for (const paragraph of paragraphs) {
+      const ticks = (paragraph.match(/^\s*```/gm) || []).length;
+      if (part && part.length + paragraph.length > 700 && !inCode) {
+        out.push({title:section.title, body:part}); part = '';
+      }
+      part += (part ? '\n\n' : '') + paragraph;
+      if (ticks % 2) inCode = !inCode;
+    }
+    if (part) out.push({title:section.title, body:part});
+  }
+  return out.length ? out : [{title, body:'本知识点暂时没有讲义，请在系统更新后再学。'}];
+}
+
+function inlineMd(text) {
+  // 所有内容先转义，再只为可信语法着色；模型生成的 HTML 永不执行。
+  return escapeHtml(text).replace(/`([^`\n]+)`/g,'<code>$1</code>')
+    .replace(/\*\*(.+?)\*\*/g,'<strong>$1</strong>');
+}
+
+function renderMd(md) {
+  const chunks = String(md).split(/(```[^\n]*\n[\s\S]*?```)/g);
+  return chunks.map(chunk => {
+    if (chunk.startsWith('```')) return '<pre><code>' + escapeHtml(chunk.replace(/^```[^\n]*\n/,'').replace(/```$/,'')) + '</code></pre>';
+    return chunk.split(/\n\s*\n/).filter(Boolean).map(block => {
+      // 分隔线：讲义里的 --- 是排版符号，不该原样显示成三个横杠。
+      if (/^\s*(?:-{3,}|\*{3,}|_{3,})\s*$/.test(block)) return '<hr class="md-rule">';
+      // 标题：# / ## / ### —— 讲义小节标题原样显示会带着井号，转成小标题。
+      if (/^#{1,6}\s+/.test(block)) {
+        const text = block.replace(/^#{1,6}\s+/gm, '').trim();
+        return '<h4 class="md-h">' + inlineMd(text) + '</h4>';
+      }
+      if (/^\|/.test(block)) return '<pre>' + escapeHtml(block) + '</pre>';
+      if (/^>/.test(block)) return '<div class="tip-box">' + inlineMd(block.replace(/^>\s?/gm,'')) + '</div>';
+      if (/^(?:[-*] |\d+\. )/m.test(block)) return '<ul>' + block.split('\n').map(line => '<li>' + inlineMd(line.replace(/^(?:[-*] |\d+\. )/,'')) + '</li>').join('') + '</ul>';
+      return '<p>' + inlineMd(block).replace(/\n/g,'<br>') + '</p>';
+    }).join('');
+  }).join('');
+}
+
+function keyPoint(md) {
+  const prose = String(md).replace(/```[\s\S]*?```/g, '').replace(/[#>*`\[\]]/g, '');
+  const bold = /\*\*(.+?)\*\*/.exec(md);
+  const line = bold ? bold[1] : prose.split(/[。！？\n]/).map(s => s.trim()).find(s => s.length > 8);
+  // 重点句里可能带 `代码`，走 inlineMd 才会变成 <code>，否则会原样显示反引号。
+  return line ? `<div class="key-box">${inlineMd(line.slice(0, 110))}</div>` : '';
+}
+
+function stripKeySentence(md) {
+  // 只删「整块 == 黄框那句重点」的那一块。句中加粗是强调，别的加粗块（如「任务：…」）也不是重点句，都要留。
+  const keyed = /\*\*(.+?)\*\*/.exec(md);
+  if (!keyed) return md;
+  const target = keyed[1].trim().slice(0, 110);
+  return String(md).split(/\n\s*\n/).filter(block => {
+    const m = /^\s*\*\*(.+?)\*\*\s*$/.exec(block);
+    if (!m) return true;
+    return m[1].trim().slice(0, 110) !== target;   // 整块就是这句重点 → 删
+  }).join('\n\n');
+}
+
+// ---- 试一试：讲义里的示例代码本来只能看，学员没有任何执行通道。这里接真沙箱 ----
+const LAB_CODE = {};   // kp_id -> 学员改过的代码；翻页回来不丢
+function codeLab(kp) {
+  const code = LAB_CODE[kp.id] !== undefined ? LAB_CODE[kp.id] : String(kp.example_code || '');
+  return `<div class="lab"><h4>试一试 · 改一改再跑</h4>`
+    + `<textarea id="lab-code" spellcheck="false" oninput="labInput(this.value)">${escapeHtml(code)}</textarea>`
+    + `<div class="lab-actions"><button id="lab-run" onclick="runCode()">▶ 运行</button>`
+    + `<span class="hint" id="lab-note">在本机沙箱里跑，超时 10 秒。</span></div>`
+    + `<pre class="lab-out" id="lab-out" style="display:none"></pre></div>`;
+}
+
+function labInput(v) {
+  const kp = CURRENT_KPS[CURRENT_KP_INDEX];
+  if (kp) LAB_CODE[kp.id] = v;
+}
+
+async function runCode() {
+  const ta = document.getElementById('lab-code');
+  const out = document.getElementById('lab-out');
+  const note = document.getElementById('lab-note');
+  const btn = document.getElementById('lab-run');
+  if (!ta || !out || !btn) return;
+  labInput(ta.value);
+  btn.disabled = true;
+  note.textContent = '运行中…';
+  try {
+    const r = await fetch('/api/code/run', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({code: ta.value}),
+    });
+    const d = await r.json();
+    const ok = d.exit_code === 0;
+    const stdout = String(d.stdout || '').replace(/\s+$/, '');
+    const stderr = String(d.stderr || '').replace(/\s+$/, '');
+    out.style.display = 'block';
+    out.className = 'lab-out' + (ok ? '' : ' bad');
+    out.textContent = [stdout, stderr].filter(Boolean).join('\n')
+      || (ok ? '（程序没有任何输出）' : '（没有输出）');
+    note.textContent = ok ? '✓ 运行结束（退出码 0）' : `✗ 退出码 ${d.exit_code}`;
+  } catch (e) {
+    note.textContent = '运行失败：' + e;
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+function renderStep() {
+  const kp = CURRENT_KPS[CURRENT_KP_INDEX];
+  if (!kp) return;
+  const sections = LESSON_SECTIONS[CURRENT_KP_INDEX];
+  const part = sections[CURRENT_STEP_INDEX];
+  const total = CURRENT_KPS.reduce((n, _, i) => n + LESSON_SECTIONS[i].length, 0);
+  const before = LESSON_SECTIONS.slice(0,CURRENT_KP_INDEX).reduce((n,s) => n + s.length,0);
+  const done = before + CURRENT_STEP_INDEX + 1;
+  REACHED = Math.max(REACHED, done);        // 只增不减：看过的最高小节
+  document.getElementById('step-counter').textContent = `知识点 ${CURRENT_KP_INDEX + 1}/${CURRENT_KPS.length} · 小节 ${CURRENT_STEP_INDEX + 1}/${sections.length}`;
+  document.getElementById('step-bar').style.width = (done / total * 100) + '%';
+  document.getElementById('lesson-xp').textContent = `STEP ${done}/${total}`;
+  const key = keyPoint(part.body);
+  // 重点句已经在黄色框里，正文就把它整句去掉；只拆 ** 会让同一句话连读两遍。
+  const body = key ? stripKeySentence(part.body) : part.body;
+  // 试验台只挂在「动手试一试」这一节：挂每一节会重复出现，挂最后一节又离示例太远。
+  const lab = (kp.example_code && /^动手试一试/.test(part.title)) ? codeLab(kp) : '';
+  document.getElementById('content').innerHTML =
+    `<article class="step-card"><h3>${escapeHtml(part.title)}</h3><div class="step-body">${key}${renderMd(body)}</div></article>`
+    + lab + plainCard(kp, part) + cloudPop(kp);
+  document.getElementById('prev-step').disabled = CURRENT_KP_INDEX === 0 && CURRENT_STEP_INDEX === 0;
+  const atEnd = done === total;
+  const kpEnd = CURRENT_STEP_INDEX + 1 === sections.length;
+  const next = document.getElementById('next-step');
+  next.textContent = atEnd ? '⚔ 挑战 BOSS'
+    : kpEnd ? (CURRENT_KP_INDEX + 1 < CURRENT_KPS.length ? '解锁下个知识点 ▶' : '⚔ 挑战 BOSS')
+    : '下一小节 ▶';
+  const nav = document.getElementById('kp-nav');
+  nav.innerHTML = '';
+  CURRENT_KPS.forEach((k,i) => {
+    const button = document.createElement('button');
+    const ix = IX_STATE[k.id];
+    const mark = i < CURRENT_KP_INDEX ? '✓' : i === CURRENT_KP_INDEX ? '★' : '□';
+    const tick = ix === 'right' ? ' 🎉' : ix === 'wrong' ? ' 💡' : '';
+    button.textContent = `${mark} ${k.title && k.title !== k.id ? k.title : k.id}${tick}`;
+    button.className = (i < CURRENT_KP_INDEX ? 'done' : '') + (i === CURRENT_KP_INDEX ? ' active' : '');
+    button.disabled = i > CURRENT_KP_INDEX;
+    button.onclick = () => { CURRENT_KP_INDEX = i; CURRENT_STEP_INDEX = 0; renderStep(); };
+    nav.appendChild(button);
+  });
+  document.getElementById('step-actions').style.display = 'flex';
+  const side = document.getElementById('side-plain');
+  if (side) {
+    // 侧栏也跟着小节变：显示「本小节」的重点，而不是整课不变的那句。
+    const sec = part ? sectionPlain(part.body) : null;
+    const line = (sec && (sec.intuition || sec.example)) || (kp && kp.plain && (kp.plain.conclusion || kp.plain.intuition)) || '';
+    side.innerHTML = line ? escapeHtml(line) : '这一节没有额外的「一句话重点」。';
+  }
+  syncBossGate();
+}
+
+// ---- 大白话卡片：从「当前这一小节」的正文里提炼（内容来自原文，不新增知识）----
+// 之前只看 kp.plain —— 那是整个知识点的摘要，所以翻遍整课卡片都不动。现在优先按小节算。
+function plainCard(kp, part) {
+  const fromSection = part ? sectionPlain(part.body) : null;
+  const p = fromSection || (kp && kp.plain);
+  if (!p || !p.has_any) return '';
+  const row = (who, text) => text
+    ? `<div class="plain-row"><span class="who">${who}</span> ${escapeHtml(text)}</div>` : '';
+  const rows = row('说白了：', p.intuition)
+             + row('举个例：', p.example)
+             + row('记这一句：', p.conclusion)
+             + row('代码里：', p.code_hint)
+             + row('容易踩：', p.pitfall);
+  if (!rows) return '';
+  return `<div class="plain-box"><h4>🧠 大白话 · 人话版</h4>${rows}</div>`;
+}
+
+// 按小节正文提炼：优先「假设/比如」这类例子句，其次加粗的重点句，最后第一句人话。
+// 纯前端、只摘原文，拿不到就返回 null 让上层回落到知识点级摘要。
+function sectionPlain(md) {
+  const text = String(md || '');
+  if (!text.trim()) return null;
+  const plain = s => String(s).replace(/```[\s\S]*?```/g, '')
+    .replace(/^#{1,6}\s*/gm, '').replace(/[`*_>|]/g, '').replace(/\s+/g, ' ').trim();
+  const cut = s => { const t = plain(s); const m = /^(.*?[。！？!?])/.exec(t); return (m ? m[1] : t).slice(0, 120); };
+
+  let example = '';
+  const ex = /(假设|比如说|比如|例如|举个例子|就像|好比|相当于)[^\n]{8,}/.exec(text);
+  if (ex) {
+    const line = text.slice(ex.index).split('\n\n')[0];
+    if (!/^[-*+\d#|]/.test(line.trim()) && !line.includes('```')) example = cut(line);
+  }
+  let keyLine = '';
+  const bold = /\*\*([^*\n]{6,110})\*\*/.exec(text);
+  if (bold) keyLine = plain(bold[1]).slice(0, 110);
+  if (!example && !keyLine) {
+    const firstPara = text.split(/\n\s*\n/).map(s => s.trim())
+      .find(s => s && !/^[-*+\d#|>]/.test(s) && !s.startsWith('```') && !/^-{3,}$/.test(s));
+    if (firstPara) keyLine = cut(firstPara);
+  }
+  if (!example && !keyLine) return null;
+  return { intuition: keyLine, example: example, conclusion: '', code_hint: '', pitfall: '', has_any: true };
+}
+
+// ---- 课堂互动：白云气泡里的小问题（选错也能继续学，只是换个说法再讲一遍）----
+function cloudPop(kp) {
+  if (!kp) return '';
+  const item = INTERACTIONS[kp.id];
+  if (!item) return '';
+  const sections = LESSON_SECTIONS[CURRENT_KP_INDEX] || [];
+  // 每个知识点只弹一次：单小节的知识点在小节里弹，多小节的读完最后一个小节再弹
+  // （放在末尾问，学习者才刚看过上下文，比一进来就考更合理）。
+  if (CURRENT_STEP_INDEX !== Math.max(0, sections.length - 1)) return '';
+  const opts = item.options.map((op, i) =>
+    `<button class="cloud-opt" data-kp="${escapeHtml(kp.id)}" data-ix="${escapeHtml(item.id)}" data-i="${i}"
+      onclick="answerCloud(this)">
+      <span class="k">${i + 1}.</span><span>${escapeHtml(op)}</span></button>`).join('');
+  return `<div class="cloud-pop" id="cloud-${escapeHtml(kp.id)}">
+    <div class="cloud-bubble">
+      <div class="cloud-ask">☁️ 停一下，先想想——</div>
+      <div style="margin:8px 0;color:#16233d">${escapeHtml(item.stem)}</div>
+      <div class="cloud-opts">${opts}</div>
+    </div>
+    <div id="cloud-verdict-${escapeHtml(kp.id)}"></div>
+  </div>`;
+}
+
+const PRAISE = ['答对啦！你真棒 🎉', '漂亮！就是这个 ✨', '太厉害了，稳准狠 💪', '完全正确！继续保持 🌟', '哇，秒懂 👏'];
+const COMFORT = ['没关系，这个点确实绕 🙂', '差一点点，咱们再看一遍 🤝', '错了很正常，记住这次就好 💡', '别急，换个说法你就懂了 🌱', '踩坑才记得牢，继续 👍'];
+
+function answerCloud(btn) {
+  const kpId = btn.dataset.kp, itemId = btn.dataset.ix, index = parseInt(btn.dataset.i, 10);
+  const item = INTERACTIONS[kpId];
+  if (!item) return;
+  const box = document.getElementById('cloud-' + kpId);
+  if (box) box.querySelectorAll('.cloud-opt').forEach(b => { b.disabled = true; });
+  fetch(api('/api/interactions/check'), {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({lesson_id: CURRENT_LESSON, id: itemId, answer: index, user: USER || undefined}),
+  }).then(r => r.json()).then(res => {
+    if (res.error) { setNote(res.error, false); return; }
+    // 把正确项标绿、选错的那项标红——学习者一眼看到差在哪。
+    if (box) {
+      box.querySelectorAll('.cloud-opt').forEach(b => {
+        if (parseInt(b.dataset.i, 10) === index && !res.correct) b.classList.add('wrong');
+      });
+    }
+    showCloudVerdict(kpId, res);
+    IX_STATE[kpId] = res.correct ? 'right' : 'wrong';
+  }).catch(e => setNote('互动判分失败：' + e.message, false));
+}
+
+function showCloudVerdict(kpId, res) {
+  const host = document.getElementById('cloud-verdict-' + kpId);
+  if (!host) return;
+  const pool = res.correct ? PRAISE : COMFORT;
+  const line = pool[Math.floor(Math.random() * pool.length)];
+  const why = res.correct ? (res.why || '') : (res.hint || res.why || '');
+  host.innerHTML = `<div class="cloud-verdict ${res.correct ? 'good' : 'bad'}">
+    <div class="${res.correct ? 'praise' : 'comfort'}">${escapeHtml(line)}</div>
+    ${why ? `<div class="why">${escapeHtml(why)}</div>` : ''}
+    <div class="why" style="margin-top:6px">继续往下看，不耽误进度 ⏩</div>
+  </div>`;
+}
+
+// ---- 打 BOSS 的门禁：讲义读过 45% 才放行（防止没学就点测验碰运气）----
+const BOSS_READ_GATE = 0.45;
+
+function readTotal() { return LESSON_SECTIONS.reduce((n, s) => n + s.length, 0); }
+function readProgress() { const t = readTotal(); return t ? REACHED / t : 0; }
+
+// ---- 首页入口：跳转到独立的课堂页 / 闯关页 ----
+// 全开放后整张地图都是可学的，所以「没能推荐的下一关」不等于「没得学」：
+// 全通关的人照样能重学任何一关，这里回落到第一关，绝不让入口按钮变死。
+function entryLesson() {
+  return (STATUS && STATUS.next_lesson) || mapProblemLesson() || firstLesson();
+}
+
+function firstLesson() {
+  if (!MAP) return null;
+  const sem = (MAP.semesters || [])[0];
+  const unit = sem && (sem.units || [])[0];
+  const les = unit && (unit.lessons || [])[0];
+  return les ? les.id : null;
+}
+
+function enterClass() {
+  const target = entryLesson();
+  if (!target) { setNote('课程地图还没载入，稍等一下再点。', false); return; }
+  goClass(target);
+}
+
+function enterBoss() {
+  // 全开放：优先打没通关的关；全通关了就回第一关重打，不挡人。
+  const target = entryLesson();
+  if (!target) { setNote('课程地图还没载入，稍等一下再点。', false); return; }
+  goBoss(target);
+}
+
+function mapProblemLesson() {
+  if (!MAP) return null;
+  for (const sem of (MAP.semesters || [])) for (const u of (sem.units || [])) for (const l of (u.lessons || []))
+    if (l.state !== 'passed') return l.id;
+  return null;
+}
+
+// 课堂页底部那个「挑战 BOSS」按钮的门禁：讲义读够 45% 才亮。
+// 门禁只作用于「从课堂页顺读下去」这条路；首页/地图直接点关卡打 Boss 不被挡
+// （那里本来就是想打就打，挡住会像坏掉）。
+function syncBossGate() {
+  const btn = document.getElementById('class-boss-btn');
+  if (!btn) return;
+  const total = readTotal();
+  const ratio = total ? readProgress() : 0;
+  const ok = total > 0 && ratio >= BOSS_READ_GATE;
+  btn.disabled = !ok;
+  const need = Math.ceil(BOSS_READ_GATE * total);
+  btn.title = !total ? '先载入讲义'
+    : ok ? '开打！正确率 ≥85% 通关'
+    : `讲义才读了 ${Math.round(ratio * 100)}%，继续读（至少 ${need} 个小节）才能挑战 BOSS`;
+}
+
+function moveStep(delta) {
+  if (delta > 0 && CURRENT_STEP_INDEX + 1 === LESSON_SECTIONS[CURRENT_KP_INDEX].length && CURRENT_KP_INDEX + 1 === CURRENT_KPS.length) {
+    // 没读够不放行：停在原地提示，而不是直接把 BOSS 打开。
+    if (readProgress() < BOSS_READ_GATE) { setNote(document.getElementById('class-boss-btn').title, false); return; }
+    goBoss(CURRENT_LESSON); return;
+  }
+  CURRENT_STEP_INDEX += delta;  if (CURRENT_STEP_INDEX >= LESSON_SECTIONS[CURRENT_KP_INDEX].length) { CURRENT_KP_INDEX++; CURRENT_STEP_INDEX = 0; }
+  if (CURRENT_STEP_INDEX < 0) { CURRENT_KP_INDEX--; CURRENT_STEP_INDEX = LESSON_SECTIONS[CURRENT_KP_INDEX].length - 1; }
+  renderStep();
+  window.scrollTo({top: 0, behavior: 'smooth'});
+}
+
+async function loadLesson(id) {
+  const btn = document.getElementById('load-btn');
+  const target = id || entryLesson();
+  if (!target) { setNote('课程地图还没载入，稍等一下再点。', false); return; }
+  if (CURRENT_LESSON === target && CURRENT_KPS.length) {
+    // 已载入：切回讲义模式，并把当前小节重新画一遍。
+    document.getElementById('content').style.display = '';
+    renderStep();
+    return;
+  }
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ 载入中…'; }
+  try {
+    // 讲义与互动题面一起取：互动题是「停顿一下」用的小问题，取不到不影响阅读。
+    const [lesson, ix] = await Promise.all([
+      fetch(api('/api/lesson/' + encodeURIComponent(target))).then(r => {
+        if (!r.ok) throw new Error('HTTP ' + r.status); return r.json();
+      }),
+      fetch(api('/api/interactions/' + encodeURIComponent(target)))
+        .then(r => r.ok ? r.json() : {items: {}}).catch(() => ({items: {}})),
+    ]);
+    CURRENT_LESSON = target;
+    CURRENT_KPS = lesson.kps || [];
+    LESSON_SECTIONS = CURRENT_KPS.map(lessonSteps);
+    CURRENT_KP_INDEX = CURRENT_STEP_INDEX = 0;
+    REACHED = 0;                          // 换一关，阅读进度从头算
+    INTERACTIONS = ix.items || {};
+    IX_STATE = {};
+    const label = {};
+    { const s = MAP && MAP.semesters || [];
+      for (const sem of s) for (const u of sem.units) for (const l of u.lessons) label[l.id] = l.name; }
+    const nice = label[target] && label[target] !== target ? label[target] : null;
+    document.getElementById('lessonTitle').textContent = nice ? `${nice} · ${target}` : `STAGE ${target}`;
+    document.getElementById('content').style.display = '';
+    if (CURRENT_KPS.length) renderStep();
+    else { document.getElementById('content').textContent = '本关暂无知识点'; document.getElementById('step-actions').style.display = 'none'; }
+    setNote('一屏一小节、一个知识点一个知识点来；黄框是重点，云朵里会停下来问你一句。');
+  } catch (e) { setNote(`载入 ${target} 失败：${e.message}，请检查服务后重试。`, false); }
+  finally {
+    if (btn) {
+      btn.disabled = !entryLesson();
+      btn.textContent = (STATUS && STATUS.next_lesson) ? `▶ 开始 ${STATUS.next_lesson}` : '▶ 重学第一关';
+    }
+  }
+}
+
+
+/* ================= 打 Boss（街机左右对战） ================= */
+let BOSS = null;
+let BOSS_LABEL = {};
+
+function bossLog(text, cls) {
+  const log = document.getElementById('boss-log');
+  if (!log) return;
+  const d = document.createElement('div');
+  d.className = cls || 'sys';
+  d.textContent = text;
+  log.appendChild(d);
+  log.scrollTop = log.scrollHeight;
+}
+
+function stageLabel(id) {
+  const n = BOSS_LABEL[id];
+  return n && n !== id ? n : id;
+}
+
+// 命中特效 + 出拳动作：纯 CSS 类，300ms 后自动收回（不排队、不阻塞下一题）。
+function fx(hit) {
+  const hero = document.getElementById('fighter-hero');
+  const boss = document.getElementById('fighter-boss');
+  const pop = document.getElementById('hit-fx');
+  if (hit && hit.perfect) {
+    boss.classList.add('hurt'); hero.classList.add('lunge');
+    if (pop) { pop.textContent = `-${hit.damage}`; pop.classList.remove('show'); void pop.offsetWidth; pop.classList.add('show'); }
+    setTimeout(() => { boss.classList.remove('hurt'); hero.classList.remove('lunge'); }, 620);
+  } else if (hit && hit.damage) {
+    boss.classList.add('hurt');
+    if (pop) { pop.textContent = `-${hit.damage}`; pop.classList.remove('show'); void pop.offsetWidth; pop.classList.add('show'); }
+    setTimeout(() => boss.classList.remove('hurt'), 620);
+  } else {
+    hero.classList.add('lunge');
+    setTimeout(() => hero.classList.remove('lunge'), 320);
+  }
+}
+
+// 难度 1..5 显示成 ★☆，题目没带难度时什么都不显示。
+function diffStars(d) {
+  const n = Math.max(0, Math.min(5, parseInt(d, 10) || 0));
+  return n ? '难度 ' + '★'.repeat(n) + '☆'.repeat(5 - n) : '';
+}
+
+// 一道题渲染哪种作答控件，只在这里决定一次（Boss 与考试共用）。
+// 题库里 code_reading 全部是纯文字作答（实测 486 道全无 options），
+// 判分口径见 grading.py：有 options 且交下标按单选判，否则交文字。
+// 曾经的写法把 code_reading 写死成「渲染 options 里的单选」，options 为空时
+// 一个控件都不渲染 → 题目空白、提交被拦，整题不可答。所以这里以「有没有选项」为准。
+function hasOptions(item) {
+  return Array.isArray(item.options) && item.options.length > 0;
+}
+
+function answerControl(item) {
+  const type = item.type || 'single_choice';
+  if (!hasOptions(item)) return 'text';
+  if (type === 'multi_choice') return 'checkbox';
+  return 'radio';
+}
+
+function answerInputHtml(item, name) {
+  const ctl = answerControl(item);
+  if (ctl === 'checkbox' || ctl === 'radio') {
+    return '<div class="opts">' + (item.options || []).map((o, j) =>
+      `<label><input type="${ctl}" name="${name}" value="${j}"> ${escapeHtml(String(o))}</label>`).join('') + '</div>';
+  }
+  let html = `<input type="text" name="${name}" placeholder="输入你的答案" style="width:100%">`;
+  // 文字作答的题没有选项，必须告诉学习者「这题怎么判」，否则空白输入框等于无解。
+  if (item.answer_hint) html += `<div class="hint" style="margin-top:6px">💡 ${escapeHtml(item.answer_hint)}</div>`;
+  return html;
+}
+
+function readAnswer(item, name) {
+  const ctl = answerControl(item);
+  if (ctl === 'checkbox') {
+    return Array.from(document.querySelectorAll(`input[name="${name}"]:checked`)).map(e => parseInt(e.value));
+  }
+  if (ctl === 'radio') {
+    const sel = document.querySelector(`input[name="${name}"]:checked`);
+    return sel ? parseInt(sel.value) : -1;
+  }
+  const el = document.querySelector(`input[name="${name}"]`);
+  return el ? (el.value || '') : '';
+}
+
+function renderBoss() {
+  const hp = BOSS.hp, max = BOSS.max_hp;
+  const pct = max ? Math.round(100 * hp / max) : 0;
+  document.getElementById('boss-hp').style.width = pct + '%';
+  document.getElementById('boss-hp-text').textContent = `HP ${hp}/${max}`;
+  document.getElementById('boss-round').textContent =
+    `回合 ${BOSS.round}/${BOSS.total}　正确率 ${Math.round(BOSS.barrage * 100)}%`;
+  document.getElementById('boss-need').textContent = `通关线 ${Math.round(BOSS.need * 100)}%`;
+  document.getElementById('boss-title').textContent = `⚔ 闯关 · ${stageLabel(BOSS.lesson_id)}`;
+  document.getElementById('boss-sub-label').textContent = BOSS.lesson_id;
+  document.getElementById('combo-badge').textContent = BOSS.combo >= 2 ? `🔥 连击 ×${BOSS.combo}` : '';
+  document.getElementById('hero-hp').style.width = '100%';   // 你答错只掉正确率，不扣血
+
+  document.getElementById('fighter-boss').classList.toggle('dead', !!(BOSS.finished && (BOSS.verdict || {}).passed));
+
+  const qbox = document.getElementById('boss-question');
+  const actions = document.getElementById('boss-actions');
+  qbox.innerHTML = '';
+  if (BOSS.finished) {
+    actions.style.display = 'block';
+    document.getElementById('boss-submit').style.display = 'none';
+    const v = BOSS.verdict || {};
+    if (v.passed) {
+      bossLog(`🏆 击败！正确率 ${Math.round(v.score * 100)}%，命中 ${v.hits}/${v.total}，最高连击 ×${v.best_combo}`, 'win');
+      bossLog('▶ 下一关已解锁，回首页点「开始当前关」。', 'win');
+    } else {
+      bossLog(`💀 败北：正确率 ${Math.round(v.score * 100)}%，需要 ${Math.round(v.need * 100)}%。`, 'bad');
+      bossLog('BOSS 回满了血。点「再战一局」会换一批没打过的题。', 'bad');
+    }
+    return;
+  }
+  actions.style.display = 'block';
+  document.getElementById('boss-submit').style.display = 'inline-block';
+
+  const item = BOSS.question || {};
+  const type = item.type || 'single_choice';
+  const d = document.createElement('div');
+  d.className = 'quiz-q';
+  // 题干里带换行的（code_reading 481/486 都是代码块）必须保留换行，否则代码挤成一行。
+  d.innerHTML = `<strong>第 ${BOSS.round + 1} 回合 · [${type}] · ${diffStars(item.difficulty)}</strong>`
+    + `<div class="stem">${escapeHtml(item.stem || '')}</div>${answerInputHtml(item, 'bq')}`;
+  qbox.appendChild(d);
+}
+
+function bossAnswer() {
+  return readAnswer(BOSS.question || {}, 'bq');
+}
+
+async function startBoss(lessonId) {
+  const target = lessonId || CURRENT_LESSON;
+  if (!target) { setNote('没有可挑战的关卡。', false); goHome(); return; }
+  // 门禁：只有从课堂页进入时才检查阅读进度；从首页/地图直接打 Boss 不再被 45% 挡住
+  // （首页点进去就是想打，挡着反而像坏了）。
+  if (target === CURRENT_LESSON && readTotal() > 0 && readProgress() < BOSS_READ_GATE) {
+    // 已在课堂页读到一半 → 回课堂页继续读，而不是静默失败。
+    setNote(`讲义才读了 ${Math.round(readProgress() * 100)}%，先读完再打（至少 ${Math.ceil(BOSS_READ_GATE * readTotal())} 个小节）。`, false);
+    goClass(target);
+    return;
+  }
+  try {
+    const url = api('/api/boss') + '&lesson=' + encodeURIComponent(target);
+    const r = await fetch(url);
+    const v = await r.json();
+    if (v.error) { setNote(v.error, false); return; }
+    BOSS = v;
+    document.getElementById('boss-log').innerHTML = '';
+    document.getElementById('boss-card').style.display = '';
+    bossLog(`⚔ 开局：${stageLabel(v.lesson_id)}　${v.total} 回合　通关线 ${Math.round(v.need * 100)}%（答错不扣血，但拉低正确率）`, 'sys');
+    renderBoss();
+    setNote(`打 BOSS：正确率 ≥ ${Math.round(v.need * 100)}% 才通关。`);
+  } catch (e) {
+    setNote(`开始 BOSS 战失败：${e.message}`, false);
+  }
+}
+
+async function bossAttack() {
+  if (!BOSS || BOSS.finished) return;
+  const answer = bossAnswer();
+  const ctl = answerControl(BOSS.question || {});
+  if (ctl === 'checkbox' && (!answer || !answer.length)) { setNote('多选题请至少选一项。', false); return; }
+  if (ctl === 'radio' && answer === -1) { setNote('请选择一个选项。', false); return; }
+  if (ctl === 'text' && !String(answer).trim()) { setNote('先写出你的答案。', false); return; }
+  try {
+    const r = await fetch(api('/api/boss/hit'), {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({answer: answer, user: USER || undefined, lesson_id: BOSS.lesson_id}),
+    });
+    const v = await r.json();
+    if (v.error) { setNote(v.error, false); return; }
+    const hit = v.hit || {};
+    if (hit.perfect) {
+      bossLog(`⚔️ 命中！-${hit.damage} 血　连击 ×${v.combo}${v.combo >= 3 ? '　🔥 连击奖励' : ''}`, 'ok');
+    } else if (hit.damage) {
+      bossLog(`⚡ 擦到，-${hit.damage} 血（未满分，连击中断）`, 'sys');
+    } else {
+      bossLog('💥 打空了（答错），连击中断', 'bad');
+    }
+    fx(hit);
+    if (hit.feedback) bossLog(`　${hit.feedback}`, hit.perfect ? 'ok' : 'bad');
+    if (hit.explain) bossLog(`　解析：${hit.explain}`, 'sys');
+    BOSS = v;
+    renderBoss();
+    if (v.finished) { refreshStatus(); refreshMap(); }
+  } catch (e) {
+    setNote(`出击失败：${e.message}`, false);
+  }
+}
+
+async function bossRestart() {
+  const lesson = BOSS ? BOSS.lesson_id : (currentRoute().arg || null);
+  BOSS = null;
+  document.getElementById('boss-log').innerHTML = '';
+  try {
+    const r = await fetch(api('/api/boss/restart'), {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({lesson_id: lesson || undefined, user: USER || undefined}),
+    });
+    const v = await r.json();
+    if (v.error) { setNote(v.error, false); return; }
+    BOSS = v;
+    document.getElementById('boss-card').style.display = '';
+    bossLog('↻ 已重开：BOSS 回满血，换了一批没打过的题。', 'sys');
+    renderBoss();
+  } catch (e) {
+    setNote(`重开失败：${e.message}`, false);
+  }
+}
+
+async function refreshMap() {
+  const r = await fetch(api('/api/map'));
+  const m = await r.json();
+  MAP = m;
+  BOSS_LABEL = {};
+  for (const sem of (m.semesters || [])) for (const u of (sem.units || [])) for (const l of (u.lessons || [])) BOSS_LABEL[l.id] = l.name;
+  document.getElementById('map-progress').textContent = `${m.passed}/${m.total} 已通关`;
+  // 地图到位后才能算出「重学哪一关」，所以这里刷新一次入口按钮，
+  // 避免 STATUS 先到、MAP 后到时按钮停在不可用状态。
+  if (STATUS) {
+    const entry = entryLesson();
+    const btn = document.getElementById('load-btn');
+    if (btn) {
+      btn.disabled = !entry;
+      btn.textContent = STATUS.next_lesson ? `▶ 开始 ${STATUS.next_lesson}` : '▶ 重学第一关';
+    }
+  }
+  renderWorldMap(m);
+  const box = document.getElementById('map');
+  box.innerHTML = '';
+  const curLesson = m.current && m.current.lesson_id;
+  const curSem = m.current && m.current.semester_id;
+  const STATE_LABEL = {passed:'已通关，可重学', unlocked:'可学习'};
+  for (const sem of m.semesters) {
+    const det = document.createElement('details');
+    det.className = 'sem';
+    if (sem.id === curSem) det.open = true;
+    const sum = document.createElement('summary');
+    sum.textContent = `${sem.id.toUpperCase()} · ${sem.name} — ${sem.passed}/${sem.total}`;
+    det.appendChild(sum);
+    for (const u of sem.units) {
+      const ud = document.createElement('div');
+      ud.className = 'unit';
+      const done = u.lessons.filter(l => l.state === 'passed').length;
+      ud.innerHTML = `<div class="uname">${escapeHtml(u.name)} — ${done}/${u.lessons.length}</div>`;
+      const chips = document.createElement('div');
+      chips.className = 'chips';
+      for (const l of u.lessons) {
+        const c = document.createElement('span');
+        const isCur = l.id === curLesson;
+        c.className = 'chip ' + l.state + (isCur ? ' current' : '');
+        c.textContent = l.id.replace(sem.id, '').toUpperCase() + (isCur ? ' ★' : '');
+        c.title = `${l.name || l.id} · ${STATE_LABEL[l.state] || l.state}`;
+        c.onclick = () => goClass(l.id);
+        chips.appendChild(c);
+      }
+      ud.appendChild(chips);
+      det.appendChild(ud);
+    }
+    box.appendChild(det);
+  }
+}
+
+// 关卡全开放：默认展示「当前学期」，但可以用学期按钮跳到任意学期任意关。
+let WORLD_SEM = '';
+function renderWorldMap(m) {
+  const box = document.getElementById('world-map');
+  const cur = (m.current && m.current.lesson_id) || '';
+  const curSem = (m.current && m.current.semester_id) || '';
+  if (!WORLD_SEM) {
+    WORLD_SEM = curSem
+      || (m.semesters.find(s => s.passed < s.total) || {}).id
+      || (m.semesters[0] || {}).id || '';
+  }
+  const sem = m.semesters.find(s => s.id === WORLD_SEM) || m.semesters[0];
+  if (!sem) { box.innerHTML = '<div class="hint">课程地图为空</div>'; return; }
+  const lessons = sem.units.flatMap(u => u.lessons);
+  box.innerHTML = '';
+
+  const tabs = document.createElement('div');
+  tabs.className = 'wm-tabs';
+  m.semesters.forEach(s => {
+    const b = document.createElement('button');
+    b.className = 'wm-tab' + (s.id === sem.id ? ' active' : '') + (s.passed === s.total && s.total ? ' done' : '');
+    b.textContent = `${s.id.toUpperCase()} ${s.passed}/${s.total}`;
+    b.title = s.name;
+    b.onclick = () => { WORLD_SEM = s.id; renderWorldMap(m); };
+    tabs.appendChild(b);
+  });
+  box.appendChild(tabs);
+
+  const head = document.createElement('div');
+  head.className = 'wm-head';
+  head.textContent = `${sem.id.toUpperCase()} · ${sem.name} — ${sem.passed}/${sem.total}（全部关卡已开放，点哪关学哪关）`;
+  box.appendChild(head);
+
+  const grid = document.createElement('div');
+  grid.className = 'wm-grid';
+  lessons.forEach((l, i) => {
+    const tile = document.createElement('button');
+    tile.className = 'tile ' + l.state + (l.id === cur ? ' current' : '');
+    tile.innerHTML = `<span class="tile-no">${i + 1}</span><span class="tile-mark">${l.state === 'passed' ? '✓' : '▶'}</span>`;
+    tile.title = `${l.name && l.name !== l.id ? l.name : l.id} · ${l.state === 'passed' ? '已通关，可重学' : '可学习'}`;
+    tile.onclick = () => goClass(l.id);
+    grid.appendChild(tile);
+  });
+  box.appendChild(grid);
+}
+
+// ---- 章节考 / 学期考 ----
+// 卷子可达 237 题，一次渲染全部会卡，所以一次只渲染一题，答案存在 EXAM.answers 里。
+let EXAM = null;
+
+async function refreshExams() {
+  const box = document.getElementById('exam-box');
+  const line = document.getElementById('exam-line');
+  const d = await fetch(api('/api/exams')).then(r => r.json())
+    .catch(() => ({items: [], ready: []}));
+  const ready = d.ready || [];
+  const done = d.items || [];
+  const rows = [];
+  // 全部可考的都列出来，不只「下一场」——真实库里几十场早就可以考了，
+  // 只给一场的话，前面学期的考试永远点不到。
+  for (const e of ready) {
+    const label = e.scope === 'unit' ? '章节考' : '学期考';
+    const pct = Math.round((e.threshold || 0) * 100);
+    rows.push(`<div class="lesson"><span><span class="tag">${label}</span> ${escapeHtml(e.scope_id)}
+      <span class="muted">· ${e.lessons_passed}/${e.lessons} 课已过 · 通过线 ${pct}%</span></span>
+      <span><button onclick="goExam('${escapeHtml(e.scope)}','${escapeHtml(e.scope_id)}')">▶ 开考</button></span></div>`);
+  }
+  for (const e of done) {
+    const label = e.scope === 'unit' ? '章节考' : '学期考';
+    const mark = e.passed ? '✓ 通过' : '✗ 未过';
+    const color = e.passed ? 'var(--ok)' : 'var(--warn)';
+    rows.push(`<div class="lesson"><span><span class="tag">${label}</span> ${escapeHtml(e.name || e.scope_id)}
+      <span class="muted">· ${e.attempts} 次</span></span>
+      <span style="color:${color}">${mark} ${Math.round((e.score || 0) * 100)}%</span></div>`);
+  }
+  line.textContent = ready.length ? `${ready.length} 场可考 · ${done.length} 场已考`
+    : (done.length ? `${done.length} 场已考` : '');
+  box.innerHTML = rows.length ? rows.join('')
+    : '<div class="hint">范围内课程全部通过后可开考（章节考 70%、学期考 75%）</div>';
+}
+
+async function startExam(scope, scopeId) {
+  const r = await fetch(api(`/api/exam/${encodeURIComponent(scope)}/${encodeURIComponent(scopeId)}`));
+  const d = await r.json();
+  // 这两种失败都要退回首页再说：留在考试页上，提示会跟着页面一起被换掉，等于没提示。
+  if (d.error) { alert(d.error); goHome(); return; }
+  if (!d.questions || !d.questions.length) {
+    alert('该考试范围尚未就绪：需先通过范围内全部课程。');
+    goHome();
+    return;
+  }
+  EXAM = {scope, scope_id: scopeId, status: d.status || {}, questions: d.questions,
+          index: 0, answers: new Array(d.questions.length).fill(null)};
+  document.getElementById('exam-title').textContent =
+    (scope === 'unit' ? '章节考 · ' : '学期考 · ') + (d.status && d.status.name ? d.status.name : scopeId);
+  document.getElementById('exam-sub').textContent =
+    `共 ${d.questions.length} 题 · 通过线 ${Math.round(((d.status || {}).threshold || 0) * 100)}%`;
+  document.getElementById('exam-result').innerHTML = '';
+  document.getElementById('exam-note').textContent = '';
+  renderExam();
+}
+
+function renderExam() {
+  if (!EXAM) return;
+  const i = EXAM.index, n = EXAM.questions.length;
+  const item = EXAM.questions[i] || {};
+  const name = 'eq' + i;
+  document.getElementById('exam-counter').textContent =
+    `第 ${i + 1}/${n} 题 · [${item.type || ''}] · ${diffStars(item.difficulty)}`;
+  document.getElementById('exam-bar').style.width = Math.round(100 * (i + 1) / n) + '%';
+  const box = document.getElementById('exam-question');
+  const prev = EXAM.answers[i];
+  box.innerHTML = `<div class="quiz-q"><div class="stem">${escapeHtml(item.stem || '')}</div>${answerInputHtml(item, name)}</div>`;
+  // 回看时把已填的答案还原到控件上，否则翻页即丢。
+  if (prev !== null && prev !== undefined) {
+    const ctl = answerControl(item);
+    if (ctl === 'checkbox') {
+      for (const v of (prev || []))
+        box.querySelectorAll(`input[name="${name}"]`).forEach(el => { if (parseInt(el.value) === v) el.checked = true; });
+    } else if (ctl === 'radio') {
+      box.querySelectorAll(`input[name="${name}"]`).forEach(el => { if (parseInt(el.value) === prev) el.checked = true; });
+    } else {
+      const el = box.querySelector(`input[name="${name}"]`);
+      if (el) el.value = prev;
+    }
+  }
+  document.getElementById('exam-prev').disabled = i === 0;
+  document.getElementById('exam-next').style.display = i === n - 1 ? 'none' : '';
+  document.getElementById('exam-submit').style.display = i === n - 1 ? '' : 'none';
+}
+
+function examMove(delta) {
+  if (!EXAM) return;
+  const item = EXAM.questions[EXAM.index] || {};
+  EXAM.answers[EXAM.index] = readAnswer(item, 'eq' + EXAM.index);
+  const next = EXAM.index + delta;
+  if (next < 0 || next >= EXAM.questions.length) return;
+  EXAM.index = next;
+  renderExam();
+}
+
+async function examSubmit() {
+  if (!EXAM) return;
+  const item = EXAM.questions[EXAM.index] || {};
+  EXAM.answers[EXAM.index] = readAnswer(item, 'eq' + EXAM.index);
+  const missing = EXAM.answers.filter(a =>
+    a === null || a === undefined || a === -1 || (Array.isArray(a) && !a.length) ||
+    (typeof a === 'string' && !a.trim())).length;
+  if (missing && !confirm(`还有 ${missing} 题没答，未答按 0 分计。确定交卷？`)) return;
+  const answers = EXAM.answers.map((a, i) => {
+    if (a !== null && a !== undefined) return a;
+    return answerControl(EXAM.questions[i] || {}) === 'checkbox' ? [] : '';
+  });
+  const r = await fetch(`/api/exam/${encodeURIComponent(EXAM.scope)}/${encodeURIComponent(EXAM.scope_id)}`, {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({answers, user: USER || undefined}),
+  });
+  const v = await r.json();
+  const note = document.getElementById('exam-note');
+  if (v.error || v.ok === false) {
+    note.textContent = v.error || v.reason || '交卷失败';
+    note.style.color = 'var(--warn)';
+    return;
+  }
+  const pct = Math.round((v.score || 0) * 100);
+  const need = Math.round((v.threshold || 0) * 100);
+  note.textContent = v.passed
+    ? `✓ 通过！得分 ${pct}%（通过线 ${need}%），第 ${v.attempts} 次尝试。`
+    : `✗ 未通过：得分 ${pct}%，通过线 ${need}%。回课堂复习后可重考。`;
+  note.style.color = v.passed ? 'var(--ok)' : 'var(--warn)';
+  document.getElementById('exam-actions').style.display = 'none';
+  document.getElementById('exam-result').innerHTML =
+    `<div class="card"><h2>成绩</h2><div class="hint">共 ${v.answered} 题 · 得分 ${pct}% · 通过线 ${need}%</div>
+     <div style="margin-top:12px"><button onclick="goHome()">回首页</button></div></div>`;
+  refreshStatus();
+  refreshExams();
+  refreshMap();
+}
+
+// ---- 到期复习：列表 + 点击回课堂 ----
+async function refreshReview() {
+  const d = await fetch(api('/api/review')).then(r => r.json()).catch(() => ({items: []}));
+  const box = document.getElementById('review-box');
+  document.getElementById('review-line').textContent = d.count ? `${d.count} 项到期` : '暂无到期';
+  if (!d.count) {
+    box.innerHTML = '<div class="hint">没有到期的复习项。按 FSRS 排程，学过的知识点会在这里到期。</div>';
+    return;
+  }
+  const rows = [];
+  for (const it of d.items.slice(0, 30)) {
+    rows.push(`<div class="lesson" onclick="goClass('${escapeHtml(it.lesson_id)}')" style="cursor:pointer">
+      <span>${escapeHtml(it.kp_title || it.kp_id)} <span class="muted">· ${escapeHtml(it.lesson_id)}</span></span>
+      <span class="muted">到期 ${escapeHtml(String(it.due_at || '').slice(0, 10))} · 复习 ${it.reps} 次</span></div>`);
+  }
+  if (d.items.length > 30) rows.push(`<div class="hint">…另有 ${d.items.length - 30} 项</div>`);
+  box.innerHTML = rows.join('');
+}
+
+// ---- 错题本：按知识点聚合，点击回课堂重学 ----
+async function refreshErrors() {
+  const d = await fetch(api('/api/errors')).then(r => r.json()).catch(() => ({items: []}));
+  const box = document.getElementById('error-box');
+  document.getElementById('error-line').textContent = d.count ? `${d.count} 条错题` : '暂无错题';
+  if (!d.count) {
+    box.innerHTML = '<div class="hint">还没有错题。答错的知识点会自动记在这里。</div>';
+    return;
+  }
+  const byKp = new Map();
+  for (const it of d.items) {
+    const key = it.kp_id || '?';
+    const cur = byKp.get(key) || {kp_title: it.kp_title, lesson_id: it.lesson_id, n: 0, types: new Set(), last: null};
+    cur.n += 1;
+    if (it.error_type) cur.types.add(it.error_type);
+    if (!cur.last) cur.last = it;
+    byKp.set(key, cur);
+  }
+  const rows = [];
+  for (const [kpId, v] of byKp) {
+    const last = v.last || {};
+    rows.push(`<div class="lesson" onclick="goClass('${escapeHtml(v.lesson_id || '')}')" style="cursor:pointer">
+      <span>${escapeHtml(v.kp_title || kpId)} <span class="muted">· 错 ${v.n} 次 · ${[...v.types].join('/') || '—'}</span></span>
+      <span class="muted">${escapeHtml(v.lesson_id || '')}</span></div>`);
+  }
+  box.innerHTML = rows.join('');
+}
+
+async function refreshNotifications() {
+  const r = await fetch(api('/api/notifications'));
+  const d = await r.json();
+  document.getElementById('notif-count').textContent = d.unread ? `未读 ${d.unread}` : '已全部已读';
+  const box = document.getElementById('notifications');
+  box.innerHTML = '';
+  if (!d.items.length) { box.innerHTML = '<div class="hint">暂无通知</div>'; return; }
+  for (const n of d.items) {
+    const div = document.createElement('div');
+    div.className = 'lesson';
+    div.innerHTML = `<span><span class="tag">${escapeHtml(n.kind)}</span> ${escapeHtml(n.message)}</span>`
+      + `<span class="muted">${escapeHtml(String(n.created_at || ''))}</span>`;
+    if (n.read_at) div.style.opacity = '0.55';
+    box.appendChild(div);
+  }
+}
+
+async function markNotifsRead() {
+  await fetch('/api/notifications/read', {method:'POST',
+    headers:{'Content-Type':'application/json'}, body: JSON.stringify({user: USER})});
+  refreshNotifications();
+}
+
+async function resetAll() {
+  if (!confirm('确定清空全部学习进度？')) return;
+  await fetch(api('/api/reset'), {method:'POST'});
+  refreshStatus();
+  refreshMap();
+  refreshNotifications();
+}
+
+function tickClock() {
+  document.getElementById('clock').textContent = fmtClock(new Date().toISOString());
+}
+
+function initPixelSky() {
+  const canvas = document.getElementById('pixel-sky');
+  if (!canvas) return;
+  const W = 320, H = 150;                 // 低分辨率画布 + CSS 放大 = 天然像素块
+  canvas.width = W; canvas.height = H;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return;
+  const stars = Array.from({length: 46}, (_, i) => ({x: (i * 37) % W, y: (i * 53) % 62, tw: i % 5}));
+  const hills = [
+    {y: 104, h: 30, c: '#1d2b52'},
+    {y: 118, h: 32, c: '#16203d'},
+  ];
+  function draw() {
+    const f = PIXEL_FRAME;
+    ctx.fillStyle = '#171a42'; ctx.fillRect(0, 0, W, 100);
+    ctx.fillStyle = '#283d66'; ctx.fillRect(0, 100, W, 50);
+    // 星空：每 4 帧换一次闪烁，避免整屏高频重绘
+    for (const s of stars) {
+      ctx.fillStyle = ((f >> 2) + s.tw) % 5 === 0 ? '#fdf6b2' : '#9fb0e0';
+      ctx.fillRect(s.x, s.y, 1, 1);
+    }
+    ctx.fillStyle = '#f7f1d5';           // 月亮：方块 + 挖角，凑出像素月牙
+    ctx.fillRect(268, 24, 10, 10);
+    ctx.fillStyle = '#171a42';
+    ctx.fillRect(264, 20, 6, 6); ctx.fillRect(272, 32, 6, 6);
+    // 云：向右缓慢漂移
+    for (let i = 0; i < 3; i++) {
+      const cx = ((i * 118 + f * 0.35) % (W + 60)) - 30, cy = 40 + i * 18;
+      ctx.fillStyle = '#c9d6f5';
+      ctx.fillRect(cx, cy, 26, 6); ctx.fillRect(cx + 6, cy - 5, 16, 5);
+      ctx.fillStyle = '#a9bce8'; ctx.fillRect(cx, cy + 6, 26, 3);
+    }
+    // 山：锯齿状像素轮廓，向左缓慢滚动
+    hills.forEach((hill, hi) => {
+      const off = (f * 0.12 * (hi + 1)) % 16;
+      ctx.fillStyle = hill.c;
+      for (let x = -16; x < W + 16; x += 16) {
+        const px = Math.round(x - off), peak = hill.y - (hi % 2 ? 5 : 9);
+        ctx.fillRect(px, hill.y, 16, hill.h);
+        ctx.fillRect(px + (hi % 2 ? 4 : 6), peak, 6, hill.y - peak);
+      }
+    });
+    // 前景草皮在画布底部收边；画布高度贴合视口，所以不会在页面中间切出一条横带。
+    const g = Math.round(f * 0.5) % 32;
+    ctx.fillStyle = '#2f7a4e'; ctx.fillRect(0, H - 12, W, 12);
+    ctx.fillStyle = '#4f9e5c';
+    for (let x = -32; x < W + 32; x += 32) ctx.fillRect(x - g, H - 14, 16, 4);
+  }
+  const reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  let last = 0;
+  function loop(ts) {
+    if (ts - last >= 120) { PIXEL_FRAME++; draw(); last = ts; }   // ~8fps，够用且省电
+    requestAnimationFrame(loop);
+  }
+  draw();
+  if (!reduce) requestAnimationFrame(loop);
+  window.addEventListener('resize', draw);
+}
+
+// 兼容旧的 ?lesson=xxx 直达链接：转成课堂页路由，不改变老书签的行为。
+const wanted = new URLSearchParams(location.search).get('lesson');
+if (wanted) { history.replaceState(null, '', location.pathname + '#/class/' + encodeURIComponent(wanted)); }
+window.addEventListener('hashchange', route);
+route();
+// 时钟每秒走（纯本地，不碰后端）；全量状态 15s 一次。
+// 原实现是 setInterval(refreshStatus, 1000) —— 每秒一次 /api/status，单次上千条 SQL，
+// 面板轮询把 SQLite 占死（页面卡顿、并发请求互相踩出 InterfaceError）。
+setInterval(tickClock, 1000);
+setInterval(() => { if (currentRoute().view === 'home') refreshStatus(); }, 15000);
+</script>
+</body>
+</html>

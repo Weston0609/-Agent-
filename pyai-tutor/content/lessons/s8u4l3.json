@@ -1,0 +1,616 @@
+{
+  "id": "s8u4l3",
+  "title": "s8u4l3",
+  "kps": [
+    "arch.cloud.cost_optim",
+    "arch.cloud.multi_region"
+  ],
+  "theory": "## arch.cloud.cost_optim\n\n# 云成本优化（Cloud Cost Optimization）入门到工程级\n\n## 一句话直觉\n\n**你花钱买的不是服务器，而是「算力时间」——云成本优化的本质就是：用最少的钱，买到刚好够用的算力，并把闲置和浪费降到最低。**\n\n学完这一节，你能回答三个问题：钱花在哪了？为什么浪费了？怎么省下来？\n\n---\n\n## 1. 成本从哪里来：云账单的四块拼图\n\n云支出通常由四类资源构成（不同云厂商命名略有差异）：\n\n- **计算（Compute）**：CPU/GPU 实例、容器、Serverless 函数。\n- **存储（Storage）**：对象存储、块存储、快照。\n- **网络（Network）**：出流量（Egress）、跨区传输、NAT 网关。\n- **托管服务（Managed Services）**：数据库、消息队列、日志系统。\n\n成本优化的第一步永远不是「省钱」，而是**算清楚单位成本**，即每个业务动作的真实开销。\n\n### 核心公式：单位经济学（Unit Economics）\n\n```python\n# 计算「每次推理」或「每个用户」的成本，而不是只看总账单\ntotal_monthly_cost = 3000.0   # 云账单（美元/月）\nrequests_per_month = 5_000_000  # 月请求数\ncost_per_request = total_monthly_cost / requests_per_month\nprint(f\"单次请求成本: ${cost_per_request:.6f}\")  # 0.000600\n```\n\n**结论**：只有把成本摊到「一次请求 / 一个用户 / 一次训练」上，你才有可比较、可优化的指标。\n\n---\n\n## 2. 浪费的三大来源：别急着砍规格，先找漏点\n\n按业界经验，云账单里 30%~50% 是可回收浪费，主要来自三类：\n\n1. **闲置（Idle）**：实例开着但 CPU 利用率 < 5%，如忘记关掉的开发机、GPU 训练完未释放。\n2. **过度配置（Over-provisioning）**：按峰值买容量，导致 90% 时间在浪费。\n3. **架构低效（Architectural Inefficiency）**：同步调用、跨区流量、日志全量落盘等隐性成本。\n\n```python\n# 用简单利用率表找出「该杀的实例」\ninstances = [\n    {\"id\": \"i-dev-01\", \"cpu_util\": 0.02, \"cost\": 120},\n    {\"id\": \"i-gpu-02\",  \"cpu_util\": 0.85, \"cost\": 800},\n    {\"id\": \"i-batch-03\",\"cpu_util\": 0.03, \"cost\": 300},\n]\nidle = [i for i in instances if i[\"cpu_util\"] < 0.05]\nprint(\"闲置实例:\", [i[\"id\"] for i in idle])\nprint(\"可回收金额/月:\", sum(i[\"cost\"] for i in idle))\n```\n\n**结论**：优化顺序应是 **先关闲置 → 再调规格 → 最后才改架构**，投入产出比最高。\n\n---\n\n## 3. 五种主流优化手段\n\n### 3.1 合理选型（Right-sizing）\n按 P95 负载而不是峰值买机器。\n\n```python\nimport statistics\nlatencies = [50, 55, 52, 60, 58, 300, 54, 53, 57, 56]  # ms\np95 = sorted(latencies)[int(len(latencies)*0.95)]\nprint(f\"P95 延迟: {p95} ms -> 按此规格选型，而非按最大值 300\")\n```\n\n### 3.2 弹性伸缩（Auto-scaling）\n按负载动态增减实例，避免为峰值长期付费。\n\n```python\n# 简单伸缩策略：CPU > 70% 扩容，< 30% 缩容\ndef scale(current, cpu):\n    if cpu > 0.7: return min(current + 1, 20)\n    if cpu < 0.3: return max(current - 1, 2)\n    return current\nprint(scale(5, 0.85), scale(5, 0.2), scale(5, 0.5))  # 6 4 5\n```\n\n### 3.3 预留与竞价（Reserved / Spot）\n- **预留实例（Reserved Instance）**：承诺 1~3 年，折扣 30%~60%，适合稳定负载。\n- **竞价实例（Spot Instance）**：折扣 60%~90%，但可能被回收，适合可中断任务（如批处理、训练）。\n\n```python\ndef blended_cost(base, pct_reserved=0.6, pct_spot=0.3):\n    on_demand = 1 - pct_reserved - pct_spot\n    return base * (pct_reserved*0.5 + pct_spot*0.2 + on_demand*1.0)\nprint(f\"混合采购后单价: ${blended_cost(1.0):.3f}（原价 $1.000）\")\n```\n\n### 3.4 存储分层（Storage Tiering）\n热数据放标准层，冷数据放归档层（价格差可达 10 倍以上）。\n\n```python\n# 按访问频率分层：最近 30 天热存，其余归档\nfiles = [{\"name\":\"a\", \"days_since_access\": 2},\n         {\"name\":\"b\", \"days_since_access\": 400}]\nfor f in files:\n    tier = \"STANDARD\" if f[\"days_since_access\"] < 30 else \"ARCHIVE\"\n    print(f\"{f['name']} -> {tier}\")\n```\n\n### 3.5 架构级优化\n- 把训练任务放到 GPU 竞价池，用**检查点（Checkpoint）** 抗中断。\n- 用**批处理（Batching）** 提高 GPU 利用率。\n- 减少跨区（Cross-AZ）流量。\n\n```python\n# 批处理：GPU 利用率从 20% 提升到 80%，单位成本下降 4 倍\nutil_before, util_after = 0.2, 0.8\nprint(f\"单位成本降低: {(1/util_before - 1/util_after)/(1/util_before):.0%}\")\n```\n\n---\n\n## 4. 工程级做法：可观测性 + 预算告警 + 持续治理\n\n真正落地的成本优化是一套**持续流程**，不是一次性动作：\n\n1. **打标签（Tagging）**：所有资源必须带 `team` / `project` / `env` 标签，否则无法归因。\n2. **可观测性（Observability）**：每日抓取账单 + 利用率指标，做趋势对比。\n3. **预算告警（Budget Alert）**：月度预算达 80% 自动告警。\n4. **定期复盘**：每月清理闲置、审查预留覆盖率、评估架构。\n\n```python\n# 一个最小可用的成本看板逻辑\nbudget = 5000\ncurrent = 4300\nusage_ratio = current / budget\nif usage_ratio >= 0.8:\n    print(f\"⚠️ 预算告警：已使用 {usage_ratio:.0%}\")\ntags_ok = {\"team\": \"ml\", \"env\": \"prod\"}\nassert \"team\" in tags_ok and \"env\" in tags_ok, \"资源必须打标签\"\nprint(\"标签检查通过，可归因\")\n```\n\n**结论**：成本优化的工程化 = **度量 → 告警 → 治理 → 复盘** 的闭环。\n\n---\n\n## 5. 总结：记住这条清单\n\n- 用单位经济学（Unit Economics）衡量成本，不看总账单。\n- 先关闲置，再调规格，最后动架构。\n- 三种采购方式混用：按需 + 预留 + 竞价。\n- 存储分层、批处理、减少跨区是常见「免费午餐」。\n- 没有标签就没有成本治理。\n\n---\n\n## 动手练习\n\n**任务**：给你一个月的云账单数据（下表中的小样本），完成一份「优化建议报告」。\n\n数据（`instances.csv` 内容，可自行保存）：\n```\nid,type,cpu_util,cost_per_month,tags\nweb-01,t3.medium,0.15,60,team=web;env=prod\nweb-02,t3.medium,0.08,60,team=web;env=prod\nbatch-01,c5.4xlarge,0.03,500,team=data\nbatch-02,c5.4xlarge,0.75,500,team=data\ngpu-01,p3.2xlarge,0.90,2500,team=ml\ngpu-02,p3.2xlarge,0.00,2500,team=ml\n```\n\n**要求**：\n1. 用 Python 读取数据（可硬编码为列表）。\n2. 识别出所有 `cpu_util < 0.05` 的闲置实例，计算可回收金额。\n3. 对 `team=ml` 的 GPU 实例给出「竞价实例 + 检查点」的建议。\n4. 打印一份格式化的报告，包含：总成本、可优化金额、优化后预期成本。\n\n**交付物**：一个 `cost_report.py` 脚本 + 运行输出。\n\n**评分要点**：能否正确识别闲置、是否给出采购策略建议、报告是否可读。\n\n```python\n# cost_report.py —— 云成本优化最小示例\ninstances = [\n    {\"id\": \"web-01\",   \"type\": \"t3.medium\", \"cpu_util\": 0.15, \"cost\": 60,   \"tags\": {\"team\": \"web\", \"env\": \"prod\"}},\n    {\"id\": \"web-02\",   \"type\": \"t3.medium\", \"cpu_util\": 0.08, \"cost\": 60,   \"tags\": {\"team\": \"web\", \"env\": \"prod\"}},\n    {\"id\": \"batch-01\", \"type\": \"c5.4xlarge\",\"cpu_util\": 0.03, \"cost\": 500,  \"tags\": {\"team\": \"data\"}},\n    {\"id\": \"batch-02\", \"type\": \"c5.4xlarge\",\"cpu_util\": 0.75, \"cost\": 500,  \"tags\": {\"team\": \"data\"}},\n    {\"id\": \"gpu-01\",   \"type\": \"p3.2xlarge\",\"cpu_util\": 0.90, \"cost\": 2500, \"tags\": {\"team\": \"ml\"}},\n    {\"id\": \"gpu-02\",   \"type\": \"p3.2xlarge\",\"cpu_util\": 0.00, \"cost\": 2500, \"tags\": {\"team\": \"ml\"}},\n]\n\n# 1) 总成本\ntotal_cost = sum(i[\"cost\"] for i in instances)\n\n# 2) 识别闲置 (cpu_util < 0.05)\nidle = [i for i in instances if i[\"cpu_util\"] < 0.05]\nidle_saving = sum(i[\"cost\"] for i in idle)\n\n# 3) GPU 竞价策略：占 ml 团队的 70% 折扣\nml_gpus = [i for i in instances if i[\"tags\"].get(\"team\") == \"ml\" and i[\"cpu_util\"] > 0.5]\nml_cost = sum(i[\"cost\"] for i in ml_gpus)\nspot_saving = ml_cost * 0.7  # 竞价折扣 70%\n\n# 4) 报告\nprint(\"=\" * 40)\nprint(f\"总成本            : ${total_cost:,}\")\nprint(f\"闲置实例          : {[i['id'] for i in idle]}\")\nprint(f\"闲置可回收        : ${idle_saving:,}\")\nprint(f\"GPU 竞价可节省    : ${spot_saving:,.0f}\")\nprint(f\"优化后预期成本    : ${total_cost - idle_saving - spot_saving:,.0f}\")\nprint(\"=\" * 40)\n```\n\n## arch.cloud.multi_region\n\n## 一句话直觉\n\n**多区域（Multi-Region）架构**就是让同一个系统同时跑在地理上相隔很远的多个云区域里，这样一处机房挂了，其他区域还能继续服务用户——它是把\"可用性\"和\"延迟\"从单点提升到全球级别的第一课。\n\n---\n\n### 1. 什么是区域与多区域\n\n**区域（Region）** 是云厂商在地理上划分的独立数据中心集群，比如 `us-east-1`、`ap-southeast-1`、`cn-hangzhou`。每个区域内部又有多个**可用区（Availability Zone, AZ）**，AZ 之间电力、网络、冷却相互独立。\n\n**多区域（Multi-Region）** 指同一个应用部署在至少两个不同 Region 中。它的目标不是简单的\"备份\"，而是让流量可以在区域之间切换或分流。\n\n```python\n# 用字典模拟一个多区域部署清单\nregions = {\n    \"us-east-1\": {\"zones\": [\"us-east-1a\", \"us-east-1b\"], \"role\": \"active\"},\n    \"ap-southeast-1\": {\"zones\": [\"ap-southeast-1a\", \"ap-southeast-1b\"], \"role\": \"active\"},\n}\n\nfor name, info in regions.items():\n    print(f\"{name} -> AZ 数量: {len(info['zones'])}, 角色: {info['role']}\")\n```\n\n**关键结论：** 一个 Region 内多 AZ 解决的是\"单机房故障\"，多 Region 解决的是\"整个地理区域故障\"，二者是包含关系。\n\n---\n\n### 2. 为什么需要多区域：可用性、延迟、合规\n\n- **可用性（Availability）**：单区域即使多 AZ，也可能因为区域级网络或控制面故障而整体不可用。\n- **延迟（Latency）**：用户在日本，请求打到美国东海岸，光速往返就要 150ms 以上。就近接入能把延迟压到几十毫秒。\n- **合规（Compliance）**：某些国家要求用户数据必须留在本国境内，必须本地部署。\n\n```python\n# 用简单的数学示意 RTT（往返时延）对用户体验的影响\nimport math\n\ndef rtt_ms(distance_km: float) -> float:\n    # 光纤中光速约为 200,000 km/s，往返乘 2\n    return distance_km * 2 / 200_000 * 1000\n\nprint(\"东京 -> 东京 :\", round(rtt_ms(500), 1), \"ms\")\nprint(\"东京 -> 美国西海岸:\", round(rtt_ms(8800), 1), \"ms\")\nprint(\"东京 -> 美国东海岸:\", round(rtt_ms(11000), 1), \"ms\")\n```\n\n**关键结论：** 多区域不是\"更贵更稳\"的玄学，而是用物理距离换延迟、用冗余换可用性的工程取舍。\n\n---\n\n### 3. 多区域架构的三种典型模式\n\n1. **主动-被动（Active-Passive）**：一个区域接流量，另一个区域热备，故障时切换。实现简单，但备用区域平时浪费资源，切换时有 RTO（恢复时间目标）。\n2. **主动-主动（Active-Active）**：两个区域同时接流量，就近路由。可用性和延迟都最好，但数据一致性最难。\n3. **分片式（Sharded / Cell-Based）**：每个区域只服务一部分用户，通过路由把用户\"钉\"在某个区域。\n\n```python\n# 主动-主动的极简流量路由示例\ndef route_user(user_region: str, healthy_regions: list[str]) -> str:\n    if user_region in healthy_regions:\n        return user_region  # 就近\n    return healthy_regions[0]  # 降级到任意健康区域\n\nhealthy = [\"us-east-1\", \"ap-southeast-1\"]\nprint(route_user(\"ap-southeast-1\", healthy))  # 命中本地\nprint(route_user(\"eu-west-1\", healthy))        # 回退\n```\n\n**关键结论：** 模式选择由业务决定：能接受短暂停机就用主动-被动，要求极致体验才上主动-主动。\n\n---\n\n### 4. 数据一致性与复制：多区域最硬的骨头\n\n跨区域复制（Replication）有同步和异步两种：\n\n- **同步复制（Synchronous）**：写请求要等所有区域确认，强一致，但延迟高、可用性差。\n- **异步复制（Asynchronous）**：本地写完就返回，后台复制，延迟低，但可能丢数据或读到旧值。\n- **CRDT / 最终一致（Eventual Consistency）**：冲突用规则自动合并，适合计数器、集合等场景。\n\n```python\n# 用版本号模拟\"最后写入胜出\"（Last-Write-Wins）\nfrom dataclasses import dataclass\n\n@dataclass\nclass Record:\n    value: str\n    version: int\n\ndef merge(a: Record, b: Record) -> Record:\n    return a if a.version >= b.version else b\n\nr1 = Record(\"from-east\", 3)\nr2 = Record(\"from-west\", 5)\nprint(merge(r1, r2).value)  # from-west\n```\n\n**关键结论：** 多区域下不要幻想\"完美强一致 + 低延迟 + 高可用\"同时成立，CAP 定理（Consistency, Availability, Partition tolerance）会逼你选边。\n\n---\n\n### 5. 工程落地：DNS、健康检查与故障切换\n\n多区域落地的最后一公里是**流量调度**：\n\n- **DNS 地理路由（GeoDNS）**：根据用户 IP 返回最近区域的地址。\n- **Anycast**：同一 IP 在全球多节点宣告，网络层自动选最近。\n- **健康检查（Health Check）**：探测区域是否可用，不可用就从 DNS 摘掉。\n- **故障切换（Failover）**：自动或手动把流量切到健康区域。\n\n```python\n# 模拟一次带健康检查的 GeoDNS 解析\ngeo_map = {\"JP\": \"ap-southeast-1\", \"US\": \"us-east-1\"}\nhealth = {\"ap-southeast-1\": True, \"us-east-1\": False}\n\ndef resolve(country: str) -> str:\n    primary = geo_map.get(country, \"us-east-1\")\n    if health.get(primary, False):\n        return primary\n    # 回退到任意健康区域\n    return next(r for r, ok in health.items() if ok)\n\nprint(resolve(\"JP\"))\nprint(resolve(\"US\"))\n```\n\n**关键结论：** 多区域不是部署完就结束，而是一个持续监控、演练、切换的运维闭环。\n\n```python\nimport time\nfrom dataclasses import dataclass, field\n\n@dataclass\nclass Region:\n    name: str\n    latency_ms: int\n    healthy: bool = True\n    writes: int = 0\n\nclass MultiRegionStore:\n    \"\"\"极简多区域键值存储：本地写、异步复制、读就近。\"\"\"\n    def __init__(self, regions):\n        self.regions = {r.name: r for r in regions}\n        self.data = {r.name: {} for r in regions}\n\n    def write(self, region_name, key, value):\n        region = self.regions[region_name]\n        if not region.healthy:\n            raise RuntimeError(f\"{region_name} 不可用\")\n        self.data[region_name][key] = value\n        region.writes += 1\n        self._replicate(key, value, source=region_name)\n\n    def _replicate(self, key, value, source):\n        for name, region in self.regions.items():\n            if name == source or not region.healthy:\n                continue\n            time.sleep(region.latency_ms / 1000)  # 模拟网络延迟\n            self.data[name][key] = value\n\n    def read_nearest(self, user_region):\n        candidates = [r for r in self.regions.values() if r.healthy]\n        nearest = min(candidates, key=lambda r: r.latency_ms)\n        return nearest.name, self.data[nearest.name]\n\nif __name__ == \"__main__\":\n    store = MultiRegionStore([\n        Region(\"us-east-1\", latency_ms=10),\n        Region(\"ap-southeast-1\", latency_ms=20),\n    ])\n    store.write(\"ap-southeast-1\", \"user:1\", \"alice\")\n    print(store.read_nearest(\"ap-southeast-1\"))\n    print(store.read_nearest(\"us-east-1\"))\n```\n",
+  "quiz": [
+    {
+      "kp": "arch.cloud.cost_optim",
+      "type": "single_choice",
+      "question": "某团队把一台长期运行的 Web 服务器从按需实例改为 1 年期预留实例，但负载预计会在半年后翻倍。下列判断最合理的是？",
+      "options": [
+        "预留实例锁定了实例族与地域，若半年后需要换更大规格或换地域，灵活性会受限，可能产生浪费",
+        "预留实例随时可以无损退订，所以完全不必担心负载变化",
+        "预留实例自动随负载扩容，因此是最佳选择",
+        "预留实例只对无状态服务有效，对有状态服务没有折扣"
+      ],
+      "answer": 0,
+      "explanation": "预留实例以承诺换取折扣，通常绑定实例族、地域和期限，需求变化时灵活性差、可能闲置浪费，这是成本优化中「承诺折扣 vs 弹性」的核心权衡。",
+      "error_tag": "概念混淆",
+      "variant_group": "cloud_cost_optim_commitment"
+    },
+    {
+      "kp": "arch.cloud.cost_optim",
+      "type": "single_choice",
+      "question": "一个数据分析任务每天只在凌晨运行 2 小时，其余时间空闲。从成本角度，最合适的计算资源选择思路是？",
+      "options": [
+        "购买包年包月的专用物理机，因为稳定",
+        "使用按量付费/竞价实例，任务结束后释放资源",
+        "无论如何都应选择预留实例，因为单价最低",
+        "把任务改成 7x24 运行以摊薄成本"
+      ],
+      "answer": 1,
+      "explanation": "间歇性、可中断的工作负载适合按量付费或竞价实例，只为实际使用时间付费；包年包月会让大量空闲时间也被计费。",
+      "error_tag": "选型不当",
+      "variant_group": "cloud_cost_optim_pricing_model"
+    },
+    {
+      "kp": "arch.cloud.cost_optim",
+      "type": "single_choice",
+      "question": "某系统为应对极端峰值把实例规格长期设置为峰值的 3 倍，日常只用到 20%。改进思路是？",
+      "options": [
+        "保持现状，因为大规格更稳定",
+        "按日常负载配置资源，峰值时通过自动伸缩或弹性负载均衡应对",
+        "把规格再提高一倍以留足余量",
+        "取消所有监控以节省费用"
+      ],
+      "answer": 1,
+      "explanation": "容量应按常态负载规划，峰值通过弹性能力吸收；长期按极端峰值配置会导致大部分容量闲置付费。",
+      "error_tag": "容量规划不当",
+      "variant_group": "cloud_cost_optim_elasticity"
+    },
+    {
+      "kp": "arch.cloud.cost_optim",
+      "type": "single_choice",
+      "question": "关于「闲置资源」的识别与处理，下列说法正确的是？",
+      "options": [
+        "闲置资源不影响成本，可以忽略",
+        "定期盘点未挂载的存储卷、未使用的弹性 IP、长期空闲的实例并释放，可显著降本",
+        "只要资源创建过就必须付费一辈子",
+        "闲置资源会自动被云厂商回收并退费"
+      ],
+      "answer": 1,
+      "explanation": "未挂载的卷、未绑定的 IP、空闲实例等仍会产生费用，需要通过盘点与清理来消除浪费；云厂商通常不会自动回收。",
+      "error_tag": "概念混淆",
+      "variant_group": "cloud_cost_optim_governance"
+    },
+    {
+      "kp": "arch.cloud.cost_optim",
+      "type": "single_choice",
+      "question": "某团队想验证一次成本优化是否有效，最合理的度量方式是？",
+      "options": [
+        "只看本月总账单，不做任何对比",
+        "对比优化前后同类工作负载的单位成本（如每千次请求成本）",
+        "只看资源数量有没有减少",
+        "只关注单价是否下降"
+      ],
+      "answer": 1,
+      "explanation": "单位成本（每请求/每用户/每任务成本）能剔除业务量变化的影响，是衡量优化效果更可靠的指标。",
+      "error_tag": "度量方式错误",
+      "variant_group": "cloud_cost_optim_measurement"
+    },
+    {
+      "kp": "arch.cloud.cost_optim",
+      "type": "single_choice",
+      "question": "关于「竞价实例（抢占式实例）」的使用，下列判断正确的是？",
+      "options": [
+        "它们是最昂贵的实例类型，只适合关键业务",
+        "价格较低但可能被回收，适合可中断、可重试的批处理类任务",
+        "一旦申请就永久不会被中断",
+        "它们与按量付费实例价格完全相同"
+      ],
+      "answer": 1,
+      "explanation": "竞价实例以可能被回收换取更低价格，适合无状态、可重试的批处理；对有状态或强一致要求的服务风险较高。",
+      "error_tag": "选型不当",
+      "variant_group": "cloud_cost_optim_pricing_model"
+    },
+    {
+      "kp": "arch.cloud.cost_optim",
+      "type": "single_choice",
+      "question": "在成本优化中，「右调规格（rightsizing）」指的是？",
+      "options": [
+        "把所有实例规格统一调大以保证性能",
+        "根据实际监控数据把实例调整为更匹配负载的规格",
+        "只调整存储类型，不调整计算资源",
+        "把实例迁移到更贵的区域"
+      ],
+      "answer": 1,
+      "explanation": "右调规格是依据真实利用率选择合适规格，避免长期资源过大造成浪费或过小影响性能。",
+      "error_tag": "概念混淆",
+      "variant_group": "cloud_cost_optim_utilization"
+    },
+    {
+      "kp": "arch.cloud.cost_optim",
+      "type": "single_choice",
+      "question": "某应用把静态图片每次都从后端服务实时读取并返回，带宽与计算成本都很高。较优的优化方案是？",
+      "options": [
+        "提高后端服务器规格以加快读取",
+        "引入 CDN/缓存层，让静态内容就近分发并减少回源",
+        "把图片改为更小的分辨率并删除原图",
+        "限制用户访问频率"
+      ],
+      "answer": 1,
+      "explanation": "CDN 与缓存能显著降低回源流量和源站负载，从而降低带宽与计算成本；单纯提升规格或删数据不是合理的成本优化。",
+      "error_tag": "优化手段误选",
+      "variant_group": "cloud_cost_optim_network"
+    },
+    {
+      "kp": "arch.cloud.cost_optim",
+      "type": "single_choice",
+      "question": "关于「预算与告警」在成本管理中的作用，下列说法正确的是？",
+      "options": [
+        "设置预算告警会自动阻止所有资源创建",
+        "设置预算与成本告警可以在费用异常增长时及时通知，便于人工介入",
+        "预算功能只对大企业有效，小团队无意义",
+        "预算告警只能按月设置，不能按项目设置"
+      ],
+      "answer": 1,
+      "explanation": "预算与告警用于及时发现异常支出并触发处理流程，本身不强制阻断资源；可按多种维度设置。",
+      "error_tag": "概念混淆",
+      "variant_group": "cloud_cost_optim_governance"
+    },
+    {
+      "kp": "arch.cloud.cost_optim",
+      "type": "single_choice",
+      "question": "某团队为每个环境创建了独立的云账号并设置配额，这一做法的主要成本收益是？",
+      "options": [
+        "提高单价折扣",
+        "隔离账单与权限，便于按环境/团队核算成本并防止误用",
+        "自动减少所有资源费用",
+        "免除网络流量费用"
+      ],
+      "answer": 1,
+      "explanation": "账号隔离是成本治理的常见手段：账单边界清晰、权限可控，能防止资源被随意创建导致费用失控。",
+      "error_tag": "概念混淆",
+      "variant_group": "cloud_cost_optim_governance"
+    },
+    {
+      "kp": "arch.cloud.cost_optim",
+      "type": "single_choice",
+      "question": "关于「无服务器（Serverless）按调用计费」的成本特征，下列说法正确的是？",
+      "options": [
+        "无论是否调用都按固定月费收取",
+        "按实际调用次数与执行时长计费，低流量场景可能更省，但高频持续负载下未必比常驻实例便宜",
+        "Serverless 一定比虚拟机便宜",
+        "Serverless 不产生任何费用"
+      ],
+      "answer": 1,
+      "explanation": "Serverless 计费与使用强相关，适合间歇或突发负载；持续高负载时按调用计费可能超过常驻实例，需要根据负载特征选择。",
+      "error_tag": "选型不当",
+      "variant_group": "cloud_cost_optim_pricing_model"
+    },
+    {
+      "kp": "arch.cloud.cost_optim",
+      "type": "single_choice",
+      "question": "某团队发现账单中「数据传输」费用占比很高，但业务流量并未明显增长。最可能的排查方向是？",
+      "options": [
+        "检查是否存在跨可用区/跨地域的频繁调用或不当的公网出口路径",
+        "提高实例 CPU 规格",
+        "增加更多存储卷",
+        "关闭监控系统"
+      ],
+      "answer": 0,
+      "explanation": "流量费用异常往往来自架构路径问题：跨区调用、绕行公网、NAT 出口设计不当等，应优先从网络拓扑排查。",
+      "error_tag": "排查方向错误",
+      "variant_group": "cloud_cost_optim_network"
+    },
+    {
+      "kp": "arch.cloud.cost_optim",
+      "type": "single_choice",
+      "question": "以下哪种情况最适合使用对象存储的生命周期策略来降低成本？",
+      "options": [
+        "数据写入后 1 秒内被高频读取",
+        "访问日志写入后 30 天内偶尔查询，之后几乎不再访问但需长期留存",
+        "需要低延迟随机读写的数据库文件",
+        "需要在多台服务器间共享的块设备"
+      ],
+      "answer": 1,
+      "explanation": "生命周期策略用于随访问频率下降将数据从高频层转移到低频/归档层，适合「先热后冷且需长期保留」的数据。",
+      "error_tag": "场景误判",
+      "variant_group": "cloud_cost_optim_storage_tier"
+    },
+    {
+      "kp": "arch.cloud.cost_optim",
+      "type": "single_choice",
+      "question": "关于「按量付费」和「预留/包年包月」的成本比较，下列说法正确的是？",
+      "options": [
+        "按量付费单价通常更高，但无需长期承诺，适合需求不确定的场景",
+        "按量付费单价通常更低，且无任何使用限制",
+        "包年包月一定比按量付费总成本更低，无论使用多久",
+        "两者单价完全相同，区别仅在计费周期"
+      ],
+      "answer": 0,
+      "explanation": "云厂商用折扣换取用户的长期承诺：按量单价高但灵活，包年/预留单价低但需承诺期限，是否更省取决于实际使用时长。",
+      "error_tag": "概念混淆",
+      "variant_group": "cloud_cost_optim_pricing_model"
+    },
+    {
+      "kp": "arch.cloud.cost_optim",
+      "type": "single_choice",
+      "question": "某服务夜间流量很低但仍保留与白天相同的实例数量，导致成本偏高。最直接的优化手段是？",
+      "options": [
+        "把实例规格统一调小，白天再加回来",
+        "配置基于负载的自动伸缩，在低峰期缩减实例数量",
+        "把所有实例改为预留实例",
+        "提高监控告警阈值"
+      ],
+      "answer": 1,
+      "explanation": "负载有明显峰谷时，自动伸缩让资源跟随需求变化，避免低峰期为空闲容量付费，这是弹性带来的成本优化。",
+      "error_tag": "优化手段误选",
+      "variant_group": "cloud_cost_optim_elasticity"
+    },
+    {
+      "kp": "arch.cloud.cost_optim",
+      "type": "single_choice",
+      "question": "在容器化部署中，提高节点上容器的资源利用率通常能降低成本。下列做法最直接有效的是？",
+      "options": [
+        "为每个容器预留远超实际需求的 CPU 和内存",
+        "根据实际用量设置合理的资源请求与限制并提高装箱率",
+        "让所有容器都使用独占的物理节点",
+        "把容器改为在本地机房运行"
+      ],
+      "answer": 1,
+      "explanation": "合理设置 requests/limits 并提高节点装箱率，可以让同样的硬件承载更多负载；过度预留则会造成资源碎片和浪费。",
+      "error_tag": "优化手段误选",
+      "variant_group": "cloud_cost_optim_utilization"
+    },
+    {
+      "kp": "arch.cloud.cost_optim",
+      "type": "single_choice",
+      "question": "关于「出网流量（数据传出）」费用，下列理解正确的是？",
+      "options": [
+        "云上所有网络流量都完全免费",
+        "把数据从云内传到公网通常会计费，且跨可用区/跨地域传输也可能产生费用",
+        "只有入网流量收费，出网流量免费",
+        "出网流量只在夜间收费"
+      ],
+      "answer": 1,
+      "explanation": "多数云厂商对公网出流量、跨区/跨地域流量计费，入网流量通常免费，网络设计不当会带来难以察觉的成本。",
+      "error_tag": "概念混淆",
+      "variant_group": "cloud_cost_optim_network"
+    },
+    {
+      "kp": "arch.cloud.cost_optim",
+      "type": "single_choice",
+      "question": "为降低微服务之间的跨可用区调用成本与延迟，合理的架构调整是？",
+      "options": [
+        "让所有服务随机分布在所有可用区，不做任何约束",
+        "将频繁通信的服务尽量部署在同一可用区内，或利用同区域内的本地路由",
+        "把所有服务集中到单一可用区以彻底消除跨区流量",
+        "关闭所有可用区之间的网络连通"
+      ],
+      "answer": 1,
+      "explanation": "跨可用区会产生流量费用并增加延迟，减少跨区调用能在保持一定冗余的前提下优化成本；但把所有服务塞进单可用区会牺牲高可用。",
+      "error_tag": "取舍失衡",
+      "variant_group": "cloud_cost_optim_network"
+    },
+    {
+      "kp": "arch.cloud.cost_optim",
+      "type": "single_choice",
+      "question": "某团队希望在不改变业务代码的前提下降低云上数据库成本，下列做法最合理的是？",
+      "options": [
+        "把数据库从托管服务迁移到自建虚拟机以省掉服务费",
+        "分析慢查询与索引使用情况，优化查询并选择合适的实例规格与存储类型",
+        "关闭数据库备份以节省存储费用",
+        "把所有数据表都加上冗余索引"
+      ],
+      "answer": 1,
+      "explanation": "数据库成本优化通常从查询效率、索引、实例规格与存储层级入手；盲目自建或关闭备份会引入风险，加冗余索引反而增加开销。",
+      "error_tag": "优化手段误选",
+      "variant_group": "cloud_cost_optim_database"
+    },
+    {
+      "kp": "arch.cloud.cost_optim",
+      "type": "single_choice",
+      "question": "关于「成本分摊标签」，下列描述最准确的是？",
+      "options": [
+        "标签只用于美化资源列表，对成本分析没有帮助",
+        "给资源打上项目/团队/环境等标签，可以按维度归集和分摊费用，定位成本来源",
+        "标签会自动降低资源单价",
+        "标签只能设置一个，不能组合使用"
+      ],
+      "answer": 1,
+      "explanation": "标签是把账单映射到业务维度的基础能力，缺标签会导致无法定位成本归属；标签本身不会改变单价。",
+      "error_tag": "概念混淆",
+      "variant_group": "cloud_cost_optim_governance"
+    },
+    {
+      "kp": "arch.cloud.multi_region",
+      "type": "single_choice",
+      "question": "某服务同时部署在三个地理区域的数据中心，用户请求会被路由到最近的一个区域。这种部署方式最直接带来的好处是什么？",
+      "options": [
+        "降低用户访问延迟",
+        "减少代码的单元测试数量",
+        "消除所有类型的软件缺陷",
+        "自动提高数据库的写入吞吐量"
+      ],
+      "answer": 0,
+      "explanation": "多区域部署把服务实例放在离用户更近的位置，最直接的收益是网络往返时间变短，访问延迟降低。它不能消除缺陷，也不必然提升单库写入吞吐。",
+      "error_tag": "概念混淆",
+      "variant_group": "multi_region_motivation"
+    },
+    {
+      "kp": "arch.cloud.multi_region",
+      "type": "single_choice",
+      "question": "关于多区域部署中的「区域（region）」，下列说法最准确的是？",
+      "options": [
+        "区域是同一个机房内的一组机架",
+        "区域是地理上相互隔离的一组数据中心，通常拥有独立的供电与网络",
+        "区域等同于一个操作系统进程",
+        "区域是代码仓库中的一个分支"
+      ],
+      "answer": 1,
+      "explanation": "区域通常指地理隔离、具备相对独立基础设施的一组数据中心。机架属于更细粒度的概念，区域与进程、代码分支无关。",
+      "error_tag": "概念混淆",
+      "variant_group": "region_definition"
+    },
+    {
+      "kp": "arch.cloud.multi_region",
+      "type": "multi_choice",
+      "question": "下列哪些属于采用多区域部署时常见的收益或动机？（多选）",
+      "options": [
+        "降低地理上分散用户的访问延迟",
+        "在某区域故障时仍能继续提供服务，提升可用性",
+        "满足数据必须留在特定地理范围内的合规要求",
+        "自动让所有单元测试都通过",
+        "显著减少代码总量"
+      ],
+      "answer": [
+        0,
+        1,
+        2
+      ],
+      "explanation": "多区域的常见动机是降低延迟、提升容灾可用性和满足数据驻留合规。让测试通过、减少代码量与其无关。",
+      "error_tag": "概念混淆",
+      "variant_group": "multi_region_motivation"
+    },
+    {
+      "kp": "arch.cloud.multi_region",
+      "type": "multi_choice",
+      "question": "在设计跨区域数据同步方案时，下列哪些是需要认真考虑的维度？（多选）",
+      "options": [
+        "一致性模型（强一致还是最终一致）",
+        "冲突检测与解决策略",
+        "跨区域链路的延迟与带宽",
+        "开发者的编辑器配色方案"
+      ],
+      "answer": [
+        0,
+        1,
+        2
+      ],
+      "explanation": "一致性强弱、冲突处理以及链路延迟带宽都会直接影响跨区域数据同步的正确性与性能。编辑器配色与此无关。",
+      "error_tag": "记忆缺失",
+      "variant_group": "replication_design"
+    },
+    {
+      "kp": "arch.cloud.multi_region",
+      "type": "multi_choice",
+      "question": "关于多区域架构中的流量路由，下列说法正确的有哪些？（多选）",
+      "options": [
+        "可以基于用户地理位置把请求路由到最近区域",
+        "路由策略需要考虑目标区域是否健康",
+        "把所有流量强制路由到单一区域一定比就近路由延迟更低",
+        "路由决策可能受到数据驻留等合规约束影响"
+      ],
+      "answer": [
+        0,
+        1,
+        3
+      ],
+      "explanation": "就近路由、健康感知和合规约束都是真实存在的路由考量；强制单区域路由通常不会比就近路由延迟更低。",
+      "error_tag": "概念混淆",
+      "variant_group": "traffic_routing"
+    },
+    {
+      "kp": "arch.cloud.multi_region",
+      "type": "multi_choice",
+      "question": "某团队在多区域架构中采用最终一致性。下列哪些现象是采用这种模型时应当预期并处理的？（多选）",
+      "options": [
+        "不同区域的副本在同一时刻可能读到不同的值",
+        "短暂的读陈旧数据窗口",
+        "所有写操作都会瞬时在全局可见",
+        "需要设计冲突解决或幂等机制"
+      ],
+      "answer": [
+        0,
+        1,
+        3
+      ],
+      "explanation": "最终一致意味着副本间存在短暂不一致窗口，可能读到陈旧数据，并需要冲突或幂等处理。写操作瞬时全局可见与最终一致矛盾。",
+      "error_tag": "边界错误",
+      "variant_group": "consistency_tradeoff"
+    },
+    {
+      "kp": "arch.cloud.multi_region",
+      "type": "fill_blank",
+      "question": "在多区域架构中，当不同区域同时对同一数据项进行写入并产生分歧时，系统需要一套____机制来最终确定权威值。",
+      "options": [],
+      "answer": [
+        "冲突解决",
+        "冲突处理",
+        "conflict resolution"
+      ],
+      "explanation": "多主或跨区域写入容易产生冲突，必须有一套冲突检测与解决策略来收敛到一致状态。",
+      "error_tag": "记忆缺失",
+      "variant_group": "replication_design"
+    },
+    {
+      "kp": "arch.cloud.multi_region",
+      "type": "fill_blank",
+      "question": "为了让地理上分散的用户更快地访问静态资源，常见的做法是把内容缓存或复制到多个____，由用户就近获取。",
+      "options": [],
+      "answer": [
+        "区域",
+        "地理区域",
+        "region",
+        "边缘节点"
+      ],
+      "explanation": "把资源分布到多个区域或边缘节点，让用户就近获取，是多区域下降低延迟的常见手段。",
+      "error_tag": "记忆缺失",
+      "variant_group": "traffic_routing"
+    },
+    {
+      "kp": "arch.cloud.multi_region",
+      "type": "code_reading",
+      "question": "阅读下面的伪代码：\n\n```\ndef handle_write(key, value):\n    region = nearest_region_of(current_user)\n    write_to_local_replica(region, key, value)\n    async_replicate_to_other_regions(region, key, value)\n    return \"ok\"\n```\n\n问：当用户写入后立刻从另一个区域读取同一个 key，最可能看到什么？为什么？",
+      "options": [],
+      "answer": "可能读到旧值（写尚未同步过去），因为跨区域复制是异步进行的，此时系统表现为最终一致而非强一致。",
+      "explanation": "写只在本地副本立即生效，随后异步复制到其他区域，因此另一区域短时间内可能读到尚未更新的旧数据。",
+      "error_tag": "边界错误",
+      "variant_group": "async_replication_read"
+    },
+    {
+      "kp": "arch.cloud.multi_region",
+      "type": "code_reading",
+      "question": "阅读下面的伪代码：\n\n```\ndef choose_region(regions, user_location):\n    healthy = [r for r in regions if r.is_healthy]\n    if not healthy:\n        raise NoHealthyRegionError()\n    return min(healthy, key=lambda r: r.distance_to(user_location))\n```\n\n问：这段逻辑在选择目标区域时同时考虑了哪两个因素？",
+      "options": [],
+      "answer": "同时考虑了区域的健康状态（是否可用）和与用户的地理距离（就近选择）。",
+      "explanation": "先过滤掉不健康的区域，再从健康区域中按距离选取最近的一个，兼顾了可用性与延迟。",
+      "error_tag": "概念混淆",
+      "variant_group": "traffic_routing"
+    },
+    {
+      "kp": "arch.cloud.multi_region",
+      "type": "scenario",
+      "question": "某 SaaS 产品原先只在单一区域运行，现在要把服务扩展到三个区域，用户分布在亚洲、欧洲和北美。产品负责人希望「用户就近访问且不受某一区域故障影响」，但同时要求跨区域的数据在写入后能尽快被其他区域看到。作为架构师，你会如何权衡一致性、延迟与可用性，并给出你的方案要点？",
+      "options": [],
+      "answer": null,
+      "explanation": "场景要求在就近访问、容灾和跨区域可见性之间取舍。合理回答应指出跨区域强一致会抬高延迟，并围绕一致性模型选择、数据同步策略、故障隔离与路由等给出权衡方案。",
+      "error_tag": "边界错误",
+      "variant_group": "consistency_tradeoff",
+      "required_keywords": [
+        "隔离",
+        "容灾",
+        "一致性"
+      ]
+    },
+    {
+      "kp": "arch.cloud.multi_region",
+      "type": "scenario",
+      "question": "某金融系统采用多区域部署，但监管要求部分用户的账户数据必须留在其所在国家境内，不得跨境复制。与此同时，运营团队希望全球都能查询到统一的账户余额视图。请说明你会如何设计数据存储与访问路径，并指出其中的主要矛盾。",
+      "options": [],
+      "answer": null,
+      "explanation": "该场景的核心矛盾在于数据驻留合规与全局统一视图之间的冲突。回答应指出需要按区域就地存储受约束数据，并通过受控的聚合或查询路径提供统一视图，同时处理好一致性问题。",
+      "error_tag": "概念混淆",
+      "variant_group": "data_residency",
+      "required_keywords": [
+        "合规",
+        "一致性"
+      ]
+    },
+    {
+      "kp": "arch.cloud.multi_region",
+      "type": "single_choice",
+      "question": "某系统在单一区域运行稳定，团队计划扩展到多区域。下列哪一项是扩展时最需要优先解决的问题？",
+      "options": [
+        "把变量名改得更短",
+        "确定各区域之间数据如何同步与冲突如何解决",
+        "把日志级别统一改成 DEBUG",
+        "删除所有自动化测试以加快发布"
+      ],
+      "answer": 1,
+      "explanation": "多区域的核心难点在于跨区域数据一致性与冲突处理，而不是命名、日志级别或减少测试。",
+      "error_tag": "概念混淆",
+      "variant_group": "multi_region_challenge"
+    },
+    {
+      "kp": "arch.cloud.multi_region",
+      "type": "single_choice",
+      "question": "在多区域架构中，「故障隔离」主要指什么？",
+      "options": [
+        "一个区域的故障不应导致其他区域的服务同时不可用",
+        "所有区域的数据库必须共用同一块磁盘",
+        "每次发布必须同时在所有区域回滚",
+        "用户只能访问自己所在区域的服务"
+      ],
+      "answer": 0,
+      "explanation": "故障隔离的目标是把故障影响限制在局部，避免单区域问题波及全局。共用磁盘反而会放大故障，回滚策略与隔离无关。",
+      "error_tag": "概念混淆",
+      "variant_group": "fault_isolation"
+    },
+    {
+      "kp": "arch.cloud.multi_region",
+      "type": "single_choice",
+      "question": "某电商把读流量分发到多个区域，写操作统一路由到主区域。这种模式通常被称为？",
+      "options": [
+        "单区域单活",
+        "多区域读扩展、单点写入（主从式多区域）",
+        "完全对等的多主写入",
+        "无状态边缘缓存"
+      ],
+      "answer": 1,
+      "explanation": "读可以在多个区域本地处理，而写集中在主区域，是一种常见的折中方案，避免了多主写入的冲突问题。",
+      "error_tag": "概念混淆",
+      "variant_group": "topology_patterns"
+    },
+    {
+      "kp": "arch.cloud.multi_region",
+      "type": "single_choice",
+      "question": "在多区域部署中，跨区域调用相比同区域调用最主要的代价是什么？",
+      "options": [
+        "CPU 主频会下降",
+        "网络往返延迟显著增大，且可能受跨区域链路波动影响",
+        "内存容量会自动减半",
+        "代码编译时间变长"
+      ],
+      "answer": 1,
+      "explanation": "跨区域通信受物理距离与链路质量影响，延迟更高且更不稳定，这是多区域设计需要重点权衡的因素。",
+      "error_tag": "概念混淆",
+      "variant_group": "cross_region_latency"
+    },
+    {
+      "kp": "arch.cloud.multi_region",
+      "type": "single_choice",
+      "question": "某团队希望用户无论身处哪个区域，都能就近读写数据且保持强一致。下列判断最合理的是？",
+      "options": [
+        "这是完全免费的，任何数据库都天然支持",
+        "就近读写与强一致通常存在张力，需要在一致性、延迟和可用性之间权衡",
+        "只要多加几台服务器就能自动实现",
+        "强一致一定会让延迟变得更低"
+      ],
+      "answer": 1,
+      "explanation": "跨区域强一致需要协调多个区域的副本，往往带来更高延迟；就近读写则倾向本地化。两者需要权衡，属于典型的分布式取舍。",
+      "error_tag": "边界错误",
+      "variant_group": "consistency_tradeoff"
+    },
+    {
+      "kp": "arch.cloud.multi_region",
+      "type": "single_choice",
+      "question": "某系统采用多区域部署，但所有区域共用同一个数据库实例。这种设计的主要风险是？",
+      "options": [
+        "数据库所在区域一旦故障，会波及所有区域的服务",
+        "用户的访问延迟会降低到零",
+        "数据会自动分片到各区域",
+        "各区域之间的网络延迟会消失"
+      ],
+      "answer": 0,
+      "explanation": "共享单一数据库会形成跨区域的单点故障，丧失了故障隔离的意义，某一区域出问题可能影响全局。",
+      "error_tag": "边界错误",
+      "variant_group": "shared_single_point"
+    },
+    {
+      "kp": "arch.cloud.multi_region",
+      "type": "single_choice",
+      "question": "在多区域场景中，所谓「数据主权」或「数据驻留」要求通常指什么？",
+      "options": [
+        "数据必须加密存储在所有区域",
+        "某些用户数据必须存储在规定的地理区域境内，不得随意跨境传输",
+        "所有数据必须集中存放在总部机房",
+        "数据只能由单一区域的运维人员访问"
+      ],
+      "answer": 1,
+      "explanation": "数据驻留/主权要求数据留存和处理的物理位置符合当地法规，这会直接影响多区域的复制与路由策略。",
+      "error_tag": "概念混淆",
+      "variant_group": "data_residency"
+    },
+    {
+      "kp": "arch.cloud.multi_region",
+      "type": "single_choice",
+      "question": "某服务的健康检查只检测进程是否存活，而不检测其依赖的跨区域数据库是否可达。在多区域部署下，这可能带来什么问题？",
+      "options": [
+        "进程永远不会退出",
+        "健康检查会一直返回失败",
+        "实例可能在依赖不可用时仍被判定为健康，继续接收流量并大量报错",
+        "数据库会自动切换主区域"
+      ],
+      "answer": 2,
+      "explanation": "仅检查进程存活的健康检查无法反映真实可用性，实例可能在依赖不可达时仍被判为健康，导致流量被误导并放大错误。",
+      "error_tag": "边界错误",
+      "variant_group": "health_check_scope"
+    }
+  ]
+}

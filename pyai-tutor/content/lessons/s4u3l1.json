@@ -1,0 +1,932 @@
+{
+  "id": "s4u3l1",
+  "title": "s4u3l1",
+  "kps": [
+    "py.mem.weakref",
+    "py.mem.cycle",
+    "py.mem.leak_debug"
+  ],
+  "theory": "## py.mem.weakref\n\n# 弱引用（Weak Reference）：让对象“可被回收”，让缓存“不泄漏”\n\n> 一句话直觉：**弱引用（weak reference）让你“看着”一个对象，但不阻止它被垃圾回收（garbage collection）——这是缓存、观察者、图结构等场景避免内存泄漏的关键工具。**\n\n---\n\n## 1. 为什么需要弱引用：强引用（strong reference）的“粘连”问题\n\n在 Python 中，**变量名绑定的都是对象的引用（reference）**。默认的引用计数（reference counting）机制让对象只要被引用就不会被回收。\n\n```python\nimport sys\n\nclass Node:\n    pass\n\nn = Node()\nprint(sys.getrefcount(n))  # 输出引用计数（含 getrefcount 自身的临时引用）\n```\n\n问题在于：很多“辅助”数据结构并不想拥有对象的所有权。比如缓存、监听器列表——如果它们**强引用**对象，对象永远无法释放，就是典型的**内存泄漏（memory leak）**。\n\n```python\n# 一个经典泄漏：对象注册到全局字典后再也删不掉\n_registry = {}\n\nclass Widget:\n    def __init__(self, name):\n        self.name = name\n        _registry[name] = self  # 强引用导致 Widget 永不释放\n\nw = Widget(\"a\")\ndel w  # 期待释放，但 _registry 还持有它\nprint(list(_registry))\n```\n\n**弱引用**就是为这种“我关心你，但不拥有你”的关系设计的。\n\n---\n\n## 2. 最小可用：`weakref.ref`\n\n标准库 `weakref` 提供 `ref(obj)` 返回一个弱引用对象。调用它可以在对象仍存活时得到原对象，对象被回收后返回 `None`。\n\n```python\nimport weakref\n\nclass Node:\n    def __init__(self, name):\n        self.name = name\n    def __repr__(self):\n        return f\"Node({self.name})\"\n\nn = Node(\"A\")\nr = weakref.ref(n)\n\nprint(r())            # 对象还活着：<Node A>\nprint(r() is n)       # True\ndel n                 # 删除唯一的强引用\nprint(r())            # 对象已被回收：None\n```\n\n关键点：**弱引用自身不是强引用**，它不增加目标的引用计数。\n\n```python\nimport sys, weakref\n\nclass T: pass\nt = T()\nprint(sys.getrefcount(t))\nr = weakref.ref(t)\nprint(sys.getrefcount(t))  # 数值不变，弱引用不增加计数\n```\n\n---\n\n## 3. 回调（callback）：对象“临终”时通知你\n\n`weakref.ref(obj, callback)` 支持对象被回收前调用回调，常用于清理索引、取消注册。\n\n```python\nimport weakref\n\nclass Connection:\n    def __init__(self, name):\n        self.name = name\n\nc = Connection(\"db-1\")\n\ndef on_gone(ref):\n    print(f\"{ref} 引用的对象已被回收\")\n\nr = weakref.ref(c, on_gone)\nprint(\"before del\")\ndel c                 # 触发回调\nprint(\"after del\")\n```\n\n> 注意：回调里 `ref()` 通常已经返回 `None`，只能拿到弱引用本身（比如用于字典 key 匹配）。\n\n---\n\n## 4. 三大实用容器：`WeakValueDictionary` / `WeakKeyDictionary` / `WeakSet`\n\n### 4.1 `WeakValueDictionary`：缓存首选\n\n值被弱引用持有，值一旦无强引用即从字典中自动消失——正是缓存想要的语义。\n\n```python\nimport weakref\n\nclass Expensive:\n    def __init__(self, key):\n        self.key = key\n\ncache = weakref.WeakValueDictionary()\n\ndef get(key):\n    obj = cache.get(key)\n    if obj is None:\n        obj = Expensive(key)\n        cache[key] = obj\n    return obj\n\na = get(\"x\")\nprint(list(cache))   # ['x']\ndel a                # 唯一强引用消失\ngc.collect() if False else None\nimport gc; gc.collect()\nprint(list(cache))   # [] —— 条目自动清理\n```\n\n### 4.2 `WeakKeyDictionary`：给对象“贴便签”\n\n常用于给对象附加元数据而不阻止其被回收。\n\n```python\nimport weakref\n\nclass Session:\n    pass\n\nmeta = weakref.WeakKeyDictionary()\ns = Session()\nmeta[s] = \"user=alice\"\nprint(meta[s])\ndel s\nimport gc; gc.collect()\nprint(len(meta))     # 0\n```\n\n### 4.3 `WeakSet`：观察者/监听器列表\n\n```python\nimport weakref\n\nclass Listener:\n    pass\n\nlisteners = weakref.WeakSet()\nl1, l2 = Listener(), Listener()\nlisteners.add(l1); listeners.add(l2)\nprint(len(listeners))   # 2\ndel l1\nimport gc; gc.collect()\nprint(len(listeners))   # 1\n```\n\n> 模块本身还提供 `WeakSet` 的类 `weakref.WeakSet`；注意名字与内置 `set` 不同。\n\n---\n\n## 5. 手动管理：`WeakMethod` 与 `finalize`\n\n- `weakref.WeakMethod`：弱引用绑定方法（bound method），避免因持有方法而拖住 `self`。\n- `weakref.finalize`：更安全、可控的清理器，可在对象销毁时执行任意清理逻辑，并支持取消。\n\n```python\nimport weakref\n\nclass Handler:\n    def handle(self):\n        print(\"handling\")\n\nh = Handler()\nm = weakref.WeakMethod(h.handle)\nprint(m() is not None)  # True\ndel h\nimport gc; gc.collect()\nprint(m())              # None\n\nclass Resource:\n    def close(self):\n        print(\"resource closed\")\n\nres = Resource()\nfin = weakref.finalize(res, res.close)\nprint(fin.alive)        # True\ndel res; import gc; gc.collect()\nprint(fin.alive)        # False，且打印 'resource closed'\n```\n\n---\n\n## 6. 局限与工程注意\n\n- **不是所有对象都能弱引用**：`list`、`dict`、`tuple`、`int`、`str` 等内置类型不支持弱引用；自定义类、`list` 子类通常可以。\n  ```python\n  import weakref\n  weakref.ref([1, 2, 3])   # TypeError: cannot create weak reference to 'list' object\n  class MyList(list): pass\n  weakref.ref(MyList())    # OK\n  ```\n- **弱引用可能提前“消失”**：不要缓存 `r()` 的结果到长时间存活的变量，否则又变成强引用。\n- **循环引用 + 弱引用的组合**：弱引用不会阻止循环被 GC，但你要理解何时触发；必要时用 `gc.collect()` 验证。\n- **多线程场景**：弱引用容器不是线程安全的，读写需要外部同步。\n\n---\n\n## 7. 小结\n\n| 工具 | 适用场景 |\n|---|---|\n| `weakref.ref` | 单个对象的“观察”而不拥有 |\n| `weakref.ref(obj, cb)` | 对象回收时回调清理 |\n| `WeakValueDictionary` | 缓存（值可回收） |\n| `WeakKeyDictionary` | 给对象附加元数据 |\n| `WeakSet` | 观察者 / 监听器集合 |\n| `WeakMethod` | 弱引用绑定方法 |\n| `weakref.finalize` | 显式、可取消的清理器 |\n\n**记忆口诀**：缓存、观察、便签、清理 —— 弱引用四大用途。\n\n```python\nimport gc\nimport weakref\n\n\nclass Image:\n    def __init__(self, name: str, data: bytes):\n        self.name = name\n        self.data = data\n\n    def __repr__(self):\n        return f\"Image({self.name})\"\n\n\n# 1) 用 WeakValueDictionary 做一个“不占内存”的图片缓存\ncache: \"weakref.WeakValueDictionary[str, Image]\" = weakref.WeakValueDictionary()\n\n\ndef load(name: str) -> Image:\n    img = cache.get(name)\n    if img is None:\n        img = Image(name, b\"...\")   # 模拟从磁盘加载\n        cache[name] = img\n    return img\n\n\n# 使用：调用方持有强引用，缓存只是“看着”\na = load(\"cat.png\")\nprint(\"cache keys:\", list(cache))\n\n# 调用方释放后，缓存条目自动消失\ndel a\ngc.collect()\nprint(\"cache keys after del:\", list(cache))\n\n\n# 2) finalize：对象销毁时自动清理外部资源\nclass FileHandle:\n    def __init__(self, path: str):\n        self.path = path\n\n    def close(self):\n        print(f\"closed {self.path}\")\n\n\nfh = FileHandle(\"/tmp/demo.txt\")\ncleaner = weakref.finalize(fh, fh.close)\nprint(\"alive before del:\", cleaner.alive)\ndel fh\ngc.collect()\nprint(\"alive after del:\", cleaner.alive)\n```\n\n## py.mem.cycle\n\n# py.mem.cycle：Python 中的循环引用与内存管理\n\n## 一句话直觉\n\nPython 的垃圾回收（Garbage Collection, GC）主要靠“引用计数”（Reference Counting），但当两个或多个对象**互相引用**时，引用计数永远不归零，对象就泄漏了——理解循环引用（Reference Cycle）是写出不爆内存的 Python 程序的第一步。\n\n---\n\n## 1. 为什么会有这个问题：引用计数不是万能的\n\nPython 里每个对象都有一个计数器，记录“有多少个变量/容器指向我”。当计数变为 0，CPython 立即释放这块内存。这是最主流、最及时的回收方式。\n\n```python\nimport sys\n\na = []\nprint(sys.getrefcount(a))  # 2：一个是 a，一个是 getrefcount 的临时参数\n\nb = a\nprint(sys.getrefcount(a))  # 3：a、b、临时参数\n\ndel b\nprint(sys.getrefcount(a))  # 2：回到初始\n```\n\n当 `del b` 执行后，`a` 的计数减 1；如果 `a` 也 `del`，计数归零，列表立刻被释放。\n\n**关键结论**：引用计数只能处理“单向”的引用，一旦形成环，计数永远不会降到 0。\n\n---\n\n## 2. 循环引用长什么样\n\n最常见的形式是**对象自己引用自己**，或**两个对象互相引用**。\n\n```python\nimport gc\nimport sys\n\nclass Node:\n    def __init__(self, name):\n        self.name = name\n        self.parent = None\n        self.children = []\n\n# 经典循环：parent 持有 child，child 又反过来持有 parent\nparent = Node(\"parent\")\nchild = Node(\"child\")\nparent.children.append(child)\nchild.parent = parent\n\n# 此刻 parent 和 child 互相引用\ndel parent\ndel child\n\n# 即使删掉了外部变量，两个对象仍然活在 GC 的“不可达但未回收”集合里\nprint(\"collectable:\", gc.collect())  # 返回被回收的对象数，通常是 2\n```\n\n运行以上代码，`gc.collect()` 至少返回 2，说明 CPython 的分代 GC 帮你收拾了这个环。但如果你把 `gc.disable()`，这两个对象就会**永久驻留内存**。\n\n---\n\n## 3. Python 的兜底机制：分代 GC（Generational GC）\n\nPython 自己也知道引用计数不够用，所以内置了一个**循环垃圾回收器**：\n\n- 它跟踪所有“可能是容器”的对象（list、dict、自定义对象等）。\n- 定期扫描，找出**只被环内对象引用**的集合，把它们整体回收。\n- 分三代（0/1/2），越老的对象扫描频率越低，以节省成本。\n\n```python\nimport gc\n\nprint(gc.get_threshold())   # 默认 (700, 10, 10)\nprint(gc.isenabled())       # True\n\n# 手动触发一次全量回收\nn = gc.collect()\nprint(\"collected:\", n)\n\n# 查看当前代中被跟踪的对象数量\nprint(gc.get_count())\n```\n\n**关键结论**：循环引用最终能被回收，但不是“立刻”，也不保证“永远”。在长期运行的服务中，GC 停顿和内存峰值往往是循环引用导致的。\n\n---\n\n## 4. 循环引用的四大常见来源\n\n工程中真正让内存爆掉的往往是下面几种：\n\n1. **父子双向引用**：树结构里父节点存 child、child 又存 parent。\n2. **回调/闭包持有 self**：`self.handler = lambda: self.do()`。\n3. **异常回溯**：`except Exception as e: ...` 里 `e` 持有整条调用栈。\n4. **缓存（cache）**：缓存对象引用外部大对象，外部又引用缓存。\n\n```python\n# 陷阱 1：闭包持有 self\nclass Worker:\n    def __init__(self):\n        self.data = [0] * 1_000_000\n        self.cb = lambda: self.data  # 闭包持有 self → 循环\n\nw = Worker()\ndel w\nimport gc\nprint(\"闭包循环回收:\", gc.collect())\n\n# 陷阱 2：异常对象持有 traceback\nimport sys\ndef risky():\n    try:\n        raise ValueError(\"boom\")\n    except ValueError as e:\n        return e  # e 持有 traceback，traceback 持有帧，帧持有局部变量\n\nerr = risky()\ndel err\nprint(\"异常循环回收:\", gc.collect())\n```\n\n---\n\n## 5. 工程做法：用 `weakref` 和 `__del__` 主动打断环\n\n最优雅的方式是**让其中一条边变成弱引用（weak reference）**，这样它不增加引用计数，环就断了。\n\n```python\nimport weakref\n\nclass Node:\n    def __init__(self, name):\n        self.name = name\n        self.children = []\n        self._parent = None  # 弱引用存 parent\n\n    @property\n    def parent(self):\n        return self._parent() if self._parent else None\n\n    @parent.setter\n    def parent(self, p):\n        self._parent = weakref.ref(p) if p else None\n\nroot = Node(\"root\")\nleaf = Node(\"leaf\")\nroot.children.append(leaf)\nleaf.parent = root  # 只在 leaf 里存弱引用，不构成环\n\ndel root\nimport gc\nprint(\"weakref 后 GC 次数:\", gc.collect())  # 通常为 0，因为没有环\n```\n\n如果必须保留强引用并且要在对象销毁时做清理，可以定义 `__del__`，但注意：**在循环里的 `__del__` 会让 GC 变得复杂**（3.4 起才安全支持）。现代写法更推荐 `weakref.finalize`。\n\n```python\nimport weakref\n\nclass Resource:\n    def __init__(self, name):\n        self.name = name\n        self._finalizer = weakref.finalize(self, self._cleanup, name)\n\n    @staticmethod\n    def _cleanup(name):\n        print(f\"释放资源: {name}\")\n\nr = Resource(\"db-conn\")\ndel r\n# 输出：释放资源: db-conn\n```\n\n---\n\n## 动手练习\n\n**任务：给一个“双向链表”打断循环引用。**\n\n1. 定义 `Node` 类，包含 `value`、`next`、`prev` 三个属性。\n2. 构造一个 3 个节点的双向链表。\n3. 用 `gc.collect()` 观察删除所有外部引用后是否产生循环。\n4. 把 `prev` 改成 `weakref.ref`，再测一次，验证 `gc.collect()` 返回 0。\n5. 在注释里写出结论：为什么双向链表天然容易形成循环引用？\n\n参考骨架：\n\n```python\nimport gc, weakref\n\nclass Node:\n    def __init__(self, value):\n        self.value = value\n        self.next = None\n        self.prev = None  # ← 改成 weakref.ref 试试\n\n# 构造 3 节点双向链表 > 删除外部引用 > 调用 gc.collect()\n# 对比两种 prev 实现时的 collect 返回值\n```\n\n完成后你应该能回答：**“为什么 Python 有了引用计数，还需要 GC？”**\n\n```python\nimport gc\nimport sys\nimport weakref\n\n\nclass Node:\n    \"\"\"双向链表节点，prev 使用弱引用避免循环。\"\"\"\n    def __init__(self, value):\n        self.value = value\n        self.next = None\n        self._prev = None  # 弱引用\n\n    @property\n    def prev(self):\n        return self._prev() if self._prev else None\n\n    @prev.setter\n    def prev(self, node):\n        self._prev = weakref.ref(node) if node else None\n\n\ndef build_strong_cycle():\n    \"\"\"构造强引用循环，演示引用计数无法回收。\"\"\"\n    a = Node(1); b = Node(2); c = Node(3)\n    a.next = b; b.prev = a\n    b.next = c; c.prev = b\n    # 此时 a<->b<->c 通过 next/prev 形成强引用环\n    return a, b, c\n\n\ndef build_weak_cycle():\n    \"\"\"构造弱引用版本，环被打断。\"\"\"\n    a = Node(1); b = Node(2); c = Node(3)\n    a.next = b; b.prev = a\n    b.next = c; c.prev = b\n    return a, b, c\n\n\nif __name__ == \"__main__\":\n    gc.disable()\n    try:\n        a, b, c = build_strong_cycle()\n        del a, b, c\n        # 强引用环：引用计数不归零，GC 关闭时无法回收\n        print(\"强引用环（GC 关闭）collect:\", gc.collect())  # 0\n    finally:\n        gc.enable()\n\n    print(\"强引用环（GC 开启）collect:\", gc.collect())  # 至少 3\n\n    a, b, c = build_weak_cycle()\n    del a, b, c\n    # 弱引用版本：对象立即被引用计数回收\n    print(\"弱引用环 collect:\", gc.collect())  # 0\n```\n\n## py.mem.leak_debug\n\n# py.mem.leak_debug —— Python 内存泄漏调试\n\n> **一句话直觉**：程序越跑越慢、内存越吃越多，最后被系统 OOM（Out Of Memory，内存耗尽）杀掉——学完这节，你能自己定位“谁在偷偷攒对象不放手”，而不是靠重启续命。\n\n前置知识：无。你只需要会写最基础的 Python 函数和 `class`。\n\n---\n\n## 0. 先分清“长胖”和“泄漏”\n\nPython 有自动垃圾回收（Garbage Collection, GC），大多数临时对象用完就被回收。但如果一个对象**被某个长生命周期的容器、闭包、全局变量、缓存、循环引用链一直引用**，它就永远回收不掉。\n\n- **正常增长**：启动时构建缓存、连接池，内存上升后稳定。\n- **内存泄漏（Memory Leak）**：持续运行中对象只增不减，`gc.collect()` 也收不回。\n\n第一件事就是**观察曲线**：是台阶式稳定，还是近似线性上升？\n\n```python\n# 最小可跑的“泄漏 vs 正常”对照\nimport gc, sys\n\nclass Node:\n    def __init__(self, name):\n        self.name = name\n\ndef make_cycle():\n    a = Node(\"a\")\n    b = Node(\"b\")\n    a.peer = b\n    b.peer = a\n    return [a, b]   # 外部还引用，无法回收\n\nleaked = []         # 全局容器，故意“藏”对象\nfor i in range(1000):\n    leaked.append(make_cycle())\n\nprint(\"gc 前:\", len(gc.get_objects()))\ngc.collect()\nprint(\"gc 后:\", len(gc.get_objects()))  # 几乎不变，说明确实被 leaked 引用着\n```\n\n---\n\n## 1. 三个核心工具：`tracemalloc`、`gc`、`objgraph`\n\n### 1.1 `tracemalloc` —— 官方“内存快照对比”\n\n它记录**每一次分配发生在哪一行**，能直接告诉你“哪个文件哪一行在涨”。\n\n```python\nimport tracemalloc, linecache\n\ntracemalloc.start(10)                    # 保留 10 层调用栈\nsnap1 = tracemalloc.take_snapshot()\n\n# —— 模拟可疑业务 ——\n_cache = {}\nfor i in range(10000):\n    _cache[i] = \"x\" * 1000\n\nsnap2 = tracemalloc.take_snapshot()\n\nfor stat in snap2.compare_to(snap1, 'lineno')[:3]:\n    print(stat)                           # 显示增长最多的行\n\nfor stat in snap2.compare_to(snap1, 'lineno')[:1]:\n    for frame in stat.traceback:\n        print(\"  来源:\", linecache.getline(frame.filename, frame.lineno).strip())\n```\n\n**结论**：`compare_to` 是最有价值的 API——两次快照做差，增长量＋调用栈 = 嫌疑点。\n\n### 1.2 `gc` —— 看谁把对象“抓住”了\n\n```python\nimport gc\n\n# 找到所有被引用但疑似泄漏的类型实例\nobjs = [o for o in gc.get_objects() if isinstance(o, dict)]\nprint(\"dict 数量:\", len(objs))\n\n# 关闭/开启自动 GC，确认泄漏是否来自循环引用\ngc.disable()\nprint(\"gc 是否开启:\", gc.isenabled())\ngc.enable()\n```\n\n**结论**：如果只有 `gc.disable()` 才涨，是循环引用；如果 `gc.collect()` 后仍涨，是外部强引用（全局变量、缓存、闭包、单例）。\n\n### 1.3 `objgraph` —— 可视化引用链（工程级神器）\n\n```python\n# pip install objgraph\nimport objgraph\n\nclass Session:\n    pass\n\n_sessions = []\nfor _ in range(100):\n    _sessions.append(Session())\n\nobjgraph.show_most_common_types(limit=5)\nobjgraph.show_backrefs([_sessions[0]], max_depth=3, filename=\"refs.png\")\n```\n\n**结论**：`show_backrefs` 把“谁引用了我”画成图，一眼看穿泄漏源头。\n\n---\n\n## 2. 工程中 5 个最常见的泄漏模式\n\n| 模式 | 例子 | 识别信号 | 修复 |\n|------|------|----------|------|\n| 全局缓存无上限 | `CACHE[key] = data` | 部署时间长就涨 | 用 `functools.lru_cache(maxsize=N)` 或 `cachetools` |\n| 闭包捕获大对象 | 回调里引用大 DataFrame | 回调活着就不释放 | 显式 `del`，或把依赖拆成小参数 |\n| 循环引用 + `__del__` | 自定义 `__del__` 阻止 GC | GC 后不下降 | 避免 `__del__`，改 `weakref.finalize` |\n| 未关闭的资源 | 未关闭的文件/DB 连接 | 句柄数持续上升 | 用 `with` 或显式 `close()` |\n| 全局事件监听器 | `signal.connect` 后从不 `disconnect` | 监听器列表越来越长 | 使用弱引用的信号（`weakref`） |\n\n用弱引用验证“谁该被释放”：\n\n```python\nimport weakref, gc\n\nclass Big:\n    pass\n\nb = Big()\nref = weakref.ref(b)\nprint(\"存活:\", ref() is not None)   # True\ndel b\ngc.collect()\nprint(\"存活:\", ref() is not None)   # False —— 说明没被别处强引用\n```\n\n**结论**：`weakref` 是判断“我是否被别的地方悄悄持有”的最快方法。\n\n---\n\n## 3. 标准调试流程（照抄即可）\n\n1. **复现**：写脚本循环触发可疑逻辑，`time.sleep` 观察 RSS；用 `psutil.Process().memory_info().rss` 打印。\n2. **快照**：`tracemalloc.start()` → 跑一轮 → `take_snapshot()` → 再跑一轮 → `take_snapshot()` → `compare_to`。\n3. **定位**：看增长最多的 1~3 行源码。\n4. **确认引用链**：`objgraph.show_backrefs([obj], max_depth=5)`。\n5. **修复**：加 `maxsize` / `weakref` / `contextlib.closing` / `del`。\n6. **回归**：同样的脚本再跑一轮，`compare_to` 应该趋近 0。\n\n```python\nimport psutil, os, gc, time\n\ndef rss_mb() -> float:\n    return psutil.Process(os.getpid()).memory_info().rss / 1024 / 1024\n\n_cache = {}\nfor i in range(5):\n    for j in range(100_000):\n        _cache[(i, j)] = j\n    gc.collect()\n    print(f\"第 {i} 轮后 RSS = {rss_mb():.1f} MB，缓存大小 = {len(_cache)}\")\n    time.sleep(0.5)\n```\n\n**结论**：缓存大小与 RSS 同步增长 = 上限缺失，直接给 `_cache` 加 `maxsize` 或换成 `lru_cache`。\n\n---\n\n## 4. 防患于未然：三条工程习惯\n\n1. **一切缓存必须有上限**：`lru_cache(maxsize=...)` 或 `cachetools.TTLCache`。\n2. **一切长生命周期对象尽量用 `weakref`**：监听器、观察者、父节点反向引用。\n3. **CI 里加内存回归测试**：跑 1000 次业务循环，断言 RSS 增幅 < 阈值。\n\n```python\nfrom functools import lru_cache\n\n@lru_cache(maxsize=1024)     # 上限 1024，超出按 LRU 淘汰\ndef heavy(x: int) -> int:\n    return sum(range(x))\n\nfor i in range(100_000):\n    heavy(i % 2048)          # 永远不会无限增长\nprint(heavy.cache_info())    # 看命中率、淘汰数\n```\n\n**结论**：内存泄漏 90% 不是 Python 的错，而是“作者忘了给缓存加边界”。\n\n---\n\n## 5. 动手练习\n\n> **任务**：写一个故意泄漏的小服务，再用你学到的工具把它修好。\n\n**步骤**：\n1. 新建 `leaky.py`，实现 `class Order`，以及一个全局 `ORDERS = []`，写一个 `place_order(i)` 把新 `Order` 塞进 `ORDERS`，**不清理**。\n2. 写 `loop()`：循环调用 `place_order` 共 200_000 次，每 50_000 次打印 `psutil` 的 RSS 和 `len(ORDERS)`。\n3. 运行，记录 RSS 曲线——应该线性上升。\n4. 用 `tracemalloc` 的快照对比，把增长最大的一行打印出来。\n5. 修复：把 `ORDERS` 换成 `collections.deque(maxlen=1000)`。\n6. 再跑一遍，验证 RSS 稳定在某个值附近，`tracemalloc.compare_to` 的增长接近 0。\n\n**验收标准**：\n- 修复前 RSS 单调上升；修复后 RSS 在前 50_000 次后基本持平（波动 < 10 MB）。\n- 打印出 `tracemalloc` 对比报告，指出泄漏行就是 `ORDERS.append(...)`。\n\n**提示**：\n- `pip install psutil objgraph`。\n- 如果你希望看引用链，用 `objgraph.show_backrefs([ORDERS[0]], max_depth=4)`。\n\n做完这道题，你就掌握了从“观察现象 → 快照对比 → 定位行 → 查引用链 → 加边界 → 回归验证”完整的一条工程级内存泄漏调试链路。\n",
+  "quiz": [
+    {
+      "kp": "py.mem.weakref",
+      "type": "single_choice",
+      "question": "以下代码运行后，cache 中最终还剩下多少个键值对？\n\nimport weakref\n\nclass Obj:\n    pass\n\ncache = weakref.WeakValueDictionary()\na = Obj()\ncache['a'] = a\nb = Obj()\ncache['b'] = b\ndel a\nimport gc\ngc.collect()\nprint(len(cache))",
+      "options": [
+        "0",
+        "1",
+        "2",
+        "运行时报错，因为 WeakValueDictionary 不允许删除键"
+      ],
+      "answer": 1,
+      "explanation": "WeakValueDictionary 只对值保持弱引用。变量 a 被 del 后，Obj 实例没有强引用，被 GC 回收，对应条目自动消失；b 仍被变量 b 强引用，所以 cache 中只剩 'b' 一个条目。",
+      "error_tag": "弱引用语义理解错误",
+      "variant_group": "weakvaluedict_basic"
+    },
+    {
+      "kp": "py.mem.weakref",
+      "type": "single_choice",
+      "question": "关于 weakref.ref(obj) 的返回值，下列描述正确的是？",
+      "options": [
+        "它返回 obj 的一个浅拷贝，修改拷贝会影响原对象",
+        "它返回一个可调用对象，调用后若原对象还存活则返回该对象，否则返回 None",
+        "它返回一个整数内存地址，可以用于还原对象",
+        "它返回 obj 本身，只是不增加引用计数"
+      ],
+      "answer": 1,
+      "explanation": "weakref.ref 返回一个弱引用对象；它可被调用以获取原对象，若原对象已被回收则返回 None。它不阻止对象的回收，也不是拷贝或地址。",
+      "error_tag": "弱引用对象行为误解",
+      "variant_group": "weakref_ref_semantics"
+    },
+    {
+      "kp": "py.mem.weakref",
+      "type": "single_choice",
+      "question": "如果对已被回收的对象使用 weakref.proxy 创建的代理，会发生什么？",
+      "options": [
+        "返回 None",
+        "抛出 ReferenceError",
+        "返回原对象的副本",
+        "自动重新创建原对象"
+      ],
+      "answer": 1,
+      "explanation": "weakref.proxy 创建的代理在原对象被回收后，任何访问都会抛出 ReferenceError。而 weakref.ref 则是调用后返回 None。",
+      "error_tag": "proxy 失效行为错误",
+      "variant_group": "weakref_proxy_dead"
+    },
+    {
+      "kp": "py.mem.weakref",
+      "type": "single_choice",
+      "question": "以下哪种场景最适合使用弱引用？",
+      "options": [
+        "父对象强引用子对象，子对象需要阻止父对象被回收",
+        "对象之间互相强引用形成循环，希望打破循环以便回收",
+        "需要确保对象在程序结束前一直存活",
+        "需要复制一个对象并保持两者独立"
+      ],
+      "answer": 1,
+      "explanation": "弱引用常用于打破循环引用，让对象可以在没有外部强引用时被回收。选项 A 和 C 都要求延长对象生命周期，与弱引用目的相反；D 与弱引用无关。",
+      "error_tag": "弱引用适用场景误判",
+      "variant_group": "weakref_use_case"
+    },
+    {
+      "kp": "py.mem.weakref",
+      "type": "single_choice",
+      "question": "关于 weakref.ref 的 callback 参数，下列说法正确的是？",
+      "options": [
+        "callback 在弱引用对象被创建时立即执行一次",
+        "callback 在原对象被回收时被调用，并接收弱引用对象作为参数",
+        "callback 必须返回原对象，否则弱引用无效",
+        "callback 只有在手动调用 weakref.ref 实例时才会执行"
+      ],
+      "answer": 1,
+      "explanation": "weakref.ref(obj, callback) 中的 callback 会在原对象被回收时被调用，参数是弱引用对象本身。它不会在创建时执行，也与手动调用弱引用无关。",
+      "error_tag": "弱引用回调机制误解",
+      "variant_group": "weakref_callback"
+    },
+    {
+      "kp": "py.mem.weakref",
+      "type": "single_choice",
+      "question": "以下代码中，cache 最终输出什么？\n\nimport weakref\n\nclass Item:\n    pass\n\ncache = weakref.WeakKeyDictionary()\ni1 = Item()\ni2 = Item()\ncache[i1] = 'one'\ncache[i2] = 'two'\ndel i1\nimport gc\ngc.collect()\nprint(len(cache))",
+      "options": [
+        "0",
+        "1",
+        "2",
+        "抛出 KeyError"
+      ],
+      "answer": 1,
+      "explanation": "WeakKeyDictionary 的键是弱引用。i1 被删除并回收后，对应的条目自动移除；i2 仍存活，因此只剩一个条目。",
+      "error_tag": "WeakKeyDictionary 回收行为误判",
+      "variant_group": "weakkeydict_basic"
+    },
+    {
+      "kp": "py.mem.weakref",
+      "type": "single_choice",
+      "question": "为什么内置类型如 int、str 不能作为 weakref.ref 的目标？",
+      "options": [
+        "因为它们是不可变对象",
+        "因为它们没有实现 __weakref__ 槽，不支持弱引用",
+        "因为它们总是被解释器缓存，永远不回收",
+        "因为弱引用只能用于自定义类"
+      ],
+      "answer": 1,
+      "explanation": "许多内置类型没有为弱引用留出槽位（不支持 __weakref__），因此不能直接创建弱引用。不可变性不是根本原因，模块等可变类型也可能不支持或支持。",
+      "error_tag": "不可弱引用原因误解",
+      "variant_group": "weakref_builtin_types"
+    },
+    {
+      "kp": "py.mem.weakref",
+      "type": "single_choice",
+      "question": "假设你有一个类定义了 __slots__ = ('x',)，要使其实例支持弱引用，正确的做法是？",
+      "options": [
+        "__slots__ = ('x',) 已经足够，无需修改",
+        "__slots__ = ('x', '__weakref__')",
+        "__slots__ = ('x', '__dict__')",
+        "在类中定义 __del__ 方法"
+      ],
+      "answer": 1,
+      "explanation": "使用 __slots__ 的类默认不支持弱引用，必须在 __slots__ 中包含 '__weakref__'。加入 '__dict__' 可以恢复实例字典，但并不直接解决弱引用问题。",
+      "error_tag": "slots 弱引用支持遗漏",
+      "variant_group": "weakref_slots_fix"
+    },
+    {
+      "kp": "py.mem.weakref",
+      "type": "single_choice",
+      "question": "以下关于 weakref.WeakSet 的描述，正确的是？",
+      "options": [
+        "它存储元素的强引用，元素不会被自动移除",
+        "它存储元素的弱引用，元素被回收后自动从集合中移除",
+        "它只能存储可哈希的弱引用对象，其它类型会报错",
+        "它是内置 set 的子类，行为完全相同"
+      ],
+      "answer": 1,
+      "explanation": "WeakSet 对元素保持弱引用，元素被回收后自动从集合中移除。它要求元素可弱引用且可哈希，但不是内置 set 的子类。",
+      "error_tag": "WeakSet 语义误解",
+      "variant_group": "weakset_basic"
+    },
+    {
+      "kp": "py.mem.weakref",
+      "type": "single_choice",
+      "question": "下面哪个操作能获取弱引用所指向的对象（若仍存在）？",
+      "options": [
+        "ref.get()",
+        "ref()",
+        "ref.value",
+        "ref.target"
+      ],
+      "answer": 1,
+      "explanation": "weakref.ref 实例是可调用的，调用 ref() 返回原对象或 None。它没有 get 方法（那是某些语言的习惯），也没有 value/target 属性。",
+      "error_tag": "弱引用取值方式错误",
+      "variant_group": "weakref_api_call"
+    },
+    {
+      "kp": "py.mem.weakref",
+      "type": "single_choice",
+      "question": "在观察者模式中，为什么常用弱引用来保存观察者列表？",
+      "options": [
+        "因为弱引用列表遍历速度更快",
+        "避免被观察对象长期持有观察者，导致观察者无法被回收",
+        "因为弱引用可以自动排序观察者",
+        "因为弱引用列表支持自动去重"
+      ],
+      "answer": 1,
+      "explanation": "如果被观察者用强引用保存观察者，可能会阻止观察者被回收，造成内存泄漏。使用弱引用可以让观察者在不被其他地方引用时被正常回收。",
+      "error_tag": "观察者模式弱引用动机误解",
+      "variant_group": "weakref_observer"
+    },
+    {
+      "kp": "py.mem.weakref",
+      "type": "single_choice",
+      "question": "调用 weakref.finalize 返回的对象上的 cancel() 方法，效果是什么？",
+      "options": [
+        "立即执行回调并移除 finalize 对象",
+        "取消已注册的回调，使其在目标对象回收时不再执行",
+        "删除目标对象并触发回调",
+        "将回调改为强引用，延长目标对象生命周期"
+      ],
+      "answer": 1,
+      "explanation": "finalize 对象提供 cancel() 用于取消回调，取消后即使目标对象被回收，回调也不会执行。cancel() 本身不会立即执行回调或删除对象。",
+      "error_tag": "finalize cancel 行为误解",
+      "variant_group": "weakref_finalize_cancel"
+    },
+    {
+      "kp": "py.mem.weakref",
+      "type": "single_choice",
+      "question": "以下哪类对象不能被 weakref.ref 直接引用？",
+      "options": [
+        "自定义类的实例",
+        "Python 的 list 实例",
+        "字典中的值（自定义对象）",
+        "模块对象"
+      ],
+      "answer": 1,
+      "explanation": "内置的 list、dict、tuple 等类型默认不支持弱引用，不能直接创建 weakref.ref；而自定义类实例、模块对象等通常支持。",
+      "error_tag": "不可弱引用类型误判",
+      "variant_group": "weakref_supported_types"
+    },
+    {
+      "kp": "py.mem.weakref",
+      "type": "single_choice",
+      "question": "如何让一个自定义类的实例支持弱引用？",
+      "options": [
+        "在类中定义 __weakref__ 属性",
+        "在类中定义 __slots__ 且不包含 '__weakref__'",
+        "在类中定义 __del__ 方法",
+        "任何自定义类实例都天然支持，无需额外声明"
+      ],
+      "answer": 0,
+      "explanation": "普通类实例默认支持弱引用，因为类字典中隐含 __weakref__ 槽；但定义了 __slots__ 的类必须在 __slots__ 中显式加入 '__weakref__' 才能支持弱引用。选项 B 恰好相反，C 无关，D 对 __slots__ 类不成立。",
+      "error_tag": "slots 与弱引用支持混淆",
+      "variant_group": "weakref_slots"
+    },
+    {
+      "kp": "py.mem.weakref",
+      "type": "single_choice",
+      "question": "以下代码输出什么？\n\nimport weakref\n\nclass A:\n    pass\n\nobj = A()\nr = weakref.ref(obj)\nprint(r() is obj)\ndel obj\nimport gc\ngc.collect()\nprint(r())",
+      "options": [
+        "True 然后 一个 A 实例",
+        "False 然后 None",
+        "True 然后 None",
+        "False 然后 一个 A 实例"
+      ],
+      "answer": 2,
+      "explanation": "对象存活时，r() 返回原对象，因此 r() is obj 为 True。删除 obj 并回收后，弱引用失效，r() 返回 None。",
+      "error_tag": "弱引用调用结果误判",
+      "variant_group": "weakref_call_after_del"
+    },
+    {
+      "kp": "py.mem.weakref",
+      "type": "single_choice",
+      "question": "WeakKeyDictionary 与 WeakValueDictionary 的主要区别是什么？",
+      "options": [
+        "前者对键弱引用，后者对值弱引用",
+        "前者对值弱引用，后者对键弱引用",
+        "两者都对键和值同时弱引用",
+        "两者都是普通字典，只是线程安全"
+      ],
+      "answer": 0,
+      "explanation": "WeakKeyDictionary 的键是弱引用，WeakValueDictionary 的值是弱引用。当键（或值）对象被回收时，对应条目自动从字典中移除。",
+      "error_tag": "弱键弱值字典方向混淆",
+      "variant_group": "weakdict_direction"
+    },
+    {
+      "kp": "py.mem.weakref",
+      "type": "single_choice",
+      "question": "使用 weakref.finalize(obj, callback, *args) 的作用是什么？",
+      "options": [
+        "立即调用 callback 并返回结果",
+        "在 obj 被垃圾回收时调用 callback，除非之前显式调用 finalize 对象的 cancel()",
+        "阻止 obj 被垃圾回收，直到 callback 执行完成",
+        "把 callback 注册为 obj 的方法"
+      ],
+      "answer": 1,
+      "explanation": "finalize 注册一个在目标对象被回收时执行的回调，通常用于清理资源；返回的 finalize 对象可以调用 cancel() 取消。它不会立即执行，也不会阻止对象回收。",
+      "error_tag": "finalize 行为误解",
+      "variant_group": "weakref_finalize"
+    },
+    {
+      "kp": "py.mem.weakref",
+      "type": "single_choice",
+      "question": "以下关于弱引用与引用计数的说法，正确的是？",
+      "options": [
+        "创建弱引用会增加对象的引用计数",
+        "创建弱引用不会增加对象的引用计数，因此不会阻止其被回收",
+        "弱引用会强制对象一直存活，直到弱引用被删除",
+        "弱引用只在多线程程序中有意义"
+      ],
+      "answer": 1,
+      "explanation": "弱引用的核心特点是不增加目标对象的引用计数，从而不阻止垃圾回收。它常用于缓存、观察者列表等避免循环引用或延长生命周期的场景。",
+      "error_tag": "引用计数影响误判",
+      "variant_group": "weakref_refcount"
+    },
+    {
+      "kp": "py.mem.weakref",
+      "type": "single_choice",
+      "question": "在实现一个缓存时，使用 WeakValueDictionary 相比普通 dict 的主要优势是什么？",
+      "options": [
+        "缓存条目永不失效，访问速度更快",
+        "当缓存的值对象不再被其他地方引用时，条目会自动移除，避免内存泄漏",
+        "它支持更快的哈希查找",
+        "它能自动序列化缓存内容"
+      ],
+      "answer": 1,
+      "explanation": "WeakValueDictionary 的值是弱引用，当值对象没有其他强引用时会被回收，对应条目自动消失，适合做缓存而不必手动管理生命周期。",
+      "error_tag": "弱引用缓存场景误解",
+      "variant_group": "weakref_cache_use"
+    },
+    {
+      "kp": "py.mem.weakref",
+      "type": "single_choice",
+      "question": "以下代码中 r 是什么类型？\n\nimport weakref\n\nclass Node:\n    pass\n\nn = Node()\nr = weakref.proxy(n)\nprint(type(r).__name__)",
+      "options": [
+        "Node",
+        "weakref",
+        "ProxyType",
+        "NoneType"
+      ],
+      "answer": 2,
+      "explanation": "weakref.proxy 返回一个代理对象，其类型是 weakref.ProxyType（或 CallableProxyType），通过它可以直接访问原对象的属性，但原对象被回收后使用代理会抛出 ReferenceError。",
+      "error_tag": "proxy 类型混淆",
+      "variant_group": "weakref_proxy_type"
+    },
+    {
+      "kp": "py.mem.cycle",
+      "type": "single_choice",
+      "question": "关于 Python 中的循环引用（reference cycle），下列说法正确的是？",
+      "options": [
+        "循环引用会导致引用计数永远不为零，因此 CPython 中这类对象永远无法被回收",
+        "循环引用会立即导致程序内存泄漏，必须手动打破",
+        "CPython 的分代垃圾回收器能够检测并回收不可达的循环引用对象",
+        "只有使用 weakref 才能避免循环引用造成的内存无法释放"
+      ],
+      "answer": 2,
+      "explanation": "引用计数确实无法单独回收循环引用，但 CPython 自带的分代 GC（gc 模块）会周期性地检测不可达的循环并回收它们，因此并非永远无法回收。选项 A、B 夸大了后果，D 中 weakref 只是打破循环的一种手段而非唯一方式。",
+      "error_tag": "概念混淆",
+      "variant_group": "cycle_gc_basic"
+    },
+    {
+      "kp": "py.mem.cycle",
+      "type": "single_choice",
+      "question": "下列哪段代码最可能形成循环引用，使对象的引用计数无法仅靠计数归零？",
+      "options": [
+        "a = []; b = [a]; a.append(b)",
+        "a = []; b = a; a.append(1)",
+        "a = {}; b = a.copy()",
+        "a = (1, 2, 3); b = a[:1]"
+      ],
+      "answer": 0,
+      "explanation": "选项 A 中 a 引用 b，b 又引用 a，形成双向引用环。B 是共享引用但无环，C 是浅拷贝生成新对象，D 是切片生成新元组，都不构成环。",
+      "error_tag": "概念混淆",
+      "variant_group": "cycle_detect_code"
+    },
+    {
+      "kp": "py.mem.cycle",
+      "type": "multi_choice",
+      "question": "使用 gc 模块进行调试时，下列哪些说法正确？（多选）",
+      "options": [
+        "gc.set_debug(gc.DEBUG_LEAK) 可用于观察回收情况",
+        "gc.get_referrers(obj) 可以查看谁引用了 obj",
+        "gc.get_referents(obj) 可以查看 obj 引用了谁",
+        "gc.disable() 后仍会自动回收循环引用",
+        "gc.isenabled() 可以判断自动回收是否开启"
+      ],
+      "answer": [
+        0,
+        1,
+        2,
+        4
+      ],
+      "explanation": "A、B、C、E 都是 gc 模块提供的调试/查询能力。D 错误：gc.disable() 会关闭循环引用的自动检测，需手动 collect。",
+      "error_tag": "记忆缺失",
+      "variant_group": "cycle_gc_api"
+    },
+    {
+      "kp": "py.mem.cycle",
+      "type": "multi_choice",
+      "question": "关于 gc.garbage，下列哪些描述正确？（多选）",
+      "options": [
+        "它是垃圾回收器无法回收对象的列表",
+        "通常为空，除非有不可回收的对象",
+        "可以手动向其中添加对象",
+        "向其中添加对象会阻止该对象被回收",
+        "它里面存放的是所有被回收过的对象"
+      ],
+      "answer": [
+        0,
+        1,
+        3
+      ],
+      "explanation": "gc.garbage 保存 GC 无法回收的对象，通常为空。手动向其添加对象会阻止回收。E 错误：它不是“回收记录”，而是“无法回收”的集合。C 虽然可以 append，但它本身是容器，向其中添加对象是其被用作阻断回收的方式，D 才是该行为的因果关系，故不选 C。",
+      "error_tag": "边界错误",
+      "variant_group": "cycle_gc_api"
+    },
+    {
+      "kp": "py.mem.cycle",
+      "type": "fill_blank",
+      "question": "在 CPython 中，引用计数机制无法单独回收循环引用对象，需要借助 ____ 模块提供的分代垃圾回收器。",
+      "options": [],
+      "answer": [
+        "gc",
+        "GC",
+        "在 gc 中",
+        "gc 模块"
+      ],
+      "explanation": "标准库 gc 模块提供垃圾回收与调试接口。",
+      "error_tag": "记忆缺失",
+      "variant_group": "cycle_gc_basic"
+    },
+    {
+      "kp": "py.mem.cycle",
+      "type": "fill_blank",
+      "question": "使用标准库中的 ____ 工具可以创建不增加对象引用计数的弱引用。",
+      "options": [],
+      "answer": [
+        "weakref",
+        "weakref 模块",
+        "weakref.ref",
+        "弱引用",
+        "weakref 弱引用"
+      ],
+      "explanation": "weakref 模块提供弱引用支持，弱引用不增加被引用对象的引用计数。",
+      "error_tag": "概念混淆",
+      "variant_group": "cycle_weakref"
+    },
+    {
+      "kp": "py.mem.cycle",
+      "type": "fill_blank",
+      "question": "调用 gc.collect() 会强制触发一次完整的垃圾回收，其返回值是本次回收的 ____。",
+      "options": [],
+      "answer": [
+        "不可达但被回收的对象数量",
+        "回收的对象数",
+        "被回收对象数量",
+        "回收的对象数目",
+        "number of unreachable objects collected"
+      ],
+      "explanation": "gc.collect() 返回本次回收到的不可达对象数量。",
+      "error_tag": "记忆缺失",
+      "variant_group": "cycle_gc_api"
+    },
+    {
+      "kp": "py.mem.cycle",
+      "type": "code_reading",
+      "question": "阅读以下代码，说明 a 和 b 的引用计数在函数结束后是否会归零，并说明原因：\n\nclass Node:\n    pass\n\na = Node()\nb = Node()\na.peer = b\nb.peer = a\ndel a, b\n\n（执行后仅剩循环引用）",
+      "options": [],
+      "answer": "不会归零。a 与 b 互相作为对方的强引用形成引用环，即便 del a, b 删除了外部引用，环内引用计数仍大于零；它们需要由 CPython 的分代 gc 检测并回收（如 gc.collect()），引用计数机制本身无法打破环。",
+      "explanation": "关键点是环内互相引用使计数不能下降到零，需 GC 介入。",
+      "error_tag": "概念混淆",
+      "variant_group": "cycle_detect_code"
+    },
+    {
+      "kp": "py.mem.cycle",
+      "type": "code_reading",
+      "question": "阅读以下代码，说明输出结果及原因：\n\nimport weakref\n\nclass A:\n    pass\n\na = A()\nr = weakref.ref(a)\nprint(r() is a)\ndel a\nimport gc\ngc.collect()\nprint(r() is None)",
+      "options": [],
+      "answer": "先输出 True，后输出 True。因为弱引用 r 不增加 a 的引用计数，r() 仍能取回 a 对象；del a 且无强引用后对象被回收，r 变为失效弱引用，r() 返回 None。",
+      "explanation": "弱引用本身不影响对象生命周期，对象无强引用后即被回收。",
+      "error_tag": "概念混淆",
+      "variant_group": "cycle_weakref"
+    },
+    {
+      "kp": "py.mem.cycle",
+      "type": "scenario",
+      "question": "你的服务长期运行后内存持续增长。监控发现大量自定义对象因父子互相持有强引用而无法释放，但这些对象已不再被业务使用。请描述你会如何定位与缓解这一问题。",
+      "options": [],
+      "answer": null,
+      "explanation": "回答应包含：用 gc 模块/对象引用遍历（如 get_referrers/get_referents、gc.collect 或内存剖析）定位循环；将双向关系的一侧改为 weakref 弱引用以打破环；必要时调整或触发 gc；理解引用计数与分代 GC 的协作。",
+      "error_tag": "工程实践",
+      "variant_group": "cycle_scenario",
+      "required_keywords": [
+        "循环引用",
+        "gc 模块",
+        "get_referrers",
+        "weakref",
+        "弱引用"
+      ]
+    },
+    {
+      "kp": "py.mem.cycle",
+      "type": "scenario",
+      "question": "团队在一次性能调优中发现，某些场景下对象释放被延迟，怀疑是闭包与对象互相引用形成的循环。请说明你会如何验证并优化？",
+      "options": [],
+      "answer": null,
+      "explanation": "可通过 gc 调试（gc.set_debug、get_referrers）确认环的存在；将闭包对外层对象的强引用改为弱引用或重构解耦；用 gc.collect 观察回收情况；对关键路径进行内存剖析以避免延迟释放。",
+      "error_tag": "工程实践",
+      "variant_group": "cycle_scenario",
+      "required_keywords": [
+        "内存",
+        "解耦"
+      ]
+    },
+    {
+      "kp": "py.mem.cycle",
+      "type": "single_choice",
+      "question": "关于 CPython 中引用计数与分代 GC 的关系，下列说法正确的是？",
+      "options": [
+        "引用计数和 GC 相互竞争，应关闭其中之一",
+        "引用计数处理大部分即时回收，GC 主要弥补循环引用等计数失效的场景",
+        "GC 会替代引用计数，禁用后引用计数仍然工作且能处理环",
+        "引用计数不会影响 GC 的触发频率"
+      ],
+      "answer": 1,
+      "explanation": "两者是互补关系：引用计数负责大部分对象即时释放，分代 GC 专门处理计数无法覆盖的循环不可达对象。",
+      "error_tag": "概念混淆",
+      "variant_group": "cycle_gc_basic"
+    },
+    {
+      "kp": "py.mem.cycle",
+      "type": "single_choice",
+      "question": "在 CPython 中，仅存在循环引用而无其他外部引用的对象，其引用计数会怎样变化？",
+      "options": [
+        "自动归零并立即被引用计数机制回收",
+        "始终大于零，直到垃圾回收器介入才能被回收",
+        "抛出 ReferenceError",
+        "会被立刻存入 gc.garbage 并永久保留"
+      ],
+      "answer": 1,
+      "explanation": "环内对象互相持有引用，引用计数不会降到零；只有分代 GC 检测到它们不可达后才会回收。不会抛出异常，也不一定进入 gc.garbage（仅当定义了 __del__ 且不可回收等特殊情况）。",
+      "error_tag": "概念混淆",
+      "variant_group": "cycle_gc_basic"
+    },
+    {
+      "kp": "py.mem.cycle",
+      "type": "single_choice",
+      "question": "在调试内存时，你想查看某个列表对象在哪被引用。下列哪种方式最合适？",
+      "options": [
+        "调用 gc.get_referrers(obj)",
+        "访问 obj.__refcount__ 属性",
+        "调用 id(obj) 的返回值",
+        "使用 sys.setrecursionlimit(obj)"
+      ],
+      "answer": 0,
+      "explanation": "gc.get_referrers(obj) 返回直接引用 obj 的对象列表，是常用的调试手段。其他选项与查看引用来源无关。",
+      "error_tag": "记忆缺失",
+      "variant_group": "cycle_gc_api"
+    },
+    {
+      "kp": "py.mem.cycle",
+      "type": "single_choice",
+      "question": "关于 __del__ 方法与循环引用的关系，下列说法正确的是？",
+      "options": [
+        "__del__ 一定会在循环对象被 GC 回收时按定义顺序调用",
+        "在较新的 CPython 中，带 __del__ 的循环对象通常仍可被 GC 回收",
+        "只要对象定义了 __del__，就永远不会被回收",
+        "定义了 __del__ 的对象无法参与循环引用"
+      ],
+      "answer": 1,
+      "explanation": "历史上带 __del__ 的循环对象难以回收，但 Python 3.4 起 GC 已能处理大多数此类情况，将其回收。因此 A、C、D 均不正确。",
+      "error_tag": "记忆缺失",
+      "variant_group": "cycle_del"
+    },
+    {
+      "kp": "py.mem.cycle",
+      "type": "single_choice",
+      "question": "下列哪种做法最有助于避免因循环引用而延迟释放内存？",
+      "options": [
+        "双向关联时，一侧使用 weakref 弱引用",
+        "把所有对象都放入全局列表",
+        "给每个对象都定义 __del__",
+        "频繁调用 gc.disable()"
+      ],
+      "answer": 0,
+      "explanation": "弱引用不增加引用计数，因此不会形成强引用环。放入全局列表、定义 __del__、禁用 GC 都会加重问题而非缓解。",
+      "error_tag": "概念混淆",
+      "variant_group": "cycle_avoid"
+    },
+    {
+      "kp": "py.mem.cycle",
+      "type": "single_choice",
+      "question": "调用 gc.collect() 的主要作用是？",
+      "options": [
+        "清空所有对象的引用计数",
+        "强制触发一次完整的垃圾回收，包括检测循环引用",
+        "释放当前函数的所有局部变量",
+        "关闭自动垃圾回收"
+      ],
+      "answer": 1,
+      "explanation": "gc.collect() 触发一次完整回收，主要用于处理循环引用。它不重置引用计数，也与局部变量释放无关，关闭自动回收是 gc.disable()。",
+      "error_tag": "概念混淆",
+      "variant_group": "cycle_gc_api"
+    },
+    {
+      "kp": "py.mem.cycle",
+      "type": "single_choice",
+      "question": "关于 CPython 分代回收策略，下列说法正确的是？",
+      "options": [
+        "新创建的对象会被先放入第 0 代，存活越久越可能被移入更高代",
+        "所有对象都在同一代中，没有分代概念",
+        "越老的对象检查越频繁",
+        "gc 只处理第 0 代，其余代永不回收"
+      ],
+      "answer": 0,
+      "explanation": "CPython 使用三代回收：新对象进入第 0 代，经过多次回收仍存活则晋升到更高代，高代检查频率更低。其余选项与实现相反。",
+      "error_tag": "记忆缺失",
+      "variant_group": "cycle_generation"
+    },
+    {
+      "kp": "py.mem.cycle",
+      "type": "multi_choice",
+      "question": "下列关于循环引用与垃圾回收的说法，哪些是正确的？（多选）",
+      "options": [
+        "引用计数无法单独处理循环引用，需要分代 GC 辅助",
+        "weakref 弱引用不会增加对象的引用计数",
+        "gc.collect() 可以强制触发一次完整回收",
+        "只要禁用 gc，循环引用的内存就一定不会泄漏",
+        "gc.get_objects() 返回所有被跟踪对象的列表"
+      ],
+      "answer": [
+        0,
+        1,
+        2,
+        4
+      ],
+      "explanation": "A、B、C、E 均为事实描述。D 错误：禁用 gc 后循环引用反而无法被回收，会导致内存持续增长。",
+      "error_tag": "概念混淆",
+      "variant_group": "cycle_gc_basic"
+    },
+    {
+      "kp": "py.mem.cycle",
+      "type": "multi_choice",
+      "question": "以下哪些场景容易产生循环引用？（多选）",
+      "options": [
+        "父子对象互相持有对方的强引用",
+        "对象把自身加入自己维护的列表中",
+        "两个对象相互作为属性引用",
+        "仅把对象放入一个局部变量后函数返回",
+        "闭包中引用了包含该闭包的对象自身"
+      ],
+      "answer": [
+        0,
+        1,
+        2,
+        4
+      ],
+      "explanation": "A、B、C、E 都可能形成引用环。D 只是普通局部引用，函数返回后引用即消失，不构成环。",
+      "error_tag": "概念混淆",
+      "variant_group": "cycle_detect_code"
+    },
+    {
+      "kp": "py.mem.cycle",
+      "type": "multi_choice",
+      "question": "关于弱引用（weakref）在避免循环引用中的作用，下列说法哪些正确？（多选）",
+      "options": [
+        "弱引用不会阻止被引用对象被回收",
+        "容器（如字典、列表）中的弱引用项在被引用对象消失后会自动失效或移除",
+        "weakref.ref(obj) 拿到弱引用后，取对象需要调用它本身",
+        "弱引用可以让循环引用变成非循环的强引用",
+        "普通对象没有定义 __weakref__ 时也可能无法被弱引用"
+      ],
+      "answer": [
+        0,
+        1,
+        2,
+        4
+      ],
+      "explanation": "A、B、C、E 正确描述了弱引用行为。D 错误：弱引用不是“把弱引用变成强引用”，它本身不阻止回收。",
+      "error_tag": "概念混淆",
+      "variant_group": "cycle_weakref"
+    },
+    {
+      "kp": "py.mem.leak_debug",
+      "type": "single_choice",
+      "question": "在一个长时间运行的服务程序中，某个全局列表不断被追加对象而从不清理，程序占用的内存随时间稳定上升。这最符合下列哪种现象？",
+      "options": [
+        "内存泄漏（对象仍被引用而无法回收）",
+        "内存碎片化导致的分配失败",
+        "栈溢出（递归过深）",
+        "引用计数在 CPython 中失效"
+      ],
+      "answer": 0,
+      "explanation": "全局容器长期持有对象引用，使这些对象始终可达，垃圾回收不会释放它们，内存占用持续上升，这是典型的内存泄漏。栈溢出与递归深度有关，碎片化与回收机制有关，均与本题现象不符。",
+      "error_tag": "概念混淆",
+      "variant_group": "leak_basic_definition"
+    },
+    {
+      "kp": "py.mem.leak_debug",
+      "type": "single_choice",
+      "question": "关于 CPython 中的引用计数与循环垃圾回收，下列说法正确的是？",
+      "options": [
+        "引用计数为 0 的对象会立即被释放，但相互引用的循环需要分代回收器处理",
+        "只要有循环引用，对象就永远不会被回收",
+        "分代回收器会释放所有仍被全局变量引用的对象",
+        "引用计数无法处理任何对象的释放"
+      ],
+      "answer": 0,
+      "explanation": "CPython 中引用计数为 0 立即释放；循环引用使计数不为 0，需要垃圾回收器（分代回收）来检测并回收不可达的循环。B 错在『永远』，C 错在会释放仍可达对象，D 明显错误。",
+      "error_tag": "概念混淆",
+      "variant_group": "leak_refcount_vs_gc"
+    },
+    {
+      "kp": "py.mem.leak_debug",
+      "type": "multi_choice",
+      "question": "在诊断内存问题时可用的工具或手段包括哪些？（多选）",
+      "options": [
+        "tracemalloc 快照对比",
+        "gc 模块获取被跟踪对象",
+        "objgraph 查看对象引用关系",
+        "用 print 输出当前时间戳"
+      ],
+      "answer": [
+        0,
+        1,
+        2
+      ],
+      "explanation": "tracemalloc、gc、objgraph 都是内存诊断工具。打印时间戳与内存泄漏无关，属于干扰项。",
+      "error_tag": "记忆缺失",
+      "variant_group": "leak_diagnosis_tools"
+    },
+    {
+      "kp": "py.mem.leak_debug",
+      "type": "multi_choice",
+      "question": "下列哪些可能是循环引用导致对象无法被引用计数释放的情形？（多选）",
+      "options": [
+        "两个对象互相持有对方作为属性",
+        "父对象持有子对象，子对象又回头引用父对象",
+        "对象引用自身形成闭环",
+        "对象仅被一个局部变量引用"
+      ],
+      "answer": [
+        0,
+        1,
+        2
+      ],
+      "explanation": "互相引用、父子互引、自引用都会形成循环，使引用计数无法归零。仅被一个局部变量引用不构成循环，局部变量离开作用域后可正常释放。",
+      "error_tag": "概念混淆",
+      "variant_group": "leak_cycle_reference"
+    },
+    {
+      "kp": "py.mem.leak_debug",
+      "type": "fill_blank",
+      "question": "在 CPython 中，判断一个对象是否可以被立即释放，最核心的机制是它的______计数是否降为 0。",
+      "options": [],
+      "answer": [
+        "引用",
+        "引用计数",
+        "reference"
+      ],
+      "explanation": "CPython 使用引用计数作为主要回收机制，当对象的引用计数降为 0 时立即释放；循环引用则交给分代 GC 处理。",
+      "error_tag": "记忆缺失",
+      "variant_group": "leak_refcount_vs_gc"
+    },
+    {
+      "kp": "py.mem.leak_debug",
+      "type": "fill_blank",
+      "question": "Python 标准库中的______模块提供了按调用栈追踪内存分配的能力，常用于做内存快照并对比差异。",
+      "options": [],
+      "answer": [
+        "tracemalloc"
+      ],
+      "explanation": "tracemalloc 是标准库中用于追踪内存分配的模块，支持 take_snapshot 和快照比较，适合定位泄漏来源。",
+      "error_tag": "记忆缺失",
+      "variant_group": "leak_tracemalloc_usage"
+    },
+    {
+      "kp": "py.mem.leak_debug",
+      "type": "fill_blank",
+      "question": "当需要让某个引用不阻止对象被回收时，可以使用标准库 weakref 提供的______引用。",
+      "options": [],
+      "answer": [
+        "弱",
+        "weak",
+        "弱引用"
+      ],
+      "explanation": "weakref 提供的弱引用不计入引用计数，对象在没有强引用时可被回收，是避免缓存型泄漏的常用手段。",
+      "error_tag": "记忆缺失",
+      "variant_group": "leak_weakref"
+    },
+    {
+      "kp": "py.mem.leak_debug",
+      "type": "code_reading",
+      "question": "阅读下面代码，说明程序返回后 cache 中的对象是否还能被回收，并解释原因。\n\nimport weakref\n\ncache = []\n\ndef add(obj):\n    cache.append(weakref.ref(obj))\n\ndef run():\n    data = {\"k\": \"v\"}\n    add(data)\n    return data\n\nrun()\n",
+      "options": [],
+      "answer": "能回收。cache 中保存的是弱引用（weakref.ref），不会增加对象的引用计数。run() 返回后若调用方不保留返回值，data 对象的强引用消失，引用计数降为 0，对象被回收，之后通过该弱引用访问会得到 None。",
+      "explanation": "本题考察弱引用与强引用的区别：弱引用不保活，因此对象在失去强引用后可被回收。",
+      "error_tag": "概念混淆",
+      "variant_group": "leak_weakref"
+    },
+    {
+      "kp": "py.mem.leak_debug",
+      "type": "code_reading",
+      "question": "阅读下面代码，指出为什么对象在函数返回后仍无法被释放。\n\nregistry = {}\n\ndef register(name, obj):\n    registry[name] = obj\n\ndef make():\n    large = bytearray(10_000_000)\n    register(\"big\", large)\n    return large\n\nmake()\n",
+      "options": [],
+      "answer": "因为 register 把对象存入了模块级全局字典 registry，使其仍然可达，引用计数不为 0，所以对象不会被释放，形成被全局容器持有的引用型泄漏。",
+      "explanation": "对象进入全局容器后长期可达，即使函数返回、返回值被丢弃，对象也不会被回收。",
+      "error_tag": "概念混淆",
+      "variant_group": "leak_global_reference"
+    },
+    {
+      "kp": "py.mem.leak_debug",
+      "type": "code_reading",
+      "question": "阅读下面代码，说明运行结束前 a 和 b 能否被引用计数立即释放，并给出理由。\n\nclass Node:\n    def __init__(self, name):\n        self.name = name\n        self.peer = None\n\na = Node(\"a\")\nb = Node(\"b\")\na.peer = b\nb.peer = a\ndel a\ndel b\n",
+      "options": [],
+      "answer": "执行 del a 和 del b 后，两个对象互相引用，引用计数都不为 0，无法靠引用计数立即释放；它们成为不可达的循环引用，需要垃圾回收器（分代回收）检测后回收。",
+      "explanation": "循环引用导致引用计数无法归零，这正是需要 GC 处理循环的原因。",
+      "error_tag": "边界错误",
+      "variant_group": "leak_cycle_reference"
+    },
+    {
+      "kp": "py.mem.leak_debug",
+      "type": "scenario",
+      "question": "线上一个消费消息的服务运行数天后内存持续上升，重启后恢复正常，但消息处理逻辑本身没有明显 bug。请描述你会如何系统性地排查这个内存泄漏问题。",
+      "options": [],
+      "answer": null,
+      "explanation": "排查内存泄漏需要先稳定复现并监控内存曲线，再用内存快照对比定位增长点，进一步统计可疑对象数量并分析它们的引用持有者，最终确认未被释放的原因并修复。",
+      "error_tag": "方法误用",
+      "variant_group": "leak_scenario_diagnosis",
+      "required_keywords": [
+        "监控",
+        "内存",
+        "泄漏"
+      ]
+    },
+    {
+      "kp": "py.mem.leak_debug",
+      "type": "single_choice",
+      "question": "使用 tracemalloc 排查内存增长时，下列哪种做法最有助于定位泄漏来源？",
+      "options": [
+        "在关键时间点做快照并比较两次快照的差异，查看分配增长最多的调用栈",
+        "只打印当前进程占用的总内存数值",
+        "在程序启动时调用一次 gc.collect()",
+        "把对象都改成全局变量以便观察"
+      ],
+      "answer": 0,
+      "explanation": "tracemalloc 的核心能力是按调用栈追踪分配，通过 take_snapshot 并在不同时间点比较，可以定位增长最多的代码位置。只打印总量无法定位来源，gc.collect 只触发回收，全局变量反而增加引用。",
+      "error_tag": "方法误用",
+      "variant_group": "leak_tracemalloc_usage"
+    },
+    {
+      "kp": "py.mem.leak_debug",
+      "type": "single_choice",
+      "question": "下列关于弱引用在内存管理中的作用的描述，正确的是？",
+      "options": [
+        "弱引用不会增加对象的引用计数，因此不会阻止对象被回收",
+        "弱引用会使对象永远存活",
+        "弱引用可以替代所有强引用来避免泄漏",
+        "只有内置类型才能被弱引用"
+      ],
+      "answer": 0,
+      "explanation": "weakref 持有的引用不计入引用计数，对象在没有强引用时可被回收；因此缓存或观察者常使用弱引用避免泄漏。弱引用不会使对象存活，也不能替代所有强引用，且并非只有内置类型可被弱引用（取决于是否支持 __weakref__）。",
+      "error_tag": "概念混淆",
+      "variant_group": "leak_weakref"
+    },
+    {
+      "kp": "py.mem.leak_debug",
+      "type": "single_choice",
+      "question": "某函数内创建了一个大对象并在函数内注册到一个全局回调列表中，函数返回后该对象仍无法被回收。最可能的原因是？",
+      "options": [
+        "全局回调列表持有了该对象的强引用",
+        "该对象使用了太多内存",
+        "函数返回导致局部变量被销毁",
+        "Python 不会回收函数内创建的对象"
+      ],
+      "answer": 0,
+      "explanation": "对象被全局容器引用后仍可达，引用计数不为 0，因此不会被回收，属于被引用型泄漏。内存大小本身不影响可达性，局部变量销毁是正常行为，Python 会回收函数内创建的对象（当无引用时）。",
+      "error_tag": "概念混淆",
+      "variant_group": "leak_global_reference"
+    },
+    {
+      "kp": "py.mem.leak_debug",
+      "type": "single_choice",
+      "question": "关于 gc 模块的调试用途，下列哪项说法正确？",
+      "options": [
+        "gc.get_objects() 可以列出当前被垃圾回收器跟踪的对象，便于查找可疑对象",
+        "gc.collect() 能释放仍被引用的对象",
+        "gc.disable() 会加快内存回收速度",
+        "gc 模块只能用于查看内存总量"
+      ],
+      "answer": 0,
+      "explanation": "gc.get_objects() 返回被 GC 跟踪的对象集合，配合类型统计可发现异常增长的对象。gc.collect() 只回收不可达对象，gc.disable() 会关闭自动回收可能加重泄漏，gc 模块功能远不止看总量。",
+      "error_tag": "记忆缺失",
+      "variant_group": "leak_gc_introspection"
+    },
+    {
+      "kp": "py.mem.leak_debug",
+      "type": "single_choice",
+      "question": "在排查内存泄漏时，使用 objgraph 之类工具最典型的用途是？",
+      "options": [
+        "找出某个类型对象的增长趋势或对象的引用者，帮助定位持有点",
+        "自动修复泄漏代码",
+        "把程序内存占用降到零",
+        "替代 Python 的垃圾回收机制"
+      ],
+      "answer": 0,
+      "explanation": "objgraph 能统计对象数量、展示引用链，帮助找到是谁在持有对象；它不自动修复代码、不降低总内存、也不替代 GC。",
+      "error_tag": "方法误用",
+      "variant_group": "leak_objgraph_usage"
+    },
+    {
+      "kp": "py.mem.leak_debug",
+      "type": "single_choice",
+      "question": "下列哪种情况最可能导致『看起来是内存泄漏，实际上不是』的误解？",
+      "options": [
+        "内存在使用高峰后未立即归还操作系统，而是保留在解释器内存池中供复用",
+        "对象被全局变量引用",
+        "存在循环引用",
+        "回调未取消注册"
+      ],
+      "answer": 0,
+      "explanation": "Python 的内存分配器会保留已申请的内存以复用，导致 RSS 不下降但对象其实已释放，这是分配器缓存而非泄漏。其余三项都是真实泄漏的常见原因。",
+      "error_tag": "概念混淆",
+      "variant_group": "leak_allocator_cache"
+    },
+    {
+      "kp": "py.mem.leak_debug",
+      "type": "multi_choice",
+      "question": "下列哪些做法有助于减少或避免长时间运行程序中的内存泄漏？（多选）",
+      "options": [
+        "在不再需要时取消注册的回调或事件监听",
+        "对缓存使用弱引用或设置过期/上限策略",
+        "及时关闭文件、网络连接等资源并释放其引用",
+        "把所有对象都放入全局字典以便管理",
+        "定期做快照对比，监控可疑类型的对象数量"
+      ],
+      "answer": [
+        0,
+        1,
+        2,
+        4
+      ],
+      "explanation": "取消注册、弱引用或限容缓存、及时释放资源、持续监控都是防泄漏的有效手段。把所有对象放入全局字典反而增加强引用，是泄漏的常见来源。",
+      "error_tag": "概念混淆",
+      "variant_group": "leak_prevention_practices"
+    },
+    {
+      "kp": "py.mem.leak_debug",
+      "type": "multi_choice",
+      "question": "关于弱引用与强引用，下列说法正确的有？（多选）",
+      "options": [
+        "强引用会使对象保持存活",
+        "弱引用不阻止对象被回收",
+        "对象可能同时被多个强引用和弱引用指向",
+        "弱引用在对象被回收后仍然可以取回原对象"
+      ],
+      "answer": [
+        0,
+        1,
+        2
+      ],
+      "explanation": "强引用保活，弱引用不保活，两者可并存。对象被回收后，弱引用会失效（访问返回 None 或抛出异常），无法取回原对象。",
+      "error_tag": "边界错误",
+      "variant_group": "leak_weakref"
+    }
+  ]
+}

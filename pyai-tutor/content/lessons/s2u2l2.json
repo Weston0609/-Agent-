@@ -1,0 +1,638 @@
+{
+  "id": "s2u2l2",
+  "title": "s2u2l2",
+  "kps": [
+    "py.iter.generator",
+    "py.iter.yield"
+  ],
+  "theory": "## py.iter.generator\n\n# 迭代器与生成器（Iterator & Generator）\n\n> **一句话直觉**：想遍历一百万个数据又不想把内存撑爆？想让“产生数据”的代码和“消费数据”的代码解耦？迭代器（Iterator）和生成器（Generator）就是 Python 给出的答案——它们让数据“按需产出”，一次只算一个。\n\n---\n\n## 1. 为什么需要迭代器？（Iterable 和 Iterator）\n\n在 Python 里，`for x in obj:` 之所以能工作，是因为 `obj` 是**可迭代对象**（Iterable）。它承诺自己能被遍历。\n\n- **可迭代对象（Iterable）**：实现了 `__iter__()`，返回一个迭代器。列表、元组、字典、字符串、文件都是。\n- **迭代器（Iterator）**：同时实现了 `__iter__()` 和 `__next__()`。每次调用 `__next__()` 返回下一个元素；耗尽后抛出 `StopIteration` 异常。\n\n关键区别：可迭代对象可以反复遍历（每次 `iter()` 拿新迭代器）；迭代器只能**遍历一次**，用完就“空”了。\n\n```python\n# 演示：可迭代对象 vs 迭代器\nnums = [1, 2, 3]          # 列表：可迭代\nit = iter(nums)            # 拿到一个迭代器\n\nprint(next(it))  # 1\nprint(next(it))  # 2\nprint(next(it))  # 3\n# print(next(it))  # 再调用会抛 StopIteration\n\n# 对同一个迭代器再次 for 循环，会发现它已经空了\nprint(list(it))            # [] （已被耗尽）\nprint(list(nums))          # [1, 2, 3] （原列表还能再遍历）\n```\n\n> **工程意义**：所有 `for` 循环、`sum()`、`list()`、`max()`、`zip()`、`enumerate()` 底层都在用这套协议。理解协议 = 理解 Python 数据流的骨架。\n\n---\n\n## 2. 手写一个迭代器：理解 `__iter__` 和 `__next__`\n\n自定义迭代器最直观的方式是写一个类。下面实现一个倒计时迭代器：\n\n```python\nclass Countdown:\n    \"\"\"从 n 倒数到 1 的迭代器\"\"\"\n    def __init__(self, n):\n        self.n = n\n\n    def __iter__(self):\n        return self          # 迭代器返回自身\n\n    def __next__(self):\n        if self.n <= 0:\n            raise StopIteration  # 明确的结束信号\n        self.n -= 1\n        return self.n + 1\n\nfor x in Countdown(3):\n    print(x)   # 3, 2, 1\n```\n\n两个要点：\n\n1. `__iter__` 必须返回一个迭代器（通常就是 `self`）。\n2. `__next__` 用 `raise StopIteration` 表示结束，而不是返回 `None`——这是 Python 协议硬性规定。\n\n写类能让我们看清协议，但每次都这么写太啰嗦。于是有了生成器。\n\n---\n\n## 3. 生成器（Generator）：用 `yield` 写迭代器\n\n**生成器（Generator）** 是一种用函数语法写出来的迭代器：函数里出现 `yield`，调用它就不再执行函数体，而是返回一个生成器对象。\n\n```python\ndef countdown(n):\n    while n > 0:\n        yield n     # 交出值并暂停，下次 next() 从这里继续\n        n -= 1\n\nfor x in countdown(3):\n    print(x)\n```\n\n执行流程：\n\n- 调用 `countdown(3)` **不会**执行函数体，只创建生成器对象。\n- 每次 `next()` 执行到 `yield n` 就“暂停”，把 `n` 交给调用者，并保存全部局部状态（比如 `n` 的值）。\n- 下一次 `next()` 从暂停处恢复，直到再次 `yield` 或函数返回。函数返回时自动抛 `StopIteration`。\n\n**这就是惰性（lazy）计算**：`countdown(10**9)` 几乎不占内存，因为它一次只产生一个数。\n\n```python\n# 生成器表达式：把列表推导式的 [] 换成 ()\nsq = (i * i for i in range(5))\nprint(list(sq))   # [0, 1, 4, 9, 16]\n\n# 大文件惰性读取（比 readlines 更省内存）\ndef read_lines(path):\n    with open(path, encoding='utf-8') as f:\n        for line in f:\n            yield line.rstrip('\\n')\n```\n\n> **类型标注**：生成器函数的返回类型是 `Iterator[T]`（来自 `collections.abc`），形如 `def countdown(n: int) -> Iterator[int]: ...`。`typing.Iterator`/`typing.Generator` 自 Python 3.9 起已成为 `collections.abc` 中同名类的**弃用别名**，新代码应直接从 `collections.abc` 导入。\n\n---\n\n## 4. `yield` 的进阶用法：`send()`、`throw()` 与双向通信\n\n生成器不只是“产出”，还能“接收”。`yield` 是一个表达式，可以让调用者把值送回生成器内部。\n\n```python\ndef echo():\n    \"\"\"把收到的值原样返回；收到 None 就结束\"\"\"\n    while True:\n        received = yield              # yield 有返回值\n        if received is None:\n            return\n        yield received.upper()\n\ng = echo()\nnext(g)                # 先推进到第一个 yield（预热）\nprint(g.send('hi'))    # 'HI'\nprint(g.send('bye'))   # 'BYE'\n```\n\n要点：\n\n- `send(x)` 把 `x` 作为上一个 `yield` 表达式的值传回去，并推进到下一个 `yield`。\n- 第一次必须用 `next(g)` 或 `g.send(None)` 预热，否则报 `TypeError`。\n- 生成器还有 `throw()` 线程异常进入体内，`close()` 抛 `GeneratorExit` 终止它，`return` 值则封装在 `StopIteration.value` 里。\n\n这在协程（coroutine）、管道（pipeline）场景中非常有用：多个生成器可以串成数据处理流水线。\n\n---\n\n## 5. 工程实践：惰性管道与内存对比\n\n下面用生成器搭一条“读入 → 过滤 → 变换 → 汇总”的惰性管道：\n\n```python\nfrom collections.abc import Iterator\n\ndef numbers(n: int) -> Iterator[int]:\n    for i in range(n):\n        yield i\n\ndef only_even(it: Iterator[int]) -> Iterator[int]:\n    for x in it:\n        if x % 2 == 0:\n            yield x\n\ndef squared(it: Iterator[int]) -> Iterator[int]:\n    for x in it:\n        yield x * x\n\npipeline = squared(only_even(numbers(10)))\nprint(sum(pipeline))   # 0+4+16+36+64 = 120\n```\n\n- **惰性**：一次只处理一个元素，内存和时间都按需分摊。\n- **可组合**：每个生成器职责单一，通过参数拼接。\n- **易测试**：每个函数都能单独验证。\n\n如果换成一亿条记录，`list()` 版本会先吃光内存，生成器版本则坚如磐石。这就是“工程级”和“玩具级”的分界线。\n\n---\n\n## 动手练习\n\n**任务**：写一个生成器函数 `take(n, it)`，从任意迭代器 `it` 中**惰性**取出前 `n` 个元素。要求：当 `it` 元素不足 `n` 时，能优雅返回、不报错；并用它配合无限生成器验证。\n\n```python\nfrom collections.abc import Iterator\nfrom itertools import count   # 无限迭代器\n\ndef take(n: int, it: Iterator) -> Iterator:\n    # TODO: 你的实现\n    ...\n\n# 期望：打印 0..4\nfor x in take(5, count()):\n    print(x)\n\n# 期望：只打印 0..2（超出部分自动停止）\nprint(list(take(10, iter([0, 1, 2]))))\n```\n\n**进阶（可选）**：把 `take` 改成支持负数 `n`（直接返回空生成器）；再写一个 `chunk(it, size)`，把迭代器按固定长度切成若干个 `tuple`。\n\n```python\n\"\"\"py.iter.generator 完整示例：惰性计数 + 管道组合\"\"\"\nfrom collections.abc import Iterator\nfrom itertools import count\n\n\ndef numbers(n: int) -> Iterator[int]:\n    \"\"\"生成 0..n-1\"\"\"\n    for i in range(n):\n        yield i\n\n\ndef only_even(it: Iterator[int]) -> Iterator[int]:\n    \"\"\"过滤偶数\"\"\"\n    for x in it:\n        if x % 2 == 0:\n            yield x\n\n\ndef squared(it: Iterator[int]) -> Iterator[int]:\n    \"\"\"对每个元素求平方\"\"\"\n    for x in it:\n        yield x * x\n\n\nif __name__ == '__main__':\n    # 惰性管道：numbers -> only_even -> squared\n    pipeline = squared(only_even(numbers(10)))\n    print('sum =', sum(pipeline))          # sum = 120\n\n    # 生成器表达式 + 无限迭代器切片\n    first_5_squares = (i * i for i in count())\n    print([next(first_5_squares) for _ in range(5)])   # [0, 1, 4, 9, 16]\n\n    # 与 next() 的默认值配合，安全消费\n    it = iter([1, 2])\n    print(next(it, None), next(it, None), next(it, None))  # 1 2 None\n```\n\n## py.iter.yield\n\n# py.iter.yield：让函数拥有“暂停键”的魔法\n\n## 一句话直觉\n\n`yield` 让你的函数可以“停在中途、记住现场、下次接着跑”，从而以极低的内存代价逐一产出数据流——这是 Python 迭代（iteration）与生成器（generator）体系的地基。\n\n---\n\n## 1. 从 for 循环说起：什么是可迭代对象？\n\n在 Python 里，能被 `for` 循环遍历的东西都叫 **可迭代对象（iterable）**。列表、字符串、字典、文件句柄都是。它们的共同点是：实现了 `__iter__()` 方法，返回一个 **迭代器（iterator）**。\n\n迭代器只有一个职责：每次调用 `__next__()`，吐出下一个元素；吐完了就抛出 `StopIteration`。\n\n```python\n# 一个手动实现的迭代器：从 0 数到 2\nclass CountToThree:\n    def __init__(self):\n        self.n = 0\n    def __iter__(self):\n        return self\n    def __next__(self):\n        if self.n >= 3:\n            raise StopIteration   # 关键：告诉 for 循环“没数据了”\n        self.n += 1\n        return self.n - 1\n\nfor x in CountToThree():\n    print(x)   # 输出 0 1 2\n```\n\n关键结论：**所有 `for` 循环的底层，都是 `__iter__` + `__next__` + `StopIteration` 这套协议。**\n\n---\n\n## 2. yield 登场：生成器函数\n\n手写迭代器太啰嗦。只要函数体里出现 `yield`，这个函数就自动变成 **生成器函数（generator function）**——调用它不会立刻执行，而是返回一个 **生成器（generator）** 对象，该对象天生就是迭代器。\n\n```python\ndef count_to_three():\n    yield 0\n    yield 1\n    yield 2\n\ng = count_to_three()\nprint(next(g))   # 0\nprint(next(g))   # 1\nprint(next(g))   # 2\n# next(g) 再来一次会抛 StopIteration\n\n# 也可以直接用 for 消费\nfor x in count_to_three():\n    print(x)\n```\n\n关键结论：**`yield` 不是“返回值”，而是“打个暂停点并把一个值送出去”。** 函数的状态（局部变量、执行位置）都被冻结保存。\n\n---\n\n## 3. 惰性求值：为什么它省内存？\n\n普通函数用 list 收集一万条数据，就要在内存里放一万条；生成器只保留“当前这一条”和函数的执行现场。这叫 **惰性求值（lazy evaluation）**。\n\n```python\nimport sys\n\ndef make_list(n):\n    return [i * i for i in range(n)]\n\ndef make_gen(n):\n    for i in range(n):\n        yield i * i\n\nlst = make_list(1_000_000)\ngen = make_gen(1_000_000)\nprint(sys.getsizeof(lst))   # 约 8 MB（每个 int 还要额外开销）\nprint(sys.getsizeof(gen))   # 约 200 字节，恒定\n```\n\n关键结论：**生成器以“时间换空间”——数据按需产生，而不是一次铺满。**\n\n---\n\n## 4. 无限序列 & 流水线：生成器的工程价值\n\n因为惰性，生成器可以表示无穷序列——只要没人消费到无限远，程序就不会爆炸。\n\n```python\ndef naturals():\n    n = 0\n    while True:\n        yield n\n        n += 1\n\n# 取前 5 个即可\nfrom itertools import islice\nprint(list(islice(naturals(), 5)))   # [0, 1, 2, 3, 4]\n```\n\n生成器还能像管道一样串联，每个阶段只处理一条数据，很适合读大文件、做 ETL、流式日志处理。\n\n```python\ndef read_lines(path):\n    with open(path) as f:\n        for line in f:      # 文件句柄本身就是迭代器\n            yield line.rstrip(\"\\n\")\n\ndef only_errors(lines):\n    for line in lines:\n        if \"ERROR\" in line:\n            yield line\n\n# 整条流水线不会把文件一次性载入内存\nfor line in only_errors(read_lines(\"app.log\")):\n    print(line)\n```\n\n关键结论：**生成器让“数据流”像 shell 管道一样可以组合，每个环节都惰性。**\n\n---\n\n## 5. yield 的双向能力：send / throw / close（进阶）\n\n`yield` 其实是一个“表达式”，不仅仅输出值，还能接收调用方用 `send()` 送进来的值。这让生成器变成 **协程（coroutine）** 的雏形——也是后来 `async/await` 的思想源头。\n\n```python\ndef accumulator():\n    total = 0\n    while True:\n        x = yield total   # yield 返回 send 进来的值\n        if x is None:\n            break\n        total += x\n\nacc = accumulator()\nnext(acc)          # 启动生成器，返回 0\nprint(acc.send(10))  # 10\nprint(acc.send(5))   # 15\n```\n\n关键结论：**`yield` 是双向通道：往外送值、往里收值；这也解释了为什么 `async def` 里 `await` 与 `yield` 能共存。**\n\n---\n\n## 常见误区速览\n\n- 以为调用生成器函数会立即执行：不会，只有第一次 `next()` 才启动。\n- 重复遍历同一个生成器对象：第二次 `for` 会直接结束（它已耗尽）。\n- `return x` 在生成器里不会作为值返回，而是作为 `StopIteration.value`。\n- 生成器里忘了 `try/finally`：消费中途 break 时清理逻辑可能不执行。\n\n```python\n\"\"\"\npy.iter.yield 综合示例：\n用生成器构建一个惰性日志处理流水线，并演示 send 双向通信。\n\"\"\"\nfrom itertools import islice\n\n# 1) 读取器：惰性逐行读（此处用字符串模拟文件内容）\ndef read_lines(text):\n    for line in text.splitlines():\n        yield line\n\n# 2) 过滤器：只保留包含 ERROR 的行\ndef only_errors(lines):\n    for line in lines:\n        if \"ERROR\" in line:\n            yield line\n\n# 3) 转换器：给每条日志加上行号\ndef with_index(lines, start=1):\n    for i, line in enumerate(lines, start):\n        yield f\"{i:03d}: {line}\"\n\nLOG = \"\"\"INFO boot ok\nERROR disk full\nWARN cpu high\nERROR network down\nINFO shutdown\n\"\"\"\n\npipeline = with_index(only_errors(read_lines(LOG)))\nfor out in pipeline:\n    print(out)\n\n# 4) 无限序列 + islice 只取前 5 个\ndef naturals():\n    n = 0\n    while True:\n        yield n\n        n += 1\n\nprint(list(islice(naturals(), 5)))\n\n# 5) send 双向通信：生成器作为累加器\ndef accumulator():\n    total = 0\n    while True:\n        x = yield total\n        if x is None:\n            break\n        total += x\n\nacc = accumulator()\nnext(acc)                  # 启动，返回初始 0\nprint(acc.send(10))        # 10\nprint(acc.send(5))         # 15\nacc.close()                # 显式关闭\n```\n",
+  "quiz": [
+    {
+      "kp": "py.iter.generator",
+      "type": "single_choice",
+      "question": "以下代码运行后输出什么？\n\ndef gen():\n    print(\"start\")\n    yield 1\n    print(\"middle\")\n    yield 2\n\ng = gen()\nprint(\"created\")\nnext(g)\nnext(g)",
+      "options": [
+        "created\\nstart\\nmiddle",
+        "start\\nmiddle\\ncreated",
+        "created\\nstart\\nmiddle\\n2",
+        "start\\ncreated\\nmiddle"
+      ],
+      "answer": 0,
+      "explanation": "调用生成器函数只创建生成器对象，函数体不会执行，所以先打印 created；每次 next() 才推进到下一个 yield，分别在两次 next 时打印 start 和 middle。第三次输出中的 2 不会出现，因为没有再 next。",
+      "error_tag": "生成器惰性执行误解",
+      "variant_group": "generator_lazy_execution"
+    },
+    {
+      "kp": "py.iter.generator",
+      "type": "single_choice",
+      "question": "下面关于生成器表达式 `(x*x for x in range(3))` 和列表推导式 `[x*x for x in range(3)]` 的说法，哪一个是正确的？",
+      "options": [
+        "生成器表达式会立即计算所有元素并保存在内存中",
+        "列表推导式返回迭代器，只能遍历一次",
+        "生成器表达式返回迭代器，按需产生元素",
+        "两者完全等价，只是括号不同"
+      ],
+      "answer": 2,
+      "explanation": "生成器表达式返回生成器对象，是惰性迭代器；列表推导式立即构建完整列表，可重复遍历。A、B 分别把两者的特性弄反，D 忽略了内存模型和可重复遍历性的差异。",
+      "error_tag": "生成器与列表推导式混淆",
+      "variant_group": "generator_vs_listcomp"
+    },
+    {
+      "kp": "py.iter.generator",
+      "type": "single_choice",
+      "question": "关于生成器与内存的关系，下面哪一项正确？",
+      "options": [
+        "生成器会一次性把所有数据装入内存，因此比列表省内存",
+        "生成器按需产生数据，适合处理大数据流，但不支持随机索引访问",
+        "生成器也是序列，支持 g[0] 这样的下标访问",
+        "生成器可以像列表一样反复遍历"
+      ],
+      "answer": 1,
+      "explanation": "生成器惰性求值，适合流式处理大数据，但不是序列，不支持下标访问，也不能重复遍历。A、C、D 分别混淆了内存模型、序列协议和一次性特性。",
+      "error_tag": "生成器特性理解错误",
+      "variant_group": "generator_properties"
+    },
+    {
+      "kp": "py.iter.generator",
+      "type": "single_choice",
+      "question": "下面哪个表达式返回的是生成器对象？",
+      "options": [
+        "[x for x in range(3)]",
+        "{x for x in range(3)}",
+        "(x for x in range(3))",
+        "tuple(x for x in range(3))"
+      ],
+      "answer": 2,
+      "explanation": "圆括号且不含额外函数调用的表达式是生成器表达式。方括号是列表推导式，花括号是集合推导式，tuple(...) 会消耗生成器并返回元组。",
+      "error_tag": "生成器表达式形式混淆",
+      "variant_group": "generator_expression"
+    },
+    {
+      "kp": "py.iter.generator",
+      "type": "single_choice",
+      "question": "执行下面代码会发生什么？\n\ndef gen():\n    yield 1\n    return\n    yield 2\n\ng = gen()\nprint(list(g))",
+      "options": [
+        "[1]",
+        "[1, 2]",
+        "[2]",
+        "报错"
+      ],
+      "answer": 0,
+      "explanation": "return 会结束生成器，其后的 yield 2 永远不会执行，因此只产出 1。return 在生成器中相当于抛出 StopIteration。",
+      "error_tag": "生成器中 return 语义误解",
+      "variant_group": "generator_return"
+    },
+    {
+      "kp": "py.iter.generator",
+      "type": "single_choice",
+      "question": "下面代码输出是什么？\n\ndef gen():\n    yield 1\n    yield 2\n\ng = gen()\nfor v in g:\n    print(v)\n    if v == 1:\n        g.close()",
+      "options": [
+        "1\\n2",
+        "1",
+        "2",
+        "报错"
+      ],
+      "answer": 1,
+      "explanation": "在循环中打印 1 后立刻 close 生成器，generator 被标记为耗尽，for 下一次取下一个值时抛 StopIteration，循环结束。因此只打印 1。",
+      "error_tag": "在迭代中关闭生成器行为不清",
+      "variant_group": "generator_close_in_loop"
+    },
+    {
+      "kp": "py.iter.generator",
+      "type": "single_choice",
+      "question": "关于生成器推导式中的 lambda 捕获变量，下面代码输出什么？\n\ndef gen():\n    for i in range(3):\n        yield lambda: i\n\nprint([f() for f in gen()])",
+      "options": [
+        "[0, 1, 2]",
+        "[2, 2, 2]",
+        "[0, 0, 0]",
+        "报错"
+      ],
+      "answer": 1,
+      "explanation": "生成器是惰性的，但 lambda 闭包捕获的是变量 i 本身。到列表推导式真正调用 lambda 时，生成器已经耗尽，i 的最终值为 2，因此三个函数都返回 2。",
+      "error_tag": "闭包与生成器惰性求值结合错误",
+      "variant_group": "generator_lambda_closure"
+    },
+    {
+      "kp": "py.iter.generator",
+      "type": "single_choice",
+      "question": "下面代码返回什么？\n\ndef gen():\n    yield 1\n    yield 2\n\ndef consume(g):\n    total = 0\n    for v in g:\n        total += v\n    return total\n\ng = gen()\nprint(consume(g), list(g))",
+      "options": [
+        "3 []",
+        "3 [1, 2]",
+        "0 [1, 2]",
+        "报错"
+      ],
+      "answer": 0,
+      "explanation": "consume(g) 迭代完生成器后已耗尽，所以后续 list(g) 为空。常见误解是生成器在传参后仍可重复使用。",
+      "error_tag": "生成器耗尽后再使用",
+      "variant_group": "generator_exhaustion_reuse"
+    },
+    {
+      "kp": "py.iter.generator",
+      "type": "single_choice",
+      "question": "要实现一个能无限产生斐波那契数列的函数，最适合哪种写法？",
+      "options": [
+        "返回一个预先生成的巨大列表",
+        "使用 while True 配合 yield",
+        "使用递归并缓存所有结果",
+        "使用全局变量数组保存所有项"
+      ],
+      "answer": 1,
+      "explanation": "生成器天然适合无限序列，while True 配合 yield 按需产出。预生成列表、全量缓存和全局数组都会无界占用内存，不适合无限序列。",
+      "error_tag": "生成器适用场景判断错误",
+      "variant_group": "generator_infinite_sequence"
+    },
+    {
+      "kp": "py.iter.generator",
+      "type": "single_choice",
+      "question": "下面哪种情况最适合使用生成器而不是返回列表？",
+      "options": [
+        "需要反复随机访问第 100 个元素",
+        "读取一个超大日志文件并逐行处理",
+        "需要对小规模数据多次排序",
+        "需要把结果缓存起来供多次遍历"
+      ],
+      "answer": 1,
+      "explanation": "逐行读取超大文件时，生成器可以按需处理而不把整个文件装入内存。需要随机访问、重复遍历或多次排序的场景通常应使用列表或其他可重复序列。",
+      "error_tag": "生成器适用场景选择错误",
+      "variant_group": "generator_use_case"
+    },
+    {
+      "kp": "py.iter.generator",
+      "type": "single_choice",
+      "question": "下面代码输出是什么？\n\ndef gen():\n    print(\"a\")\n    yield 1\n    print(\"b\")\n\ng = gen()\nprint(next(g, \"default\"))\nprint(next(g, \"default\"))\nprint(next(g, \"default\"))",
+      "options": [
+        "a\\n1\\nb\\ndefault\\ndefault",
+        "a\\n1\\nb\\ndefault",
+        "a\\n1\\nb\\n报错",
+        "default\\ndefault\\ndefault"
+      ],
+      "answer": 0,
+      "explanation": "第一次 next 触发 print(\"a\") 并返回 1；第二次 next 执行 print(\"b\") 后生成器结束，返回默认值 default；第三次生成器已耗尽，也返回默认值 default。",
+      "error_tag": "next 默认值与生成器结束交互理解错误",
+      "variant_group": "next_default_exhaustion"
+    },
+    {
+      "kp": "py.iter.generator",
+      "type": "single_choice",
+      "question": "关于 `send(None)` 与 `next(g)` 的关系，哪一项正确？",
+      "options": [
+        "send(None) 与 next(g) 等价，都用于启动或推进生成器",
+        "send(None) 会报错，因为 send 必须传非 None",
+        "next(g) 会给生成器发送 None，而 send(None) 不会",
+        "只有第一次启动前才能使用 send(None)"
+      ],
+      "answer": 0,
+      "explanation": "对于生成器，send(None) 与 next(g) 效果相同，都可以启动或推进生成器；send 传非 None 时要求生成器已启动（否则报 TypeError）。",
+      "error_tag": "send 与 next 关系混淆",
+      "variant_group": "send_next_equivalence"
+    },
+    {
+      "kp": "py.iter.generator",
+      "type": "single_choice",
+      "question": "执行下面代码会得到什么结果？\n\ndef gen():\n    yield 1\n    yield 2\n\ng = gen()\nprint(list(g))\nprint(list(g))",
+      "options": [
+        "[1, 2] 然后 [1, 2]",
+        "[1, 2] 然后 []",
+        "[] 然后 [1, 2]",
+        "报错，生成器不能转成列表"
+      ],
+      "answer": 1,
+      "explanation": "生成器是一次性迭代器，第一次 list(g) 耗尽后，第二次再迭代不会重新开始，因此得到空列表。常见误解是把它当成可重复遍历的容器。",
+      "error_tag": "生成器一次性耗尽",
+      "variant_group": "generator_exhaustion"
+    },
+    {
+      "kp": "py.iter.generator",
+      "type": "single_choice",
+      "question": "一个函数体里同时包含 `yield` 和 `return 5`，调用该函数时会发生什么？",
+      "options": [
+        "立即返回 5",
+        "抛出 SyntaxError",
+        "返回一个生成器对象",
+        "返回 None"
+      ],
+      "answer": 2,
+      "explanation": "只要函数体中出现 yield，它就是生成器函数，调用时返回生成器对象，不执行函数体；return 5 会在迭代结束后作为 StopIteration 的 value 传递，但调用本身不会立即返回 5。",
+      "error_tag": "生成器函数调用行为误解",
+      "variant_group": "generator_function_call"
+    },
+    {
+      "kp": "py.iter.generator",
+      "type": "single_choice",
+      "question": "下面代码输出是什么？\n\ndef gen():\n    for i in range(3):\n        yield i\n\ng = gen()\nprint(next(g))\nprint(next(g))\nprint(next(g))\nprint(next(g, \"end\"))",
+      "options": [
+        "0\\n1\\n2\\nend",
+        "0\\n1\\n2\\n报错 StopIteration",
+        "0\\n1\\n2\\nNone",
+        "1\\n2\\n3\\nend"
+      ],
+      "answer": 0,
+      "explanation": "前三次 next 取到 0、1、2，第四次生成器已耗尽，但 next 提供了默认值 \"end\"，所以返回默认值而不抛 StopIteration。若没有默认值则会抛 StopIteration。",
+      "error_tag": "next 默认值行为误解",
+      "variant_group": "next_default"
+    },
+    {
+      "kp": "py.iter.generator",
+      "type": "single_choice",
+      "question": "关于 `yield from` 的说法，下面哪一项最准确？",
+      "options": [
+        "它只能用于列表，不能用于生成器",
+        "它把子迭代器中的所有元素依次产出，并转发 send/throw",
+        "它等价于 `return`，会结束当前生成器",
+        "它只能出现在普通函数中，不能出现在生成器函数里"
+      ],
+      "answer": 1,
+      "explanation": "yield from 委托给子迭代器，逐个产出其元素，并且把 send/throw/close 转发给它，最终返回值成为 yield from 表达式的值。A、C、D 都是常见误解。",
+      "error_tag": "yield from 语义不清",
+      "variant_group": "yield_from_semantics"
+    },
+    {
+      "kp": "py.iter.generator",
+      "type": "single_choice",
+      "question": "下面代码运行结果是什么？\n\ndef gen():\n    x = yield 1\n    print(\"received\", x)\n\ng = gen()\nprint(next(g))\nprint(g.send(10))",
+      "options": [
+        "1\\nreceived 10\\nNone",
+        "received 10\\n1\\nNone",
+        "1\\nreceived None\\nNone",
+        "报错，send 不能用于刚创建的生成器"
+      ],
+      "answer": 0,
+      "explanation": "第一次 next 启动生成器并产出 1；send(10) 把 10 作为 yield 表达式的值赋给 x，打印 received 10，函数结束产出 StopIteration，因此第二次 print 显示 None。",
+      "error_tag": "send 与 next 配合理解错误",
+      "variant_group": "generator_send"
+    },
+    {
+      "kp": "py.iter.generator",
+      "type": "single_choice",
+      "question": "以下哪种写法能让函数体真正成为生成器函数？",
+      "options": [
+        "def f(): return 1",
+        "def f(): yield 1",
+        "def f(): print(1)",
+        "def f(): raise 1"
+      ],
+      "answer": 1,
+      "explanation": "函数体内出现 yield 才是生成器函数；只有 return、print 或 raise 的函数都是普通函数。",
+      "error_tag": "生成器函数定义条件不清",
+      "variant_group": "generator_definition"
+    },
+    {
+      "kp": "py.iter.generator",
+      "type": "single_choice",
+      "question": "生成器在 `for` 循环中迭代时，循环结束的典型内部信号是什么？",
+      "options": [
+        "返回 None",
+        "抛出 StopIteration",
+        "抛出 GeneratorExit",
+        "返回空列表"
+      ],
+      "answer": 1,
+      "explanation": "for 循环隐式调用 next()，当生成器耗尽时抛出 StopIteration，循环正常结束。None 是普通返回值，GeneratorExit 与关闭相关，空列表不是生成器迭代结束的信号。",
+      "error_tag": "迭代结束机制混淆",
+      "variant_group": "iteration_termination"
+    },
+    {
+      "kp": "py.iter.generator",
+      "type": "single_choice",
+      "question": "下面代码输出什么？\n\ndef gen():\n    try:\n        yield 1\n        yield 2\n    finally:\n        print(\"cleanup\")\n\ng = gen()\nprint(next(g))\ng.close()",
+      "options": [
+        "1\\ncleanup",
+        "1\\n2\\ncleanup",
+        "cleanup\\n1",
+        "1\\n报错"
+      ],
+      "answer": 0,
+      "explanation": "close() 会在生成器暂停处抛出 GeneratorExit，从而触发 finally 中的清理代码。由于此时只产出了 1，并未执行到 yield 2，所以只打印 1 和 cleanup。",
+      "error_tag": "生成器 close 与 finally 理解错误",
+      "variant_group": "generator_close"
+    },
+    {
+      "kp": "py.iter.yield",
+      "type": "single_choice",
+      "question": "关于包含 yield 的函数，下列说法正确的是？",
+      "options": [
+        "调用该函数会立即执行函数体并返回全部结果",
+        "调用该函数返回一个生成器对象，函数体在首次迭代时才执行",
+        "yield 只能出现在函数外部的模块层",
+        "含有 yield 的函数必须显式 return 一个列表"
+      ],
+      "answer": 1,
+      "explanation": "含 yield 的函数被调用时不会执行函数体，而是返回一个生成器对象；函数体在第一次请求下一个值（如 next() 或 for 迭代）时才开始执行，并在每个 yield 处暂停。",
+      "error_tag": "概念混淆",
+      "variant_group": "yield基本语义"
+    },
+    {
+      "kp": "py.iter.yield",
+      "type": "single_choice",
+      "question": "下面代码输出什么？\n\ndef g():\n    print('start')\n    yield 1\n    print('mid')\n    yield 2\n\ngen = g()\nprint('created')\nprint(next(gen))\nprint(next(gen))",
+      "options": [
+        "created\\nstart\\n1\\nmid\\n2",
+        "start\\ncreated\\n1\\nmid\\n2",
+        "created\\n1\\n2",
+        "start\\nmid\\n1\\n2\\ncreated"
+      ],
+      "answer": 0,
+      "explanation": "调用 g() 只创建生成器，不执行函数体，所以先打印 'created'。第一次 next() 才执行到第一个 yield，打印 'start' 并返回值 1；第二次 next() 从暂停处继续，打印 'mid' 并返回值 2。",
+      "error_tag": "执行顺序误判",
+      "variant_group": "yield执行时机"
+    },
+    {
+      "kp": "py.iter.yield",
+      "type": "multi_choice",
+      "question": "关于含 yield 的函数，下列哪些说法是正确的？（多选）",
+      "options": [
+        "该函数调用后返回生成器对象",
+        "函数体在第一次请求元素时才开始执行",
+        "生成器支持 send() 向其传值",
+        "生成器迭代耗尽后可以自动重新从头迭代",
+        "yield 表达式本身可以接收外部传入的值"
+      ],
+      "answer": [
+        0,
+        1,
+        2,
+        4
+      ],
+      "explanation": "A、B、C、E 都是生成器的正确特性。D 错误：生成器是单次迭代的，耗尽后再次迭代不会重新执行函数体，如需重复需重新调用函数或使用其他结构。",
+      "error_tag": "概念混淆",
+      "variant_group": "生成器特性"
+    },
+    {
+      "kp": "py.iter.yield",
+      "type": "multi_choice",
+      "question": "下列哪些场景适合用生成器而不是列表？（多选）",
+      "options": [
+        "流式读取日志文件并逐行做过滤",
+        "生成一个有限的斐波那契数列并立即对整个序列排序",
+        "实现一个无限递增的计数器，只在需要时取前几个值",
+        "需要多次随机访问结果集合中的任意位置",
+        "用处理管道逐个转换数据项以避免中间列表"
+      ],
+      "answer": [
+        0,
+        2,
+        4
+      ],
+      "explanation": "A、C、E 都只顺序消费数据，适合惰性生成。B、D 需要对全部元素进行排序或随机访问，必须物化为列表，不适合生成器。",
+      "error_tag": "场景误判",
+      "variant_group": "生成器适用场景"
+    },
+    {
+      "kp": "py.iter.yield",
+      "type": "multi_choice",
+      "question": "关于生成器的生命周期和异常处理，下列哪些说法正确？（多选）",
+      "options": [
+        "生成器耗尽后再 next() 会抛 StopIteration",
+        "for 循环会自动处理 StopIteration 并正常结束",
+        "生成器中的异常会传播给调用方",
+        "生成器内部的 yield 必须被 try/except 包裹",
+        "可以通过 throw() 向生成器内部注入异常"
+      ],
+      "answer": [
+        0,
+        1,
+        2,
+        4
+      ],
+      "explanation": "A、B、C、E 正确。D 错误：yield 不需要强制用 try/except 包裹，是否捕获取决于业务需要（如清理资源时常用 try/finally）。",
+      "error_tag": "概念混淆",
+      "variant_group": "生成器异常"
+    },
+    {
+      "kp": "py.iter.yield",
+      "type": "multi_choice",
+      "question": "下面代码中，哪些说法是正确的？（多选）\n\ndef g():\n    try:\n        yield 1\n        yield 2\n    finally:\n        print('cleanup')",
+      "options": [
+        "正常迭代完两个值后会打印 'cleanup'",
+        "在第一次 yield 后调用 gen.close() 会打印 'cleanup'",
+        "生成器完全耗尽时 finally 一定会执行",
+        "如果外部通过 throw() 注入异常且未被捕获，finally 也会执行",
+        "close() 不会触发 finally"
+      ],
+      "answer": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "explanation": "finally 在生成器正常耗尽、被 close() 关闭、或被注入未捕获异常时都会执行，因此 A、B、C、D 都正确，E 错误。",
+      "error_tag": "概念混淆",
+      "variant_group": "生成器关闭"
+    },
+    {
+      "kp": "py.iter.yield",
+      "type": "fill_blank",
+      "question": "请补全代码，使 limit 生成器依次产出 0,1,2,...,n-1：\n\ndef limit(n):\n    for i in range(n):\n        ______ i",
+      "options": [],
+      "answer": [
+        "yield",
+        "yield "
+      ],
+      "explanation": "在循环中通过 yield i 逐个产出值，函数即成为生成器函数，调用它返回生成器对象。",
+      "error_tag": "记忆缺失",
+      "variant_group": "yield基本语法"
+    },
+    {
+      "kp": "py.iter.yield",
+      "type": "fill_blank",
+      "question": "下面函数期望每次收到外部传入的值并回显。请填空使代码正确：\n\ndef echo():\n    while True:\n        v = ______\n        print(v)\n\ngen = echo()\nnext(gen)\ngen.send('hello')",
+      "options": [],
+      "answer": [
+        "yield",
+        "yield ",
+        "(yield)"
+      ],
+      "explanation": "yield 是表达式，可以出现在赋值右侧。第一次 next(gen) 启动生成器并推进到 yield；之后 send('hello') 使 yield 表达式返回 'hello'，赋给 v 并打印出来。",
+      "error_tag": "记忆缺失",
+      "variant_group": "send与yield表达式"
+    },
+    {
+      "kp": "py.iter.yield",
+      "type": "fill_blank",
+      "question": "生成器产出的是一个序列中的元素，若要把它一次性收集为列表，可以写成 list(gen)。若要获取下一个元素但避免抛出 StopIteration，可以使用内置函数 ________(gen, None)。",
+      "options": [],
+      "answer": [
+        "next",
+        "next "
+      ],
+      "explanation": "next(gen, default) 在生成器耗尽时返回 default 而不抛异常。这里 next(gen, None) 会在耗尽时返回 None。",
+      "error_tag": "记忆缺失",
+      "variant_group": "生成器取值"
+    },
+    {
+      "kp": "py.iter.yield",
+      "type": "code_reading",
+      "question": "阅读代码，写出运行输出：\n\ndef g():\n    print('A')\n    yield 1\n    print('B')\n    return\n    yield 2\n\nfor x in g():\n    print('got', x)",
+      "options": [],
+      "answer": "A\\ngot 1\\nB",
+      "explanation": "迭代开始：打印 A 并产出 1，for 接收到 1 后打印 'got 1'。再次请求下一个值时，从 yield 1 后继续打印 B，遇到 return 结束，return 之后的 yield 2 永远不会执行。for 捕获 StopIteration 后结束。",
+      "error_tag": "执行顺序误判",
+      "variant_group": "yield执行时机"
+    },
+    {
+      "kp": "py.iter.yield",
+      "type": "code_reading",
+      "question": "阅读代码，解释为什么输出是 6 而不是 3：\n\ndef gen_sum(nums):\n    total = 0\n    for n in nums:\n        total += n\n        yield total\n\ng = gen_sum([1, 2, 3])\nprint(next(g))\nprint(next(g))\nprint(next(g))\n\n# 期望输出？",
+      "options": [],
+      "answer": "输出依次为 1\\n3\\n6。因为每次 yield 都把当前累加的 total 返回，total 在生成器内部持续保留，而不是每次从 0 重新开始。",
+      "explanation": "生成器暂停时会保留局部变量 total，所以每次 next 都在上次的累加基础上继续，得到前缀和 1、3、6。",
+      "error_tag": "概念混淆",
+      "variant_group": "生成器状态保持"
+    },
+    {
+      "kp": "py.iter.yield",
+      "type": "scenario",
+      "question": "你的服务需要处理一个可能 10GB 的日志文件，找出所有包含 ERROR 的行并统计出现次数。同事建议先 readlines() 把所有行读进列表再过滤。请说明你会如何用生成器改进，并说明理由。",
+      "options": [],
+      "answer": null,
+      "explanation": "答案应指出：用生成器逐行读取文件（如 for line in f，或封装为生成器函数 yield 过滤后的行），避免一次性把整个文件放入列表。生成器惰性、按需产出，内存占用接近常量，适合流式处理大文件；同时可把过滤和统计拆成可组合的生成器管道。",
+      "error_tag": "场景误判",
+      "variant_group": "生成器适用场景",
+      "required_keywords": [
+        "生成器",
+        "逐行读取",
+        "惰性求值",
+        "内存占用",
+        "流式处理"
+      ]
+    },
+    {
+      "kp": "py.iter.yield",
+      "type": "single_choice",
+      "question": "生成器执行到函数体末尾（没有更多 yield）后，再次调用 next() 会怎样？",
+      "options": [
+        "返回 None",
+        "重新从头开始执行",
+        "抛出 StopIteration 异常",
+        "返回最后一个 yield 的值"
+      ],
+      "answer": 2,
+      "explanation": "生成器耗尽后再调用 next() 会抛出 StopIteration。for 循环会自动捕获该异常并正常结束，因此手动循环时才会看到。",
+      "error_tag": "概念混淆",
+      "variant_group": "生成器耗尽"
+    },
+    {
+      "kp": "py.iter.yield",
+      "type": "scenario",
+      "question": "你实现了一个无限生成器 counter()，它会一直产出递增整数。现在测试发现遍历它会导致程序卡死。请分析原因，并给出两种安全使用这种无限生成器的方式。",
+      "options": [],
+      "answer": null,
+      "explanation": "无限生成器不会自然耗尽，for 循环永远不会结束。安全方式包括：在循环体内用条件 break（如取到 n 个后退出），或使用 itertools.islice 或手动调用 next() 限定次数，明确终止条件。",
+      "error_tag": "边界错误",
+      "variant_group": "无限生成器",
+      "required_keywords": [
+        "无限生成器",
+        "终止条件",
+        "break",
+        "itertools.islice",
+        "next"
+      ]
+    },
+    {
+      "kp": "py.iter.yield",
+      "type": "single_choice",
+      "question": "关于 yield 的返回值，下面说法正确的是？",
+      "options": [
+        "表达式 x = yield v 中，x 会得到调用方通过 send() 传入的值",
+        "yield 语句没有返回值，永远为 None",
+        "send() 可以用来向尚未启动的生成器传值，无需先 next()",
+        "yield 只能返回，不能接收值"
+      ],
+      "answer": 0,
+      "explanation": "yield 是一个表达式，它的值由外部通过 gen.send(value) 传入；但第一次启动生成器必须用 next() 或 send(None)，否则会报错。",
+      "error_tag": "概念混淆",
+      "variant_group": "send与yield表达式"
+    },
+    {
+      "kp": "py.iter.yield",
+      "type": "single_choice",
+      "question": "下面函数返回的生成器会产出什么？\n\ndef count(n):\n    i = 0\n    while i < n:\n        yield i\n        i += 1",
+      "options": [
+        "0 到 n 的整数（含 n）",
+        "0 到 n-1 的整数",
+        "1 到 n 的整数",
+        "无限循环的整数"
+      ],
+      "answer": 1,
+      "explanation": "循环条件为 i < n，当 i 达到 n 时不再进入循环，因此产出 0,1,...,n-1。",
+      "error_tag": "边界错误",
+      "variant_group": "生成器边界"
+    },
+    {
+      "kp": "py.iter.yield",
+      "type": "single_choice",
+      "question": "关于生成器的内存特性，下列描述正确的是？",
+      "options": [
+        "生成器在创建时就把所有结果计算并存入列表",
+        "生成器按需产生值，通常比一次性构建完整列表更省内存",
+        "生成器一旦迭代完还能再次完整迭代",
+        "生成器无法用 for 循环遍历"
+      ],
+      "answer": 1,
+      "explanation": "生成器是惰性求值，按需产出下一个值，不需要一次性保存全部结果，因此在大数据流处理中更省内存。耗尽后不能重用。",
+      "error_tag": "记忆缺失",
+      "variant_group": "生成器特性"
+    },
+    {
+      "kp": "py.iter.yield",
+      "type": "single_choice",
+      "question": "下面哪种写法可以正确地从一个列表推导式改成生成器表达式？",
+      "options": [
+        "把方括号换成圆括号：[x*2 for x in data] → (x*2 for x in data)",
+        "在推导式前加 yield：(yield x*2 for x in data)",
+        "把 for 去掉：[x*2]",
+        "使用 list(x*2 for x in data) 才叫生成器表达式"
+      ],
+      "answer": 0,
+      "explanation": "生成器表达式与列表推导式语法几乎相同，只需把方括号换成圆括号。list(...) 会把生成器重新物化成列表，失去惰性优势。",
+      "error_tag": "概念混淆",
+      "variant_group": "生成器表达式"
+    },
+    {
+      "kp": "py.iter.yield",
+      "type": "single_choice",
+      "question": "下列哪个场景最适合使用含 yield 的生成器？",
+      "options": [
+        "需要多次随机访问同一个结果集合的中间元素",
+        "需要多次遍历同一批数据并统计总数",
+        "逐行读取一个超大文件并逐条处理，内存有限",
+        "需要保证数据在所有线程间共享不可变"
+      ],
+      "answer": 2,
+      "explanation": "逐行处理大文件时，生成器每次只保留一行在内存中，避免把整个文件读入列表，非常适合内存受限的场景。",
+      "error_tag": "场景误判",
+      "variant_group": "生成器适用场景"
+    },
+    {
+      "kp": "py.iter.yield",
+      "type": "single_choice",
+      "question": "下面代码中，next(gen) 和 gen.send('x') 的效果分别是什么？\n\ndef echo():\n    while True:\n        received = yield\n        print('got', received)\n\ngen = echo()\nnext(gen)\ngen.send('x')",
+      "options": [
+        "都只是推进生成器，received 都是 None",
+        "next(gen) 让 received 得到 None，send('x') 让 received 得到 'x'",
+        "send('x') 会先重启生成器再打印 'x'",
+        "send('x') 等价于 next(gen)，忽略参数"
+      ],
+      "answer": 1,
+      "explanation": "首次 next(gen) 启动生成器并推进到 yield；之后 send('x') 会把 'x' 作为 yield 表达式的值赋给 received，因此打印 'got x'。",
+      "error_tag": "概念混淆",
+      "variant_group": "send与yield表达式"
+    },
+    {
+      "kp": "py.iter.yield",
+      "type": "single_choice",
+      "question": "关于生成器的 close() 与 GeneratorExit，下列说法正确的是？",
+      "options": [
+        "close() 会让生成器抛出 ValueError",
+        "close() 在生成器暂停处抛出 GeneratorExit，生成器可以捕获它做清理",
+        "close() 后会继续正常产出剩余元素",
+        "close() 只能对未启动的生成器调用"
+      ],
+      "answer": 1,
+      "explanation": "gen.close() 会在暂停点抛出 GeneratorExit，生成器可在 try/finally 中做资源清理；若生成器在收到 GeneratorExit 后又 yield，会触发 RuntimeError。",
+      "error_tag": "概念混淆",
+      "variant_group": "生成器关闭"
+    }
+  ]
+}

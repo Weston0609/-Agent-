@@ -1,0 +1,275 @@
+{
+  "id": "s7u2l6",
+  "title": "s7u2l6",
+  "kps": [
+    "agent.rag.graphrag",
+    "agent.rag.community_summary"
+  ],
+  "theory": "## agent.rag.graphrag\n\n# GraphRAG：向量检索答不了的那类问题\n\n> **一句话直觉**：向量 RAG 找的是「和问题长得像的段落」；但有一类问题，答案不在任何一段里，而是散落在几百段之间。GraphRAG 就是先把文档变成一张知识图谱，再在图上回答这类「全局性」问题。\n\n## 1. 向量 RAG 的失效边界\n\n先看两类问题：\n\n- **局部问题**：「退款政策里 7 天怎么算？」——答案就在某一段里，向量检索 + 重排就能解决。\n- **全局问题**：「这批用户反馈的主要痛点有哪几类？各自的代表案例是什么？」——答案不在任何一段，需要遍历整个语料做归纳。\n\n第二类问题向量 RAG 几乎必错：它只能召回 top-k 段，而 top-k 永远覆盖不了全局。你调大 k 只会让上下文塞满噪声。\n\n```python\n# 向量 RAG 的天然上限：召回池决定答案上限\ndocs = retriever.search(query, k=10)      # 只有这 10 段进模型\nanswer = llm(f\"根据以下资料回答：\\n{docs}\\n\\n问题：{query}\")\n# 如果答案需要 300 段才能归纳，这里永远答不对\n```\n\n## 2. GraphRAG 的三步\n\n**第一步：抽取实体与关系。** 用 LLM 逐块读文档，输出 `(实体, 关系, 实体)` 三元组，并记录每个实体出现在哪些块（用于溯源）。\n\n```python\nEXTRACT_PROMPT = \"\"\"从文本中抽取实体和关系，输出 JSON：\n{\"entities\": [{\"name\": \"...\", \"type\": \"人/组织/产品/概念\"}],\n \"relations\": [{\"source\": \"...\", \"target\": \"...\", \"description\": \"...\"}]}\n只输出 JSON。\"\"\"\n```\n\n**第二步：建图。** 实体去重（同名不同指的要做实体消解）、合并关系权重、写入图数据库。这一步是 `s5u2l5` 里 Neo4j + Cypher 的用武之地。\n\n**第三步：社区检测 + 摘要。** 用 Leiden 算法把图切成层次化的社区（cluster），对每个社区生成一段摘要。社区摘要才是「全局问题」的答案素材。\n\n```\n文档块 ──LLM抽取──► 实体/关系三元组 ──去重合并──► 图\n                                                    │\n                                                    ├─ Leiden 社区检测\n                                                    ├─ 每个社区 LLM 摘要\n                                                    └─ 摘要再向上聚合（层次化）\n```\n\n## 3. 两种检索模式\n\n| 模式 | 走哪条路 | 适合的问题 |\n| --- | --- | --- |\n| 局部检索（local search） | 实体定位 → 邻域子图 → 相关原文块 | 「X 和 Y 什么关系」 |\n| 全局检索（global search） | 社区摘要 → map-reduce 归纳 | 「整体有哪些主题」 |\n\n局部检索的流程值得细看：先用向量或关键词在实体名上找到入口实体，然后沿关系扩一跳或两跳拿到子图，再把子图里实体对应的原文块一起喂给 LLM。这比纯向量召回多了一个「关系」维度。\n\n## 4. 成本是 GraphRAG 的真正门槛\n\nGraphRAG 的索引成本远高于向量 RAG：\n\n- 每块文档要跑一次抽取 LLM 调用；\n- 每个社区要跑一次摘要调用（社区数可能上百）；\n- 图变了要重算社区摘要。\n\n一个粗略经验：**GraphRAG 的建索引成本是向量 RAG 的 10~100 倍**，而且对抽取质量极其敏感——抽取错了，整张图就是错的。所以它不适合「文档天天更新」的场景。\n\n## 5. 什么时候真的该上 GraphRAG\n\n三条判据，同时满足才考虑：\n\n1. 问题类型以**全局归纳、跨文档关系**为主，而不是「查某一段」。\n2. 语料**相对稳定**（季度级更新），能承受一次昂贵的索引。\n3. 有**明确的实体类型**（人/组织/产品/合同条款），抽取质量可控。\n\n如果只是「想更准一点」，正确做法是加 rerank、做 query 改写、调 chunk 策略——那些是几行代码的事，GraphRAG 是几十倍成本的事。\n\n## 小结\n\nGraphRAG 解决的是向量 RAG 的结构性盲区：全局性问题。它的核心产物不是图，而是**社区摘要**——把散落的实体关系压缩成可归纳的层次化文本。代价是索引成本极高，所以先确认问题真的需要它。\n\n## agent.rag.community_summary\n\n# 社区摘要：把一张图变成能读的层次结构\n\n> **一句话直觉**：图有几十万个节点，LLM 读不完。社区摘要做的事是「先分组、再总结、再往上总结」，最终得到一棵摘要树——全局问题从树的顶层回答，局部问题从叶子回答。\n\n## 1. 社区检测：Leiden 算法在做什么\n\n社区检测的目标是让「组内连接密集、组间连接稀疏」。Leiden 是 Louvain 的改进版，解决了两件事：保证社区内部连通、结果更稳定。\n\n```python\nimport igraph as ig\nimport leidenalg\n\ng = ig.Graph.from_networkx(nx_graph)\npartition = leidenalg.find_partition(\n    g, leidenalg.RBConfigurationVertexPartition,\n    resolution_parameter=1.0,     # 越大 → 社区越多越小\n)\n```\n\n`resolution_parameter` 是唯一需要调的旋钮：调大得到细粒度社区（适合细节问题），调小得到粗粒度社区（适合主题归纳）。\n\n## 2. 层次化摘要：为什么要分层\n\n单层摘要解决不了「这个语料整体讲了什么」——顶层需要一个更粗的视角。所以社区要建**层次**：\n\n```\nLevel 0：最小社区（5~20 个实体）→ 详细摘要\nLevel 1：合并若干 Level 0 社区 → 中层摘要\nLevel 2：再合并 → 主题级摘要\n```\n\n每一层都是对下一层摘要的再总结。用户问「整体主题」就只用 Level 2，问「某个模块的细节」就下沉到 Level 0。\n\n```python\ndef summarize_level(communities, prev_summaries):\n    return [llm(f\"以下是若干子主题摘要，请归纳成一段更高层的概述：\\n{s}\")\n            for s in batch(prev_summaries)]\n```\n\n## 3. 全局检索 = map-reduce\n\n拿到问题后，对每个相关社区摘要跑一次「map」（抽取与本问题相关的要点），再「reduce」成最终答案：\n\n```python\npoints = [llm(f\"问题：{q}\\n\\n从这段摘要中提取相关要点，无关就回 NONE：\\n{s}\")\n          for s in community_summaries]\npoints = [p for p in points if p != \"NONE\"]\nanswer = llm(f\"问题：{q}\\n\\n根据以下要点综合回答，并标注每个要点的来源：\\n{points}\")\n```\n\n这个模式的关键是**允许 map 阶段返回 NONE**。不给这个出口，模型会对每段摘要都硬凑出相关性，最后 reduce 出一堆噪声。\n\n## 4. 增量更新：GraphRAG 最疼的地方\n\n新文档进来后：\n\n- 新实体要抽取、合并进图；\n- 受影响的社区要重新检测（社区边界可能整体漂移）；\n- 受影响的社区摘要要重算，且要往上逐层重算。\n\n所以工程上通常的做法是**批量重建 + 版本化**：索引按批次做快照，查询时指定版本，避免新旧混杂。而不是「实时增量」。\n\n## 5. 成本控制的三条实践\n\n- **摘要长度要短**。社区摘要 200~500 字足够，太长会让 map-reduce 的成本失控。\n- **社区数量要卡上限**。只对规模 Top-N 的社区生成摘要，小社区合并进父级。\n- **缓存 map 结果**。同一问题类型下社区摘要的 map 结果可复用。\n\n## 6. 别把它当默认方案\n\n社区摘要适合：整本文档的主题归纳、大规模反馈的分类梳理、跨文档的人物/事件关系梳理。\n\n不适合：单文档问答、需要精确引用原文条款的场景（摘要已经损失了原文细节）、文档高频更新的场景。\n\n一句话判断标准：**如果用户的问题是「有哪些类别/主题/关系」，用社区摘要；如果问题是「第几条怎么写的」，用原文检索。**\n\n## 小结\n\n社区摘要把图压缩成一棵可读的摘要树：Leiden 分组、逐层归纳、map-reduce 回答全局问题。它的价值在于覆盖「向量检索永远够不到的全局视角」，代价是索引成本与更新复杂度。\n",
+  "quiz": [
+    {
+      "kp": "agent.rag.graphrag",
+      "type": "single_choice",
+      "question": "向量 RAG 在以下哪类问题上会系统性失效？",
+      "options": [
+        "答案明确写在某一段里的细节问题",
+        "需要遍历整个语料做归纳的全局性问题",
+        "术语解释类问题",
+        "单文档的事实查询"
+      ],
+      "answer": 1,
+      "explanation": "top-k 召回永远覆盖不了全局，调大 k 只会引入噪声；全局归纳需要图/社区摘要。",
+      "error_tag": "边界错误",
+      "variant_group": "graphrag_global_limit"
+    },
+    {
+      "kp": "agent.rag.graphrag",
+      "type": "single_choice",
+      "question": "GraphRAG 建索引的三个核心步骤顺序是？",
+      "options": [
+        "社区检测 → 实体抽取 → 建图",
+        "实体关系抽取 → 建图 → 社区检测与摘要",
+        "向量化 → 建图 → 重排",
+        "建图 → 向量化 → 摘要"
+      ],
+      "answer": 1,
+      "explanation": "先抽实体关系，写入图库，再做社区检测并对社区生成摘要。",
+      "error_tag": "流程错误",
+      "variant_group": "graphrag_pipeline_order"
+    },
+    {
+      "kp": "agent.rag.graphrag",
+      "type": "single_choice",
+      "question": "「X 和 Y 是什么关系」这类问题，GraphRAG 应该走哪条检索路径？",
+      "options": [
+        "全局检索，遍历所有社区摘要",
+        "局部检索：定位入口实体 → 邻域子图 → 相关原文块",
+        "只做向量相似度检索",
+        "直接让 LLM 自由回答"
+      ],
+      "answer": 1,
+      "explanation": "关系类问题用局部检索沿图扩一跳两跳，比纯向量召回多一个关系维度。",
+      "error_tag": "选型错误",
+      "variant_group": "graphrag_local_search"
+    },
+    {
+      "kp": "agent.rag.graphrag",
+      "type": "single_choice",
+      "question": "GraphRAG 相比向量 RAG 的主要成本差异是？",
+      "options": [
+        "几乎没有差异",
+        "索引阶段要为每块文档跑抽取、为每个社区跑摘要，成本高 10~100 倍",
+        "查询阶段贵，索引阶段便宜",
+        "只多了一次向量化"
+      ],
+      "answer": 1,
+      "explanation": "抽取 + 社区摘要都是 LLM 调用，规模是文档块数加社区数。",
+      "error_tag": "工程实践缺失",
+      "variant_group": "graphrag_cost"
+    },
+    {
+      "kp": "agent.rag.graphrag",
+      "type": "single_choice",
+      "question": "以下哪种场景最不适合上 GraphRAG？",
+      "options": [
+        "季度更新的内部制度文档，需要回答「整体有哪些规定类别」",
+        "每天新增上万条用户反馈，需要实时问答",
+        "稳定语料的人物关系梳理",
+        "跨文档的合同条款关联分析"
+      ],
+      "answer": 1,
+      "explanation": "高频更新会让社区边界漂移、摘要反复重算，索引成本与更新复杂度都不可接受。",
+      "error_tag": "边界错误",
+      "variant_group": "graphrag_not_suitable"
+    },
+    {
+      "kp": "agent.rag.graphrag",
+      "type": "multi_choice",
+      "question": "关于 GraphRAG 的适用判据，以下正确的有哪些？（多选）",
+      "options": [
+        "问题类型以全局归纳、跨文档关系为主",
+        "语料相对稳定，能承受一次昂贵索引",
+        "有明确的实体类型，抽取质量可控",
+        "只要想「更准一点」就应该换 GraphRAG",
+        "抽取质量差也没关系，图会自动纠错"
+      ],
+      "answer": [0, 1, 2],
+      "explanation": "GraphRAG 有明确适用边界；抽取错了整张图就是错的，不会自愈。",
+      "error_tag": "概念混淆",
+      "variant_group": "graphrag_when"
+    },
+    {
+      "kp": "agent.rag.graphrag",
+      "type": "fill_blank",
+      "question": "GraphRAG 建图时，用 LLM 从文档块中抽取的基本单元是 (实体, ______, 实体) 三元组。",
+      "options": [],
+      "answer": ["关系", "relation", "relations"],
+      "explanation": "三元组由头实体、关系、尾实体构成，是知识图谱的最小结构。",
+      "error_tag": "记忆缺失",
+      "variant_group": "graphrag_triple"
+    },
+    {
+      "kp": "agent.rag.graphrag",
+      "type": "fill_blank",
+      "question": "把图写入图数据库后，用 ______ 算法（Leiden/Louvain）把节点切成社区。",
+      "options": [],
+      "answer": ["Leiden", "leiden", "社区检测", "Louvain"],
+      "explanation": "社区检测把图切成组内密集、组间稀疏的子图，是生成摘要的前提。",
+      "error_tag": "记忆缺失",
+      "variant_group": "graphrag_leiden"
+    },
+    {
+      "kp": "agent.rag.graphrag",
+      "type": "code_reading",
+      "question": "以下抽取代码在真实语料上会出什么问题：\n\nfor chunk in chunks:\n    out = llm(f\"从这段文本抽取所有实体和关系，输出 JSON：{chunk}\")\n    graph.add(json.loads(out))",
+      "options": [],
+      "answer": "三个问题：一是没有做实体消解，同一个实体在不同块里写法不同（「阿里巴巴」「阿里」「Alibaba」）会变成三个节点，图被撕碎；二是 json.loads 没有容错，LLM 输出带 markdown 围栏或多余解释时直接抛异常；三是没有记录实体出现在哪个 chunk，导致后续无法溯源到原文。应加实体归一化、结构化输出约束（json schema / 修复解析）、以及 chunk_id 映射。",
+      "explanation": "实体消解与溯源映射是 GraphRAG 索引阶段的必做项，缺一个图就不可用。",
+      "error_tag": "工程实践缺失",
+      "variant_group": "graphrag_extract_pitfalls"
+    },
+    {
+      "kp": "agent.rag.graphrag",
+      "type": "scenario",
+      "question": "公司有一份 2000 页的行业研究报告，产品经理经常问「这份报告认为行业未来三年的主要驱动力有哪些」「A 公司和 B 公司在哪些领域有竞争」。现有向量 RAG 效果很差。请说明你会怎么改造，并给出成本预估的思路。",
+      "options": [],
+      "answer": null,
+      "explanation": "考查方案设计：全局问题→GraphRAG 社区摘要、关系问题→局部检索；语料稳定可承受一次性索引；成本按块数×抽取调用 + 社区数×摘要调用估算；同时保留向量检索处理细节引用类问题。",
+      "error_tag": "场景分析不足",
+      "variant_group": "graphrag_report_scenario",
+      "required_keywords": ["社区摘要", "实体", "关系", "局部检索", "成本", "稳定"]
+    },
+    {
+      "kp": "agent.rag.community_summary",
+      "type": "single_choice",
+      "question": "社区检测里 resolution_parameter 调大，结果是？",
+      "options": [
+        "社区数量变少、粒度变粗",
+        "社区数量变多、粒度变细",
+        "完全不影响结果",
+        "只影响摘要长度"
+      ],
+      "answer": 1,
+      "explanation": "resolution 越大越倾向切出更多更小的社区，适合细节问题；调小适合主题归纳。",
+      "error_tag": "概念混淆",
+      "variant_group": "community_resolution"
+    },
+    {
+      "kp": "agent.rag.community_summary",
+      "type": "single_choice",
+      "question": "为什么社区摘要要分层（Level 0/1/2）？",
+      "options": [
+        "为了节省存储",
+        "顶层视角回答「整体主题」，底层视角回答「局部细节」，单层无法兼顾",
+        "因为 LLM 只能读一层",
+        "分层能让成本降到零"
+      ],
+      "answer": 1,
+      "explanation": "全局问题用顶层粗粒度摘要，细节问题下沉到叶子社区，层次结构同时支持两种粒度。",
+      "error_tag": "原理不清",
+      "variant_group": "community_hierarchy"
+    },
+    {
+      "kp": "agent.rag.community_summary",
+      "type": "single_choice",
+      "question": "全局检索的 map 阶段为什么必须允许返回 NONE？",
+      "options": [
+        "为了减少 token 消耗",
+        "不给出口模型会对每段摘要都硬凑相关性，最终 reduce 出一堆噪声",
+        "因为 JSON 格式要求",
+        "为了让模型显得诚实"
+      ],
+      "answer": 1,
+      "explanation": "允许「无关」是 map-reduce 质量的关键，否则相关性判断会全面失真。",
+      "error_tag": "工程实践缺失",
+      "variant_group": "community_map_none"
+    },
+    {
+      "kp": "agent.rag.community_summary",
+      "type": "single_choice",
+      "question": "新文档持续进来时，社区摘要最实际的工程做法是？",
+      "options": [
+        "每次新文档都全量重算所有社区摘要",
+        "批量重建 + 版本化快照，查询时指定版本",
+        "永不更新摘要",
+        "只更新叶子社区，父级不更新"
+      ],
+      "answer": 1,
+      "explanation": "社区边界会整体漂移，父级也必须逐层重算；用批量快照避免新旧混杂。",
+      "error_tag": "工程实践缺失",
+      "variant_group": "community_incremental"
+    },
+    {
+      "kp": "agent.rag.community_summary",
+      "type": "single_choice",
+      "question": "以下哪类问题应该走原文检索而不是社区摘要？",
+      "options": [
+        "「这批反馈主要分成哪几类」",
+        "「合同第 7.2 条的具体表述是什么」",
+        "「整个语料的主题分布」",
+        "「行业未来三年的主要驱动力」"
+      ],
+      "answer": 1,
+      "explanation": "需要精确引用原文条款时必须回原文，摘要已损失细节。",
+      "error_tag": "选型错误",
+      "variant_group": "community_vs_raw"
+    },
+    {
+      "kp": "agent.rag.community_summary",
+      "type": "multi_choice",
+      "question": "社区摘要的成本控制实践有哪些？（多选）",
+      "options": [
+        "摘要控制在 200~500 字，避免 map-reduce 成本失控",
+        "只对规模 Top-N 的社区生成摘要，小社区合并进父级",
+        "缓存 map 阶段结果，同类问题复用",
+        "每个社区都生成上万字长摘要以保证信息完整",
+        "为每个社区都单独训练一个模型"
+      ],
+      "answer": [0, 1, 2],
+      "explanation": "摘要长度、社区数量、map 缓存是三个主要成本杠杆。",
+      "error_tag": "工程实践缺失",
+      "variant_group": "community_cost_control"
+    },
+    {
+      "kp": "agent.rag.community_summary",
+      "type": "fill_blank",
+      "question": "全局检索把「对每个社区摘要抽要点」与「汇总成答案」两步组合，这个模式叫 ______（map-reduce）。",
+      "options": [],
+      "answer": ["map-reduce", "mapreduce", "MapReduce", "map reduce"],
+      "explanation": "map 逐段抽取要点，reduce 综合成答案，是处理超长语料的通用范式。",
+      "error_tag": "记忆缺失",
+      "variant_group": "community_mapreduce"
+    },
+    {
+      "kp": "agent.rag.community_summary",
+      "type": "fill_blank",
+      "question": "社区检测常用的图聚类算法是 ______（Louvain 的改进版，保证社区内部连通）。",
+      "options": [],
+      "answer": ["Leiden", "leiden"],
+      "explanation": "Leiden 在 Louvain 基础上保证社区连通性，结果更稳定。",
+      "error_tag": "记忆缺失",
+      "variant_group": "community_leiden"
+    },
+    {
+      "kp": "agent.rag.community_summary",
+      "type": "code_reading",
+      "question": "以下全局检索实现有什么缺陷：\n\npoints = [llm(f\"从这段摘要提取与问题相关的要点：{q}\\n{s}\") for s in summaries]\nanswer = llm(f\"根据以下要点回答：{points}\")\nprint(answer)",
+      "options": [],
+      "answer": "没有允许 map 返回「无关」：每段摘要都会硬凑出要点，reduce 阶段被噪声淹没。也没有过滤空结果，points 里混入大量低质内容。应改为「无关请只回 NONE」，过滤后为空时直接回复「语料中没有相关信息」，并让 reduce 标注每个要点的来源社区以便追溯。",
+      "explanation": "缺少 NONE 出口是 map-reduce 全局检索最典型的实现缺陷。",
+      "error_tag": "边界错误",
+      "variant_group": "community_map_defect"
+    },
+    {
+      "kp": "agent.rag.community_summary",
+      "type": "scenario",
+      "question": "你要为一家电商做一个「用户反馈分析」系统：每月新增 5 万条评论，产品团队需要「本季度用户抱怨集中在哪几类问题、各自举例」。请说明你会怎么设计，以及为什么不直接用向量 RAG。",
+      "options": [],
+      "answer": null,
+      "explanation": "考查：全局归纳需求→社区摘要；月度批量重建而非实时增量；评论抽实体（产品/功能/问题类型）建图；分层摘要支持「整体分类」与「具体案例」；向量 RAG 只能召回 top-k，无法覆盖全局分布。",
+      "error_tag": "场景分析不足",
+      "variant_group": "community_feedback_scenario",
+      "required_keywords": ["社区摘要", "批量", "重建", "分类", "向量", "全局"]
+    }
+  ]
+}

@@ -1,0 +1,634 @@
+{
+  "id": "s8u1l3",
+  "title": "s8u1l3",
+  "kps": [
+    "arch.dist.ray",
+    "arch.dist.checkpoint"
+  ],
+  "theory": "## arch.dist.ray\n\n# 知识点：arch.dist.ray —— 用 Ray 做分布式 AI 计算的起点\\n\\n> **一句话直觉**：当你的一台机器已经喂不饱模型训练或数据处理时，Ray 让你用几乎不改代码的方式，把同样的 Python 函数分布到多台机器上跑。\\n\\n---\\n\\n## 1. 为什么需要 Ray？从单机瓶颈说起\\n\\n在 AI 工程里，我们经常会遇到三类瓶颈：\\n\\n1. **算力瓶颈**：一个模型训练要跑 20 小时，单机 GPU 不够。\\n2. **吞吐瓶颈**：要处理 1 亿张图片，单进程 `for` 循环太慢。\\n3. **资源异构**：有的任务要 GPU，有的只要 CPU，有的要大量内存。\\n\\n最原始的分布式（distributed）做法是写 `multiprocessing` 或手动起多台机器跑脚本，但很快就会遇到：任务调度、失败重试、跨机通信、资源分配这些重复造轮子的问题。\\n\\n**Ray** 是一个通用的分布式计算框架（distributed computing framework），它把这些基础设施封装好，让你继续用 Python 函数和类来写分布式程序。\\n\\n核心心智模型只有两个：\\n\\n- **Task（任务）**：把一个普通函数变成可以远程执行的函数。\\n- **Actor（演员/有状态进程）**：把一个普通类变成可以远程调用的、带状态的进程。\\n\\n---\\n\\n## 2. 最小可运行示例：把函数变成远程任务\\n\\nRay 的基本用法是：用 `@ray.remote` 装饰一个函数，调用时用 `.remote()`，取结果用 `ray.get()`。\\n\\n```python\\nimport ray\\n\\n# 初始化 Ray；本地单机也会启动一个本地集群（local cluster）\\nray.init()\\n\\n@ray.remote\\ndef square(x):\\n    # 这个函数会在 Ray 的 worker 进程里执行，而不是当前进程\\n    return x * x\\n\\n# 提交任务：立即返回一个 ObjectRef（对象引用），不阻塞\\nfutures = [square.remote(i) for i in range(5)]\\n\\n# 阻塞等待所有结果\\nresults = ray.get(futures)\\nprint(results)  # [0, 1, 4, 9, 16]\\n\\nray.shutdown()\\n```\\n\\n关键结论：\\n\\n- `@ray.remote` 把函数注册成远程任务。\\n- `.remote()` 是异步提交，返回 `ObjectRef`，不是结果本身。\\n- `ray.get()` 才会真正取值，并把结果从对象存储（object store）拉回本地。\\n\\n---\\n\\n## 3. 从任务到 Actor：需要状态时怎么办？\\n\\n如果每个任务都无状态，那用 Task 就够了。但很多 AI 场景需要**有状态**：比如一个参数服务器（parameter server）、一个环境模拟器、一个加载了大模型的推理服务。\\n\\n这时用 Actor：`@ray.remote` 装饰一个类，实例化后就是一个常驻的远程进程。\\n\\n```python\\nimport ray\\n\\nray.init()\\n\\n@ray.remote\\nclass Counter:\\n    def __init__(self):\\n        self.value = 0\\n\\n    def inc(self):\\n        self.value += 1\\n        return self.value\\n\\n# 创建 Actor 实例：会在某个 worker 进程里常驻\\nc = Counter.remote()\\n\\n# 连续调用，状态会保留\\nprint(ray.get(c.inc.remote()))  # 1\\nprint(ray.get(c.inc.remote()))  # 2\\n\\nray.shutdown()\\n```\\n\\n关键结论：\\n\\n- Actor 方法默认是**串行**执行的，适合维护状态一致性。\\n- Actor 可以指定资源，例如 `Counter.options(num_gpus=1).remote()`。\\n- Actor 的生命周期由 Ray 管理，可以通过 `ray.kill()` 或让它被垃圾回收。\\n\\n---\\n\\n## 4. 资源与调度：让任务跑到该去的地方\\n\\nRay 的调度器（scheduler）会根据资源声明把任务分配到合适的节点。你可以声明任务需要多少 CPU、GPU、内存。\\n\\n```python\\nimport ray\\n\\nray.init()\\n\\n@ray.remote(num_gpus=1)\\ndef train_step(data):\\n    # 这里假设内部会用到 GPU\\n    return sum(data)\\n\\n# 提交时 Ray 会找一个有空闲 GPU 的节点\\nfutures = [train_step.remote(list(range(10))) for _ in range(4)]\\nprint(ray.get(futures))\\n\\nray.shutdown()\\n```\\n\\n关键结论：\\n\\n- `num_gpus=1` 是**逻辑资源**，Ray 会按节点实际 GPU 数量调度。\\n- 资源不足时任务会排队，而不是直接失败。\\n- 可以用 `ray.nodes()` 查看集群节点和资源状态。\\n\\n---\\n\\n## 5. 从单机到集群：Ray 的扩展路径\\n\\n本地跑通后，扩展到集群通常只需要改 `ray.init()` 的地址：\\n\\n```python\\n# 本地\\n# ray.init()\\n\\n# 连接到已有集群（head 节点地址）\\n# ray.init(address=\\\"ray://<head-node-ip>:10001\\\")\\n```\\n\\nRay 集群一般由一个 **head node（头节点）** 和多个 **worker node（工作节点）** 组成。head 负责调度和元数据，worker 负责实际计算。\\n\\n关键结论：\\n\\n- 同一份代码，本地和集群可以复用。\\n- 生产环境常用 Ray Cluster Launcher 或 KubeRay 在 Kubernetes 上部署。\\n- Ray 生态里还有 Ray Train、Ray Tune、Ray Serve、Ray Data，分别解决训练、调参、推理服务、数据处理。\\n\\n---\\n\\n## 6. 一句话总结\\n\\nRay 用 `@ray.remote` 把普通 Python 函数和类变成分布式任务与 Actor，让你在单机和集群之间平滑迁移，是分布式 AI 工程的起点。\\n\\n---\\n\\n## 动手练习\\n\\n**任务**：在本机安装 Ray，写一个脚本，完成以下要求：\\n\\n1. 用 `@ray.remote` 定义一个函数 `fib(n)`，返回第 n 个斐波那契数。\\n2. 并发提交 `fib(30)`、`fib(31)`、`fib(32)` 三个任务。\\n3. 用 `ray.get()` 收集结果并打印。\\n4. 再用 `@ray.remote` 定义一个 Actor `Accumulator`，提供 `add(x)` 方法累加值，并打印连续三次调用后的累计结果。\\n\\n**提交物**：一个 `.py` 文件 + 运行输出截图或文本。\\n\\n**提示**：如果本机没有 GPU，练习中不需要声明 `num_gpus`。\\n\n\n## arch.dist.checkpoint\n\n# 分布式检查点（Distributed Checkpoint）：从零到工程实践\n\n## 一句话直觉\n\n在分布式训练（Distributed Training）中，模型和数据被拆到多张 GPU 上；**分布式检查点（Distributed Checkpoint）** 就是：在训练过程中，把“分散在各卡上的状态”安全、完整、可恢复地保存下来——像给整个训练过程拍一张“全局快照”。\n\n为什么必须学它？因为真实训练中停电、抢占、OOM（Out of Memory）、机器故障都会发生。没有可靠的 checkpoint，你可能会丢掉几天甚至几周的算力。\n\n---\n\n## 1. 什么是检查点（Checkpoint）？\n\n**检查点（Checkpoint）** 是训练过程中的“存档点”：把当前模型参数、优化器状态、学习率调度器状态、训练步数等信息保存到磁盘，以便之后恢复（Resume）。\n\n在单卡训练里，这很简单：\n\n```python\n# 单卡：保存和恢复非常简单\nimport torch\n\nmodel = torch.nn.Linear(10, 2)\noptimizer = torch.optim.SGD(model.parameters(), lr=0.1)\n\n# 保存\nckpt = {\n    \"model\": model.state_dict(),\n    \"optimizer\": optimizer.state_dict(),\n    \"step\": 100,\n}\ntorch.save(ckpt, \"single.pt\")\n\n# 恢复\nckpt = torch.load(\"single.pt\")\nmodel.load_state_dict(ckpt[\"model\"])\noptimizer.load_state_dict(ckpt[\"optimizer\"])\nstart_step = ckpt[\"step\"]\n```\n\n> 关键结论：Checkpoint 不只是“模型权重”，还包括**优化器状态**和**训练进度**。少了任何一项，恢复后训练行为都会变。\n\n---\n\n## 2. 分布式训练为什么让 Checkpoint 变难？\n\n分布式训练常见三种并行：\n\n- **数据并行（Data Parallel, DP）**：每张卡有一份完整模型副本，但梯度不同。\n- **张量并行（Tensor Parallel, TP）**：同一层的权重被切到不同卡上。\n- **流水线并行（Pipeline Parallel, PP）**：不同层放在不同卡上。\n\n当使用 TP/PP 时，**每张卡只持有模型的一部分**。如果只保存 rank0 的状态，恢复时模型就不完整。\n\n用一个最小例子感受“分片（Sharding）”：\n\n```python\n# 模拟：一个权重矩阵被切到 2 张卡上\nimport torch\n\nfull = torch.arange(12).reshape(4, 3)\n# 按行切分到 2 个 rank\nrank0 = full[:2]\nrank1 = full[2:]\n\nprint(\"rank0:\", rank0.tolist())\nprint(\"rank1:\", rank1.tolist())\n\n# 恢复时必须把两个 rank 的分片拼回去\nrestored = torch.cat([rank0, rank1], dim=0)\nassert torch.equal(restored, full)\n```\n\n> 关键结论：分布式 Checkpoint 的核心问题是 **分片状态如何被正确收集、命名、写入和重组**。\n\n---\n\n## 3. 两种主流策略：汇总保存 vs 分片保存\n\n### 3.1 汇总保存（Gather then Save）\n\n所有 rank 把张量发给 rank0，由 rank0 写一个完整文件。\n\n**优点**：格式简单，恢复容易。  \n**缺点**：rank0 内存/带宽成为瓶颈，大规模下容易 OOM。\n\n```python\n# 用 torch.distributed 模拟：把各 rank 的分片汇总到 rank0\nimport os\nimport torch\nimport torch.distributed as dist\n\n# 说明：需用 torchrun 启动，例如\n# torchrun --nproc_per_node=2 gather_save.py\ndist.init_process_group(\"gloo\")\nrank = dist.get_rank()\nworld_size = dist.get_world_size()\n\n# 每个 rank 本地有一个分片\nlocal_shard = torch.full((2, 3), float(rank))\n\n# 收集所有 rank 的分片\nif rank == 0:\n    gathered = [torch.empty_like(local_shard) for _ in range(world_size)]\nelse:\n    gathered = None\n\ndist.gather(local_shard, gather_list=gathered, dst=0)\n\nif rank == 0:\n    full = torch.cat(gathered, dim=0)\n    torch.save({\"weight\": full}, \"gathered.pt\")\n    print(\"saved on rank0:\", full.tolist())\n\ndist.destroy_process_group()\n```\n\n### 3.2 分片保存（Sharded Save）\n\n每个 rank 只写自己的分片，并附一个元数据（Metadata）文件描述如何重组。\n\n**优点**：可扩展，避免单点瓶颈。  \n**缺点**：恢复时要按元数据加载并拼接。\n\n```python\n# 分片保存：每个 rank 写自己的文件 + 一个 metadata\nimport os\nimport torch\nimport torch.distributed as dist\n\ndist.init_process_group(\"gloo\")\nrank = dist.get_rank()\nworld_size = dist.get_world_size()\n\nlocal_shard = torch.full((2, 3), float(rank))\nos.makedirs(\"sharded_ckpt\", exist_ok=True)\n\ntorch.save(local_shard, f\"sharded_ckpt/rank{rank}.pt\")\n\nif rank == 0:\n    meta = {\"world_size\": world_size, \"shape\": [2 * world_size, 3], \"dtype\": \"float32\"}\n    torch.save(meta, \"sharded_ckpt/meta.pt\")\n\ndist.barrier()\n\n# 恢复：每个 rank 读取自己的分片\nloaded = torch.load(f\"sharded_ckpt/rank{rank}.pt\")\nprint(f\"rank{rank} loaded:\", loaded.tolist())\n\ndist.destroy_process_group()\n```\n\n> 关键结论：**大规模训练优先用分片保存**；小规模或调试阶段可以用汇总保存。\n\n---\n\n## 4. 工程中最常用的方案：PyTorch DCP\n\nPyTorch 提供了 **分布式检查点（Distributed Checkpoint, DCP）**，即 `torch.distributed.checkpoint`，专门解决分片保存与恢复。\n\n核心 API：\n\n- `save(state_dict, checkpoint_id)`：保存\n- `load(state_dict, checkpoint_id)`：恢复\n- `StateDictOptions`：控制是否展平、是否只 rank0 加载等\n\n```python\n# PyTorch DCP 最小示例（需分布式环境，如 torchrun --nproc_per_node=2 dcp_demo.py）\nimport torch\nimport torch.distributed as dist\nimport torch.distributed.checkpoint as dcp\nfrom torch.distributed.checkpoint.state_dict import get_state_dict, set_state_dict\n\nmodel = torch.nn.Linear(4, 2)\noptim = torch.optim.Adam(model.parameters())\n\ndist.init_process_group(\"gloo\")\n\n# 1) 收集模型和优化器的 state_dict（DCP 友好）\nmodel_sd, optim_sd = get_state_dict(model, optim)\nstate = {\"model\": model_sd, \"optim\": optim_sd}\n\n# 2) 保存到目录（每个 rank 写自己的分片）\ndcp.save(state, checkpoint_id=\"dcp_ckpt\")\n\n# 3) 恢复：先构造同样结构的空 state_dict\nmodel_sd2, optim_sd2 = get_state_dict(model, optim)\nstate2 = {\"model\": model_sd2, \"optim\": optim_sd2}\ndcp.load(state2, checkpoint_id=\"dcp_ckpt\")\n\n# 4) 把加载后的 state 写回模型和优化器\nset_state_dict(model, optim, model_sd2, optim_sd2)\nprint(f\"rank{dist.get_rank()} loaded ok\")\n\ndist.destroy_process_group()\n```\n\n> 关键结论：DCP 把“分片、元数据、重组”都封装好了，是当前 PyTorch 工程中的首选。\n\n---\n\n## 5. 工程级注意事项\n\n1. **异步保存（Async Save）**：保存大模型可能阻塞训练。可以用后台线程或 DCP 的异步能力。\n2. **原子性（Atomicity）**：先写临时目录，再重命名，避免半写状态被当成有效 checkpoint。\n3. **版本兼容**：记录 PyTorch 版本、并行策略、词表大小等元数据。\n4. **保留策略**：只保留最近 N 个 + 最佳 N 个，避免磁盘爆满。\n5. **恢复一致性**：数据加载器的随机种子、采样进度也要一起保存。\n\n> 关键结论：Checkpoint 的目标不是“存下来”，而是“**任何时刻都能正确恢复并继续训练**”。\n\n---\n\n## 动手练习\n\n**任务**：用 `torchrun` 在 2 个进程上模拟一个分布式训练的分片保存与恢复。\n\n要求：\n\n1. 每个 rank 创建一个形状为 `(2, 3)` 的张量，内容为 `rank` 的值。\n2. 用“分片保存”写到 `./my_ckpt/rank{N}.pt`，并在 rank0 写 `meta.pt`。\n3. 再写一个 `load` 脚本，读取各 rank 分片并 `torch.cat` 成完整张量。\n4. 验证完整张量等于逐行拼接的期望结果。\n\n运行命令示例：\n\n```bash\ntorchrun --nproc_per_node=2 save_shards.py\ntorchrun --nproc_per_node=2 load_shards.py\n```\n\n进阶：把上面的例子改写成 `torch.distributed.checkpoint` 版本，对比代码量与可扩展性。\n",
+  "quiz": [
+    {
+      "kp": "arch.dist.ray",
+      "type": "single_choice",
+      "question": "在使用 Ray 构建分布式应用时，如果你希望一个函数能够在集群中的多个节点上并行执行，通常应该怎么做？",
+      "options": [
+        "直接调用该函数，Ray 会自动将其分发到集群节点",
+        "用 @ray.remote 装饰该函数，然后通过 .remote() 调用",
+        "将函数放入 multiprocessing.Pool 中执行",
+        "使用 threading.Thread 启动该函数"
+      ],
+      "answer": 1,
+      "explanation": "Ray 通过 @ray.remote 装饰器将普通函数转换为远程函数，调用时使用 .remote() 提交任务，由 Ray 调度到集群节点执行。直接调用不会分发；multiprocessing 和 threading 是单机并发方案，不涉及 Ray 的分布式调度。",
+      "error_tag": "概念混淆",
+      "variant_group": "ray_remote_basic"
+    },
+    {
+      "kp": "arch.dist.ray",
+      "type": "single_choice",
+      "question": "以下代码片段使用 Ray 执行任务：\n\nimport ray\nray.init()\n\n@ray.remote\ndef add(a, b):\n    return a + b\n\nresult = add.remote(1, 2)\nprint(result)\n\n输出 result 时得到的是什么？",
+      "options": [
+        "整数 3",
+        "一个 ObjectRef 对象，需要通过 ray.get() 获取实际结果",
+        "None",
+        "一个 Future 对象，可以直接用 await 获取结果"
+      ],
+      "answer": 1,
+      "explanation": "调用 .remote() 会立即返回一个 ObjectRef（对象引用），任务在后台异步执行。要获得实际返回值，必须使用 ray.get(result)。直接 print 只会显示 ObjectRef 的表示。",
+      "error_tag": "异步结果理解错误",
+      "variant_group": "ray_objectref"
+    },
+    {
+      "kp": "arch.dist.ray",
+      "type": "single_choice",
+      "question": "在 Ray 中，如何指定一个远程任务需要 2 个 CPU 和 1 个 GPU？",
+      "options": [
+        "@ray.remote(num_cpus=2, num_gpus=1)",
+        "@ray.remote(cpus=2, gpus=1)",
+        "@ray.resource(cpu=2, gpu=1)",
+        "在函数内调用 ray.request(cpu=2, gpu=1)"
+      ],
+      "answer": 0,
+      "explanation": "Ray 使用 @ray.remote(num_cpus=..., num_gpus=...) 来声明资源需求。参数名是 num_cpus 和 num_gpus，不是 cpus/gpus，也没有 ray.request 这样的函数。",
+      "error_tag": "API 误用",
+      "variant_group": "ray_resource"
+    },
+    {
+      "kp": "arch.dist.ray",
+      "type": "single_choice",
+      "question": "以下代码使用 Ray 并行计算：\n\n@ray.remote\ndef square(x):\n    return x * x\n\nrefs = [square.remote(i) for i in range(4)]\nprint(ray.get(refs))\n\n输出是什么？",
+      "options": [
+        "[0, 1, 4, 9]",
+        "[1, 4, 9, 16]",
+        "[0, 1, 2, 3]",
+        "[0, 2, 4, 6]"
+      ],
+      "answer": 0,
+      "explanation": "square(i) 计算 i 的平方，i 从 0 到 3，结果为 [0,1,4,9]。ray.get 接受一个 ObjectRef 列表，按顺序返回结果列表。",
+      "error_tag": "逻辑错误",
+      "variant_group": "ray_parallel_map"
+    },
+    {
+      "kp": "arch.dist.ray",
+      "type": "single_choice",
+      "question": "在 Ray 中，ray.get() 的阻塞行为是怎样的？",
+      "options": [
+        "ray.get() 是非阻塞的，立即返回",
+        "ray.get() 会阻塞直到所有请求的对象就绪，然后返回",
+        "ray.get() 会阻塞直到超时，超时后返回 None",
+        "ray.get() 只能获取一个对象，不能传入列表"
+      ],
+      "answer": 1,
+      "explanation": "ray.get 是阻塞调用，会等待直到传入的所有 ObjectRef 对应的对象都就绪，然后返回结果（单个值或列表）。它会一直等待，除非指定 timeout 参数。它也可以接受 ObjectRef 列表。",
+      "error_tag": "阻塞行为理解错误",
+      "variant_group": "ray_get_blocking"
+    },
+    {
+      "kp": "arch.dist.ray",
+      "type": "single_choice",
+      "question": "以下哪种做法可能导致 Ray 任务无法正确获取依赖结果？",
+      "options": [
+        "将 ObjectRef 作为参数传递给另一个远程函数",
+        "在远程函数内部对传入的 ObjectRef 再次调用 ray.get",
+        "使用 ray.get 获取最终结果",
+        "将多个 ObjectRef 放入列表一次性 ray.get"
+      ],
+      "answer": 1,
+      "explanation": "在远程函数内部对传入的 ObjectRef 再次调用 ray.get 通常不必要，而且可能因为对象不在本地而阻塞或引发问题。Ray 会自动解析作为参数传入的 ObjectRef。其他选项都是推荐做法。",
+      "error_tag": "依赖解析错误",
+      "variant_group": "ray_objectref_dep"
+    },
+    {
+      "kp": "arch.dist.ray",
+      "type": "single_choice",
+      "question": "关于 Ray 的放置组（placement group），以下描述正确的是？",
+      "options": [
+        "放置组用于将多个任务或 actor 按指定策略（如打包或分散）调度到同一组节点上",
+        "放置组用于对任务结果进行分组排序",
+        "放置组只能包含 actor，不能包含任务",
+        "放置组是一种序列化机制"
+      ],
+      "answer": 0,
+      "explanation": "放置组是 Ray 中用于原子性预留资源并按照指定策略（PACK、SPREAD、STRICT_PACK 等）调度任务和 actor 的机制，常用于需要协同调度的场景。它不负责结果排序或序列化，且可以包含任务和 actor。",
+      "error_tag": "概念混淆",
+      "variant_group": "ray_placement_group"
+    },
+    {
+      "kp": "arch.dist.ray",
+      "type": "single_choice",
+      "question": "以下代码中，remote 函数返回 ObjectRef，如果直接调用 len(result_ref) 会发生什么？\n\n@ray.remote\ndef get_list():\n    return [1, 2, 3]\n\nref = get_list.remote()\nprint(len(ref))",
+      "options": [
+        "输出 3",
+        "输出 0",
+        "抛出 TypeError，因为 ObjectRef 不支持 len()",
+        "输出 ObjectRef 的长度"
+      ],
+      "answer": 2,
+      "explanation": "ObjectRef 不是实际的列表，不支持 len() 操作。要获取列表长度，需要先 ray.get(ref) 得到实际列表。直接调用 len 会抛出 TypeError。",
+      "error_tag": "API 误用",
+      "variant_group": "ray_objectref_ops"
+    },
+    {
+      "kp": "arch.dist.ray",
+      "type": "single_choice",
+      "question": "在 Ray 中，如何优雅地关闭运行时并释放资源？",
+      "options": [
+        "调用 ray.shutdown()",
+        "调用 ray.stop()",
+        "直接退出 Python 解释器即可，无需任何操作",
+        "调用 ray.disconnect()"
+      ],
+      "answer": 0,
+      "explanation": "ray.shutdown() 用于断开当前进程与 Ray 集群的连接并释放相关资源。ray.stop() 和 ray.disconnect() 不是标准 API。虽然进程退出通常也会清理，但显式 shutdown 是推荐做法。",
+      "error_tag": "API 误用",
+      "variant_group": "ray_shutdown"
+    },
+    {
+      "kp": "arch.dist.ray",
+      "type": "single_choice",
+      "question": "假设你有一个 Ray actor，它的方法需要按顺序执行以保证状态一致性。以下哪种说法正确？",
+      "options": [
+        "同一个 actor 的方法调用默认按提交顺序串行执行",
+        "同一个 actor 的方法调用默认并行执行",
+        "必须显式加锁才能保证顺序",
+        "actor 方法调用没有顺序保证"
+      ],
+      "answer": 0,
+      "explanation": "Ray actor 的每个方法调用默认在同一个 actor 进程内按提交顺序串行执行，这保证了状态一致性。如果需要并发，可以使用 async actor 或 max_concurrency 参数。",
+      "error_tag": "并发理解错误",
+      "variant_group": "ray_actor_order"
+    },
+    {
+      "kp": "arch.dist.ray",
+      "type": "single_choice",
+      "question": "以下哪个不是 Ray 的典型应用场景？",
+      "options": [
+        "分布式模型训练",
+        "大规模数据预处理",
+        "强化学习中的并行环境采样",
+        "替代 Python 的 GIL 实现单线程加速"
+      ],
+      "answer": 3,
+      "explanation": "Ray 用于分布式计算，可以跨进程和节点并行，但它不是用来替代 GIL 或实现单线程加速的工具。分布式训练、数据预处理、强化学习采样都是 Ray 的典型场景。",
+      "error_tag": "概念混淆",
+      "variant_group": "ray_use_case"
+    },
+    {
+      "kp": "arch.dist.ray",
+      "type": "single_choice",
+      "question": "在 Ray 中，ray.wait() 的作用是什么？",
+      "options": [
+        "等待所有 ObjectRef 就绪后返回",
+        "等待部分 ObjectRef 就绪后返回，可指定 num_returns",
+        "等待集群启动",
+        "等待网络连接"
+      ],
+      "answer": 1,
+      "explanation": "ray.wait(refs, num_returns=n) 会等待直到有 n 个对象就绪，然后返回 (ready_refs, remaining_refs)。它允许部分等待，适合流式处理。ray.get 则是等待所有。",
+      "error_tag": "API 误用",
+      "variant_group": "ray_wait"
+    },
+    {
+      "kp": "arch.dist.ray",
+      "type": "single_choice",
+      "question": "在 Ray 中，以下哪种方式可以正确获取远程函数返回的实际结果？",
+      "options": [
+        "result.value()",
+        "result.get()",
+        "ray.get(result)",
+        "result.await()"
+      ],
+      "answer": 2,
+      "explanation": "Ray 使用 ray.get(object_ref) 来获取远程任务的结果。ObjectRef 本身没有 .value()、.get() 或 .await() 方法用于获取值（虽然某些版本可能有兼容接口，但标准方式是 ray.get）。",
+      "error_tag": "API 误用",
+      "variant_group": "ray_get"
+    },
+    {
+      "kp": "arch.dist.ray",
+      "type": "single_choice",
+      "question": "关于 Ray 的 actor，以下说法正确的是？",
+      "options": [
+        "Actor 是用 @ray.remote 装饰的类，其实例在集群中作为有状态的进程运行",
+        "Actor 只能用于无状态计算，不能保存成员变量",
+        "Actor 的每个方法调用都会创建一个新的进程",
+        "Actor 不能跨节点调度，只能在本地运行"
+      ],
+      "answer": 0,
+      "explanation": "Ray actor 是通过 @ray.remote 装饰的类，实例化后会在集群中某个节点上启动一个长期运行的进程，可以维护内部状态。方法调用通过 .remote() 提交，按顺序执行。Actor 可以有状态，也可以跨节点调度。",
+      "error_tag": "概念混淆",
+      "variant_group": "ray_actor"
+    },
+    {
+      "kp": "arch.dist.ray",
+      "type": "single_choice",
+      "question": "以下代码定义了一个 Ray actor：\n\n@ray.remote\nclass Counter:\n    def __init__(self):\n        self.n = 0\n    def inc(self):\n        self.n += 1\n        return self.n\n\ncounter = Counter.remote()\nfuture1 = counter.inc.remote()\nfuture2 = counter.inc.remote()\nprint(ray.get(future1), ray.get(future2))\n\n输出是什么？",
+      "options": [
+        "0 0",
+        "1 1",
+        "1 2",
+        "2 1"
+      ],
+      "answer": 2,
+      "explanation": "Actor 方法调用在同一个 actor 实例上按提交顺序串行执行，且共享状态。第一次 inc 后 n 变为 1，第二次变为 2，因此输出 1 2。每个调用不会重新初始化。",
+      "error_tag": "状态理解错误",
+      "variant_group": "ray_actor_state"
+    },
+    {
+      "kp": "arch.dist.ray",
+      "type": "single_choice",
+      "question": "在 Ray 中，ray.init() 的主要作用是什么？",
+      "options": [
+        "启动本地 Ray 运行时并连接到集群（或创建本地集群）",
+        "初始化一个 Python 虚拟环境",
+        "安装 Ray 的依赖包",
+        "编译 Ray 的 C++ 核心"
+      ],
+      "answer": 0,
+      "explanation": "ray.init() 用于启动 Ray 运行时。如果不指定地址，会在本地启动一个 Ray 集群；如果指定 address，则连接到已有集群。它不负责安装依赖、创建虚拟环境或编译代码。",
+      "error_tag": "概念混淆",
+      "variant_group": "ray_init"
+    },
+    {
+      "kp": "arch.dist.ray",
+      "type": "single_choice",
+      "question": "以下哪个场景最适合使用 Ray 的 actor 而不是远程函数？",
+      "options": [
+        "对一批图片进行无状态的预处理",
+        "训练一个需要维护优化器状态的模型，并在多轮迭代中更新参数",
+        "计算两个数的和",
+        "读取一个静态配置文件"
+      ],
+      "answer": 1,
+      "explanation": "Actor 适合需要维护内部状态、跨多次调用累积或更新状态的场景，例如参数服务器、模型训练中的优化器状态。无状态的一次性计算更适合普通远程函数。",
+      "error_tag": "选型错误",
+      "variant_group": "ray_actor_usage"
+    },
+    {
+      "kp": "arch.dist.ray",
+      "type": "single_choice",
+      "question": "Ray 中的 ObjectRef 代表什么？",
+      "options": [
+        "一个指向远程对象存储中对象的引用，可用于获取结果或作为参数传递",
+        "一个 Python 原生对象，可以直接修改其值",
+        "一个线程锁对象",
+        "一个文件描述符"
+      ],
+      "answer": 0,
+      "explanation": "ObjectRef 是 Ray 中指向分布式对象存储中对象的引用。它不能直接当作普通值使用，必须通过 ray.get 获取实际对象，但可以作为参数传递给其他远程任务，Ray 会自动解析依赖。",
+      "error_tag": "概念混淆",
+      "variant_group": "ray_objectref_def"
+    },
+    {
+      "kp": "arch.dist.ray",
+      "type": "single_choice",
+      "question": "如果在一个远程函数内部调用另一个远程函数并传入 ObjectRef 作为参数，Ray 会如何处理？",
+      "options": [
+        "报错，远程函数不能接受 ObjectRef 参数",
+        "自动将 ObjectRef 解析为实际值后再执行",
+        "将 ObjectRef 原样传入，函数内部需要手动调用 ray.get",
+        "忽略该参数"
+      ],
+      "answer": 1,
+      "explanation": "Ray 会自动解析作为参数传入的 ObjectRef，远程函数接收到的是实际值。这使得任务依赖可以自动构建 DAG，无需手动 ray.get。手动 ray.get 会阻塞，不推荐在远程函数内对参数使用。",
+      "error_tag": "依赖解析理解错误",
+      "variant_group": "ray_objectref_arg"
+    },
+    {
+      "kp": "arch.dist.ray",
+      "type": "single_choice",
+      "question": "以下关于 Ray 任务调度的说法，哪一项是正确的？",
+      "options": [
+        "Ray 总是将任务调度到提交任务的本地节点",
+        "Ray 根据资源需求和集群状态将任务调度到合适的节点",
+        "Ray 只能调度到有 GPU 的节点",
+        "Ray 不支持异构集群"
+      ],
+      "answer": 1,
+      "explanation": "Ray 的调度器会根据任务声明的资源需求（CPU、GPU、内存等）和集群各节点的可用资源，将任务调度到合适的节点。它支持异构集群和本地节点优先等策略，并非只能在本地或 GPU 节点运行。",
+      "error_tag": "调度理解错误",
+      "variant_group": "ray_scheduling"
+    },
+    {
+      "kp": "arch.dist.checkpoint",
+      "type": "single_choice",
+      "question": "在长时间训练的分布式任务中，进程可能因硬件故障而中断。关于「检查点（checkpoint）」的核心作用，下列说法最准确的是？",
+      "options": [
+        "检查点用于记录模型每一层的计算公式，便于调试前向传播",
+        "检查点把运行中的状态定期持久化到可靠存储，故障后可从最近状态恢复，避免从头重算",
+        "检查点只能保存模型的超参数，不能保存权重",
+        "检查点是为了在训练时加速反向传播而设计的缓存机制"
+      ],
+      "answer": 1,
+      "explanation": "检查点的本质是把易失的运行状态（如模型参数、优化器状态、当前步数等）周期性写入持久存储，使任务在中断后能从最近一次保存点续跑。它不记录公式、不只是超参数、也不等同于反向传播的激活缓存。",
+      "error_tag": "概念混淆",
+      "variant_group": "checkpoint-purpose"
+    },
+    {
+      "kp": "arch.dist.checkpoint",
+      "type": "single_choice",
+      "question": "某分布式训练任务每 30 分钟保存一次检查点，但某次在保存过程中进程被杀死，重启后加载该检查点报错。最可能的原因是？",
+      "options": [
+        "保存间隔太短，导致文件太多",
+        "保存没有采用「先写临时文件再原子替换」的方式，中断后留下的是不完整的半成品文件",
+        "检查点文件必须保存在本地磁盘，不能放共享存储",
+        "加载时需要同时加载所有历史检查点"
+      ],
+      "answer": 1,
+      "explanation": "如果在写入目标文件的过程中被中断，目标文件会处于截断或未写完的状态。常见做法是写入临时文件并 fsync，再原子地 rename 到最终路径，从而保证检查点要么完整要么不存在。保存间隔与文件数量、加载全部历史检查点都不是这里的根因。",
+      "error_tag": "边界错误",
+      "variant_group": "checkpoint-atomicity"
+    },
+    {
+      "kp": "arch.dist.checkpoint",
+      "type": "multi_choice",
+      "question": "以下哪些内容通常会被纳入一个「可完整续训」的检查点？（多选）",
+      "options": [
+        "模型参数（权重与偏置）",
+        "优化器状态（如动量等）",
+        "当前训练进度（步数 / epoch）",
+        "数据集的原始文件本身",
+        "学习率调度器的状态"
+      ],
+      "answer": [
+        0,
+        1,
+        2,
+        4
+      ],
+      "explanation": "完整续训通常需要模型参数、优化器状态、训练进度以及学习率调度器状态。数据集原始文件不属于运行状态，不会被打包进检查点。",
+      "error_tag": "记忆缺失",
+      "variant_group": "checkpoint-state-contents"
+    },
+    {
+      "kp": "arch.dist.checkpoint",
+      "type": "multi_choice",
+      "question": "设计检查点保存策略时，以下哪些是合理的考虑？（多选）",
+      "options": [
+        "保存间隔要权衡「重算损失」与「保存开销」",
+        "采用原子写入（先写临时文件再替换）以避免半成品文件",
+        "把检查点写到多个副本或可靠存储以提高可用性",
+        "保存间隔越短越好，完全不考虑 I/O 开销",
+        "保留一定数量的历史检查点以便回退"
+      ],
+      "answer": [
+        0,
+        1,
+        2,
+        4
+      ],
+      "explanation": "合理的策略要平衡重算与保存开销、保证写入原子性、提高存储可靠性并保留历史点。间隔越短越好的说法忽略了频繁写带来的 I/O 和存储压力，可能反而拖慢训练。",
+      "error_tag": "概念混淆",
+      "variant_group": "checkpoint-strategy"
+    },
+    {
+      "kp": "arch.dist.checkpoint",
+      "type": "multi_choice",
+      "question": "关于从检查点恢复时的「一致性」，下列说法正确的有？（多选）",
+      "options": [
+        "应确保所有进程加载到的是同一次保存的状态版本",
+        "如果部分进程加载旧版本、部分加载新版本，训练可能不正确",
+        "加载后通常需要一次同步，确保所有进程就绪后再继续",
+        "各进程可以随意加载不同的检查点文件而不影响结果"
+      ],
+      "answer": [
+        0,
+        1,
+        2
+      ],
+      "explanation": "分布式训练要求各进程基于同一份一致的全局状态继续，否则会出现参数/进度不一致。加载后同步可确保所有进程就绪。允许各进程加载不同检查点会破坏一致性。",
+      "error_tag": "边界错误",
+      "variant_group": "checkpoint-consistency"
+    },
+    {
+      "kp": "arch.dist.checkpoint",
+      "type": "fill_blank",
+      "question": "在保存检查点时，为避免进程在写入中途被中断而留下不完整文件，常见做法是先把内容写入一个 ______ 文件，写完并刷盘后再原子地重命名到最终路径。",
+      "options": [],
+      "answer": [
+        "临时",
+        "temp",
+        "临时文件",
+        "temporary"
+      ],
+      "explanation": "先写临时文件、再原子 rename，可保证目标路径上的检查点要么是旧的完整版本，要么是新的完整版本，不会出现半写状态。",
+      "error_tag": "记忆缺失",
+      "variant_group": "checkpoint-atomicity"
+    },
+    {
+      "kp": "arch.dist.checkpoint",
+      "type": "fill_blank",
+      "question": "在分布式训练中，为了避免多个进程同时写同一个检查点文件造成冲突，通常由 ______ 进程负责写出检查点（填一个常见的排名说法，如 rank 编号）。",
+      "options": [],
+      "answer": [
+        "主",
+        "rank 0",
+        "rank0",
+        "0",
+        "主进程",
+        "zero"
+      ],
+      "explanation": "常见模式是 rank 0（主进程）统一写出，其他进程等待并在写完后同步，从而避免并发写冲突。",
+      "error_tag": "概念混淆",
+      "variant_group": "checkpoint-coordination"
+    },
+    {
+      "kp": "arch.dist.checkpoint",
+      "type": "fill_blank",
+      "question": "为了让恢复训练后优化轨迹与中断前保持一致，除了模型权重外，检查点还应保存 ______ 的状态（填写你在课上讲到的、存储动量等信息的组件名称）。",
+      "options": [],
+      "answer": [
+        "优化器",
+        "optimizer",
+        "优化器状态"
+      ],
+      "explanation": "优化器为每个参数维护动量等状态，若不同时保存，恢复后更新规则会与原来不同，导致轨迹不连续。",
+      "error_tag": "记忆缺失",
+      "variant_group": "checkpoint-state-contents"
+    },
+    {
+      "kp": "arch.dist.checkpoint",
+      "type": "code_reading",
+      "question": "阅读下面的伪代码片段（用于说明保存流程），回答问题：这种写法想解决什么问题？\n\nsave_state(state):\n    write_all(tmp_path, state)\n    fsync(tmp_path)\n    rename(tmp_path, final_path)\n\n问题：与「直接 write_all(final_path, state)」相比，上面的写法关键优势是什么？",
+      "options": [],
+      "answer": "通过先写临时文件再原子 rename，保证 final_path 上要么是旧的完整检查点、要么是新的完整检查点，不会因中断而留下被截断的半成品文件；直接写 final_path 在中断时会留下不完整文件。",
+      "explanation": "rename 在同一文件系统内通常是原子的，因此能提供「全有或全无」的语义，这是检查点健壮性的关键。",
+      "error_tag": "概念混淆",
+      "variant_group": "checkpoint-atomicity"
+    },
+    {
+      "kp": "arch.dist.checkpoint",
+      "type": "code_reading",
+      "question": "阅读伪代码，回答问题：\n\ndef maybe_save(step, state, interval):\n    if step % interval == 0:\n        save(state)\n\n假设 interval=100，训练在第 250 步崩溃，最近一次成功保存发生在哪一步？恢复后会从哪一步继续？\n问题：分别给出「最近保存步」和「恢复起始步」。",
+      "options": [],
+      "answer": "最近保存发生在第 200 步；恢复后通常从第 200 步（或其后一步）继续，第 201~250 步的工作需要重算。",
+      "explanation": "在 step 为 100 的整数倍时保存，因此崩溃前最后保存点是 200。250 与 200 之间的进度未持久化，恢复时需重算这段。",
+      "error_tag": "边界错误",
+      "variant_group": "checkpoint-recovery-cost"
+    },
+    {
+      "kp": "arch.dist.checkpoint",
+      "type": "scenario",
+      "question": "团队的大模型训练任务运行在可抢占的集群上，随时可能被中断，且训练一次要数天。目前他们只在训练全部结束时保存一次模型，结果一次抢占就损失了两天进度。请给出改进检查点策略的关键做法，并说明为什么这样能减少损失。",
+      "options": [],
+      "answer": null,
+      "explanation": "要点包括：按合适间隔定期保存检查点，使故障后从最近点恢复、只重算少量进度；采用原子写入避免半成品文件；保存到可靠存储；保留若干历史点以便回退。这些做法共同把「故障损失」限制在一个保存间隔内。",
+      "error_tag": "概念混淆",
+      "variant_group": "checkpoint-strategy",
+      "required_keywords": [
+        "检查点",
+        "定期保存",
+        "原子写入",
+        "可靠存储",
+        "历史点"
+      ]
+    },
+    {
+      "kp": "arch.dist.checkpoint",
+      "type": "scenario",
+      "question": "某分布式训练任务在恢复时，只恢复了模型权重，却发现 loss 曲线在恢复点出现明显跳变、与中断前不连续。请分析最可能的原因，并说明应如何修正检查点内容。",
+      "options": [],
+      "answer": null,
+      "explanation": "只恢复权重会丢失优化器动量、学习率调度进度、已完成步数以及随机数生成器状态，导致更新规则与数据顺序改变，从而出现不连续。应将优化器状态、调度器状态、训练进度和相关 RNG 状态一并纳入检查点，并确保各进程加载一致版本。",
+      "error_tag": "记忆缺失",
+      "variant_group": "checkpoint-state-contents",
+      "required_keywords": [
+        "RNG",
+        "版本"
+      ]
+    },
+    {
+      "kp": "arch.dist.checkpoint",
+      "type": "single_choice",
+      "question": "在多进程分布式训练中，多个进程同时把检查点写到同一个文件路径。下列说法正确的是？",
+      "options": [
+        "应该由各进程同时写同一个文件，写入更快",
+        "通常只需由一个进程（如 rank 0）负责写出完整检查点，再通过同步机制让其他进程等待，避免写冲突和内容交错",
+        "每个进程必须写自己的文件，且加载时必须手动拼接",
+        "多进程写入同一文件时操作系统会自动加锁，无需任何协调"
+      ],
+      "answer": 1,
+      "explanation": "并发写同一文件会导致内容交错或损坏。分布式训练的常见模式是由主进程统一汇总/写出检查点，其他进程在写完后同步。多进程写同一文件并不会自动获得正确性保证。",
+      "error_tag": "概念混淆",
+      "variant_group": "checkpoint-coordination"
+    },
+    {
+      "kp": "arch.dist.checkpoint",
+      "type": "single_choice",
+      "question": "关于检查点与「从零重训」的对比，下列说法正确的是？",
+      "options": [
+        "从零重训一定比从检查点恢复更快",
+        "从检查点恢复能利用已持久化的状态，通常显著快于从零重训，但前提是检查点完整且可用",
+        "检查点恢复与从零重训耗时完全相同",
+        "只要保存了检查点就一定能恢复到崩溃时的精确状态，没有任何重算"
+      ],
+      "answer": 1,
+      "explanation": "恢复比从零重训快，是因为它跳过了已持久化的进度。但并不保证精确到崩溃瞬间，通常要重算最近一个保存间隔内的工作。因此「完整且可用」是前提，且会有少量重算。",
+      "error_tag": "概念混淆",
+      "variant_group": "checkpoint-purpose"
+    },
+    {
+      "kp": "arch.dist.checkpoint",
+      "type": "single_choice",
+      "question": "恢复训练时，为了和中断前的优化轨迹保持连续，除了模型权重之外，通常还必须保存以下哪组状态？",
+      "options": [
+        "只需要保存模型权重即可完全恢复",
+        "优化器状态（如动量）以及当前已完成的步数 / epoch",
+        "只需要保存当前 epoch 数",
+        "只需要保存学习率的值"
+      ],
+      "answer": 1,
+      "explanation": "只恢复模型权重会造成优化器动量、学习率调度进度、已完成步数等丢失，导致轨迹不连续。要精确续跑，需要一并保存优化器状态和训练进度信息。仅保存权重并非「完全恢复」。",
+      "error_tag": "记忆缺失",
+      "variant_group": "checkpoint-state-contents"
+    },
+    {
+      "kp": "arch.dist.checkpoint",
+      "type": "single_choice",
+      "question": "关于检查点文件的大小，以下说法正确的是？",
+      "options": [
+        "检查点文件永远只包含模型权重，因此大小固定",
+        "若检查点同时包含模型权重和优化器状态，通常其大小会明显大于仅含权重的检查点",
+        "检查点大小与优化器类型无关",
+        "检查点大小只取决于数据集大小"
+      ],
+      "answer": 1,
+      "explanation": "优化器状态（例如带一阶/二阶动量的优化器）通常为每个参数额外保存若干份张量，因此含优化器状态的检查点往往比只含权重的检查点大几倍。检查点大小与数据集大小无直接关系。",
+      "error_tag": "概念混淆",
+      "variant_group": "checkpoint-size"
+    },
+    {
+      "kp": "arch.dist.checkpoint",
+      "type": "single_choice",
+      "question": "在从检查点恢复时，如果只保存最近一次检查点，当该检查点本身损坏时会发生什么？",
+      "options": [
+        "系统会自动从头开始训练，没有任何损失",
+        "由于没有更早的可用检查点，任务可能不得不从头重算，损失大量已完成的工作",
+        "损坏的检查点会被自动修复",
+        "训练框架会忽略损坏并继续使用部分状态"
+      ],
+      "answer": 1,
+      "explanation": "仅保留单个检查点意味着没有回退选项，一旦它损坏就只能从头开始。通常会保留若干个历史检查点（滚动或定期归档），以便在最近一个不可用时回退到更早的可用点。",
+      "error_tag": "边界错误",
+      "variant_group": "checkpoint-retention"
+    },
+    {
+      "kp": "arch.dist.checkpoint",
+      "type": "single_choice",
+      "question": "下列哪种做法最有助于缩短「从故障到恢复训练」所需的时间？",
+      "options": [
+        "把检查点间隔设得越长越好",
+        "把检查点保存到读写延迟低的可靠存储，并合理设置较短但不过于频繁的保存间隔",
+        "只在训练全部结束后保存一次",
+        "把检查点保存在每个节点的本地内存中"
+      ],
+      "answer": 1,
+      "explanation": "恢复时间 = 加载最近检查点的时间 + 从该点到故障点的重算时间。保存到快速可靠存储可缩短加载时间，合适的间隔可减少重算量。保存过稀会增加重算量，只在结束时保存则等于没有检查点，保存在内存中在进程崩溃后会丢失。",
+      "error_tag": "概念混淆",
+      "variant_group": "checkpoint-recovery-cost"
+    },
+    {
+      "kp": "arch.dist.checkpoint",
+      "type": "single_choice",
+      "question": "检查点的「保存（save）」与「加载（load）」在分布式场景下常常需要区分 rank。以下描述正确的是？",
+      "options": [
+        "保存和加载都必须由所有 rank 各写各的完整副本，互不通信",
+        "常见做法是保存时由主 rank 写出，加载时由主 rank 读取后再分发给其他 rank，配合集合通信同步",
+        "加载只能由最后一个 rank 执行",
+        "保存与加载都不需要任何同步"
+      ],
+      "answer": 1,
+      "explanation": "为避免写冲突并保证一致性，通常由主 rank 负责持久化与读取，之后通过广播等集合通信把状态分发给其余进程。各 rank 独立写完整副本会造成写冲突且浪费空间，也不需要特定「最后一个 rank」来加载。",
+      "error_tag": "概念混淆",
+      "variant_group": "checkpoint-coordination"
+    },
+    {
+      "kp": "arch.dist.checkpoint",
+      "type": "single_choice",
+      "question": "某任务使用「分片检查点」，即每个进程只保存自己负责的那部分参数。这种设计的主要好处是？",
+      "options": [
+        "可以完全不做任何同步",
+        "把写文件的压力分散到多个进程/存储目标，减少单点写瓶颈，但加载时需要正确地把分片重新组装",
+        "使检查点文件不再需要版本管理",
+        "可以省略优化器状态"
+      ],
+      "answer": 1,
+      "explanation": "分片保存把大检查点的写入负载分摊到多个进程和/或多个文件，缓解单点写入瓶颈。代价是加载时需按元数据把各分片正确重组，仍然需要同步与一致性保障，且不改变是否需要保存优化器状态。",
+      "error_tag": "概念混淆",
+      "variant_group": "checkpoint-sharding"
+    },
+    {
+      "kp": "arch.dist.checkpoint",
+      "type": "single_choice",
+      "question": "下列关于检查点与随机种子（random seed）关系的说法，最合理的是？",
+      "options": [
+        "随机种子无需保存，因为每次运行结果都一样",
+        "如果希望恢复后数据打乱、dropout 等随机行为与原来一致，通常应把相关随机数生成器的状态一并纳入检查点",
+        "只要保存模型权重，随机性就一定可复现",
+        "随机种子只在推理时需要保存"
+      ],
+      "answer": 1,
+      "explanation": "训练中存在数据打乱、dropout 等随机过程。若只恢复权重而不恢复随机数生成器状态，后续的随机序列会不同，导致难以精确复现。因此常把相关 RNG 状态纳入检查点。",
+      "error_tag": "记忆缺失",
+      "variant_group": "checkpoint-state-contents"
+    }
+  ]
+}

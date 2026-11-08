@@ -1,0 +1,310 @@
+{
+  "id": "s2u5l2",
+  "title": "s2u5l2",
+  "kps": [
+    "py.ctx.async_ctx"
+  ],
+  "theory": "## py.ctx.async_ctx\n\n# 异步上下文管理器（async with）\n\n> 一句话直觉：当你打开一个“需要时间的资源”（比如网络连接、数据库会话、异步锁），你希望无论代码成功还是出错，都能自动、优雅地把它关掉——`async with` 就是干这个的。\n\n前置说明：本讲虽是 s2u5l2 的起点，但会顺带回顾 `with`，因为理解同步版本是理解异步版本的最快路径。\n\n---\n\n## 1. 从 `with` 到 `async with`：为什么需要它\n\n`with` 语句（上下文管理器，context manager）让你用一个代码块管理资源的获取和释放，避免忘记关闭：\n\n```python\nwith open(\"data.txt\") as f:\n    data = f.read()   # 离开块时自动 close()\n```\n\n它背后靠的是两个“魔法方法”（magic method / dunder method）：`__enter__` 和 `__exit__`。\n\n当资源操作本身是 `await` 的（例如打开一个网络连接要等 I/O），同步的 `__enter__/__exit__` 就无法表达“等待”。Python 3.5 引入了 **异步上下文管理器（asynchronous context manager）**：\n\n- 对象实现 `__aenter__` 和 `__aexit__`，它们都是 `async def` 方法。\n- 用 `async with obj as x:` 调用，块离开时会 `await obj.__aexit__(...)`。\n- 只能在 `async def` 函数内部使用。\n\n### 关键代码示例\n\n```python\nimport asyncio\n\nclass AsyncResource:\n    \"\"\"一个模拟需要异步打开/关闭的资源\"\"\"\n    def __init__(self, name):\n        self.name = name\n\n    async def __aenter__(self):\n        print(f\"[enter] 正在异步打开 {self.name} ...\")\n        await asyncio.sleep(0.1)      # 模拟 I/O 等待\n        print(f\"[enter] {self.name} 已打开\")\n        return self                   # 返回给 as 后面的变量\n\n    async def __aexit__(self, exc_type, exc, tb):\n        print(f\"[exit] 正在关闭 {self.name} ...\")\n        await asyncio.sleep(0.1)\n        print(f\"[exit] {self.name} 已关闭\")\n        return False                  # False 表示异常继续向外抛\n\nasync def main():\n    async with AsyncResource(\"db\") as r:\n        print(f\"使用 {r.name} 做点事\")\n\nasyncio.run(main())\n```\n\n运行输出（顺序固定）：\n1. enter 打开\n2. 使用资源\n3. exit 关闭\n\n---\n\n## 2. `__aexit__` 的三个参数与返回值\n\n`__aexit__(self, exc_type, exc, tb)` 三个参数和同步 `__exit__` 一样：\n\n- `exc_type`：异常类（如 `ValueError`），正常退出时为 `None`。\n- `exc`：异常实例。\n- `tb`：traceback。\n\n返回值决定是否“吞掉”异常：\n\n- 返回 `False`（或 `None`）：异常继续传播。\n- 返回 `True`：异常被抑制，`async with` 块后的代码继续执行。\n\n```python\nimport asyncio\n\nclass SuppressAll:\n    async def __aenter__(self):\n        return self\n    async def __aexit__(self, exc_type, exc, tb):\n        if exc_type is not None:\n            print(f\"吞掉异常: {exc_type.__name__}: {exc}\")\n            return True      # 抑制异常\n        return False\n\nasync def main():\n    async with SuppressAll():\n        raise ValueError(\"boom\")\n    print(\"异常已抑制，继续执行到这里\")\n\nasyncio.run(main())\n```\n\n---\n\n## 3. 用 `contextlib.asynccontextmanager` 快速写异步上下文\n\n手写 `__aenter__/__aexit__` 很啰嗦。Python 3.7 起，`contextlib` 提供了 `asynccontextmanager`，让你把“yield 前 = 进入，yield 后 = 退出”写成一个 async 生成器：\n\n```python\nimport asyncio\nfrom contextlib import asynccontextmanager\n\n@asynccontextmanager\nasync def open_conn(name):\n    print(f\"打开 {name}\")\n    await asyncio.sleep(0.05)\n    try:\n        yield f\"conn:{name}\"      # yield 的值就是 as 后面拿到的东西\n    finally:\n        print(f\"关闭 {name}\")\n        await asyncio.sleep(0.05)  # 清理也可以是异步的\n\nasync def main():\n    async with open_conn(\"redis\") as c:\n        print(\"使用\", c)\n\nasyncio.run(main())\n```\n\n> 注意：`try/finally` 是必需的，保证即使块内抛异常也能执行清理。\n\n---\n\n## 4. 典型工程用途：`asyncio.Lock`、`aiofiles`、数据库连接\n\n标准库和常见第三方库已经大量使用异步上下文管理器。三个最典型的场景：\n\n```python\nimport asyncio\n\nasync def main():\n    # 1) asyncio.Lock 支持 async with\n    lock = asyncio.Lock()\n    async with lock:\n        print(\"拿到锁，操作共享状态\")\n\n    # 2) aiofiles 异步文件 I/O（需 pip install aiofiles）\n    # import aiofiles\n    # async with aiofiles.open(\"data.txt\") as f:\n    #     content = await f.read()\n\n    # 3) 异步 HTTP 会话也可这样管理（如 aiohttp）\n    # async with aiohttp.ClientSession() as session:\n    #     async with session.get(url) as resp:\n    #         print(await resp.text())\n\nasyncio.run(main())\n```\n\n**心智模型**：凡是“打开—使用—关闭”模式，且打开/关闭需要 `await`，就用 `async with`。\n\n---\n\n## 5. 与 `with`、`try/finally` 的关系\n\n三种写法的语义等价关系（示意）：\n\n| 写法 | 进入 | 退出 |\n|---|---|---|\n| `with x:` | `x.__enter__()` | `x.__exit__(...)` |\n| `async with x:` | `await x.__aenter__()` | `await x.__aexit__(...)` |\n| 手写 `try/finally` | 手动打开 | `finally` 中关闭 |\n\n关键区别：`async with` 里的等待不会阻塞事件循环，其他协程可以趁机执行。这也是它在异步 I/O 中不可替代的原因。\n\n---\n\n### 动手练习\n\n**任务**：写一个“异步限速器”上下文管理器。\n\n要求：\n1. 用 `@asynccontextmanager` 实现 `limit_rate(interval)`：进入时记录时间戳，退出时若距今不足 `interval` 秒，则 `await asyncio.sleep(...)` 补足，保证两次调用之间至少间隔 `interval`。\n2. 并发运行 5 个任务，每个任务通过 `async with limit_rate(0.3)` 打印当前时间。\n3. 观察输出时间戳，验证相邻两次最多相差一个 `interval`（± 误差）。\n4. 若块内抛异常，确认退出逻辑依然执行（打印 “cleanup done”）。\n\n提示骨架：\n```python\n@asynccontextmanager\nasync def limit_rate(interval):\n    start = asyncio.get_event_loop().time()\n    try:\n        yield\n    finally:\n        elapsed = asyncio.get_event_loop().time() - start\n        if elapsed < interval:\n            await asyncio.sleep(interval - elapsed)\n```\n\n本地运行（Python 3.8+），观察输出即可。\n\n```python\nimport asyncio\nfrom contextlib import asynccontextmanager\n\n@asynccontextmanager\nasync def limit_rate(interval):\n    loop = asyncio.get_event_loop()\n    start = loop.time()\n    try:\n        yield\n    finally:\n        elapsed = loop.time() - start\n        if elapsed < interval:\n            await asyncio.sleep(interval - elapsed)\n        print(\"cleanup done\")\n\nasync def job(i):\n    async with limit_rate(0.3):\n        print(f\"job {i} at {asyncio.get_event_loop().time():.3f}\")\n\nasync def main():\n    await asyncio.gather(*(job(i) for i in range(5)))\n\nasyncio.run(main())\n```\n",
+  "quiz": [
+    {
+      "kp": "py.ctx.async_ctx",
+      "type": "single_choice",
+      "question": "在 Python 中，关于异步上下文管理器（async context manager），下列说法正确的是？",
+      "options": [
+        "它必须同时实现 __enter__ 和 __exit__ 方法",
+        "它必须实现 __aenter__ 和 __aexit__ 方法，并且可以配合 async with 使用",
+        "它只能通过 asyncio.Lock 这类内置对象获得，无法自定义",
+        "它和普通上下文管理器完全等价，只是名字不同"
+      ],
+      "answer": 1,
+      "explanation": "异步上下文管理器通过 __aenter__/__aexit__ 实现，并配合 async with 使用。A 描述的是同步上下文管理器；C 错误，用户可以自定义；D 错误，二者协议不同。",
+      "error_tag": "概念混淆",
+      "variant_group": "async_ctx_protocol"
+    },
+    {
+      "kp": "py.ctx.async_ctx",
+      "type": "single_choice",
+      "question": "以下代码执行时，会输出什么？\n\nclass C:\n    async def __aenter__(self):\n        print('enter')\n        return self\n    async def __aexit__(self, *args):\n        print('exit')\n\nasync def main():\n    async with C():\n        print('body')\n\nimport asyncio\nasyncio.run(main())",
+      "options": [
+        "enter\nbody\nexit",
+        "enter\nbody",
+        "body\nenter\nexit",
+        "程序抛出 TypeError"
+      ],
+      "answer": 0,
+      "explanation": "async with 会先 await __aenter__（输出 enter），执行 body（输出 body），再 await __aexit__（输出 exit）。",
+      "error_tag": "执行顺序理解错误",
+      "variant_group": "async_ctx_execution_order"
+    },
+    {
+      "kp": "py.ctx.async_ctx",
+      "type": "single_choice",
+      "question": "如果 `__aenter__` 中抛出异常，下面的说法正确的是？",
+      "options": [
+        "__aexit__ 仍然会被调用",
+        "__aexit__ 不会被调用，异常直接向外传播",
+        "__aenter__ 会被自动重试",
+        "async with 会静默忽略该异常"
+      ],
+      "answer": 1,
+      "explanation": "只有在 __aenter__ 成功返回后，进入 with 体并与 __aexit__ 配对。若 __aenter__ 抛异常，则 __aexit__ 不会被调用。",
+      "error_tag": "异常处理机制不清",
+      "variant_group": "async_ctx_exception"
+    },
+    {
+      "kp": "py.ctx.async_ctx",
+      "type": "single_choice",
+      "question": "关于 `async with` 的嵌套使用，下列说法正确的是？",
+      "options": [
+        "不允许嵌套 async with",
+        "可以嵌套，退出顺序与进入顺序相反（后进先出）",
+        "嵌套时只有最外层的 __aexit__ 会被调用",
+        "嵌套时必须把内层放在外层之前"
+      ],
+      "answer": 1,
+      "explanation": "async with 与普通 with 一样可以嵌套，退出时按后进先出的顺序依次调用各自的 __aexit__。",
+      "error_tag": "嵌套规则误解",
+      "variant_group": "async_ctx_nesting"
+    },
+    {
+      "kp": "py.ctx.async_ctx",
+      "type": "single_choice",
+      "question": "下面代码的输出顺序是？\n\nclass A:\n    async def __aenter__(self): print('A in')\n    async def __aexit__(self, *a): print('A out')\n\nclass B:\n    async def __aenter__(self): print('B in')\n    async def __aexit__(self, *a): print('B out')\n\nasync def main():\n    async with A():\n        async with B():\n            print('body')\n\nimport asyncio; asyncio.run(main())",
+      "options": [
+        "A in\nB in\nbody\nB out\nA out",
+        "A in\nB in\nbody\nA out\nB out",
+        "B in\nA in\nbody\nA out\nB out",
+        "A in\nbody\nB in\nB out\nA out"
+      ],
+      "answer": 0,
+      "explanation": "嵌套时先进先出进入，后进先出退出，所以是 A in、B in、body、B out、A out。",
+      "error_tag": "嵌套规则误解",
+      "variant_group": "async_ctx_nesting"
+    },
+    {
+      "kp": "py.ctx.async_ctx",
+      "type": "single_choice",
+      "question": "使用 `asyncio.Lock` 时，常见的写法 `async with lock:` 说明？",
+      "options": [
+        "Lock 是普通上下文管理器，只能用 with",
+        "Lock 对象实现了异步上下文管理器协议，可在 async with 中自动获取和释放锁",
+        "Lock 只能通过 lock.acquire() 使用",
+        "async with lock 会立即返回而不等待锁"
+      ],
+      "answer": 1,
+      "explanation": "asyncio.Lock 支持异步上下文管理器协议，async with lock 会等待获取锁并在退出时释放。",
+      "error_tag": "API 认知错误",
+      "variant_group": "async_ctx_lock"
+    },
+    {
+      "kp": "py.ctx.async_ctx",
+      "type": "single_choice",
+      "question": "以下哪一项不是异步上下文管理器协议所要求的方法？",
+      "options": [
+        "__aenter__",
+        "__aexit__",
+        "__enter__",
+        "__aiter__"
+      ],
+      "answer": 3,
+      "explanation": "异步上下文管理器要求 __aenter__ 和 __aexit__；__enter__ 属于同步协议；__aiter__ 属于异步迭代协议，与之无关。",
+      "error_tag": "协议混淆",
+      "variant_group": "async_ctx_protocol"
+    },
+    {
+      "kp": "py.ctx.async_ctx",
+      "type": "single_choice",
+      "question": "关于 `asyncio.timeout`（Python 3.11+）的用法，下述正确的是？",
+      "options": [
+        "它是一个协程函数，需要 await",
+        "它是一个异步上下文管理器，可用于 async with，超时后取消内部操作",
+        "它只能用于同步代码",
+        "它和 async with 不兼容"
+      ],
+      "answer": 1,
+      "explanation": "asyncio.timeout 返回一个异步上下文管理器，在 async with 块内超时会取消当前任务，并与内部 await 配合产生 TimeoutError。",
+      "error_tag": "API 认知错误",
+      "variant_group": "async_ctx_timeout"
+    },
+    {
+      "kp": "py.ctx.async_ctx",
+      "type": "single_choice",
+      "question": "关于 `async with` 中 `__aenter__` 的返回值，下列说法正确的是？",
+      "options": [
+        "返回值会被丢弃，无法获取",
+        "返回值会赋给 as 后面的变量",
+        "必须是 True 或 False",
+        "只能是 self"
+      ],
+      "answer": 1,
+      "explanation": "async with EXPR as VAR 中，VAR 会被绑定为 await __aenter__() 的结果，与同步 with 一致。",
+      "error_tag": "语法细节不清",
+      "variant_group": "async_ctx_as_binding"
+    },
+    {
+      "kp": "py.ctx.async_ctx",
+      "type": "single_choice",
+      "question": "以下关于 `__aexit__` 参数的说法正确的是？",
+      "options": [
+        "它只接收一个参数 self",
+        "它接收 (exc_type, exc, tb) 三个参数，无异常时三者均为 None",
+        "它接收的异常参数始终为 None",
+        "它只能接收 exc_type 一个参数"
+      ],
+      "answer": 1,
+      "explanation": "__aexit__ 的签名与 __exit__ 一致，接收异常类型、异常对象和回溯信息；无异常时均为 None。",
+      "error_tag": "签名细节不清",
+      "variant_group": "async_ctx_aexit_signature"
+    },
+    {
+      "kp": "py.ctx.async_ctx",
+      "type": "single_choice",
+      "question": "实现一个异步数据库连接池上下文管理器时，最需要在 __aenter__ 和 __aexit__ 中做的事是？",
+      "options": [
+        "__aenter__ 中同步返回连接，__aexit__ 中不做任何事",
+        "__aenter__ 中 await 获取连接，__aexit__ 中 await 释放/归还连接",
+        "把连接获取放在 __init__ 中完成",
+        "把连接的获取与释放都放在普通函数中"
+      ],
+      "answer": 1,
+      "explanation": "资源获取/释放常涉及异步 I/O，应分别在 __aenter__ 和 __aexit__ 中 await 完成，以保证正确释放。",
+      "error_tag": "设计实践误区",
+      "variant_group": "async_ctx_design"
+    },
+    {
+      "kp": "py.ctx.async_ctx",
+      "type": "single_choice",
+      "question": "下面哪个描述正确反映了 `async with` 与 `await` 的关系？",
+      "options": [
+        "async with 内部不能使用 await",
+        "async with 本质上等价于在进入和退出时对 __aenter__/__aexit__ 调用 await",
+        "async with 只是语法糖，不会真的 await 任何东西",
+        "async with 会阻塞整个事件循环"
+      ],
+      "answer": 1,
+      "explanation": "async with 会在进入和退出时分别 await __aenter__() 和 __aexit__(...)，这允许在协议方法中执行异步操作。",
+      "error_tag": "概念混淆",
+      "variant_group": "async_ctx_protocol"
+    },
+    {
+      "kp": "py.ctx.async_ctx",
+      "type": "single_choice",
+      "question": "如果在一个普通函数（非 async 函数）中使用 `async with`，会发生什么？",
+      "options": [
+        "和 with 行为一致，可以正常运行",
+        "解释时会报 SyntaxError，因为 async with 只能出现在 async 函数中",
+        "运行时自动把函数变成协程函数",
+        "运行到 async with 时抛出 TypeError"
+      ],
+      "answer": 1,
+      "explanation": "async with 是异步语法，必须出现在 async def 定义的函数体内，否则在编译阶段就会报 SyntaxError。",
+      "error_tag": "语法规则不清",
+      "variant_group": "async_ctx_syntax"
+    },
+    {
+      "kp": "py.ctx.async_ctx",
+      "type": "single_choice",
+      "question": "关于 `async with` 中的 `__aexit__` 方法，下列说法正确的是？",
+      "options": [
+        "它必须是同步方法，否则会报错",
+        "它可以返回 False 来抑制异常，返回 True 则传播异常",
+        "返回 True 会抑制异常，返回 False 或 None 则异常继续传播",
+        "它的返回值会被忽略，无法影响异常传播"
+      ],
+      "answer": 2,
+      "explanation": "__aexit__ 返回真值会抑制 with 块内抛出的异常，返回假值则异常继续向外传播，与同步 __exit__ 语义一致。",
+      "error_tag": "返回值语义混淆",
+      "variant_group": "async_ctx_aexit_return"
+    },
+    {
+      "kp": "py.ctx.async_ctx",
+      "type": "single_choice",
+      "question": "以下哪种写法能正确实现一个异步上下文管理器？",
+      "options": [
+        "class M:\n    def __enter__(self): ...\n    def __exit__(self, *a): ...\n\nasync with M(): ...",
+        "class M:\n    async def __aenter__(self): ...\n    async def __aexit__(self, *a): ...\n\nasync with M(): ...",
+        "class M:\n    async def __enter__(self): ...\n    async def __exit__(self, *a): ...\n\nasync with M(): ...",
+        "class M:\n    def __aenter__(self): ...\n    def __aexit__(self, *a): ...\n\nwith M(): ..."
+      ],
+      "answer": 1,
+      "explanation": "异步上下文管理器要求 __aenter__ 和 __aexit__ 都是可等待的（通常为 async def）。A 是同步协议；C 方法名不对；D 方法不是协程同时还用了 with。",
+      "error_tag": "协议实现错误",
+      "variant_group": "async_ctx_implementation"
+    },
+    {
+      "kp": "py.ctx.async_ctx",
+      "type": "single_choice",
+      "question": "关于 `contextlib.asynccontextmanager`，下列说法正确的是？",
+      "options": [
+        "它和 `contextlib.contextmanager` 完全一样，可以互换使用",
+        "它装饰的生成器函数中必须使用 yield，且 yield 前后的代码分别对应进入和退出",
+        "它装饰的函数必须是普通 def，不能是 async def",
+        "它只能用于同步 with 语句"
+      ],
+      "answer": 1,
+      "explanation": "asynccontextmanager 用于把一个 async 生成器函数转换为异步上下文管理器，yield 之前的代码相当于 __aenter__，之后的相当于 __aexit__。",
+      "error_tag": "装饰器用途混淆",
+      "variant_group": "async_ctx_manager_decorator"
+    },
+    {
+      "kp": "py.ctx.async_ctx",
+      "type": "single_choice",
+      "question": "在使用 `@asynccontextmanager` 时，如果生成器函数中 yield 之前的部分没有可等待操作，下面说法正确的是？",
+      "options": [
+        "这不是合法的，yield 前必须至少 await 一次",
+        "这仍然合法，生成器本身是 async 的即可",
+        "会抛出 RuntimeError",
+        "必须改成普通 contextmanager"
+      ],
+      "answer": 1,
+      "explanation": "只要生成器函数是 async 生成器，即使 yield 前没有 await，也可以被 asynccontextmanager 包装。",
+      "error_tag": "语法误判",
+      "variant_group": "async_ctx_manager_decorator"
+    },
+    {
+      "kp": "py.ctx.async_ctx",
+      "type": "single_choice",
+      "question": "下面代码运行后，会输出什么？\n\nimport asyncio\nfrom contextlib import asynccontextmanager\n\n@asynccontextmanager\nasync def cm():\n    print('A')\n    yield\n    print('B')\n\nasync def main():\n    async with cm():\n        print('C')\n\nasyncio.run(main())",
+      "options": [
+        "A\nB\nC",
+        "A\nC\nB",
+        "C\nA\nB",
+        "A\nC"
+      ],
+      "answer": 1,
+      "explanation": "yield 之前打印 A，进入 with 体打印 C，退出时继续执行 yield 之后打印 B。",
+      "error_tag": "执行顺序理解错误",
+      "variant_group": "async_ctx_manager_decorator"
+    },
+    {
+      "kp": "py.ctx.async_ctx",
+      "type": "single_choice",
+      "question": "关于异步上下文管理器与普通上下文管理器的区别，下列描述最准确的是？",
+      "options": [
+        "异步上下文管理器只能在多线程中使用",
+        "异步上下文管理器在进入和退出时可以 await 异步操作，而普通上下文管理器不能",
+        "普通上下文管理器不能用于文件操作",
+        "异步上下文管理器不支持异常处理"
+      ],
+      "answer": 1,
+      "explanation": "异步上下文管理器的核心价值在于进入/退出阶段可以挂起等待 I/O，普通上下文管理器无法在协议方法中 await。",
+      "error_tag": "概念混淆",
+      "variant_group": "async_ctx_protocol"
+    },
+    {
+      "kp": "py.ctx.async_ctx",
+      "type": "single_choice",
+      "question": "以下关于 `async with` 异常处理的说法，正确的是？",
+      "options": [
+        "with 体内发生异常时，__aexit__ 不会被调用",
+        "with 体内发生异常时，__aexit__ 会被调用，并接收异常信息",
+        "只有在 __aenter__ 中发生异常时 __aexit__ 才会被调用",
+        "异常会被自动忽略，不会传播"
+      ],
+      "answer": 1,
+      "explanation": "无论 with 体是否发生异常，只要成功进入，__aexit__ 都会被调用并接收异常类型、值和回溯信息，由返回值决定是否抑制。",
+      "error_tag": "异常处理机制不清",
+      "variant_group": "async_ctx_exception"
+    }
+  ]
+}

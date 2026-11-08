@@ -1,0 +1,951 @@
+{
+  "id": "s6u2l1",
+  "title": "s6u2l1",
+  "kps": [
+    "ai.nn.linear",
+    "ai.nn.activation",
+    "ai.nn.loss"
+  ],
+  "theory": "## ai.nn.linear\n\n# 神经网络中的线性层（Linear Layer）\n\n> **一句话直觉**：如果神经网络是一座城市，线性层就是城市里所有道路的交汇点——它把输入信号按不同权重“混合”后再传递出去，是整个深度学习模型最基础、最频繁使用的计算单元。\n\n---\n\n## 1. 什么是线性层？\n\n线性层（Linear Layer），也叫全连接层（Fully Connected Layer，FC）或稠密层（Dense Layer），做的事情非常朴素：\n\n$$y = xW^T + b$$\n\n- **x**：输入向量或一批输入，形状为 `(batch_size, in_features)`\n- **W**：权重矩阵（weight），形状为 `(out_features, in_features)`\n- **b**：偏置向量（bias），形状为 `(out_features,)`\n- **y**：输出，形状为 `(batch_size, out_features)`\n\n**关键结论**：线性层本质上是一次矩阵乘法加一次加法。它不做非线性变换——这正是为什么神经网络中线性层后面总要接一个激活函数（activation function，如 ReLU）。\n\n```python\n# 用 NumPy 手动实现一个线性层的前向计算\nimport numpy as np\n\n# 假设输入：2 个样本，每个样本 3 个特征\nx = np.array([[1.0, 2.0, 3.0],\n              [4.0, 5.0, 6.0]])          # shape: (2, 3)\n\nW = np.array([[0.1, 0.2, 0.3],           # shape: (2, 3)\n              [0.4, 0.5, 0.6]])\nb = np.array([0.01, 0.02])               # shape: (2,)\n\ny = x @ W.T + b                          # (2,3) @ (3,2) + (2,) -> (2,2)\nprint(y)\n# [[1.41 3.32]\n#  [3.21 7.82]]\n```\n\n---\n\n## 2. 为什么它被称为“全连接”？\n\n“全连接”的意思是：**输入的每一个特征都与输出的每一个特征相连**。\n\n假设输入有 `in_features` 个特征，输出有 `out_features` 个特征，那么权重矩阵一共有 `in_features × out_features` 个可学习参数，再加上 `out_features` 个偏置。\n\n参数量计算公式：\n\n$$\\text{params} = \\text{in\\_features} \\times \\text{out\\_features} + \\text{out\\_features}$$\n\n**关键结论**：全连接层的参数量随输入和输出维度乘积增长，因此在高维输入（如图像像素）上会迅速膨胀，这也是 CNN（卷积神经网络）出现的原因之一。\n\n```python\n# 演示参数量增长\nfor in_f, out_f in [(784, 128), (784, 512), (1024, 1024)]:\n    params = in_f * out_f + out_f\n    print(f\"in={in_f:<5} out={out_f:<5} -> {params:,} 个参数\")\n# in=784   out=128   -> 100,480 个参数\n# in=784   out=512   -> 401,920 个参数\n# in=1024  out=1024  -> 1,049,600 个参数\n```\n\n---\n\n## 3. 用 PyTorch 实现线性层\n\nPyTorch 提供了 `nn.Linear`，它自动管理权重初始化、梯度计算和参数更新。\n\n**关键结论**：`nn.Linear(in_features, out_features)` 会自动创建形状为 `(out_features, in_features)` 的权重和形状为 `(out_features,)` 的偏置，并在前向传播时自动处理批次维度。\n\n```python\nimport torch\nimport torch.nn as nn\n\n# 定义：输入 3 维，输出 2 维\nlinear = nn.Linear(in_features=3, out_features=2)\n\n# 查看权重和偏置的形状\nprint(\"weight shape:\", linear.weight.shape)  # torch.Size([2, 3])\nprint(\"bias shape:  \", linear.bias.shape)    # torch.Size([2])\n\n# 前向传播\nx = torch.tensor([[1.0, 2.0, 3.0],\n                  [4.0, 5.0, 6.0]])          # (2, 3)\ny = linear(x)\nprint(\"output shape:\", y.shape)              # torch.Size([2, 2])\nprint(y)\n```\n\n---\n\n## 4. 线性层在神经网络中的位置\n\n一个典型的多层感知机（Multilayer Perceptron，MLP）就是“线性层 + 激活函数”的堆叠：\n\n```python\nimport torch.nn as nn\n\nmodel = nn.Sequential(\n    nn.Linear(784, 256),   # 输入层 -> 隐藏层\n    nn.ReLU(),             # 非线性激活\n    nn.Linear(256, 10),    # 隐藏层 -> 输出层\n)\n\nx = torch.randn(8, 784)    # 8 个样本，每个 784 维\nlogits = model(x)\nprint(logits.shape)        # torch.Size([8, 10])\n```\n\n**关键结论**：如果没有激活函数，多层线性层叠加等价于单层线性层——因为矩阵乘积仍然是矩阵乘积。非线性激活函数是引入表达力的关键。\n\n```python\n# 验证：两个线性层叠加，若无激活函数，等价于一个线性层\nimport torch\nimport torch.nn as nn\n\nlin1 = nn.Linear(4, 3)\nlin2 = nn.Linear(3, 2)\n\nx = torch.randn(1, 4)\ny_two = lin2(lin1(x))\n\n# 手动融合成一个等价线性层\nW_combined = lin2.weight @ lin1.weight         # (2,3) @ (3,4) = (2,4)\nb_combined = lin2.weight @ lin1.bias + lin2.bias  # (2,)\n\ny_fused = x @ W_combined.T + b_combined\nprint(torch.allclose(y_two, y_fused, atol=1e-6))  # True\n```\n\n---\n\n## 5. 工程中的实践要点\n\n- **初始化（Initialization）**：PyTorch 默认使用 Kaiming 均匀初始化，但有时需要手动调整。\n- **设备（Device）**：线性层需要和输入在同一设备（CPU/GPU）上。\n- **数据类型（dtype）**：`float32` 是默认，混合精度训练时用 `float16`。\n- **调试**：打印 `weight.shape` 和 `bias.shape` 是排查维度错误的第一手段。\n\n```python\nimport torch\nimport torch.nn as nn\n\nlinear = nn.Linear(4, 2)\nprint(\"默认初始化 weight:\", linear.weight)\nprint(\"默认初始化 bias:  \", linear.bias)\n\n# 手动初始化\nnn.init.zeros_(linear.bias)\nnn.init.xavier_uniform_(linear.weight)\nprint(\"手动初始化后 weight:\", linear.weight)\n```\n\n---\n\n## 动手练习\n\n**任务**：在本地完成以下练习。\n\n1. 用 NumPy 手动实现一个线性层的前向传播函数 `my_linear(x, W, b)`，返回 `x @ W.T + b`。\n2. 构造输入 `x` 形状 `(5, 4)`，权重 `W` 形状 `(3, 4)`，偏置 `b` 形状 `(3,)`，计算输出并打印形状。\n3. 用 PyTorch 的 `nn.Linear(4, 3)` 对同一个 `x` 做前向传播，验证输出形状与手动实现一致。\n4. 在 PyTorch 版本中，把 `linear.weight` 和 `linear.bias` 替换为你手动构造的 `W` 和 `b`，验证输出与你 NumPy 实现的输出完全一致（用 `torch.allclose` 检查）。\n5. **进阶**：堆叠两个线性层（无激活函数），手动融合成单个线性层，验证输出一致。\n\n**提示**：注意 `nn.Linear` 的权重形状是 `(out_features, in_features)`，而不是 `(in_features, out_features)`。\n\n## ai.nn.activation\n\n## 一句话直觉\n**激活函数（Activation Function）**是神经网络里“引入非线性”的开关：没有它，再多层线性层叠起来也只等价于一层线性模型。\n\n---\n\n## 1. 为什么需要激活函数？\n\n神经网络的一层通常写成：\n\n$$y = Wx + b$$\n\n这是**线性变换（Linear Transformation）**。如果每一层都只有线性变换：\n\n$$y = W_2(W_1x + b_1) + b_2 = (W_2W_1)x + (W_2b_1 + b_2)$$\n\n仍然是一个线性函数。也就是说，**没有激活函数，深度网络会退化成单层线性模型**，无法拟合异或（XOR）、图像、语言等复杂模式。\n\n激活函数的作用：在每层线性变换后加入一个**非线性函数（Non-linear Function）**，让网络具备逼近任意复杂函数的能力。\n\n```python\nimport torch\nimport torch.nn as nn\n\n# 没有激活函数：两层线性层仍然等价于一层线性层\nlinear1 = nn.Linear(2, 2)\nlinear2 = nn.Linear(2, 1)\nx = torch.randn(1, 2)\ny_no_act = linear2(linear1(x))\nprint(\"无激活输出:\", y_no_act)\n```\n\n---\n\n## 2. 常见激活函数长什么样？\n\n### 2.1 Sigmoid\n\n$$\\sigma(x)=\\frac{1}{1+e^{-x}}$$\n\n特点：输出范围 $(0,1)$，曾经常用于二分类输出层。\n\n缺点：\n- 容易**梯度消失（Gradient Vanishing）**；\n- 输出不是零中心（Not Zero-Centered），影响优化。\n\n```python\nimport torch\nimport torch.nn as nn\n\nx = torch.tensor([-2.0, 0.0, 2.0])\nsigmoid = nn.Sigmoid()\nprint(\"Sigmoid:\", sigmoid(x))\n```\n\n### 2.2 Tanh\n\n$$\\tanh(x)=\\frac{e^x-e^{-x}}{e^x+e^{-x}}$$\n\n特点：输出范围 $(-1,1)$，是零中心的，比 Sigmoid 稍好。\n\n缺点：两端仍然饱和，仍可能梯度消失。\n\n```python\nimport torch\nimport torch.nn as nn\n\nx = torch.tensor([-2.0, 0.0, 2.0])\ntanh = nn.Tanh()\nprint(\"Tanh:\", tanh(x))\n```\n\n### 2.3 ReLU\n\n$$\\mathrm{ReLU}(x)=\\max(0,x)$$\n\n特点：\n- 计算简单；\n- 正区间梯度恒为 1，缓解梯度消失；\n- 是深度学习最常用的默认激活函数之一。\n\n缺点：\n- 负区间梯度为 0，可能出现**神经元死亡（Dead Neuron）**；\n- 输出不是零中心。\n\n```python\nimport torch\nimport torch.nn as nn\n\nx = torch.tensor([-2.0, 0.0, 2.0])\nrelu = nn.ReLU()\nprint(\"ReLU:\", relu(x))\n```\n\n### 2.4 LeakyReLU / GELU / SiLU\n\n为了解决 ReLU 的死亡神经元问题，出现了 LeakyReLU：\n\n$$\\mathrm{LeakyReLU}(x)=\\max(\\alpha x,x)$$\n\nGELU 和 SiLU 则是现代 Transformer、CNN 中常见的平滑激活函数。\n\n```python\nimport torch\nimport torch.nn as nn\n\nx = torch.tensor([-2.0, 0.0, 2.0])\nprint(\"LeakyReLU:\", nn.LeakyReLU(0.01)(x))\nprint(\"GELU:\", nn.GELU()(x))\nprint(\"SiLU:\", nn.SiLU()(x))\n```\n\n---\n\n## 3. 在 PyTorch 中怎么用激活函数？\n\n两种常见写法：\n\n1. **函数式（Functional）**：`torch.relu(x)`、`torch.sigmoid(x)`\n2. **模块式（Module）**：`nn.ReLU()`、`nn.Sigmoid()`\n\n在定义网络时，通常把激活函数放在线性层或卷积层之后。\n\n```python\nimport torch\nimport torch.nn as nn\n\nclass MLP(nn.Module):\n    def __init__(self):\n        super().__init__()\n        self.net = nn.Sequential(\n            nn.Linear(2, 4),\n            nn.ReLU(),          # 隐藏层激活\n            nn.Linear(4, 1),\n            nn.Sigmoid()        # 二分类输出层激活\n        )\n\n    def forward(self, x):\n        return self.net(x)\n\nmodel = MLP()\nx = torch.randn(3, 2)\nprint(\"MLP 输出:\", model(x))\n```\n\n---\n\n## 4. 如何选择激活函数？\n\n- **隐藏层默认**：ReLU；如果出现死亡神经元，可用 LeakyReLU、GELU、SiLU。\n- **二分类输出层**：Sigmoid。\n- **多分类输出层**：通常配合 `CrossEntropyLoss` 使用，不需要手动加 Softmax。\n- **回归输出层**：通常不加激活函数。\n- **Transformer / 大模型**：GELU、SiLU 很常见。\n\n```python\nimport torch\nimport torch.nn as nn\n\n# 多分类：输出 logits，CrossEntropyLoss 内部包含 LogSoftmax\nlogits = torch.randn(2, 5)\ntarget = torch.tensor([1, 3])\nloss_fn = nn.CrossEntropyLoss()\nloss = loss_fn(logits, target)\nprint(\"多分类 loss:\", loss)\n\n# 二分类：Sigmoid + BCEWithLogitsLoss 更稳定\nlogits = torch.randn(2, 1)\ntarget = torch.tensor([[1.0], [0.0]])\nloss_fn = nn.BCEWithLogitsLoss()\nloss = loss_fn(logits, target)\nprint(\"二分类 loss:\", loss)\n```\n\n---\n\n## 5. 工程实践中的关键点\n\n1. **激活函数通常不改变张量形状**，只逐元素变换。\n2. **不要在输出层乱加 ReLU**，除非任务确实需要非负输出。\n3. **训练不稳定时**，可以尝试换激活函数，例如 ReLU -> GELU。\n4. **激活函数也有可学习参数**，例如 PReLU。\n5. **理解激活函数，是理解深度网络表达能力的第一步**。\n\n```python\nimport torch\nimport torch.nn as nn\n\n# PReLU 带可学习参数\nprelu = nn.PReLU(num_parameters=1)\nx = torch.tensor([-2.0, 0.0, 2.0])\nprint(\"PReLU:\", prelu(x))\nprint(\"PReLU 参数:\", prelu.weight)\n```\n\n## ai.nn.loss\n\n# 损失函数（Loss Function）：让神经网络知道「错在哪、错多少」\n\n> 一句话直觉：损失函数就是模型的「疼痛传感器」——它把预测和真实答案的差距量化成一个数，训练过程就是不断让这个数变小。\n\n学习本讲前，假设你只懂最基础的 Python。我们会从「为什么要有个分数」讲到工程里怎么选、怎么调。全程代码可直接复制运行。\n\n---\n\n## 1. 为什么需要损失函数？\n\n想象你在教一个小孩认猫。他指着一只狗说「猫」。你怎么纠正他？你得先意识到「他错了」，而且错得越离谱，纠正力度越大。\n\n神经网络也一样。它前向传播（forward propagation）输出一个预测值，比如 `0.3`。真实答案是 `1.0`。如果没有任何机制衡量「差多少」，模型就不知道该往哪个方向调整参数（parameters）。\n\n损失函数（Loss Function，也叫代价函数 Cost Function、目标函数 Objective Function）负责：\n- 把「预测 vs 真实」压缩成一个标量（scalar）数值；\n- 这个数值可导（differentiable），从而能用梯度下降（Gradient Descent）反向传播（Backpropagation）更新权重。\n\n**关键结论：损失函数是训练的信号源。没有它，网络只是一堆随机数。**\n\n```python\nimport torch  # 用 PyTorch 演示；安装：pip install torch\n\n# 假设模型对 3 个样本的预测值\ny_pred = torch.tensor([0.3, 0.7, 0.9])\n# 真实标签\ny_true = torch.tensor([1.0, 1.0, 0.0])\n\n# 均方误差（MSE）：平均每个样本 (pred - true)^2\nloss_fn = torch.nn.MSELoss()\nloss = loss_fn(y_pred, y_true)\nprint(\"MSE loss =\", loss.item())  # 输出一个标量，这就是「疼痛值」\n```\n\n---\n\n## 2. 回归任务常用：MSE 与 MAE\n\n当你要预测的是连续数值（房价、温度、销量），叫回归（Regression）。\n\n- **均方误差（Mean Squared Error, MSE）**：`mean((y_pred - y_true)^2)`。对大误差惩罚重，梯度平滑，但容易被离群点（outlier）带偏。\n- **平均绝对误差（Mean Absolute Error, MAE）**：`mean(|y_pred - y_true|)`。对离群点更鲁棒，但在 0 点不可导，收敛可能慢。\n\n**关键结论：误差的「平方」放大了大错的代价；误差的「绝对值」更公平但不够光滑。**\n\n```python\nimport torch\nimport torch.nn as nn\n\npred = torch.tensor([2.0, 4.0, 6.0])\ntrue = torch.tensor([2.5, 5.0, 5.5])\n\nmse = nn.MSELoss()(pred, true)\nmae = nn.L1Loss()(pred, true)  # L1Loss 就是 MAE\nprint(f\"MSE={mse.item():.4f}, MAE={mae.item():.4f}\")\n# MSE 对 4.0 vs 5.0 这种较大误差惩罚更重，所以通常比 MAE 大\n```\n\n---\n\n## 3. 分类任务常用：交叉熵（Cross-Entropy）\n\n当你要判断「是猫/是狗」「这封邮件是不是垃圾邮件」，叫分类（Classification）。\n\n分类模型通常先输出 logits（未归一化的分数），再通过 Softmax（多分类）或 Sigmoid（二分类）变成概率。\n\n交叉熵（Cross-Entropy, CE）衡量两个概率分布的差异：预测越自信地犯错，损失越大。\n\n二分类用 **BCEWithLogitsLoss**（内部自带 Sigmoid，数值更稳定）；多分类用 **CrossEntropyLoss**（内部自带 Softmax）。\n\n**关键结论：分类问题几乎不用 MSE，因为交叉熵的梯度对「自信的错误」惩罚更合理，训练更快。**\n\n```python\nimport torch\nimport torch.nn as nn\n\n# --- 二分类示例 ---\nlogits = torch.tensor([2.0, -1.0, 0.5])   # 模型原始输出\nlabels = torch.tensor([1.0, 0.0, 1.0])    # 0/1 标签\nbce = nn.BCEWithLogitsLoss()(logits, labels)\nprint(\"BCE loss =\", bce.item())\n\n# --- 多分类示例（3 个类别）---\nlogits_mc = torch.tensor([[2.0, 1.0, 0.1],   # 样本1\n                          [0.5, 2.5, 0.3]])  # 样本2\nlabels_mc = torch.tensor([0, 1])             # 正确类别索引\nce = nn.CrossEntropyLoss()(logits_mc, labels_mc)\nprint(\"CrossEntropy loss =\", ce.item())\n```\n\n---\n\n## 4. 工程视角：损失函数怎么选、怎么调\n\n选损失函数不是「越高级越好」，而是看任务和标签：\n\n| 任务 | 输出 | 常用损失 |\n|---|---|---|\n| 回归 | 连续值 | MSELoss / L1Loss / SmoothL1Loss |\n| 二分类 | 1 个 logit | BCEWithLogitsLoss |\n| 多分类 | C 个 logit | CrossEntropyLoss |\n| 类别极不平衡 | C 个 logit | CrossEntropyLoss(weight=...) |\n| 多标签分类 | C 个独立 logit | BCEWithLogitsLoss |\n\n工程要点：\n1. **数值稳定性（numerical stability）**：优先用带 `WithLogits` 的版本，避免手动 Softmax/Sigmoid 后取 log 导致溢出。\n2. **类别权重（class weight）**：少数类样本给更高权重，缓解不平衡。\n3. **多任务（multi-task）**：总损失 = `w1 * loss1 + w2 * loss2`，权重是超参数（hyperparameter）。\n4. **监控 loss 曲线**：训练 loss 不降，先检查标签格式、损失函数是否匹配任务。\n\n**关键结论：损失函数和任务、标签编码方式必须严格匹配。错配是新手最常见的「训练完全不收敛」原因。**\n\n```python\nimport torch\nimport torch.nn as nn\n\n# 类别不平衡：类别 0 有 100 个样本，类别 1 只有 10 个\n# 给类别 1 更高权重，让模型不敢忽略它\nweights = torch.tensor([1.0, 10.0])\nlogits = torch.tensor([[2.0, 0.1], [0.2, 1.8]])\nlabels = torch.tensor([0, 1])\nloss_fn = nn.CrossEntropyLoss(weight=weights)\nprint(\"加权 CE loss =\", loss_fn(logits, labels).item())\n\n# 多任务损失组合示例\ntask_a_loss = torch.tensor(0.5)\ntask_b_loss = torch.tensor(1.2)\ntotal = 0.7 * task_a_loss + 0.3 * task_b_loss\nprint(\"Total multi-task loss =\", total.item())\n```\n\n---\n\n## 5. 一个完整的最小训练循环\n\n把前面串起来：定义模型、损失、优化器（Optimizer），跑几步梯度下降，观察 loss 是否下降。\n\n**关键结论：损失函数只有嵌入「前向 → 算 loss → 反向 → 更新」的循环里才有意义。**\n\n```python\nimport torch\nimport torch.nn as nn\n\n# 1. 造一份极简数据：y = 2x + 1\ntorch.manual_seed(0)\nX = torch.randn(100, 1)\ny = 2 * X + 1 + 0.1 * torch.randn(100, 1)\n\n# 2. 定义模型：一层线性层\nmodel = nn.Linear(1, 1)\n\n# 3. 损失函数 & 优化器\nloss_fn = nn.MSELoss()\noptimizer = torch.optim.SGD(model.parameters(), lr=0.1)\n\n# 4. 训练循环\nfor epoch in range(50):\n    pred = model(X)              # 前向传播\n    loss = loss_fn(pred, y)      # 计算损失\n    optimizer.zero_grad()        # 清空旧梯度\n    loss.backward()              # 反向传播\n    optimizer.step()             # 更新参数\n    if epoch % 10 == 0:\n        print(f\"Epoch {epoch:02d}, loss={loss.item():.4f}\")\n\n# 5. 看看学到的参数（应接近 w=2, b=1）\nw, b = model.weight.item(), model.bias.item()\nprint(f\"Learned: w={w:.3f}, b={b:.3f}\")\n```\n\n看到 loss 从大变小、`w` 接近 2、`b` 接近 1，说明损失函数正确地把「错多少」传导给了参数更新。\n",
+  "quiz": [
+    {
+      "kp": "ai.nn.linear",
+      "type": "single_choice",
+      "question": "在 PyTorch 中，nn.Linear(in_features=4, out_features=3) 的权重矩阵形状（weight.shape）是下列哪一个？",
+      "options": [
+        "(4, 3)",
+        "(3, 4)",
+        "(4,)",
+        "(3,)"
+      ],
+      "answer": 1,
+      "explanation": "nn.Linear 的 weight 形状为 (out_features, in_features)，即 (3, 4)；偏置 bias 的形状为 (out_features,)，即 (3,)。干扰项 (4, 3) 是常见误解，误以为与输入维度在前。",
+      "error_tag": "概念混淆",
+      "variant_group": "linear_weight_shape"
+    },
+    {
+      "kp": "ai.nn.linear",
+      "type": "single_choice",
+      "question": "有一个 nn.Linear(8, 5) 层，输入张量 x 的形状为 (2, 8)。该层输出张量的形状是？",
+      "options": [
+        "(2, 5)",
+        "(2, 8)",
+        "(5, 2)",
+        "(8, 5)"
+      ],
+      "answer": 0,
+      "explanation": "nn.Linear 对输入的最后一维做线性变换，输出最后一维变为 out_features=5，前面维度不变，因此输出形状为 (2, 5)。干扰项 (2, 8) 是错误地认为维度不变，其余选项是把维度顺序弄错。",
+      "error_tag": "形状推理错误",
+      "variant_group": "linear_output_shape"
+    },
+    {
+      "kp": "ai.nn.linear",
+      "type": "single_choice",
+      "question": "下列哪种输入不适用于 nn.Linear(5, 3)？",
+      "options": [
+        "形状 (7, 5)",
+        "形状 (2, 7, 5)",
+        "形状 (5,)",
+        "形状 (7, 6)"
+      ],
+      "answer": 3,
+      "explanation": "nn.Linear(5, 3) 要求输入最后一维为 5。形状 (7, 6) 最后一维是 6，不匹配，会报错。其余选项最后一维均为 5，合法。",
+      "error_tag": "形状推理错误",
+      "variant_group": "linear_input_dim"
+    },
+    {
+      "kp": "ai.nn.linear",
+      "type": "single_choice",
+      "question": "关于 nn.Linear 层的输出，下列说法正确的是？",
+      "options": [
+        "输出的最后一维等于 out_features",
+        "输出的最后一维等于 in_features",
+        "输出与输入形状完全一致",
+        "输出维度与批量大小有关"
+      ],
+      "answer": 0,
+      "explanation": "nn.Linear 只改变最后一维，从 in_features 变为 out_features，批量维度保持不变。干扰项误以为输出维度与批量大小相关或忽略维度变换。",
+      "error_tag": "概念混淆",
+      "variant_group": "linear_output_rule"
+    },
+    {
+      "kp": "ai.nn.linear",
+      "type": "single_choice",
+      "question": "某模型中使用 self.fc = nn.Linear(128, 10)，输入特征向量的形状为 (32, 128)。经过该层后，其参数数量（权重+偏置）是？",
+      "options": [
+        "1280",
+        "1290",
+        "1280+10",
+        "128×10+128"
+      ],
+      "answer": 1,
+      "explanation": "权重参数量为 10×128=1280，偏置参数量为 10，合计 1290。干扰项 1280 忽略偏置，其他选项计算方式错误。",
+      "error_tag": "计算错误",
+      "variant_group": "linear_param_count"
+    },
+    {
+      "kp": "ai.nn.linear",
+      "type": "single_choice",
+      "question": "在 PyTorch 中，想要创建一个无偏置的线性层，正确的写法是？",
+      "options": [
+        "nn.Linear(4, 3, bias=False)",
+        "nn.Linear(4, 3, use_bias=False)",
+        "nn.Linear(4, 3, bias=0)",
+        "nn.Linear(4, 3).no_bias()"
+      ],
+      "answer": 0,
+      "explanation": "nn.Linear 使用 bias 参数控制是否包含偏置，设为 False 即无偏置。干扰项使用了不存在的参数名或方法。",
+      "error_tag": "API 参数误用",
+      "variant_group": "linear_bias_setting"
+    },
+    {
+      "kp": "ai.nn.linear",
+      "type": "single_choice",
+      "question": "如果一个 nn.Linear 层的 weight 形状为 (7, 2)，那么 out_features 等于？",
+      "options": [
+        "2",
+        "7",
+        "5",
+        "14"
+      ],
+      "answer": 1,
+      "explanation": "weight 形状为 (out_features, in_features)，所以 out_features=7。干扰项 2 是误把 in_features 当 out_features。",
+      "error_tag": "概念混淆",
+      "variant_group": "linear_weight_shape"
+    },
+    {
+      "kp": "ai.nn.linear",
+      "type": "single_choice",
+      "question": "在自定义网络层时使用 nn.Linear，若输入张量 x 形状为 (16, 32, 64)，且该层为 nn.Linear(64, 128)，则输出形状是？",
+      "options": [
+        "(16, 32, 128)",
+        "(16, 128, 64)",
+        "(16, 32, 64)",
+        "(128, 32, 64)"
+      ],
+      "answer": 0,
+      "explanation": "nn.Linear 只对最后一维进行变换，前面维度 (16, 32) 保持不变，最后一维由 64 变为 128，输出为 (16, 32, 128)。",
+      "error_tag": "形状推理错误",
+      "variant_group": "linear_output_shape"
+    },
+    {
+      "kp": "ai.nn.linear",
+      "type": "single_choice",
+      "question": "如果想对形状为 (N, C) 的输入进行特征维度从 C 到 D 的线性映射，应使用？",
+      "options": [
+        "nn.Linear(C, D)",
+        "nn.Linear(D, C)",
+        "nn.Linear(N, D)",
+        "nn.Linear(C, N)"
+      ],
+      "answer": 0,
+      "explanation": "输入最后一维为 C，需要映射到 D，因此 in_features=C、out_features=D，即 nn.Linear(C, D)。干扰项把输入输出维度写反或用了批量维度。",
+      "error_tag": "API 参数误用",
+      "variant_group": "linear_construction"
+    },
+    {
+      "kp": "ai.nn.linear",
+      "type": "single_choice",
+      "question": "下列关于 nn.Linear 与全连接层关系的描述正确的是？",
+      "options": [
+        "nn.Linear 就是全连接层，对输入的每个位置做独立的线性变换",
+        "nn.Linear 内部包含非线性激活函数",
+        "nn.Linear 只处理二维输入",
+        "nn.Linear 是卷积层的一种"
+      ],
+      "answer": 0,
+      "explanation": "nn.Linear 即全连接层，对每个样本（或序列位置）独立进行线性加权求和，不包含激活函数。干扰项误以为含激活、只处理二维或与卷积混淆。",
+      "error_tag": "概念混淆",
+      "variant_group": "linear_definition"
+    },
+    {
+      "kp": "ai.nn.linear",
+      "type": "single_choice",
+      "question": "若在 PyTorch 中写 nn.Linear(10)，运行时会？",
+      "options": [
+        "正常运行，输出维度为 10",
+        "报错，因为缺少 out_features 参数",
+        "正常运行，输出维度为 1",
+        "正常运行，但 in_features 默认从 1 开始"
+      ],
+      "answer": 1,
+      "explanation": "nn.Linear 需要同时指定 in_features 和 out_features，只传一个参数会抛出 TypeError。这是常见笔误。",
+      "error_tag": "API 参数误用",
+      "variant_group": "linear_construction"
+    },
+    {
+      "kp": "ai.nn.linear",
+      "type": "single_choice",
+      "question": "一个线性层权重为 (2, 3)、偏置为 (2,)，当输入为形如 (1, 3) 的张量时，输出中每个元素是如何计算的？",
+      "options": [
+        "对输入的 3 个特征做加权求和后加上对应偏置，得到 2 个输出值",
+        "对输入的 3 个特征分别乘以偏置，得到 3 个输出值",
+        "输入与权重逐元素相乘，得到 (1, 3) 输出",
+        "将输入广播到 (1, 2)，逐元素相加"
+      ],
+      "answer": 0,
+      "explanation": "全连接计算为 y = xW^T + b，输入 3 维经过权重 (2, 3) 映射为 2 维，每个输出由 3 个加权和加对应偏置构成。干扰项混淆了矩阵乘法与逐元素运算。",
+      "error_tag": "概念混淆",
+      "variant_group": "linear_computation"
+    },
+    {
+      "kp": "ai.nn.linear",
+      "type": "single_choice",
+      "question": "某线性层权重形状为 (6, 3)，偏置形状为 (6,)。则其 in_features 和 out_features 分别是？",
+      "options": [
+        "3 和 6",
+        "6 和 3",
+        "3 和 3",
+        "6 和 6"
+      ],
+      "answer": 0,
+      "explanation": "nn.Linear 权重形状为 (out_features, in_features)，偏置为 (out_features,)。由 (6, 3) 可知 out_features=6、in_features=3。干扰项 6 和 3 是将其顺序理解为 (in_features, out_features)。",
+      "error_tag": "概念混淆",
+      "variant_group": "linear_weight_shape"
+    },
+    {
+      "kp": "ai.nn.linear",
+      "type": "single_choice",
+      "question": "下列哪一段代码正确创建了一个输入维度为 10、输出维度为 4 的线性层？",
+      "options": [
+        "torch.nn.Linear(10, 4)",
+        "torch.nn.Linear(4, 10)",
+        "torch.nn.Linear(in_features=4, out_features=10)",
+        "torch.nn.Linear(10)"
+      ],
+      "answer": 0,
+      "explanation": "nn.Linear 的前两个参数依次为 in_features 和 out_features，正确写法是 nn.Linear(10, 4)。干扰项把参数顺序写反，或只提供一个参数（会报错缺少 out_features）。",
+      "error_tag": "API 参数误用",
+      "variant_group": "linear_construction"
+    },
+    {
+      "kp": "ai.nn.linear",
+      "type": "single_choice",
+      "question": "给定 self.fc = nn.Linear(5, 2)，若输入张量 x 的形状为 (3, 5)，执行 self.fc(x) 后得到张量的维度是？",
+      "options": [
+        "(3, 2)",
+        "(2, 3)",
+        "(3, 5)",
+        "(5, 2)"
+      ],
+      "answer": 0,
+      "explanation": "批量维度 3 保留，最后一维由 in_features=5 映射为 out_features=2，输出为 (3, 2)。干扰项 (2, 3) 是错误交换了维度顺序，(3, 5) 是忽略映射，(5, 2) 是混淆了权重形状。",
+      "error_tag": "形状推理错误",
+      "variant_group": "linear_output_shape"
+    },
+    {
+      "kp": "ai.nn.linear",
+      "type": "single_choice",
+      "question": "某线性层的权重形状为 (5, 4)，现输入信号的最后一维是 4。若将该层改为权重形状为 (5, 6) 的新层，输入维度应满足什么条件？",
+      "options": [
+        "最后一维为 6",
+        "最后一维为 5",
+        "最后一维为 4",
+        "任意维度均可"
+      ],
+      "answer": 0,
+      "explanation": "in_features 必须等于输入最后一维，权重 (5, 6) 对应 in_features=6，因此输入最后一维需为 6。干扰项混淆了 in_features 与 out_features。",
+      "error_tag": "形状推理错误",
+      "variant_group": "linear_input_dim"
+    },
+    {
+      "kp": "ai.nn.linear",
+      "type": "single_choice",
+      "question": "在 PyTorch 的 nn.Linear 层中，偏置参数 bias 的形状通常是？",
+      "options": [
+        "(out_features,)",
+        "(in_features,)",
+        "(out_features, in_features)",
+        "(1, out_features)"
+      ],
+      "answer": 0,
+      "explanation": "nn.Linear 的 bias 是一维张量，长度为 out_features，与权重每一行对应。干扰项常被误以为是 (in_features,) 或二维。",
+      "error_tag": "概念混淆",
+      "variant_group": "linear_bias_shape"
+    },
+    {
+      "kp": "ai.nn.linear",
+      "type": "single_choice",
+      "question": "下列关于 nn.Linear 的叙述正确的是？",
+      "options": [
+        "它只能处理一维输入",
+        "它可以接受任意形状的输入，但要求最后一维等于 in_features",
+        "它要求输入必须是二维 (N, in_features)",
+        "它会在输出前自动加入 Softmax"
+      ],
+      "answer": 1,
+      "explanation": "nn.Linear 对输入最后一维进行线性变换，可接受任意带批量维度的输入，只要最后一维等于 in_features。干扰项把它误当成只接受一维或二维输入，或误以为内含激活函数。",
+      "error_tag": "概念混淆",
+      "variant_group": "linear_input_shape_rule"
+    },
+    {
+      "kp": "ai.nn.linear",
+      "type": "single_choice",
+      "question": "在初始化 nn.Linear(3, 2) 时，如果不设置 bias 参数，其默认值是？",
+      "options": [
+        "True（默认存在偏置）",
+        "False（默认无偏置）",
+        "0",
+        "None"
+      ],
+      "answer": 0,
+      "explanation": "PyTorch 的 nn.Linear 默认 bias=True，即默认包含偏置项。干扰项常见误解是以为默认无偏置或默认值为 0。",
+      "error_tag": "API 参数误用",
+      "variant_group": "linear_bias_default"
+    },
+    {
+      "kp": "ai.nn.linear",
+      "type": "single_choice",
+      "question": "设 x 为形状 (4, 6) 的张量，nn.Linear(6, 1) 的输出形状是？",
+      "options": [
+        "(4, 1)",
+        "(4,)",
+        "(1, 4)",
+        "(6, 1)"
+      ],
+      "answer": 0,
+      "explanation": "批量维度 4 保留，最后一维映射为 1，输出形状为 (4, 1)。干扰项 (4,) 是误以为线性层会自动去维。",
+      "error_tag": "形状推理错误",
+      "variant_group": "linear_output_shape"
+    },
+    {
+      "kp": "ai.nn.activation",
+      "type": "single_choice",
+      "question": "在神经网络中，激活函数的核心作用是什么？",
+      "options": [
+        "把输入特征缩放到 0 到 1 之间",
+        "为网络引入非线性，使模型能拟合复杂函数",
+        "减少参数数量，防止过拟合",
+        "加速梯度下降的收敛速度，但会去掉非线性"
+      ],
+      "answer": 1,
+      "explanation": "若没有非线性激活函数，多层网络叠加后仍等价于单个线性变换，无法拟合复杂函数。激活函数的作用是引入非线性，而不是归一化、减少参数或去掉非线性。",
+      "error_tag": "概念混淆",
+      "variant_group": "activation_purpose"
+    },
+    {
+      "kp": "ai.nn.activation",
+      "type": "single_choice",
+      "question": "关于 Sigmoid 激活函数 σ(x)=1/(1+e^{-x})，下列说法正确的是？",
+      "options": [
+        "输出范围为 (-1, 1)，且关于原点对称",
+        "输出范围为 (0, 1)，当输入绝对值很大时梯度会趋近于 0",
+        "输出范围为 [0, +∞)，不会出现梯度消失",
+        "在 x=0 处输出为 0，常用于输出层做概率"
+      ],
+      "answer": 1,
+      "explanation": "Sigmoid 输出在 (0,1)，两端饱和导致导数接近 0，容易梯度消失。它是非负的、在 x=0 处输出 0.5，不是 0，也不关于原点对称。",
+      "error_tag": "概念混淆",
+      "variant_group": "sigmoid_property"
+    },
+    {
+      "kp": "ai.nn.activation",
+      "type": "single_choice",
+      "question": "关于 GELU 激活函数，下列描述正确的是？",
+      "options": [
+        "它是一种平滑、非单调的激活，形式与高斯分布累积相关，常用于 Transformer",
+        "它是分段线性的，和 ReLU 完全相同",
+        "它没有负值，输出范围是 [0, +∞)",
+        "它只能用于卷积网络，不能用于 Transformer"
+      ],
+      "answer": 0,
+      "explanation": "GELU 是平滑、非单调的激活，常写作 x·Φ(x)（Φ 为标准正态 CDF），在 Transformer 等模型中广泛使用，并不是分段线性。",
+      "error_tag": "概念混淆",
+      "variant_group": "gelu_property"
+    },
+    {
+      "kp": "ai.nn.activation",
+      "type": "single_choice",
+      "question": "关于 Swish/SiLU（f(x)=x·σ(x)），下列说法正确的是？",
+      "options": [
+        "它是平滑非单调的，在负值区域有小幅负输出，常与 ReLU 系列作对比",
+        "它是单调递增且有界的，输出在 (0,1)",
+        "它将所有负输入置为 0",
+        "它需要手动指定负半轴斜率参数 α"
+      ],
+      "answer": 0,
+      "explanation": "Swish/SiLU 平滑、非单调，负区有小的负值，整体无界；它不在负区置 0，也不需要像 Leaky ReLU 那样手动给出负斜率。",
+      "error_tag": "概念混淆",
+      "variant_group": "swish_property"
+    },
+    {
+      "kp": "ai.nn.activation",
+      "type": "multi_choice",
+      "question": "下列关于激活函数梯度与训练的说法，正确的有？",
+      "options": [
+        "Sigmoid 与 tanh 在输入绝对值很大时导数趋近于 0，可能导致梯度消失",
+        "ReLU 在正半轴导数恒为 1，在一定程度上缓解梯度消失",
+        "ReLU 在负半轴导数为 0，可能造成神经元死亡",
+        "Softmax 常用于隐层，因为它的导数恒为 1"
+      ],
+      "answer": [
+        0,
+        1,
+        2
+      ],
+      "explanation": "Sigmoid/tanh 两端饱和导致梯度消失；ReLU 正半轴梯度为 1 缓解该问题，但负半轴梯度为 0 有死亡风险。Softmax 常作多分类输出层，且其导数并非恒为 1。",
+      "error_tag": "概念混淆",
+      "variant_group": "gradient_saturation"
+    },
+    {
+      "kp": "ai.nn.activation",
+      "type": "multi_choice",
+      "question": "以下关于 ReLU 及其变体的说法，正确的有？",
+      "options": [
+        "ReLU 计算简单，是许多网络默认的隐层激活",
+        "Leaky ReLU 在负半轴引入小斜率，可缓解神经元死亡",
+        "PReLU 将负半轴斜率作为可学习参数",
+        "ReLU 的输出是零中心的"
+      ],
+      "answer": [
+        0,
+        1,
+        2
+      ],
+      "explanation": "ReLU 计算简单、常用；Leaky ReLU 负半轴固定小斜率，PReLU 将斜率设为可学习参数。ReLU 输出非负，不是零中心。",
+      "error_tag": "概念混淆",
+      "variant_group": "relu_variants"
+    },
+    {
+      "kp": "ai.nn.activation",
+      "type": "multi_choice",
+      "question": "关于分类/回归输出层的激活选择，下列正确的有？",
+      "options": [
+        "二分类常用 Sigmoid 输出一个概率",
+        "多分类常用 Softmax 输出各类概率",
+        "回归任务常使用恒等映射（不加激活）",
+        "多分类输出层使用 Softmax 后，各类别概率之和约为 1"
+      ],
+      "answer": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "explanation": "Sigmoid 适合二分类概率，Softmax 适合多分类概率分布且和为 1，回归通常不加激活（线性输出）。四项均正确。",
+      "error_tag": "记忆缺失",
+      "variant_group": "output_layer_choice"
+    },
+    {
+      "kp": "ai.nn.activation",
+      "type": "fill_blank",
+      "question": "已知 ReLU 定义为 max(0, x)。当输入 x = -3 时，ReLU 的输出是 ____；当输入 x = 5 时，ReLU 的输出是 ____。",
+      "options": [],
+      "answer": [
+        "0, 5",
+        "0 5",
+        "0,5",
+        "0、5"
+      ],
+      "explanation": "ReLU 对负输入输出 0，对正输入原样输出，因此 -3→0，5→5。",
+      "error_tag": "概念混淆",
+      "variant_group": "relu_property"
+    },
+    {
+      "kp": "ai.nn.activation",
+      "type": "fill_blank",
+      "question": "激活函数中，输出范围在 (-1, 1) 且零中心、常用于隐层的是 ____；而在多分类任务中把一组实数映射为概率分布、输出和为 1 的是 ____。",
+      "options": [],
+      "answer": [
+        "tanh, softmax",
+        "tanh softmax",
+        "tanh、softmax",
+        "tanh, Softmax"
+      ],
+      "explanation": "tanh 输出 (-1,1) 且零中心；Softmax 把实数向量转成和为 1 的概率分布，用于多分类输出层。",
+      "error_tag": "记忆缺失",
+      "variant_group": "activation_family"
+    },
+    {
+      "kp": "ai.nn.activation",
+      "type": "code_reading",
+      "question": "阅读下面代码并回答问题：\nimport numpy as np\nx = np.array([-2.0, 0.0, 2.0])\nrelu = np.maximum(0, x)\nprint(relu)\n输出的数组是什么？简要说明原因。",
+      "options": [],
+      "answer": "输出为 [0. 0. 2.]。因为 ReLU 对每个元素取 max(0, x)：-2 落到 0，0 仍是 0，2 保持为 2。",
+      "explanation": "np.maximum(0, x) 逐元素计算 max(0, x)，这正是 ReLU 的向量化实现，负值被截断为 0，非负值保持原样。",
+      "error_tag": "概念混淆",
+      "variant_group": "relu_property"
+    },
+    {
+      "kp": "ai.nn.activation",
+      "type": "code_reading",
+      "question": "已知 sigmoid 定义为 1/(1+exp(-x))，代码 f = lambda x: 1/(1+np.exp(-x))。当 x 分别取 -1000、0、1000 时，f(x) 的值大致是什么？从中可以看出 Sigmoid 的什么性质？",
+      "options": [],
+      "answer": "f(-1000) ≈ 0，f(0) = 0.5，f(1000) ≈ 1。说明 Sigmoid 输出在 (0,1)，两端会饱和，导数在两端趋近 0（梯度消失）。",
+      "explanation": "Sigmoid 是 S 形有界函数，极端输入时输出贴近 0 或 1，对应导数趋于 0，这正是深层网络中梯度消失的根源之一。",
+      "error_tag": "边界错误",
+      "variant_group": "gradient_saturation"
+    },
+    {
+      "kp": "ai.nn.activation",
+      "type": "scenario",
+      "question": "你在训练一个 30 层的全连接网络做手写数字分类。起初隐层全部用 Sigmoid 激活，发现训练损失下降非常慢，且深层网络表现还不如浅层。你会怎么调整激活函数，为什么？",
+      "options": [],
+      "answer": null,
+      "explanation": "Sigmoid 两端饱和会导致梯度消失，深层网络难以训练。换成 ReLU 等非饱和激活可缓解梯度消失、加快收敛，同时仍保留非线性。关键词需覆盖替换方向、原因（梯度消失）与效果（收敛）。",
+      "error_tag": "边界错误",
+      "variant_group": "activation_practice",
+      "required_keywords": [
+        "梯度消失",
+        "ReLU",
+        "非饱和激活函数",
+        "收敛",
+        "非线性"
+      ]
+    },
+    {
+      "kp": "ai.nn.activation",
+      "type": "single_choice",
+      "question": "关于 tanh 激活函数，下列说法正确的是？",
+      "options": [
+        "输出范围为 (0, 1)，和 Sigmoid 完全相同",
+        "输出范围为 (-1, 1)，且零中心化，通常比 Sigmoid 收敛更快",
+        "输出范围为 (-∞, +∞)，是无界函数",
+        "在输入很大时导数趋近于 1，不会饱和"
+      ],
+      "answer": 1,
+      "explanation": "tanh 输出 (-1,1) 且零中心，通常比 Sigmoid 收敛更好，但两端同样饱和，仍存在梯度消失问题，并不是无界函数。",
+      "error_tag": "概念混淆",
+      "variant_group": "tanh_property"
+    },
+    {
+      "kp": "ai.nn.activation",
+      "type": "single_choice",
+      "question": "ReLU 激活函数定义为 max(0, x)，下列说法正确的是？",
+      "options": [
+        "当 x<0 时输出为 x，负半轴梯度为 1",
+        "当 x>0 时梯度恒为 1，当 x<0 时梯度为 0，可能出现『神经元死亡』",
+        "输出范围是 (-1, 1)，适合作为概率输出",
+        "ReLU 处处可导，不会出现不可导点"
+      ],
+      "answer": 1,
+      "explanation": "ReLU 正半轴梯度为 1，负半轴输出恒为 0、梯度为 0，若某神经元长期落在负区可能不再更新（死亡）。它在 x=0 处不可导。",
+      "error_tag": "概念混淆",
+      "variant_group": "relu_property"
+    },
+    {
+      "kp": "ai.nn.activation",
+      "type": "single_choice",
+      "question": "关于 Leaky ReLU（f(x)=max(αx, x)，α 为小的正常数，如 0.01），它相对于标准 ReLU 的主要改进是什么？",
+      "options": [
+        "让负半轴也有一个小的非零斜率，缓解神经元死亡问题",
+        "把输出范围限制在 (0, 1)",
+        "使函数在 x=0 处可导",
+        "让负半轴输出恒为 0，从而更快"
+      ],
+      "answer": 0,
+      "explanation": "Leaky ReLU 在负半轴给出小斜率 α，使负区梯度非零，缓解 ReLU 的神经元死亡，但它在 x=0 处仍不可导，也不把输出限制到 (0,1)。",
+      "error_tag": "概念混淆",
+      "variant_group": "leaky_relu_property"
+    },
+    {
+      "kp": "ai.nn.activation",
+      "type": "single_choice",
+      "question": "Softmax 函数通常用在网络的什么位置，它的输出具有什么含义？",
+      "options": [
+        "隐层，输出为 [-1,1] 的特征",
+        "多分类输出层，输出各类别的概率分布，各分量非负且和为 1",
+        "二分类隐层，输出为单个 0/1 值",
+        "任意层，用于把输入标准化为均值 0 方差 1"
+      ],
+      "answer": 1,
+      "explanation": "Softmax 把一组实数映射为分布，常用于多分类输出层，分量在 (0,1) 且和为 1，表示各类别概率；标准化均值方差是另一类操作。",
+      "error_tag": "概念混淆",
+      "variant_group": "softmax_property"
+    },
+    {
+      "kp": "ai.nn.activation",
+      "type": "single_choice",
+      "question": "下列哪一组是常见的『平滑、有界、零中心』激活函数？",
+      "options": [
+        "ReLU",
+        "tanh",
+        "Leaky ReLU",
+        "Maxout"
+      ],
+      "answer": 1,
+      "explanation": "tanh 平滑可导、输出有界 (-1,1) 且零中心；ReLU 与 Leaky ReLU 都是分段线性、非平滑；Maxout 也是分段线性且非平滑。",
+      "error_tag": "记忆缺失",
+      "variant_group": "activation_family"
+    },
+    {
+      "kp": "ai.nn.activation",
+      "type": "single_choice",
+      "question": "在深层网络中使用 Sigmoid 作为隐层激活，最常被抱怨的问题是什么？",
+      "options": [
+        "输出不是零中心，且深层梯度易消失，训练缓慢",
+        "输出范围过大，导致数值溢出",
+        "会把网络变成纯线性模型",
+        "计算量太大，无法在 GPU 上运行"
+      ],
+      "answer": 0,
+      "explanation": "Sigmoid 输出非零中心、两端饱和使梯度很小，深层网络易梯度消失，训练慢；它计算并不特别昂贵，也不会变成线性模型。",
+      "error_tag": "边界错误",
+      "variant_group": "sigmoid_property"
+    },
+    {
+      "kp": "ai.nn.activation",
+      "type": "single_choice",
+      "question": "关于激活函数在输出层的选择，下列说法最合理的是？",
+      "options": [
+        "回归任务常不加激活或使用恒等映射；二分类常用 Sigmoid；多分类常用 Softmax",
+        "任何任务输出层都必须使用 Softmax",
+        "二分类输出层必须使用 tanh",
+        "输出层不应使用任何激活函数，否则无法反传"
+      ],
+      "answer": 0,
+      "explanation": "输出层激活由任务决定：回归用线性/恒等，二分类用 Sigmoid 给概率，多分类用 Softmax；输出层使用激活不影响反传。",
+      "error_tag": "概念混淆",
+      "variant_group": "output_layer_choice"
+    },
+    {
+      "kp": "ai.nn.activation",
+      "type": "single_choice",
+      "question": "以下关于 ELU（指数线性单元）的陈述，哪一项是正确的？",
+      "options": [
+        "x>0 时输出 x，x<0 时输出 α(e^x - 1)，负区输出可接近 -α 且梯度非零",
+        "其输出恒为非负数",
+        "它把负半轴完全置为 0",
+        "它在整个定义域上不可导"
+      ],
+      "answer": 0,
+      "explanation": "ELU 正半轴为 x，负半轴为 α(e^x-1)，输出下限为 -α，负区平滑且梯度非零；它并非处处不可导，负区也不是恒为 0。",
+      "error_tag": "概念混淆",
+      "variant_group": "elu_property"
+    },
+    {
+      "kp": "ai.nn.loss",
+      "type": "single_choice",
+      "question": "在神经网络训练中，损失函数（loss function）的核心作用是：",
+      "options": [
+        "直接决定网络有多少层",
+        "衡量模型预测值与真实目标之间的差距，为参数更新提供优化信号",
+        "对输入数据做归一化处理",
+        "决定每个神经元的激活函数类型"
+      ],
+      "answer": 1,
+      "explanation": "损失函数量化预测与目标之间的差异，反向传播据此计算梯度来更新参数。层数、归一化、激活函数都各自是独立的设计要素，不由损失函数决定。",
+      "error_tag": "概念混淆",
+      "variant_group": "loss_basic_role"
+    },
+    {
+      "kp": "ai.nn.loss",
+      "type": "single_choice",
+      "question": "做多分类任务，网络输出经过 softmax 得到各类别概率，标签是互斥的单一类别。最合适的损失函数是：",
+      "options": [
+        "均方误差（MSE）",
+        "二元交叉熵（BCE）",
+        "交叉熵损失（Cross Entropy，配合 softmax）",
+        "平均绝对误差（MAE）"
+      ],
+      "answer": 2,
+      "explanation": "互斥多分类通常用 softmax + 交叉熵，它与最大似然一致且梯度形式良好。BCE 适用于多个独立的二分类标签；MSE/MAE 常用于回归。",
+      "error_tag": "概念混淆",
+      "variant_group": "loss_task_matching"
+    },
+    {
+      "kp": "ai.nn.loss",
+      "type": "multi_choice",
+      "question": "以下关于损失函数选择的说法，正确的有哪些？",
+      "options": [
+        "互斥多分类常用 softmax + 交叉熵",
+        "多标签分类可对每个标签使用二元交叉熵",
+        "回归任务常用 MSE、MAE 或 Huber 损失",
+        "交叉熵损失天然适合回归连续值预测",
+        "任何任务都应使用同一种损失函数"
+      ],
+      "answer": [
+        0,
+        1,
+        2
+      ],
+      "explanation": "前三项符合常见任务与损失的对应关系；交叉熵面向概率/类别分布，不天然适合回归连续值；不同任务应选择匹配的损失。",
+      "error_tag": "概念混淆",
+      "variant_group": "loss_task_matching_multi"
+    },
+    {
+      "kp": "ai.nn.loss",
+      "type": "multi_choice",
+      "question": "在训练中遇到损失值变成 NaN（数值不稳定）时，以下哪些做法是合理的排查方向？",
+      "options": [
+        "检查是否存在先做 softmax 再取对数导致的数值下溢",
+        "检查学习率是否过大导致参数飞散",
+        "检查输入或标签是否有异常值/非法取值",
+        "直接放弃损失函数，改为不训练",
+        "使用带 logits 的稳定实现替代手动 softmax+log"
+      ],
+      "answer": [
+        0,
+        1,
+        2,
+        4
+      ],
+      "explanation": "NaN 常见来源包括数值下溢、学习率过大、异常输入/标签。使用更稳定的实现和排查数据是正确处理；放弃训练不是合理方案。",
+      "error_tag": "边界错误",
+      "variant_group": "loss_nan_debug"
+    },
+    {
+      "kp": "ai.nn.loss",
+      "type": "multi_choice",
+      "question": "关于 softmax 交叉熵与二元交叉熵的适用差异，正确的有：",
+      "options": [
+        "softmax 交叉熵隐含各类别互斥（概率和为 1）",
+        "二元交叉熵对每个输出独立判断，概率不要求和为 1",
+        "多标签任务（一个样本可有多个标签）更适合二元交叉熵",
+        "二元交叉熵要求各类别概率之和必须为 1",
+        "softmax 交叉熵中一个样本只能有一个正确类别"
+      ],
+      "answer": [
+        0,
+        1,
+        2,
+        4
+      ],
+      "explanation": "softmax 交叉熵对应互斥单标签，一个样本仅一个正类且概率和为 1；BCE 各输出独立，适合多标签，且不要求概率和为 1。所以第 4 项错误。",
+      "error_tag": "概念混淆",
+      "variant_group": "loss_ce_vs_bce"
+    },
+    {
+      "kp": "ai.nn.loss",
+      "type": "multi_choice",
+      "question": "以下哪些因素会影响训练中损失函数的实际行为与效果？",
+      "options": [
+        "标签的编码方式（one-hot、类别索引等）",
+        "是否对损失做加权或归一化",
+        "预测值是否以 logits 形式传入",
+        "优化器的学习率与批量大小",
+        "损失函数的实现是否数值稳定"
+      ],
+      "answer": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "explanation": "标签编码、损失加权/归一化、logits 与概率的差别、优化器超参、数值稳定性都会影响损失的实际行为和训练结果，全部正确。",
+      "error_tag": "理解不足",
+      "variant_group": "loss_affecting_factors"
+    },
+    {
+      "kp": "ai.nn.loss",
+      "type": "fill_blank",
+      "question": "在互斥多分类任务中，衡量预测分布与真实分布差异、常配合 softmax 使用的损失函数名称是____。",
+      "options": [],
+      "answer": [
+        "交叉熵",
+        "交叉熵损失",
+        "cross entropy",
+        "cross-entropy",
+        "CrossEntropyLoss"
+      ],
+      "explanation": "互斥多分类的标准做法是 softmax 输出概率后使用交叉熵损失，它等价于对真实类别概率取负对数。",
+      "error_tag": "记忆缺失",
+      "variant_group": "loss_name_ce"
+    },
+    {
+      "kp": "ai.nn.loss",
+      "type": "fill_blank",
+      "question": "回归任务中，对大误差使用平方惩罚、对离群点非常敏感的损失是____误差（填常用中文名或英文缩写均可）。",
+      "options": [],
+      "answer": [
+        "均方",
+        "均方误差",
+        "MSE",
+        "mean squared error",
+        "mean squared error loss"
+      ],
+      "explanation": "均方误差（MSE）对误差取平方，大误差被放大，因此对离群点敏感；MAE/Huber 相对更鲁棒。",
+      "error_tag": "记忆缺失",
+      "variant_group": "loss_name_mse"
+    },
+    {
+      "kp": "ai.nn.loss",
+      "type": "fill_blank",
+      "question": "当模型输出多标签、每个标签彼此独立时，通常对每个标签输出使用 sigmoid 激活，并采用____损失（填名称）。",
+      "options": [],
+      "answer": [
+        "二元交叉熵",
+        "二值交叉熵",
+        "binary cross entropy",
+        "BCE",
+        "BCELoss",
+        "binary cross-entropy"
+      ],
+      "explanation": "多标签各标签独立，对每个输出用 sigmoid + 二元交叉熵（BCE）是标准做法，不要求各标签概率和为 1。",
+      "error_tag": "记忆缺失",
+      "variant_group": "loss_name_bce"
+    },
+    {
+      "kp": "ai.nn.loss",
+      "type": "code_reading",
+      "question": "阅读下面伪代码片段并回答问题：\n\nlogits = model(x)              # 形状 (N, C)，未归一化\nprobs  = softmax(logits)       # 对最后一维做 softmax\nloss   = -log(probs[target])   # target 为正确类别索引\n\n问题：这段实现相对于直接使用带 logits 的交叉熵实现，有什么潜在风险？",
+      "options": [],
+      "answer": "先显式做 softmax 再取对数，会在概率极小时发生数值下溢或对 0 取对数，导致 loss 变成 inf/NaN 或梯度不稳定；带 logits 的交叉熵内部使用 log-sum-exp 等稳定技巧，能避免该问题。",
+      "explanation": "softmax 后某些类别概率可能小到浮点数无法表示，直接取对数会得到 -inf，进而产生 NaN。稳定的交叉熵实现把两步合并在对数域计算，规避下溢。",
+      "error_tag": "边界错误",
+      "variant_group": "loss_code_softmax_log"
+    },
+    {
+      "kp": "ai.nn.loss",
+      "type": "code_reading",
+      "question": "阅读下面伪代码并回答问题：\n\n# 两个样本，三分类，标签已转为 one-hot\npred  = [[0.7, 0.2, 0.1],\n         [0.1, 0.8, 0.1]]\nlabel = [[1, 0, 0],\n         [0, 1, 0]]\n# loss = -sum(label * log(pred)) / N\n\n问题：该损失计算得到的是哪种损失的数值？它对预测错误类别的惩罚是如何变化的？",
+      "options": [],
+      "answer": "计算的是交叉熵损失（对 one-hot 标签等于负对数似然）。真实类别预测概率越低，-log(概率) 越大，惩罚越强；概率越接近 1，损失越接近 0。",
+      "explanation": "one-hot 标签下 -sum(label*log(pred))/N 只保留正确类别的 -log(p)，即交叉熵/负对数似然。其曲线在 p→0 时急剧上升，故对高置信度错误惩罚极重。",
+      "error_tag": "理解不足",
+      "variant_group": "loss_code_ce_value"
+    },
+    {
+      "kp": "ai.nn.loss",
+      "type": "scenario",
+      "question": "工程场景：你在训练一个商品多标签分类模型（一件商品可同时属于多个类别，如「户外」「防水」）。同事把损失改成了 softmax + 交叉熵，结果发现同一商品的多个标签无法被同时预测出来。请说明问题出在哪里，以及应该如何修正。",
+      "options": [],
+      "answer": null,
+      "explanation": "softmax 交叉熵假设类别互斥、概率和为 1，只允许一个正类，因此无法表达多标签。多标签应改为对每个标签独立使用 sigmoid + 二元交叉熵，各标签概率互不约束。",
+      "error_tag": "概念混淆",
+      "variant_group": "loss_scenario_multilabel",
+      "required_keywords": [
+        "softmax",
+        "交叉熵",
+        "互斥",
+        "sigmoid",
+        "二元交叉熵"
+      ]
+    },
+    {
+      "kp": "ai.nn.loss",
+      "type": "single_choice",
+      "question": "关于交叉熵损失与负对数似然（NLL）的关系，正确的说法是：",
+      "options": [
+        "两者完全等价，没有任何区别，只是名字不同",
+        "交叉熵等于负对数似然，在分类中常指对正确类别概率取负对数",
+        "交叉熵只用于回归，NLL 只用于分类",
+        "交叉熵不需要真实标签即可计算"
+      ],
+      "answer": 1,
+      "explanation": "对 one-hot 标签的分类任务，交叉熵就等于对真实类别预测概率取负对数，即负对数似然。二者在分类语境下表达的是同一目标。",
+      "error_tag": "概念混淆",
+      "variant_group": "loss_ce_nll"
+    },
+    {
+      "kp": "ai.nn.loss",
+      "type": "scenario",
+      "question": "工程场景：你训练一个回归模型预测房价，数据中混入了个别极端高价的错误标注样本。使用均方误差（MSE）训练时，模型被这些样本严重带偏，整体误差偏大。请说明原因并给出至少一种修正思路。",
+      "options": [],
+      "answer": null,
+      "explanation": "MSE 对误差平方，极端样本带来的大误差被放大，梯度被离群点主导。可改用对离群点更鲁棒的 MAE 或 Huber 损失，或在数据层面清洗/裁剪异常样本。",
+      "error_tag": "边界错误",
+      "variant_group": "loss_scenario_outlier",
+      "required_keywords": [
+        "MSE",
+        "MAE"
+      ]
+    },
+    {
+      "kp": "ai.nn.loss",
+      "type": "single_choice",
+      "question": "在包含极多类别的分类任务中，若使用普通 softmax 交叉熵，计算开销主要来自：",
+      "options": [
+        "反向传播时对权重的更新次数",
+        "需要对所有类别计算归一化分母，类别越多计算越贵",
+        "标签编码的位数",
+        "优化器的学习率设置"
+      ],
+      "answer": 1,
+      "explanation": "softmax 需要对全部类别求和得到归一化项，类别数量大时该步骤开销显著，因此会出现负采样、层次 softmax 等近似方法。",
+      "error_tag": "理解不足",
+      "variant_group": "loss_large_vocab"
+    },
+    {
+      "kp": "ai.nn.loss",
+      "type": "single_choice",
+      "question": "某回归任务中数据存在大量离群点（outlier），你更不希望模型被这些极端值主导。相对更合适的选择是：",
+      "options": [
+        "均方误差（MSE），因为对大误差惩罚更重",
+        "平均绝对误差（MAE）或 Huber 类损失，对离群点更鲁棒",
+        "交叉熵损失",
+        "hinge 损失"
+      ],
+      "answer": 1,
+      "explanation": "MSE 对大误差是平方惩罚，离群点影响被放大；MAE 是线性惩罚，Huber 在大误差处转为线性，二者对离群点更鲁棒。",
+      "error_tag": "边界错误",
+      "variant_group": "loss_regression_robust"
+    },
+    {
+      "kp": "ai.nn.loss",
+      "type": "single_choice",
+      "question": "关于二元交叉熵（BCE）的使用，下列说法正确的是：",
+      "options": [
+        "BCE 要求标签必须是互斥的多类别之一",
+        "一个样本可以同时属于多个类别时，可对每个类别独立使用 BCE",
+        "BCE 只能配合 softmax 使用，不能配合 sigmoid",
+        "BCE 的输入必须是未归一化的 logits 才有意义，概率值不可用"
+      ],
+      "answer": 1,
+      "explanation": "多标签场景下各类别相互独立，对每个类别用 sigmoid + BCE 是标准做法。BCE 常配合 sigmoid 使用，输入既可用概率也可用 logits（数值稳定性不同）。",
+      "error_tag": "概念混淆",
+      "variant_group": "loss_bce_multilabel"
+    },
+    {
+      "kp": "ai.nn.loss",
+      "type": "single_choice",
+      "question": "从概率角度看，最小化交叉熵损失等价于：",
+      "options": [
+        "最大化模型对训练数据的似然",
+        "最小化模型的参数量",
+        "最大化模型输出分布的熵",
+        "最小化输入数据的维度"
+      ],
+      "answer": 0,
+      "explanation": "交叉熵等价于负对数似然，最小化它即最大化训练数据的似然，这是最大似然估计的体现。最大化输出熵反而会让分布更均匀，不是目标。",
+      "error_tag": "理解不足",
+      "variant_group": "loss_prob_view"
+    },
+    {
+      "kp": "ai.nn.loss",
+      "type": "single_choice",
+      "question": "某模型的损失值在训练中一直下降，但验证集损失开始上升。最可能的解释是：",
+      "options": [
+        "损失函数选错了，必须立刻更换",
+        "模型开始过拟合，训练集被记忆而泛化变差",
+        "学习率一定太大导致梯度爆炸",
+        "数据标签全部错误"
+      ],
+      "answer": 1,
+      "explanation": "训练损失下降而验证损失上升是过拟合的典型信号。它并不直接说明损失函数错误；梯度爆炸通常表现为损失剧烈震荡或变为 NaN。",
+      "error_tag": "概念混淆",
+      "variant_group": "loss_overfit_signal"
+    },
+    {
+      "kp": "ai.nn.loss",
+      "type": "single_choice",
+      "question": "在使用带 logits 的交叉熵损失时，推荐把内置的 softmax 与交叉熵合并成一步实现，主要原因是：",
+      "options": [
+        "合并后模型参数量更少",
+        "分开先做 softmax 再取对数在数值上更易下溢/不稳定，合并实现更稳定",
+        "合并后不需要真实标签",
+        "合并后可以省略反向传播"
+      ],
+      "answer": 1,
+      "explanation": "先 softmax 再求对数可能产生极小概率导致数值下溢，合并实现的内部使用 log-sum-exp 等技巧，梯度更稳定，这与参数量和是否需要标签无关。",
+      "error_tag": "理解不足",
+      "variant_group": "loss_numerical_stability"
+    },
+    {
+      "kp": "ai.nn.loss",
+      "type": "single_choice",
+      "question": "关于损失函数作为优化目标，下列说法错误的是：",
+      "options": [
+        "损失函数必须对模型参数可微（或至少可用次梯度）才能用梯度类优化器",
+        "损失函数的选择会影响梯度的形状与训练难度",
+        "只要损失函数选对了，模型结构、数据和优化器都无关紧要",
+        "多任务时可以把多个损失加权求和作为总损失"
+      ],
+      "answer": 2,
+      "explanation": "损失函数只是训练中的一个环节，模型结构、数据质量、优化器与超参都强烈影响最终效果，说其他因素无关紧要明显错误。",
+      "error_tag": "概念混淆",
+      "variant_group": "loss_optimization_role"
+    }
+  ]
+}

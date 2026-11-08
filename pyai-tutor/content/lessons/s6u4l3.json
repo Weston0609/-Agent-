@@ -1,0 +1,950 @@
+{
+  "id": "s6u4l3",
+  "title": "s6u4l3",
+  "kps": [
+    "ai.vec.faiss",
+    "ai.vec.qdrant",
+    "ai.vec.milvus"
+  ],
+  "theory": "## ai.vec.faiss\n\n# FAISS：让向量检索快如闪电\n\n## 一句话直觉\n\n当你把 100 万条文本变成 100 万条向量后，用户搜一句话，你需要**在毫秒内**从 100 万条里找最相似的 10 条——**FAISS 就是干这件事的引擎**。\n\n---\n\n## 1. 为什么需要向量检索？\n\n### 1.1 从关键词到语义\n\n传统搜索靠**关键词匹配**（keyword matching）：搜“银行 利率”，只返回含这两个词的文档。但用户写“存钱能赚多少”，语义相同，词却不一样。\n\n**向量检索**（vector retrieval）先把每条内容（文本、图片、音频）用 AI 模型编码（encode）成一个**高维向量**（embedding）。语义相近的内容，向量在空间中**距离近**。检索时，把查询也编码成向量，找**最近邻**（Nearest Neighbor, NN）。\n\n```python\n# 用一句话理解：向量就是语义坐标\n# 假设 3 维向量（真实通常 384~1536 维）\nv_dog   = [0.9, 0.1, 0.0]   # “狗”\nv_puppy = [0.85, 0.15, 0.0] # “小狗” —— 与狗很近\nv_stock = [0.0, 0.1, 0.95]  # “股票” —— 与狗很远\n```\n\n### 1.2 暴力搜索的代价\n\n假设有 N 条向量，维度 d，每次查询要和每一条算距离：\n\n- 距离计算量：N × d 次浮点乘加\n- N = 1,000,000，d = 768 时，约 7.68 亿次运算 → 单次可能几百毫秒\n- 在线上服务里，这是**不可接受的**（目标 < 10 ms）\n\nFAISS 的核心价值：**把暴力 O(N) 降到近似 O(log N) 或 O(√N)**，同时保持高召回率（recall）。\n\n---\n\n## 2. FAISS 是什么？\n\n**FAISS**（Facebook AI Similarity Search）是 Meta 开源的**向量相似度搜索库**（library），用 C++ 编写、提供 Python 接口，专门做**稠密向量**（dense vector）的高效检索。\n\n它的定位：\n\n| 维度 | 说明 |\n|------|------|\n| 不是数据库 | FAISS 是**库**，不是服务；没有 SQL、没有持久化事务 |\n| 不是模型 | 只负责“存向量 + 找近邻”，不产生向量 |\n| 强项 | 十亿级向量的毫秒级检索；支持 CPU / GPU |\n| 弱项 | 不负责元数据过滤、分布式、动态增删（需自己封装） |\n\n一句话：**FAISS 是向量检索的“发动机”，不是“整车”**。\n\n---\n\n## 3. 核心概念：索引（Index）\n\nFAISS 里一切围绕 **Index** 对象。创建、添加、查询三步走：\n\n### 3.1 最小可运行例子\n\n```python\nimport numpy as np\nimport faiss\n\n# 1. 准备数据：1000 条 64 维向量\nd = 64\nnb = 1000\nrng = np.random.default_rng(42)\n# float32 是 FAISS 要求的类型（不支持 float64）\nxb = rng.random((nb, d), dtype=np.float32)\n\n# 2. 建索引：最简单的暴力索引 IndexFlatL2\nindex = faiss.IndexFlatL2(d)   # L2 距离\nprint(\"是否已训练:\", index.is_trained)  # Flat 无需训练\nindex.add(xb)                  # 把向量加入索引\nprint(\"已存向量数:\", index.ntotal)\n\n# 3. 查询：找最近的 5 个邻居\nnq = 1\nxq = rng.random((nq, d), dtype=np.float32)\nk = 5\nD, I = index.search(xq, k)     # D=距离, I=下标\nprint(\"距离:\", D)\nprint(\"邻居 id:\", I)\n```\n\n关键 API：\n\n- `IndexFlatL2(d)`：维度 d 的**暴力精确**索引，最简单、最准、最慢。\n- `index.add(x)`：加入 N×d 的 `float32` 数组。\n- `index.search(xq, k)`：返回 `(距离, id)`，形状均为 `(nq, k)`。\n- `index.ntotal`：索引中向量总数。\n\n### 3.2 距离度量：L2 还是内积？\n\n| 索引类 | 距离 | 用于 |\n|--------|------|------|\n| `IndexFlatL2` | 欧氏距离平方 | 通用 |\n| `IndexFlatIP` | 内积（inner product） | 向量已归一化时等价于余弦相似度 |\n\n```python\nimport faiss, numpy as np\n\n# 归一化后，内积 = 余弦相似度\nxb = np.random.rand(100, 32).astype(np.float32)\nfaiss.normalize_L2(xb)\n\nindex_ip = faiss.IndexFlatIP(32)\nindex_ip.add(xb)\n\nxq = np.random.rand(1, 32).astype(np.float32)\nfaiss.normalize_L2(xq)\nscores, ids = index_ip.search(xq, 3)\nprint(scores)  # 越大越相似\n```\n\n---\n\n## 4. 进阶：让检索更快（近似索引）\n\n`IndexFlatL2` 的复杂度是 O(N·d)。当 N 到百万、千万级时，需要**近似最近邻**（Approximate Nearest Neighbor, ANN）索引，牺牲一点点召回率换巨大速度。\n\n### 4.1 IVF：先聚类再搜索\n\n**IVF**（Inverted File，倒排文件）先用 k-means 把向量空间分成 `nlist` 个聚类，查询时只搜最近几个聚类（`nprobe` 个）。\n\n```python\nimport faiss, numpy as np\n\nd = 128\nxb = np.random.rand(100_000, d).astype(np.float32)\n\nnlist = 100      # 聚类数\nquantizer = faiss.IndexFlatL2(d)                # 用于分配聚类\nindex = faiss.IndexIVFFlat(quantizer, d, nlist)\n\n# IVF 必须先训练，才能 add\nindex.train(xb)\nindex.add(xb)\n\n# nprobe 越大越准越慢\nindex.nprobe = 10\nD, I = index.search(xb[:5], 5)\nprint(I)\n```\n\n经验法则：`nlist ≈ 4 * sqrt(N)`；`nprobe` 取 `nlist` 的 1%~10%。\n\n### 4.2 PQ：压缩向量省内存\n\n**PQ**（Product Quantization，乘积量化）把 d 维向量切段，每段用一个编号近似。能把内存压缩几十倍，代价是精度下降。\n\n```python\nimport faiss, numpy as np\n\nd = 128\nxb = np.random.rand(200_000, d).astype(np.float32)\n\nm = 16                     # 切成 16 段，每段 8 维\nindex = faiss.IndexIVFPQ(faiss.IndexFlatL2(d), d, nlist=100, M=m, nbits=8)\nindex.train(xb)\nindex.add(xb)\nindex.nprobe = 10\nD, I = index.search(xb[:3], 5)\nprint(I.shape)\n```\n\n### 4.3 保存与加载索引\n\n生产环境不能每次重建索引。`write_index` / `read_index` 即可持久化：\n\n```python\nimport faiss\nfaiss.write_index(index, \"my.index\")\nloaded = faiss.read_index(\"my.index\")\nprint(loaded.ntotal)\n```\n\n---\n\n## 5. 工程级使用要点\n\n1. **数据类型**：向量必须 `np.float32` 且**连续内存**（`np.ascontiguousarray`）。否则 FAISS 会抛异常或悄悄复制。\n2. **维度一致**：索引维度 = 建索引时传入的 d；后续 add/search 必须一致。\n3. **归一化**：用余弦相似度时，先 `faiss.normalize_L2(x)` 再用 `IndexFlatIP`；或直接用 `IndexFlatIP` 并记录是否已归一化。\n4. **ID 映射**：FAISS 返回的 id 是**添加顺序**的 0,1,2,…。要映射到业务 ID，用 `IndexIDMap`：\n\n```python\nimport faiss, numpy as np\nbase = faiss.IndexFlatL2(64)\nindex = faiss.IndexIDMap(base)\n\nxb = np.random.rand(5, 64).astype(np.float32)\nids = np.array([1001, 1002, 1003, 1004, 1005], dtype=np.int64)\nindex.add_with_ids(xb, ids)\n\nD, I = index.search(xb[:1], 2)\nprint(I)  # 会返回业务 ID 而不是 0,1\n```\n\n5. **CPU / GPU**：`faiss.StandardGpuResources()` + `faiss.index_cpu_to_gpu(res, 0, index)` 可把索引搬到 GPU，适合离线批量或高并发在线。\n6. **召回评估**：用 `IndexFlatL2` 的结果当“金标准”，比较近似索引的 recall@k。\n\n```python\nimport faiss, numpy as np\nd, N = 64, 10000\nxb = np.random.rand(N, d).astype(np.float32)\nflat = faiss.IndexFlatL2(d); flat.add(xb)\nivf_q = faiss.IndexFlatL2(d)\nivf = faiss.IndexIVFFlat(ivf_q, d, nlist=100)\nivf.train(xb); ivf.add(xb); ivf.nprobe = 10\n\nxq = np.random.rand(50, d).astype(np.float32)\n_, I_flat = flat.search(xq, 10)\n_, I_ivf  = ivf.search(xq, 10)\nrecall = np.mean([len(set(a) & set(b)) / 10 for a, b in zip(I_flat, I_ivf)])\nprint(\"recall@10 =\", recall)\n```\n\n---\n\n## 小结\n\n- FAISS 解决**高维向量的近邻搜索**，是 RAG、推荐、去重、以图搜图等场景的基础设施。\n- 掌握三步：**建索引 → add → search**。\n- 从 `IndexFlatL2` 起步，规模大了换 **IVF**、**IVFPQ**。\n- 生产落地注意 **float32、归一化、ID 映射、索引持久化、召回评估**。\n\n## ai.vec.qdrant\n\n# 向量数据库 Qdrant 入门：为什么 AI 应用越来越离不开它\n\n**一句话直觉**：当你有几十万条文本、图片或用户行为的\"向量表示\"，想知道\"和这条最像的 Top-K 是谁\"时，Qdrant 就是那个能在毫秒内回答你的专业引擎——它把\"相似度搜索\"做成了数据库级别的基础设施。\n\n---\n\n## 1. 从问题出发：为什么不直接用 NumPy 算余弦相似度？\n\n向量（Vector）是一串浮点数，例如 `[0.12, -0.9, 0.33, ...]`，常常有 384、768、1536 维。给定一条查询向量（Query Vector），要找出库里与之最相似的 K 条，这叫 **最近邻搜索（Nearest Neighbor Search, 简称 NN）**。\n\nNaïve 做法是把所有向量读进内存，逐个算**余弦相似度（Cosine Similarity）**或**内积（Inner Product，也叫点积 Dot Product）**，然后排序。\n\n```python\n# 朴素的暴力检索：O(N·D) 复杂度\nimport numpy as np\n\n# 假设有 10000 条 128 维向量\ndb = np.random.rand(10000, 128).astype(\"float32\")\nquery = np.random.rand(128).astype(\"float32\")\n\n# 归一化后，内积 == 余弦相似度\ndef l2norm(m):\n    return m / np.linalg.norm(m, axis=-1, keepdims=True)\n\nscores = l2norm(db) @ l2norm(query)          # 一次矩阵乘法算完\ntopk = np.argsort(-scores)[:5]               # 取相似度最高的 5 条\nprint(\"Top-5 索引:\", topk)\n```\n\n这个方案在 1 万条时很快，但当数据涨到千万条会：占用几十 GB 内存、每次查询要几百毫秒、无法并发、重启后要重新加载、无法按元数据过滤。**向量数据库（Vector Database）**就是为解决这些问题而生的专用系统。\n\n---\n\n## 2. Qdrant 是什么：一个为向量而生的数据库\n\n**Qdrant**（读作 \"quadrant\"，象限）是一个开源向量相似度搜索引擎，用 Rust 编写，对外提供 HTTP 与 gRPC 接口，官方 Python 客户端叫 `qdrant-client`。它的核心对象有三个：\n\n- **Collection（集合）**：一组同维度、同距离度量的向量，类似关系库里的\"表\"。\n- **Point（点）**：一条记录，由 `id`（整数或 UUID）+ `vector`（向量）+ 可选 `payload`（元数据字典）组成。\n- **Distance（距离度量）**：常见三种——`Cosine`（余弦）、`Euclid`（欧氏）、`Dot`（内积）。\n\n可以用一个类比理解：**Collection 是书架，Point 是书，vector 是书的\"语义指纹\"，payload 是书名/作者/年份这类可按字段筛选的标签**。\n\nQdrant 底层用 **HNSW（Hierarchical Navigable Small World）** 图索引做 **近似最近邻（Approximate Nearest Neighbor, ANN）** 检索——牺牲一点点召回率（Recall），换来百倍以上的速度提升。\n\n---\n\n## 3. 最小可用流程：建库 → 写入 → 检索\n\nQdrant 官方推荐用 Docker 一条命令起一个本地实例：\n\n```bash\ndocker run -p 6333:6333 qdrant/qdrant\n```\n\n6333 是 HTTP/REST 端口（也是 Web UI），6334 是 gRPC 端口。然后用 Python 客户端操作：\n\n```python\nfrom qdrant_client import QdrantClient\nfrom qdrant_client.models import Distance, VectorParams, PointStruct\n\n# 1) 连接本地实例（内存模式可把 :memory: 传给 location）\nclient = QdrantClient(url=\"http://localhost:6333\")\n\n# 2) 建集合：4 维、余弦距离\nclient.recreate_collection(\n    collection_name=\"demo\",\n    vectors_config=VectorParams(size=4, distance=Distance.COSINE),\n)\n\n# 3) 写入若干点\npoints = [\n    PointStruct(id=1, vector=[0.05, 0.61, 0.76, 0.74], payload={\"tag\": \"cat\"}),\n    PointStruct(id=2, vector=[0.19, 0.81, 0.75, 0.11], payload={\"tag\": \"dog\"}),\n    PointStruct(id=3, vector=[0.36, 0.55, 0.47, 0.94], payload={\"tag\": \"cat\"}),\n]\nclient.upsert(collection_name=\"demo\", points=points)\n\n# 4) 检索：找出与查询向量最相似的 2 条\nhits = client.search(\n    collection_name=\"demo\",\n    query_vector=[0.2, 0.1, 0.9, 0.7],\n    limit=2,\n    with_payload=True,\n)\nfor h in hits:\n    print(f\"id={h.id}  score={h.score:.3f}  payload={h.payload}\")\n```\n\n**关键点**：\n- 向量的维度必须和 Collection 声明时一致，否则会报错。\n- `score` 的含义由 distance 决定：`Cosine`/`Dot` 越大越相似，`Euclid` 越小越相似。\n- `id` 可自定义（整数或 UUID），重复 upsert 会覆盖。\n\n---\n\n## 4. 真正让 Qdrant 好用的两件事：过滤 + 多向量\n\n### 4.1 Payload 过滤（Filtering）\n\n真实业务里\"最相似\"往往还要加上\"只在某个范围内\"。比如只看 `year >= 2023` 且 `lang == 'zh'` 的文章。Qdrant 会把过滤条件**下推**到 ANN 搜索内部，避免先取 Top-100 再丢一半。\n\n```python\nfrom qdrant_client.models import Filter, FieldCondition, MatchValue, Range\n\nhits = client.search(\n    collection_name=\"demo\",\n    query_vector=[0.2, 0.1, 0.9, 0.7],\n    query_filter=Filter(\n        must=[FieldCondition(key=\"tag\", match=MatchValue(value=\"cat\"))],\n    ),\n    limit=5,\n)\nprint([h.id for h in hits])\n```\n\n`must` 是 AND，`should` 是 OR，`must_not` 是 NOT，可以嵌套组合，形成布尔表达式。\n\n### 4.2 命名向量（Named Vectors）与多模态\n\n同一个 Point 可以存多个向量，比如\"标题向量\"和\"正文向量\"，分别对应不同编码器：\n\n```python\nclient.recreate_collection(\n    collection_name=\"multi\",\n    vectors_config={\n        \"title\": VectorParams(size=384, distance=Distance.COSINE),\n        \"body\":  VectorParams(size=768, distance=Distance.COSINE),\n    },\n)\n\nclient.upsert(\n    collection_name=\"multi\",\n    points=[PointStruct(\n        id=1,\n        vector={\"title\": [0.1]*384, \"body\": [0.2]*768},\n        payload={\"doc\": \"hello\"},\n    )],\n)\n\nhits = client.search(\n    collection_name=\"multi\",\n    query_vector=(\"body\", [0.3]*768),   # 指定用哪个向量检索\n    limit=3,\n)\n```\n\n### 4.3 生产模式：`:memory:` vs Docker vs Qdrant Cloud\n\n- `QdrantClient(\":memory:\")`：纯内存，方便单元测试和脚本演示，进程退出即丢弃。\n- `QdrantClient(path=\"./qdrant_data\")`：**本地持久化模式（Local Mode）**，无需服务端，适合笔记本/单机应用。\n- `QdrantClient(url=...)`：连远程服务端，支持副本、分片、快照、分布式，是生产选择。\n- Qdrant Cloud：官方托管服务，免运维。\n\n---\n\n## 5. 和 AI 应用的关系：RAG 的\"记忆库\"\n\n大语言模型（LLM）自己不知道你公司文档的内容。**检索增强生成（Retrieval-Augmented Generation, RAG）** 的经典流水线是：\n\n1. 用 embedding 模型（如 OpenAI `text-embedding-3-small`、`bge-m3`）把每段文档编码成向量；\n2. 存入 Qdrant，payload 里放原文与元数据；\n3. 用户提问时，把问题也编码成向量，从 Qdrant 取 Top-K 相似段落；\n4. 把这些段落拼进 Prompt，交给 LLM 生成答案。\n\nQdrant 在这一层扮演的就是\"语义记忆\"角色。它的性能、过滤能力、混合检索（稠密 + 稀疏）能力，直接决定 RAG 回答的**上下文质量**。所以，学 Qdrant 不只是学一个工具，更是学**AI 应用的数据平面（Data Plane）**。\n\n## ai.vec.milvus\n\n# 向量数据库 Milvus 入门：从零到工程级\n\n> 一句话直觉：当你需要“从成千上万条数据里，按含义找出最相似的前 K 条”时，传统数据库做不到，Milvus 就是为这件事而生的向量数据库（Vector Database）。\n\n---\n\n## 一、为什么需要 Milvus：从“精确匹配”到“语义相似”\n\n传统关系型数据库（Relational Database）擅长精确查询：`WHERE name = 'Alice'`。但 AI 场景里，我们经常要问的是：\n\n- 给我找出与这张图片最相似的 10 张图；\n- 给我找出与这句话语义最接近的 5 段文档；\n- 给我推荐与这个用户历史行为最相近的商品。\n\n这些问题的共同点是：**对象被表示成向量（Vector）**，即一串浮点数 `[0.12, -0.98, 0.33, ...]`，而“相似”用**距离（Distance）**衡量，例如余弦相似度（Cosine Similarity）或欧氏距离（Euclidean Distance）。\n\nMilvus 的核心职责：**高效存储海量向量，并做近似最近邻（Approximate Nearest Neighbor, ANN）检索**。\n\n```python\n# 直觉演示：向量之间用余弦相似度衡量“含义接近程度”\nimport numpy as np\n\ndef cosine(a, b):\n    a, b = np.array(a), np.array(b)\n    return float(a @ b / (np.linalg.norm(a) * np.linalg.norm(b)))\n\nv_cat  = [0.9, 0.1, 0.0]   # 假设“猫”的向量\nv_dog  = [0.8, 0.2, 0.0]   # 假设“狗”的向量\nv_car  = [0.0, 0.1, 0.9]   # 假设“汽车”的向量\n\nprint(cosine(v_cat, v_dog))  # ~0.99，语义接近\nprint(cosine(v_cat, v_car))  # ~0.02，语义很远\n```\n\n---\n\n## 二、Milvus 的核心概念：集合、字段、索引、检索\n\nMilvus 用四个关键词就能概括：\n\n| 概念 | 英文 | 说明 |\n|---|---|---|\n| 集合 | Collection | 类似关系库的“表”，存放同一类向量 |\n| 字段 | Field | 每条记录的列，包含向量字段和标量字段 |\n| 索引 | Index | 为了加速检索而建立的数据结构（如 IVF、HNSW） |\n| 检索 | Search | 输入一个查询向量，返回 top-k 最相似的实体 |\n\n其中**索引**是性能的关键。常用索引类型：\n\n- **FLAT**：暴力精确检索，最准但最慢，适合小数据或验证。\n- **IVF_FLAT**：倒排文件（Inverted File），先聚类再检索，速度快。\n- **HNSW**：基于图（Hierarchical Navigable Small World），查询快、召回高，内存占用较大。\n\n**度量方式（Metric Type）**必须与向量产生方式匹配：\n\n- `L2`：欧氏距离，越小越相似；\n- `IP`：内积（Inner Product），越大越相似；\n- `COSINE`：余弦相似度，越大越相似（Milvus 内部按 IP 处理归一化向量）。\n\n```python\n# 用 pymilvus 声明一个 Collection 的 schema（结构）\nfrom pymilvus import MilvusClient, DataType\n\nclient = MilvusClient(\"milvus_demo.db\")  # 本地文件模式，无需 Docker，便于学习\n\nschema = client.create_schema(auto_id=True, enable_dynamic_field=False)\nschema.add_field(field_name=\"id\",        datatype=DataType.INT64, is_primary=True)\nschema.add_field(field_name=\"title\",     datatype=DataType.VARCHAR, max_length=200)\nschema.add_field(field_name=\"embedding\", datatype=DataType.FLOAT_VECTOR, dim=4)\n```\n\n---\n\n## 三、最小可运行流程：建库 → 插入 → 建索引 → 检索\n\nMilvus 的典型生命周期（Lifecycle）是四步：\n\n1. 创建 Collection；\n2. 插入（Insert）向量数据；\n3. 创建索引（Create Index）并加载（Load）；\n4. 执行检索（Search）。\n\n下面这段代码把它一次性跑通。它使用 Milvus 官方轻量模式 `milvus_demo.db`，**无需安装 Docker 或单独启动服务**，非常适合本地学习。\n\n```python\nfrom pymilvus import MilvusClient, DataType\n\n# 1) 连接（本地文件模式，会自动创建 milvus_demo.db）\nclient = MilvusClient(\"milvus_demo.db\")\n\n# 2) 如果已经存在则删除，保证示例可重复运行\nif client.has_collection(\"docs\"):\n    client.drop_collection(\"docs\")\n\n# 3) 定义 schema\nschema = client.create_schema(auto_id=True, enable_dynamic_field=False)\nschema.add_field(field_name=\"id\",        datatype=DataType.INT64, is_primary=True)\nschema.add_field(field_name=\"title\",     datatype=DataType.VARCHAR, max_length=200)\nschema.add_field(field_name=\"embedding\", datatype=DataType.FLOAT_VECTOR, dim=4)\n\n# 4) 索引参数（HNSW + 余弦相似度）\nindex_params = client.prepare_index_params()\nindex_params.add_index(\n    field_name=\"embedding\",\n    index_type=\"HNSW\",\n    metric_type=\"COSINE\",\n    params={\"M\": 16, \"efConstruction\": 200},\n)\n\n# 5) 创建集合（同时应用索引）\nclient.create_collection(\n    collection_name=\"docs\",\n    schema=schema,\n    index_params=index_params,\n)\n\n# 6) 插入数据（这里的向量是假的，真实项目里来自嵌入模型）\ndata = [\n    {\"title\": \"猫的习性\",   \"embedding\": [0.9, 0.1, 0.0, 0.0]},\n    {\"title\": \"狗的饲养\",   \"embedding\": [0.8, 0.2, 0.0, 0.0]},\n    {\"title\": \"汽车维修\",   \"embedding\": [0.0, 0.1, 0.9, 0.0]},\n    {\"title\": \"飞机驾驶\",   \"embedding\": [0.0, 0.0, 0.8, 0.2]},\n]\nclient.insert(collection_name=\"docs\", data=data)\n\n# 7) 检索：找与 [0.85, 0.15, 0, 0] 最相似的 top-2\nresults = client.search(\n    collection_name=\"docs\",\n    data=[[0.85, 0.15, 0.0, 0.0]],\n    limit=2,\n    output_fields=[\"title\"],\n)\n\nfor hit in results[0]:\n    print(hit[\"entity\"][\"title\"], \"->\", round(hit[\"distance\"], 4))\n```\n\n预期输出（相似度由高到低）：`猫的习性` → `狗的饲养`。\n\n---\n\n## 四、工程化关键点：索引、分区、标量过滤\n\n做到能用之后，工程上还需要关心下面几点。\n\n### 1. 索引与度量的一致性\n\n索引创建时指定的 `metric_type` 必须与检索时一致，否则结果会出错甚至报错。检索时也可以传入 `search_params` 调整召回率：\n\n```python\nresults = client.search(\n    collection_name=\"docs\",\n    data=[[0.85, 0.15, 0.0, 0.0]],\n    limit=2,\n    output_fields=[\"title\"],\n    search_params={\"metric_type\": \"COSINE\", \"params\": {\"ef\": 64}},  # HNSW 的查询参数\n)\n```\n\n`ef` 越大召回越高但越慢；`M`、`efConstruction` 影响建索引的成本与质量。\n\n### 2. 标量过滤（Scalar Filtering）\n\n真实场景常常是“**先过滤再检索**”，例如“只在 2024 年之后的文档里找相似段落”。Milvus 支持用布尔表达式过滤：\n\n```python\n# 假设 schema 里有一个 year 字段，则可以使用 expr 过滤\nresults = client.search(\n    collection_name=\"docs\",\n    data=[[0.85, 0.15, 0.0, 0.0]],\n    limit=2,\n    filter=\"year >= 2024\",        # 表达式必须在插入时该字段已存在\n    output_fields=[\"title\", \"year\"],\n)\n```\n\n### 3. 分区（Partition）与并发\n\n- **分区键（Partition Key）**：把一个 Collection 按某个标量字段（如 `tenant_id`）切分，减小单次检索扫描范围。\n- **分批插入**：大量插入时用 `client.insert` 批量调用，不要一条一条写，否则网络往返开销巨大。\n\n### 4. 数据的持久化与一致性\n\nMilvus 是**最终一致性（Eventual Consistency）**系统。写入后立即可查通常没问题（本地模式更直接），但分布式部署时要了解 `consistency_level` 参数对搜索结果新鲜度的影响。\n\n```python\n# 强制等待数据可见（分布式部署时有用）\nclient.flush(collection_name=\"docs\")\n```\n\n---\n\n## 五、与 AI 应用如何衔接：RAG 中的 Milvus\n\n最典型的工程用法是 **检索增强生成（Retrieval-Augmented Generation, RAG）**：\n\n1. 用嵌入模型（Embedding Model，如 sentence-transformers、OpenAI Embeddings）把文本编码成向量；\n2. 向量写入 Milvus；\n3. 用户提问时，把问题也编码成向量，去 Milvus 检索最相关的文档片段；\n4. 把检索到的片段拼进提示词（Prompt）交给大语言模型（LLM）。\n\n```python\n# 伪代码：RAG 中的 Milvus 角色\n# from sentence_transformers import SentenceTransformer\n# model = SentenceTransformer(\"all-MiniLM-L6-v2\")\n# query_vec = model.encode([user_question]).tolist()\n#\n# hits = client.search(\n#     collection_name=\"knowledge_base\",\n#     data=query_vec,\n#     limit=5,\n#     output_fields=[\"text\"],\n# )\n# context = \"\\n\".join(h[\"entity\"][\"text\"] for h in hits[0])\n# prompt = f\"请根据以下资料回答问题：\\n{context}\\n\\n问题：{user_question}\"\n```\n\n到这里，你就能把 Milvus 看成“**AI 应用的外部记忆**”：模型负责理解，Milvus 负责记忆和检索。\n\n---\n\n## 动手练习\n\n**任务**：搭建一个个人知识片段检索器。\n\n1. 本地 `pip install pymilvus`，按上面第 3 节的代码，创建名为 `my_notes` 的 Collection，维度设为 4（为了简化，用随机向量代替真实嵌入）。\n2. 插入至少 8 条笔记，每条包含 `title` 和 `embedding`，其中至少 4 条是关于“编程”，4 条是关于“食物”。\n3. 用一条“趋向编程类”的查询向量检索 top-3，观察返回结果是否都是编程类。\n4. 进阶：给 schema 加一个 `category`（VARCHAR）字段，用 `filter=\"category == 'programming'\"` 把检索限制在编程类笔记里，比较有无过滤时的差异。\n\n**提交物**：一段完整可运行的 Python 脚本，以及一张截图或文本输出，展示检索结果与相似度分数。\n",
+  "quiz": [
+    {
+      "kp": "ai.vec.faiss",
+      "type": "single_choice",
+      "question": "在构建一个基于 FAISS 的向量检索系统时，你要处理十亿级别的向量。关于索引的选择，以下哪种说法最合理？",
+      "options": [
+        "直接使用 IndexFlatL2，因为它是精确检索，结果一定最好",
+        "使用 IVF 类索引并调整 nlist 和 nprobe，在召回率与速度之间取得平衡",
+        "使用 IndexIDMap 包装任意索引即可自动加速",
+        "使用 IndexFlatIP 并把向量归一化后，检索速度会比 IndexFlatL2 快很多"
+      ],
+      "answer": 1,
+      "explanation": "大数据量下精确检索（Flat）内存与耗时都不可接受；IVF 通过倒排文件聚类先粗筛再精算，nlist 控制聚类数、nprobe 控制查询时访问的聚类数，是召回率与速度的权衡手段。IndexIDMap 只是建立外部 ID 到内部 ID 的映射，不改变搜索复杂度；IndexFlatIP 与 IndexFlatL2 都是暴力检索，归一化只影响度量含义，不会显著提速。",
+      "error_tag": "索引选型混淆",
+      "variant_group": "faiss_index_choice"
+    },
+    {
+      "kp": "ai.vec.faiss",
+      "type": "single_choice",
+      "question": "用 FAISS 做相似向量检索时，发现返回的最近邻结果中少了某些本该出现的向量。已知在训练/添加向量时把它们放进去了。以下哪项最不可能是原因？",
+      "options": [
+        "查询时使用的 nprobe 太小，目标向量所在聚类没有被访问",
+        "添加向量之前忘记对索引调用 train（对需要训练的索引类型）",
+        "查询向量与库向量使用了不同的归一化方式",
+        "把向量添加到了 IndexIDMap 中，因此原始向量被覆盖"
+      ],
+      "answer": 3,
+      "explanation": "IndexIDMap 只是把用户提供的 ID 映射到内部顺序 ID，不会覆盖或丢失向量。nprobe 过小、忘记 train（IVF/PQ 等需要训练）、归一化不一致都会造成召回缺失。",
+      "error_tag": "召回失败归因错误",
+      "variant_group": "faiss_recall_debug"
+    },
+    {
+      "kp": "ai.vec.faiss",
+      "type": "single_choice",
+      "question": "关于 FAISS 的 IndexHNSWFlat 索引，下列说法正确的是？",
+      "options": [
+        "它基于图结构进行近似最近邻搜索，通常查询速度快、召回率高，但内存占用较大",
+        "它是精确检索，不会有任何误差",
+        "它必须先对向量做乘积量化压缩后才能使用",
+        "它只能用于 L2 距离，不能用于内积"
+      ],
+      "answer": 0,
+      "explanation": "HNSW 是分层可导航小世界图，属于近似最近邻方法，查询延迟低、召回高，但需要存储图边，内存较高。它不是精确检索；不强制 PQ 压缩；可以通过度量配置支持不同距离类型。",
+      "error_tag": "HNSW 特性误解",
+      "variant_group": "faiss_hnsw"
+    },
+    {
+      "kp": "ai.vec.faiss",
+      "type": "single_choice",
+      "question": "在 FAISS 中，如果希望为每个向量指定自己的外部 ID（而不是用 0,1,2,... 的顺序 ID），应使用？",
+      "options": [
+        "IndexFlatL2 本身支持自定义 ID",
+        "在索引外层再包一层列表记录顺序",
+        "IndexIDMap 包装底层索引，用 add_with_ids 添加向量",
+        "把自定义 ID 编码进向量最后一个维度"
+      ],
+      "answer": 2,
+      "explanation": "IndexIDMap（及 IndexIDMap2）用于把用户提供的 int64 ID 映射到内部顺序 ID，配合 add_with_ids 使用。普通 Flat 索引的 add 不接收外部 ID；外层列表无法在检索时直接返回 ID；把 ID 塞进向量维度会污染语义并改变度量。",
+      "error_tag": "自定义 ID 方法错误",
+      "variant_group": "faiss_custom_id"
+    },
+    {
+      "kp": "ai.vec.faiss",
+      "type": "single_choice",
+      "question": "在 FAISS 中，训练 IVF 索引时使用的训练样本应该满足什么条件？",
+      "options": [
+        "必须与最终添加的向量完全相同，且顺序一致",
+        "应从待索引数据分布中采样，数量通常远多于 nlist",
+        "只需要一条样本即可完成训练",
+        "训练样本必须归一化，否则训练会失败"
+      ],
+      "answer": 1,
+      "explanation": "训练的目标是学习聚类中心或量化码本，因此训练样本应具有代表性，数量通常建议远大于 nlist（例如几十倍）。不必与最终向量完全一致，也不要求顺序对应；一条样本远不足以训练；归一化取决于度量设计而非训练硬性要求。",
+      "error_tag": "训练样本理解偏差",
+      "variant_group": "faiss_training_data"
+    },
+    {
+      "kp": "ai.vec.faiss",
+      "type": "single_choice",
+      "question": "某服务使用 FAISS 索引，向量维度为 768。一次查询中传入维度为 512 的查询向量，最可能发生什么？",
+      "options": [
+        "FAISS 自动把 512 维补零到 768 维",
+        "FAISS 自动截断到 512 维继续检索",
+        "抛出维度不匹配的异常",
+        "检索正常返回，只是结果不准"
+      ],
+      "answer": 2,
+      "explanation": "FAISS 索引在创建时固定维度 d，查询或添加时传入不同维度的向量会触发异常/断言失败，不会自动补零或截断。",
+      "error_tag": "维度匹配规则误解",
+      "variant_group": "faiss_dimension_mismatch"
+    },
+    {
+      "kp": "ai.vec.faiss",
+      "type": "single_choice",
+      "question": "关于 FAISS 中“精确检索”和“近似检索”的取舍，以下说法正确的是？",
+      "options": [
+        "近似检索一定会返回错误的最近邻，因此生产环境不能用",
+        "精确检索结果可保证与暴力搜索一致，但数据量大时速度与内存代价高",
+        "近似检索只适合小规模数据，大规模数据必须用精确检索",
+        "两者返回的结果完全相同，只是速度不同"
+      ],
+      "answer": 1,
+      "explanation": "精确检索（如 Flat）穷举比较，结果与暴力搜索一致，但规模大时开销高；近似检索通过聚类、量化、图结构等减少计算量，可能漏掉真实最近邻但可接受。近似检索反而在大规模场景更常用。两者结果不保证相同。",
+      "error_tag": "精确与近似取舍误解",
+      "variant_group": "faiss_exact_vs_approx"
+    },
+    {
+      "kp": "ai.vec.faiss",
+      "type": "single_choice",
+      "question": "在 FAISS 中，IndexIVFFlat 与 IndexIVFPQ 的核心区别是？",
+      "options": [
+        "IVFFlat 只用倒排聚类，IVFPQ 在倒排基础上再用乘积量化压缩向量存储",
+        "IVFFlat 是精确检索，IVFPQ 不是近似检索",
+        "IVFFlat 不需要训练，IVFPQ 也不需要训练",
+        "IVFPQ 的检索结果总是比 IVFFlat 更准确"
+      ],
+      "answer": 0,
+      "explanation": "IVFFlat 在候选列表内保存完整向量并精确计算距离；IVFPQ 进一步用 PQ 压缩向量，显著降低内存但损失精度，两者都是近似检索且都需要训练。IVFPQ 因压缩通常精度低于 IVFFlat。",
+      "error_tag": "IVF 变体差异混淆",
+      "variant_group": "faiss_ivf_variants"
+    },
+    {
+      "kp": "ai.vec.faiss",
+      "type": "single_choice",
+      "question": "你在代码中创建了一个 FAISS 索引并调用 add 添加了一批向量，随后用不同的查询向量反复调用 search。关于 search 返回的 D 和 I 两个数组，说法正确的是？",
+      "options": [
+        "D 是距离/得分矩阵，I 是对应向量的 ID 矩阵，形状均为 (查询数, k)",
+        "D 是向量维度，I 是索引数量",
+        "D 是查询向量的原始数据，I 是结果 ID",
+        "D 和 I 都是长度为 k 的一维数组，与查询数无关"
+      ],
+      "answer": 0,
+      "explanation": "search(x, k) 返回 (D, I)，D 为每个查询的 k 个最近邻的距离/相似度，I 为对应的向量 ID，形状都是 (n_queries, k)。它们不是维度或原始向量数据。",
+      "error_tag": "search 返回值误解",
+      "variant_group": "faiss_search_output"
+    },
+    {
+      "kp": "ai.vec.faiss",
+      "type": "single_choice",
+      "question": "在 FAISS 中，为提升 PQ 量化精度，常使用 OPQ（Optimized Product Quantization）。它的主要作用是？",
+      "options": [
+        "增加倒排列表数量以提升召回",
+        "学习一个旋转矩阵，使各子空间方差更均衡，从而降低量化误差",
+        "替代 nprobe，在查询时决定访问哪些聚类",
+        "把内积转换为欧氏距离"
+      ],
+      "answer": 1,
+      "explanation": "OPQ 通过优化一个正交旋转矩阵，让向量各维度能量分布更均匀，减少 PQ 各子空间独立量化带来的误差。它与倒排列表数量、nprobe 查询策略、距离类型转换无关。",
+      "error_tag": "OPQ 作用误解",
+      "variant_group": "faiss_opq"
+    },
+    {
+      "kp": "ai.vec.faiss",
+      "type": "single_choice",
+      "question": "使用 FAISS 的 IVF 索引时，nlist 设置得远大于数据量，可能出现的现象是？",
+      "options": [
+        "训练时每个聚类中心样本过少，聚类质量差，检索召回下降",
+        "索引会自动降级为 Flat 索引，结果精确",
+        "nprobe 会自动被设为 nlist，速度不受影响",
+        "内存占用会显著低于数据量很小的情况"
+      ],
+      "answer": 0,
+      "explanation": "nlist 过大而训练样本相对不足时，聚类中心难以被充分学习，每个列表内样本极少，查询时即便访问少数列表也覆盖不到目标，召回下降。FAISS 不会自动降级为 Flat；nprobe 不会自动等于 nlist；内存不一定更低。",
+      "error_tag": "nlist 设置不当",
+      "variant_group": "faiss_nlist_tuning"
+    },
+    {
+      "kp": "ai.vec.faiss",
+      "type": "single_choice",
+      "question": "在大规模向量检索场景中，相比 IndexFlatL2，使用 IVF 类索引的主要收益是？",
+      "options": [
+        "可以保证 100% 召回率",
+        "通过先聚类筛选候选集，显著减少每次查询需要比较的向量数量",
+        "可以自动把向量维度降低到更低维度",
+        "可以完全避免内存占用"
+      ],
+      "answer": 1,
+      "explanation": "IVF 的核心思想是把向量分到 nlist 个聚类中，查询时只在 nprobe 个最可能的聚类内做距离计算，从而减少比较次数。它不保证 100% 召回；不会自动降维（那是 PQ 等压缩手段）；仍需要内存保存索引数据。",
+      "error_tag": "IVF 收益理解偏差",
+      "variant_group": "faiss_ivf_benefit"
+    },
+    {
+      "kp": "ai.vec.faiss",
+      "type": "single_choice",
+      "question": "某同学用 FAISS 建立索引后调用 add 添加向量，随后立即 search，却抛出了关于索引未训练的异常。最可能的原因是？",
+      "options": [
+        "向量维度与索引声明的维度不一致",
+        "使用的是需要训练的索引类型（如 IVF、PQ），但没有先调用 train",
+        "add 的向量数量太少，FAISS 要求至少 1000 条",
+        "没有先调用 normalize_L2 对向量做归一化"
+      ],
+      "answer": 2,
+      "explanation": "需要训练的索引类型（含 IVF、PQ 等）必须先提供训练样本调用 train，再 add。add 向量数量没有统一的 1000 条下限要求；归一化不是所有索引的必需步骤；维度不一致会报另一种错误。",
+      "error_tag": "训练流程缺失",
+      "variant_group": "faiss_train_required"
+    },
+    {
+      "kp": "ai.vec.faiss",
+      "type": "single_choice",
+      "question": "某团队发现 FAISS 检索结果的 ID 与业务数据库对不上，检索返回的是 0、1、2 这样的顺序编号。最可能的原因是？",
+      "options": [
+        "FAISS 返回的 ID 需要除以向量维度才是真实 ID",
+        "没有使用 IndexIDMap 或未调用 add_with_ids，导致索引只保存内部顺序 ID",
+        "查询向量的维度写错了",
+        "需要把 nprobe 设置为 0 才能返回真实 ID"
+      ],
+      "answer": 1,
+      "explanation": "普通索引用 add 添加向量时内部以 0 起始的顺序编号作为 ID。要返回业务 ID，需要用 IndexIDMap 包装并使用 add_with_ids 传入 int64 ID。ID 与维度无关，nprobe 不影响 ID 含义。",
+      "error_tag": "ID 映射缺失",
+      "variant_group": "faiss_id_mapping"
+    },
+    {
+      "kp": "ai.vec.faiss",
+      "type": "single_choice",
+      "question": "关于 FAISS 中 IndexFlatL2 与 IndexIVFFlat 的对比，下列说法正确的是？",
+      "options": [
+        "IndexFlatL2 是精确检索，IndexIVFFlat 是近似检索，后者可能漏掉真正的最近邻",
+        "IndexIVFFlat 也是精确检索，只是速度更快",
+        "IndexFlatL2 需要训练，IndexIVFFlat 不需要训练",
+        "两者都基于乘积量化，只是存储方式不同"
+      ],
+      "answer": 0,
+      "explanation": "Flat 索引对所有向量做穷举比较，结果精确；IVFFlat 先用粗聚类筛选候选再在候选集内精算，是近似检索，nprobe 不够时可能漏掉真实最近邻。训练需求与两者相反：Flat 不需要训练，IVFFlat 需要。",
+      "error_tag": "精确与近似检索混淆",
+      "variant_group": "faiss_flat_vs_ivf"
+    },
+    {
+      "kp": "ai.vec.faiss",
+      "type": "single_choice",
+      "question": "在 FAISS 中使用 IndexIVFPQ 时，参数 M 的含义是什么？",
+      "options": [
+        "倒排列表（聚类）的数量",
+        "查询时访问的聚类数量",
+        "把原始向量切分成的子向量段数，每段分别做量化",
+        "索引中保存的向量总条数"
+      ],
+      "answer": 2,
+      "explanation": "在 PQ（乘积量化）中，M 是把 d 维向量切成 M 段子向量、每段独立量化的段数；倒排列表数量是 nlist，查询访问的聚类数是 nprobe。",
+      "error_tag": "参数含义混淆",
+      "variant_group": "faiss_pq_params"
+    },
+    {
+      "kp": "ai.vec.faiss",
+      "type": "single_choice",
+      "question": "你用 FAISS 建立了 IVF 索引，发现检索速度很快但召回率偏低。调整以下哪个参数最直接地提高召回率（以牺牲部分速度为代价）？",
+      "options": [
+        "减小 nlist",
+        "增大 nprobe",
+        "减小 M",
+        "减小向量维度"
+      ],
+      "answer": 1,
+      "explanation": "nprobe 控制查询时访问的倒排列表数量，增大可覆盖更多候选、提高召回，但耗时增加。减小 nlist 使每个列表更大，单列表精算变慢，对召回的影响不是直接可控的；M 是 PQ 子段数，影响压缩率与精度但并非查询期参数；减小维度会改变语义。",
+      "error_tag": "参数调节方向错误",
+      "variant_group": "faiss_recall_speed_tradeoff"
+    },
+    {
+      "kp": "ai.vec.faiss",
+      "type": "single_choice",
+      "question": "在 FAISS 中，若希望用内积作为相似度，并且检索结果按内积从大到小排序，应使用哪个索引类？",
+      "options": [
+        "IndexFlatL2",
+        "IndexFlatIP",
+        "IndexIVFPQ",
+        "IndexHNSWFlat 只能使用 L2"
+      ],
+      "answer": 1,
+      "explanation": "IndexFlatIP 使用内积作为度量，得分越大越相似。IndexFlatL2 用欧氏距离，越小越相似。IndexIVFPQ 是量化索引，其度量取决于训练与配置，但名称本身不代表内积。HNSW 也可配合不同度量，说“只能 L2”不正确。",
+      "error_tag": "度量类型混淆",
+      "variant_group": "faiss_metric_ip"
+    },
+    {
+      "kp": "ai.vec.faiss",
+      "type": "single_choice",
+      "question": "某团队用 FAISS 搭建以图搜图服务，训练和添加向量都正常，但线上查询时经常返回完全无关的结果，排查发现查询向量的数值范围与库向量差异很大。最可能的原因是？",
+      "options": [
+        "FAISS 索引文件损坏",
+        "查询向量与库向量没有经过一致的预处理（如归一化或同一模型编码）",
+        "nprobe 设置得太小",
+        "没有使用 GPU 版本的 FAISS"
+      ],
+      "answer": 1,
+      "explanation": "向量检索的有效性依赖查询向量与库向量处于同一表示空间与同一尺度。若一侧归一化或编码方式不同，距离/内积就失去可比性，导致结果无关。索引损坏通常直接报错；nprobe 过小只会漏召回而非全错；CPU/GPU 版本不影响语义正确性。",
+      "error_tag": "预处理不一致",
+      "variant_group": "faiss_preprocess_consistency"
+    },
+    {
+      "kp": "ai.vec.faiss",
+      "type": "single_choice",
+      "question": "关于 FAISS 索引的保存与加载，以下做法正确的是？",
+      "options": [
+        "用 write_index 保存索引后，用 read_index 加载即可继续 add 和 search",
+        "索引必须序列化为 JSON 才能保存",
+        "保存索引时必须同时保存原始向量文件，否则无法加载",
+        "只有 Flat 索引可以保存，IVF 索引无法持久化"
+      ],
+      "answer": 0,
+      "explanation": "FAISS 提供 write_index / read_index 对索引做二进制序列化与反序列化，加载后可继续使用。索引不是 JSON 格式；FAISS 索引自身保存了向量数据，不需要额外原始文件；各类索引普遍支持保存。",
+      "error_tag": "持久化方式错误",
+      "variant_group": "faiss_io"
+    },
+    {
+      "kp": "ai.vec.faiss",
+      "type": "single_choice",
+      "question": "在使用 FAISS 的 GPU 版本时，把 CPU 索引转换为 GPU 索引的常见做法是？",
+      "options": [
+        "调用 index.to_gpu()，对任意 CPU 索引都可用",
+        "使用 index_cpu_to_gpu 或 index_cpu_to_all_gpus 等辅助函数进行转换",
+        "直接把索引文件后缀改为 .gpu 即可",
+        "GPU 版本不支持从 CPU 索引转换，必须从头在 GPU 上建立"
+      ],
+      "answer": 1,
+      "explanation": "FAISS 提供 index_cpu_to_gpu / index_cpu_to_all_gpus 等辅助函数，将 CPU 索引复制到 GPU 上并指定资源。并非所有索引都支持 to_gpu()；改后缀没有意义；GPU 版本可以直接从 CPU 索引转换，不必从头重建。",
+      "error_tag": "GPU 索引转换方式错误",
+      "variant_group": "faiss_gpu_transfer"
+    },
+    {
+      "kp": "ai.vec.qdrant",
+      "type": "single_choice",
+      "question": "在使用 Qdrant 这类向量数据库时，集合（collection）中每个点（point）通常至少需要包含哪些核心组成部分？",
+      "options": [
+        "向量和可选的负载（payload）",
+        "只有向量",
+        "只有负载",
+        "向量、负载以及一个自动生成的关系表"
+      ],
+      "answer": 0,
+      "explanation": "Qdrant 中的 point 由向量和可选的 payload 组成，payload 用于存储与向量关联的元数据。它不需要关系表结构，也不是只能存向量或只能存负载。",
+      "error_tag": "概念混淆",
+      "variant_group": "qdrant_point_structure"
+    },
+    {
+      "kp": "ai.vec.qdrant",
+      "type": "single_choice",
+      "question": "关于 Qdrant 中距离度量（distance metric）的选择，下列说法正确的是？",
+      "options": [
+        "同一集合中不同向量可以使用不同的距离度量，互不影响",
+        "距离度量在创建集合时指定，同一集合内所有向量共用该度量",
+        "距离度量只能在查询时临时指定，创建集合时无法设置",
+        "Qdrant 不支持余弦距离"
+      ],
+      "answer": 1,
+      "explanation": "Qdrant 在创建集合时通过向量配置指定距离度量（如 Cosine、Euclidean、Dot），该集合内的所有向量共用同一度量，不能在查询时随意更换为不同类型，也不支持同一集合内混用多种度量。",
+      "error_tag": "概念混淆",
+      "variant_group": "qdrant_distance_metric"
+    },
+    {
+      "kp": "ai.vec.qdrant",
+      "type": "single_choice",
+      "question": "在使用 Qdrant 存储文本嵌入时，若嵌入模型被更换且输出维度不同，最合理的做法是？",
+      "options": [
+        "直接把新向量写入原集合，Qdrant 会自动适配",
+        "新建一个维度匹配的集合并重新写入全部向量",
+        "修改已有集合的维度配置即可",
+        "降低查询时的 limit 以规避维度问题"
+      ],
+      "answer": 1,
+      "explanation": "集合维度在创建时固定，不能就地修改为不同维度。更换嵌入模型导致维度变化时，应新建匹配维度的集合并重新写入数据，否则写入会因维度不匹配而失败。",
+      "error_tag": "边界错误",
+      "variant_group": "qdrant_dimension"
+    },
+    {
+      "kp": "ai.vec.qdrant",
+      "type": "multi_choice",
+      "question": "下列关于 Qdrant 的说法，正确的有哪些？",
+      "options": [
+        "它是一款向量相似度搜索引擎/向量数据库",
+        "它支持为 payload 字段建立索引以加速过滤",
+        "它支持在搜索时结合向量相似度与 payload 过滤条件",
+        "它要求所有向量必须是同一种固定的距离度量才能混用"
+      ],
+      "answer": [
+        0,
+        1,
+        2
+      ],
+      "explanation": "Qdrant 是向量数据库，支持 payload 索引和带过滤的向量检索。选项 D 描述错误：同一集合使用统一距离度量，但不能在同一集合内任意混用不同度量。",
+      "error_tag": "概念混淆",
+      "variant_group": "qdrant_overview"
+    },
+    {
+      "kp": "ai.vec.qdrant",
+      "type": "multi_choice",
+      "question": "在 Qdrant 中提升带条件检索性能的合理做法包括哪些？",
+      "options": [
+        "为经常用于过滤的 payload 字段建立索引",
+        "合理设计分片与副本",
+        "把所有过滤都放到客户端做，减少服务端负担",
+        "为集合选择合适的距离度量以匹配数据特性"
+      ],
+      "answer": [
+        0,
+        1,
+        3
+      ],
+      "explanation": "建立 payload 索引、合理分片与副本、选择合适的距离度量都有助于性能与效果。把过滤全部放到客户端会拉取大量无用数据，通常更慢，不是推荐做法。",
+      "error_tag": "概念混淆",
+      "variant_group": "qdrant_filtering"
+    },
+    {
+      "kp": "ai.vec.qdrant",
+      "type": "multi_choice",
+      "question": "关于 Qdrant 中向量与 payload 的关系，正确的有哪些？",
+      "options": [
+        "payload 用于存储与向量关联的元数据",
+        "payload 可以参与过滤条件",
+        "payload 是可选的",
+        "payload 会被直接用于计算向量相似度"
+      ],
+      "answer": [
+        0,
+        1,
+        2
+      ],
+      "explanation": "payload 存储元数据、可参与过滤且是可选的。相似度计算基于向量本身而非 payload，因此选项 D 错误。",
+      "error_tag": "概念混淆",
+      "variant_group": "qdrant_point_structure"
+    },
+    {
+      "kp": "ai.vec.qdrant",
+      "type": "multi_choice",
+      "question": "在搭建基于 Qdrant 的检索系统时，下列哪些因素会影响检索结果的相关性？",
+      "options": [
+        "所选嵌入模型的质量",
+        "所选距离度量是否与数据特性匹配",
+        "向量维度是否与集合配置一致",
+        "Qdrant 服务的安装目录路径"
+      ],
+      "answer": [
+        0,
+        1,
+        2
+      ],
+      "explanation": "嵌入模型质量、距离度量匹配度、维度一致性都会影响检索效果与可用性。服务的安装目录路径与检索相关性无关。",
+      "error_tag": "概念混淆",
+      "variant_group": "qdrant_overview"
+    },
+    {
+      "kp": "ai.vec.qdrant",
+      "type": "fill_blank",
+      "question": "在 Qdrant 中，与向量一同存储、可用于过滤和返回的附加元数据称为 ______（填写英文术语）。",
+      "options": [],
+      "answer": [
+        "payload",
+        "Payload",
+        "payloads",
+        "Payloads"
+      ],
+      "explanation": "Qdrant 将向量关联的元数据称为 payload，它可选、可被过滤，并能在检索结果中一并返回。",
+      "error_tag": "记忆缺失",
+      "variant_group": "qdrant_point_structure"
+    },
+    {
+      "kp": "ai.vec.qdrant",
+      "type": "fill_blank",
+      "question": "在 Qdrant 中创建集合时，需要指定向量的维度以及所使用的 ______（填距离度量相关英文术语，如 Cosine、Euclidean、Dot 之一即可）。",
+      "options": [],
+      "answer": [
+        "Cosine",
+        "cosine",
+        "Euclidean",
+        "euclidean",
+        "Dot",
+        "dot"
+      ],
+      "explanation": "创建集合时需要指定距离度量，常见取值有 Cosine、Euclidean、Dot，它们决定相似度如何计算。",
+      "error_tag": "记忆缺失",
+      "variant_group": "qdrant_distance_metric"
+    },
+    {
+      "kp": "ai.vec.qdrant",
+      "type": "code_reading",
+      "question": "阅读下面使用 Qdrant 客户端的概念性伪代码（仅示意流程）：\n\ncreate_collection(name=\"docs\", vector_size=768, distance=\"Cosine\")\nupsert(collection=\"docs\", id=1, vector=v1, payload={\"lang\": \"zh\"})\nsearch(collection=\"docs\", query_vector=q, limit=5, filter={\"lang\": \"zh\"})\n\n请说明这段流程做了什么，以及 filter 参数在其中的作用。",
+      "options": [],
+      "answer": "先创建一个名为 docs、向量维度为 768、使用余弦距离的集合；再插入一个 id 为 1、带 payload {\"lang\": \"zh\"} 的向量；最后用查询向量 q 在该集合中检索，limit=5 表示最多返回 5 个最近邻，filter 限制结果只包含 payload 中 lang 为 zh 的点，即服务端先按 payload 过滤再返回相似度最高的若干结果。",
+      "explanation": "该伪代码展示了集合创建、向量写入与带过滤的向量检索三个步骤。filter 让检索只在满足 payload 条件的点中进行，从而结合语义相似度与元数据约束。",
+      "error_tag": "概念混淆",
+      "variant_group": "qdrant_filtering"
+    },
+    {
+      "kp": "ai.vec.qdrant",
+      "type": "scenario",
+      "question": "你的团队正在构建一个文档检索服务，使用嵌入模型把文档转成向量后存入 Qdrant。上线一段时间后，产品经理要求「只在该用户有权限访问的文档里做语义检索」。请说明你会如何利用 Qdrant 的能力实现这个需求，并解释为什么不采用「先全量检索再在应用层过滤」的方案。",
+      "options": [],
+      "answer": null,
+      "explanation": "应把文档的权限标识作为 payload 字段存储，并在检索请求中携带 filter 让 Qdrant 在服务端按权限过滤。相比先全量检索再在应用层过滤，服务端过滤能避免拉取大量无权限结果、降低延迟与泄露风险，并可结合 payload 索引提升性能。",
+      "error_tag": "概念混淆",
+      "variant_group": "qdrant_filtering",
+      "required_keywords": [
+        "权限",
+        "索引"
+      ]
+    },
+    {
+      "kp": "ai.vec.qdrant",
+      "type": "scenario",
+      "question": "某项目原使用一个输出 384 维向量的嵌入模型，运行良好。现在团队想换成输出 1024 维向量的新模型以提升效果。已知现有 Qdrant 集合是 384 维的，且线上不能停机。请描述你会如何安排这次切换，并说明直接向原集合写入 1024 维向量会发生什么。",
+      "options": [],
+      "answer": null,
+      "explanation": "集合维度创建时固定，直接写入 1024 维向量会因维度不匹配而报错。平滑切换的思路是新建一个 1024 维的集合，用新模型重新生成并写入全部向量，验证无误后再切换流量、下线旧集合，从而避免停机与数据不一致。",
+      "error_tag": "边界错误",
+      "variant_group": "qdrant_dimension",
+      "required_keywords": [
+        "集合维度",
+        "维度不匹配",
+        "新建集合",
+        "重新生成向量",
+        "切换流量"
+      ]
+    },
+    {
+      "kp": "ai.vec.qdrant",
+      "type": "single_choice",
+      "question": "在 Qdrant 中，想要在向量检索时同时按某个 payload 字段过滤结果，常见的做法是？",
+      "options": [
+        "把所有数据取回客户端后再在本地过滤",
+        "在检索请求中附带 filter 条件，由 Qdrant 在服务端过滤",
+        "必须为每个字段单独建立一个集合",
+        "过滤功能在 Qdrant 中不存在"
+      ],
+      "answer": 1,
+      "explanation": "Qdrant 支持在搜索请求中携带 filter，服务端会结合向量相似度和 payload 条件进行过滤，避免把全部结果拉回客户端再处理，也能通过为字段建立索引来提升效率。",
+      "error_tag": "概念混淆",
+      "variant_group": "qdrant_filtering"
+    },
+    {
+      "kp": "ai.vec.qdrant",
+      "type": "single_choice",
+      "question": "关于 Qdrant 的 payload 索引，下列理解正确的是？",
+      "options": [
+        "payload 索引是强制创建的，无法省略",
+        "为常用过滤字段建立 payload 索引可以提升带条件检索的性能",
+        "payload 索引等同于向量索引，二者没有区别",
+        "没有索引时任何过滤操作都会报错"
+      ],
+      "answer": 1,
+      "explanation": "payload 索引是可选的，为经常用于过滤的字段建立索引能显著提升带条件查询的速度；它不是强制的，没有索引时过滤仍可工作，只是可能更慢。payload 索引与向量索引是不同概念。",
+      "error_tag": "概念混淆",
+      "variant_group": "qdrant_payload_index"
+    },
+    {
+      "kp": "ai.vec.qdrant",
+      "type": "single_choice",
+      "question": "在 Qdrant 中写入或检索向量时，若集合定义使用的向量维度与请求传入的向量维度不一致，通常会发生什么？",
+      "options": [
+        "Qdrant 会自动截断或补齐向量到目标维度",
+        "Qdrant 会自动把该集合改造成适配新维度",
+        "操作会失败并报维度不匹配的错误",
+        "Qdrant 会忽略维度问题并随机返回结果"
+      ],
+      "answer": 2,
+      "explanation": "集合在创建时确定了向量维度，写入或查询的向量必须与该维度一致，否则请求会报错。Qdrant 不会自动截断、补齐或修改集合维度。",
+      "error_tag": "边界错误",
+      "variant_group": "qdrant_dimension"
+    },
+    {
+      "kp": "ai.vec.qdrant",
+      "type": "single_choice",
+      "question": "关于 Qdrant 中余弦距离（Cosine）与欧氏距离（Euclidean）的比较，下列说法正确的是？",
+      "options": [
+        "余弦距离关注向量方向，欧氏距离关注向量间的空间直线距离",
+        "余弦距离和欧氏距离在任何情况下结果完全等价",
+        "欧氏距离只适用于单位向量",
+        "余弦距离会忽略向量的夹角信息"
+      ],
+      "answer": 0,
+      "explanation": "余弦距离衡量向量方向上的相似性，对整体缩放不敏感；欧氏距离衡量向量端点的直线距离，受向量长度影响。二者不等价，欧氏距离并非只适用于单位向量，余弦距离恰恰关注夹角。",
+      "error_tag": "概念混淆",
+      "variant_group": "qdrant_distance_metric"
+    },
+    {
+      "kp": "ai.vec.qdrant",
+      "type": "single_choice",
+      "question": "在 Qdrant 中做近似最近邻检索时，参数中用于控制返回结果数量的通常是？",
+      "options": [
+        "limit",
+        "dimension",
+        "shard_number",
+        "replica"
+      ],
+      "answer": 0,
+      "explanation": "搜索请求中的 limit 决定返回的最近邻结果个数。dimension 是向量维度，shard_number 是分片数，replica 与副本相关，它们都不控制返回结果数量。",
+      "error_tag": "记忆缺失",
+      "variant_group": "qdrant_search_params"
+    },
+    {
+      "kp": "ai.vec.qdrant",
+      "type": "single_choice",
+      "question": "关于 Qdrant 集合的创建，下列说法正确的是？",
+      "options": [
+        "必须先插入数据，Qdrant 会自动推断并创建集合",
+        "创建集合时需指定向量维度与距离度量等参数",
+        "集合创建后无法再添加任何字段的索引",
+        "一个 Qdrant 实例只能存在一个集合"
+      ],
+      "answer": 1,
+      "explanation": "Qdrant 的集合通常需要显式创建，并在创建时指定向量维度、距离度量等配置。集合创建后仍可添加 payload 索引，一个实例也可包含多个集合，且不会因插入数据自动推断建集合。",
+      "error_tag": "概念混淆",
+      "variant_group": "qdrant_collection_create"
+    },
+    {
+      "kp": "ai.vec.qdrant",
+      "type": "single_choice",
+      "question": "在使用 Qdrant 时，如果希望同一份数据在多个节点上有冗余以提高可用性，应关注下列哪个概念？",
+      "options": [
+        "副本（replica）",
+        "payload 索引",
+        "距离度量",
+        "向量维度"
+      ],
+      "answer": 0,
+      "explanation": "副本机制通过在多个节点保存同一分片的拷贝来提升可用性和读吞吐。payload 索引用于过滤加速，距离度和向量维度是向量配置相关概念，均不提供冗余。",
+      "error_tag": "概念混淆",
+      "variant_group": "qdrant_scaling"
+    },
+    {
+      "kp": "ai.vec.qdrant",
+      "type": "single_choice",
+      "question": "关于在 Qdrant 中按 id 获取单个点（point）与执行向量搜索的区别，下列说法正确的是？",
+      "options": [
+        "两者完全等价，都会返回最近邻列表",
+        "按 id 获取是精确查找指定点，向量搜索返回与查询向量最相似的点",
+        "按 id 获取需要提供查询向量",
+        "向量搜索不能返回 payload"
+      ],
+      "answer": 1,
+      "explanation": "按 id 获取是根据已知主键精确取回一个点，不需要查询向量；向量搜索是根据相似度返回最近邻。向量搜索默认可以返回 payload，二者并不等价。",
+      "error_tag": "概念混淆",
+      "variant_group": "qdrant_retrieve_vs_search"
+    },
+    {
+      "kp": "ai.vec.milvus",
+      "type": "single_choice",
+      "question": "在使用 Milvus 向量数据库时，关于「集合（Collection）」和「分区（Partition）」的关系，下列描述正确的是？",
+      "options": [
+        "一个分区可以包含多个集合，集合是分区的逻辑子集",
+        "一个集合可以包含多个分区，分区是集合内的数据子集划分",
+        "集合和分区是同一层级的平行概念，可互相包含",
+        "分区必须跨多个集合存在，用于全局数据切分"
+      ],
+      "answer": 1,
+      "explanation": "在 Milvus 的数据模型中，Collection 是顶层的数据组织单位（类似关系库中的表），Partition 是 Collection 内部的可选子划分，用于缩小搜索范围、提升查询效率。一个 Collection 可包含多个 Partition，而 Partition 不能跨 Collection 存在。",
+      "error_tag": "概念混淆",
+      "variant_group": "milvus_data_model"
+    },
+    {
+      "kp": "ai.vec.milvus",
+      "type": "single_choice",
+      "question": "某系统需要存储 768 维浮点向量并做近似最近邻检索。下列关于 Milvus 中「字段（Field）」和「Schema」的说法，哪一项是正确的？",
+      "options": [
+        "向量字段只能存 128 维以内的向量，超出需拆分成多字段",
+        "Schema 在集合创建后可以随意增加任意类型的向量字段而无需重建索引",
+        "Schema 定义了集合的字段结构，其中必须包含一个主键字段和一个（或多个）向量字段",
+        "主键字段的值允许为空，Milvus 会自动生成 UUID 填充"
+      ],
+      "answer": 2,
+      "explanation": "创建集合时需要定义 Schema，Schema 描述字段名、类型及约束；其中至少要有主键字段和向量字段。向量维度可以在 Schema 中指定（高维如 768 维很常见），主键通常不允许为空且需唯一。创建后随意修改向量字段结构并非无代价操作。",
+      "error_tag": "概念混淆",
+      "variant_group": "milvus_schema"
+    },
+    {
+      "kp": "ai.vec.milvus",
+      "type": "single_choice",
+      "question": "关于 Milvus 中删除实体与删除集合，下列说法正确的是？",
+      "options": [
+        "删除集合后，其中的分区和索引仍然保留，可被其他集合复用",
+        "删除集合会移除该集合及其分区和索引等关联结构",
+        "只能删除单个实体，无法删除整个集合",
+        "删除实体后向量占用的空间会被立即、同步地完全回收"
+      ],
+      "answer": 1,
+      "explanation": "删除集合会移除集合及其关联的分区、索引等结构。删除实体通常不一定立即同步回收全部存储空间（可能涉及后续的压缩整理）。因此选 B。",
+      "error_tag": "概念混淆",
+      "variant_group": "milvus_delete"
+    },
+    {
+      "kp": "ai.vec.milvus",
+      "type": "multi_choice",
+      "question": "在设计一个基于 Milvus 的以图搜图系统时，下列哪些做法是合理且常见的？（多选）",
+      "options": [
+        "为向量字段选择合适的近似索引（如 IVF/HNSW 类）以平衡速度与召回",
+        "把图片的类别、上传时间等标量信息作为字段存储，以便混合过滤检索",
+        "将向量维度在集合创建时确定，并保证插入向量维度一致",
+        "为追求绝对精确，强制关闭所有索引并全量暴力扫描，忽略性能开销",
+        "把每张图片的原始二进制直接存进向量字段"
+      ],
+      "answer": [
+        0,
+        1,
+        2
+      ],
+      "explanation": "合理做法包括：选择合适的 ANN 索引、存储标量元数据以支持混合过滤、在创建集合时确定向量维度并保持插入一致。暴力全量扫描虽精确但通常不适用于大规规则模生产；向量字段应存数值向量而非原始图片二进制。",
+      "error_tag": "概念混淆",
+      "variant_group": "milvus_hybrid_query"
+    },
+    {
+      "kp": "ai.vec.milvus",
+      "type": "multi_choice",
+      "question": "下列关于 Milvus 索引与搜索权衡的说法，哪些是正确的？（多选）",
+      "options": [
+        "不同索引类型在构建时间、内存占用和查询速度上各有取舍",
+        "搜索时的参数（如候选范围大小）会影响召回率与延迟",
+        "所有索引类型都能在不损失召回的前提下达到与暴力搜索完全相同的精度",
+        "选择度量方式（L2/IP/COSINE）会影响相似度结果的排序含义",
+        "索引只影响写入性能，与查询无关"
+      ],
+      "answer": [
+        0,
+        1,
+        3
+      ],
+      "explanation": "不同索引有不同权衡；搜索参数影响召回率和延迟；度量方式决定相似度含义与排序。并非所有索引都能零损失达到暴力搜索精度，索引也不只是影响写入。因此正确项为 0、1、3。",
+      "error_tag": "概念混淆",
+      "variant_group": "milvus_index_search"
+    },
+    {
+      "kp": "ai.vec.milvus",
+      "type": "multi_choice",
+      "question": "关于 Milvus 集合与分区的使用，下列哪些说法正确？（多选）",
+      "options": [
+        "按业务维度（如租户、时间）划分分区有助于缩小检索范围",
+        "分区是集合内部的可选划分，分区内的数据仍属于该集合",
+        "跨集合检索可以在一次搜索请求中自动完成，无需应用层聚合",
+        "合理使用分区可以在部分场景下减少扫描的数据量",
+        "一个分区可以同时属于多个集合"
+      ],
+      "answer": [
+        0,
+        1,
+        3
+      ],
+      "explanation": "分区用于集合内划分，可按业务维度缩小检索范围、减少扫描量。跨集合检索通常需要应用层或多次请求处理，并非单次自动聚合；分区不能跨集合存在。正确项为 0、1、3。",
+      "error_tag": "概念混淆",
+      "variant_group": "milvus_data_model"
+    },
+    {
+      "kp": "ai.vec.milvus",
+      "type": "fill_blank",
+      "question": "在 Milvus 中，用于在向量检索时附加标量字段过滤条件的查询形式，通常被称为「______ 查询」或「混合查询」。请填写英文术语（区分大小写可忽略）。",
+      "options": [],
+      "answer": [
+        "hybrid",
+        "Hybrid",
+        "hybrid search",
+        "Hybrid Search"
+      ],
+      "explanation": "在向量检索时结合标量字段过滤的表达，常被称为混合查询（hybrid search / hybrid query），即在向量相似度检索的基础上附加标量过滤表达式。",
+      "error_tag": "记忆缺失",
+      "variant_group": "milvus_hybrid_query"
+    },
+    {
+      "kp": "ai.vec.milvus",
+      "type": "fill_blank",
+      "question": "Milvus 中，向量相似度度量常见有三种：欧氏距离（L2）、内积（IP）和 ______（填一种余弦相似度度量的名称）。",
+      "options": [],
+      "answer": [
+        "COSINE",
+        "cosine",
+        "余弦相似度",
+        "Cosine",
+        "cosine similarity"
+      ],
+      "explanation": "Milvus 常见度量方式包括 L2、IP 和 COSINE（余弦相似度）。题目已给出前两种，空缺处应填余弦相似度对应的名称。",
+      "error_tag": "记忆缺失",
+      "variant_group": "milvus_metric_type"
+    },
+    {
+      "kp": "ai.vec.milvus",
+      "type": "fill_blank",
+      "question": "在 Milvus 中，集合创建并建立索引后，需要执行 ______ 操作，把数据加载进内存，集合才能对外提供搜索服务。（填写中文或英文操作名）",
+      "options": [],
+      "answer": [
+        "load",
+        "Load",
+        "加载",
+        "load collection",
+        "LoadCollection"
+      ],
+      "explanation": "集合建好索引后需执行 load（加载）操作，将数据加载进查询节点内存，之后才能对外提供搜索/查询服务。",
+      "error_tag": "记忆缺失",
+      "variant_group": "milvus_load"
+    },
+    {
+      "kp": "ai.vec.milvus",
+      "type": "code_reading",
+      "question": "阅读下面的伪代码（Milvus 客户端调用流程）：\n\n1. client.create_collection(collection_name=\"docs\", schema=schema)\n2. client.create_index(collection_name=\"docs\", field_name=\"embedding\", index_params=params)\n3. client.insert(collection_name=\"docs\", data=vectors)\n4. results = client.search(collection_name=\"docs\", query_vector=q, limit=5)\n\n假设上述 API 名称仅示意流程，请问第 2 步「创建索引」相对于第 4 步「搜索」的主要作用是什么？如果省略第 2 步直接搜索，可能遇到什么问题？",
+      "options": [],
+      "answer": "创建索引的主要作用是为向量字段建立高效检索结构（通常是近似最近邻索引），从而在搜索时快速定位候选近邻，兼顾速度与内存。若省略索引直接搜索，可能因缺少检索结构导致搜索效率极低，或在未加载/未建索引时无法正常搜索，需要退化为低效的扫描或直接报错。",
+      "explanation": "索引是搜索性能的核心。Milvus 中向量字段通常先建索引再加载搜索；没有索引会导致搜索效率低下甚至不可用。该题考察对「索引—搜索」流程的理解，而不是记忆具体 API 名。",
+      "error_tag": "概念混淆",
+      "variant_group": "milvus_index_search"
+    },
+    {
+      "kp": "ai.vec.milvus",
+      "type": "code_reading",
+      "question": "阅读下面示意流程：\n\nschema 中定义：id 为整型主键，embedding 为 768 维向量字段，category 为字符串标量字段。\n某次插入时，开发者传入了一条 embedding 长度为 512 的向量。\n\n请问这次插入最可能的结果是什么？为什么？",
+      "options": [],
+      "answer": "该次插入最可能会失败（报错），因为向量字段在 Schema 中已声明为 768 维，插入的向量维度必须与声明维度一致，512 维与 768 维不匹配会被拒绝。",
+      "explanation": "向量字段的维度在创建集合时确定，插入数据的向量维度必须与之严格一致，否则插入会报错。考察维度一致性这一边界规则。",
+      "error_tag": "边界错误",
+      "variant_group": "milvus_schema"
+    },
+    {
+      "kp": "ai.vec.milvus",
+      "type": "scenario",
+      "question": "工程场景：你们要为电商平台搭建商品相似推荐系统。商品向量（例如由图片/文本模型生成的 512 维向量）存在 Milvus 中，同时希望支持「只在某个类目下、且上架时间在近 30 天内」的商品中做相似检索。目前数据量约 5000 万，对延迟敏感。请说明你会如何组织 Milvus 的数据结构并完成查询，并解释关键取舍。",
+      "options": [],
+      "answer": null,
+      "explanation": "该场景需要：用集合存放商品向量并定义包含标量字段（类目、上架时间）的 Schema；查询时使用标量过滤表达式结合向量检索（混合查询）；为向量字段选择合适的近似索引以平衡延迟与召回率（召回率是重要取舍）；可按类目或时间做分区以缩小检索范围。关键词覆盖集合、标量字段、混合查询/过滤、索引、召回率。",
+      "error_tag": "概念混淆",
+      "variant_group": "milvus_hybrid_query",
+      "required_keywords": [
+        "集合",
+        "标量字段",
+        "混合查询",
+        "索引",
+        "召回率"
+      ]
+    },
+    {
+      "kp": "ai.vec.milvus",
+      "type": "single_choice",
+      "question": "关于 Milvus 中的「索引（Index）」与「搜索（Search）」参数，下列说法正确的是？",
+      "options": [
+        "建立索引后，搜索时返回的结果一定是精确的最近邻，不会有近似误差",
+        "近似最近邻索引（如 IVF、HNSW 类）用召回率换取查询速度，搜索参数会影响精度与性能的权衡",
+        "索引一旦建立就与查询参数无关，nprobe、ef 等参数只影响写入速度",
+        "向量集合必须建立索引后才能插入数据，否则插入会失败"
+      ],
+      "answer": 1,
+      "explanation": "Milvus 支持的多数向量索引属于近似最近邻（ANN）索引，会以一定召回率损失换取速度与内存优势。查询时的搜索参数（如探测的桶数、候选列表大小）会直接影响召回率与延迟的权衡。数据插入并不强制要求已有索引。",
+      "error_tag": "概念混淆",
+      "variant_group": "milvus_index_search"
+    },
+    {
+      "kp": "ai.vec.milvus",
+      "type": "single_choice",
+      "question": "在 Milvus 中进行向量相似度检索时，常用的度量方式不包括下列哪一项？",
+      "options": [
+        "欧氏距离（L2）",
+        "内积（IP）",
+        "余弦相似度（COSINE）",
+        "编辑距离（Levenshtein）"
+      ],
+      "answer": 3,
+      "explanation": "Milvus 常见向量度量包括 L2 欧氏距离、IP 内积和 COSINE 余弦相似度。编辑距离用于字符串序列比较，不是向量相似度度量方式，因此不属于常见度量。",
+      "error_tag": "概念混淆",
+      "variant_group": "milvus_metric_type"
+    },
+    {
+      "kp": "ai.vec.milvus",
+      "type": "single_choice",
+      "question": "某工程师想通过 Milvus 的客户端在集合中按条件过滤后再做向量检索。下列关于「标量字段过滤 + 向量检索」的描述，正确的是？",
+      "options": [
+        "Milvus 只能做纯向量检索，无法结合标量字段条件过滤",
+        "可以通过表达式（如对数值、字符串字段的比较）在向量检索时附加标量过滤条件",
+        "标量过滤只能在插入数据时进行，查询时不能使用",
+        "标量过滤必须对每个标量字段单独建向量索引才能生效"
+      ],
+      "answer": 1,
+      "explanation": "Milvus 支持混合查询，即在向量相似度检索时附带标量字段的过滤表达式（如 age > 30、category == \"xxx\"），从而缩小候选集。标量字段不需要建向量索引。",
+      "error_tag": "概念混淆",
+      "variant_group": "milvus_hybrid_query"
+    },
+    {
+      "kp": "ai.vec.milvus",
+      "type": "single_choice",
+      "question": "下列关于 Milvus 数据一致性与可见性的说法，哪一项更准确？",
+      "options": [
+        "数据一旦插入，立刻对所有查询完全可见，无需任何等待",
+        "插入的数据需要经过持久化与加载等过程，查询可见性受一致性级别等配置影响",
+        "Milvus 不支持任何一致性级别配置，行为固定",
+        "只有删除操作存在可见性延迟，插入操作没有"
+      ],
+      "answer": 1,
+      "explanation": "Milvus 中插入的数据需被写入并最终对查询可见，这受一致性级别（如 Strong、Bounded、Eventually 等）影响。不同级别在一致性与延迟之间存在权衡。",
+      "error_tag": "记忆缺失",
+      "variant_group": "milvus_consistency"
+    },
+    {
+      "kp": "ai.vec.milvus",
+      "type": "single_choice",
+      "question": "在 Milvus 中，向量字段的维度（dim）在何时必须确定？",
+      "options": [
+        "只有在第一次搜索时确定即可",
+        "在创建集合定义 Schema 时就需要确定，且同一向量字段内所有向量维度一致",
+        "可以在每次插入数据时动态改变，Milvus 自动对齐维度",
+        "维度由索引类型自动推断，无需用户指定"
+      ],
+      "answer": 1,
+      "explanation": "向量字段的维度需在定义 Schema（创建集合）时指定，且同一字段中所有向量维度必须一致，否则插入会报错。维度不能每次插入时动态改变。",
+      "error_tag": "边界错误",
+      "variant_group": "milvus_schema"
+    },
+    {
+      "kp": "ai.vec.milvus",
+      "type": "single_choice",
+      "question": "关于 Milvus 的「加载（Load）」操作，下列理解正确的是？",
+      "options": [
+        "Load 是把数据从磁盘直接拷贝到用户本地文件系统",
+        "Load 使集合（或分区）的数据被加载进内存以便提供搜索/查询服务",
+        "Load 是在创建集合前必须执行的步骤，用于初始化元数据",
+        "Load 只对索引有效，对原始向量数据无效"
+      ],
+      "answer": 1,
+      "explanation": "在 Milvus 中，集合创建并建索引后，需要执行加载操作，将数据加载进内存（查询节点），之后才能对外提供搜索和查询服务。这不是把数据拷到用户本地磁盘。",
+      "error_tag": "概念混淆",
+      "variant_group": "milvus_load"
+    },
+    {
+      "kp": "ai.vec.milvus",
+      "type": "single_choice",
+      "question": "在 Milvus 中，下列哪一项最可能导致「搜索结果召回率明显偏低」？",
+      "options": [
+        "向量维度设置为 768",
+        "使用近似索引但搜索参数设置得过于激进（如探测范围过小）",
+        "集合中数据量较小",
+        "主键使用整数类型"
+      ],
+      "answer": 1,
+      "explanation": "近似最近邻索引在搜索时若参数设置过小（例如探测的候选范围过窄），会遗漏部分真实近邻，导致召回率下降。维度、数据量小、主键类型通常不是召回率偏低的直接原因。",
+      "error_tag": "边界错误",
+      "variant_group": "milvus_recall"
+    },
+    {
+      "kp": "ai.vec.milvus",
+      "type": "single_choice",
+      "question": "关于 Milvus 中「主键（Primary Key）」的描述，正确的是？",
+      "options": [
+        "主键只能使用字符串类型",
+        "主键用于唯一标识集合中的实体，常见可用整数或字符串类型",
+        "主键可以重复，Milvus 会自动去重",
+        "主键不能与向量字段同时存在于一个 Schema 中"
+      ],
+      "answer": 1,
+      "explanation": "主键用于唯一标识实体，Milvus 支持整数或字符串类型作为主键，不允许重复。它与向量字段可共存于同一 Schema。",
+      "error_tag": "概念混淆",
+      "variant_group": "milvus_primary_key"
+    }
+  ]
+}

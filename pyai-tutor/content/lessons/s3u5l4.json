@@ -1,0 +1,630 @@
+{
+  "id": "s3u5l4",
+  "title": "s3u5l4",
+  "kps": [
+    "py.async.semaphore",
+    "py.async.sync_primitives"
+  ],
+  "theory": "## py.async.semaphore\n\n# py.async.semaphore：异步世界的\"限流阀门\"\n\n> **一句话直觉**：当你的程序同时发起 1000 个网络请求把对方服务器打爆、或者同时打开 10000 个文件把你自己的电脑卡死时，`asyncio.Semaphore`（信号量）就是那个站在门口、手里只有 N 把钥匙、多一个都不放行的\"门卫\"。\n\n---\n\n## 1. 为什么需要信号量？先从\"并发失控\"说起\n\n`asyncio`（异步 I/O）的核心魅力，是让成千上万个任务\"并发\"运行而不阻塞。但**并发 ≠ 无限**。每个并发任务背后都可能对应一个数据库连接、一个文件句柄、一个 HTTP 连接、一段 GPU 显存——这些都是**稀缺资源（scarce resource）**，超过上限系统就会崩溃或报错。\n\n信号量（Semaphore）来自操作系统经典概念，本质是一个**内部计数器（counter）**：\n- 初始值为 N（例如 3）；\n- 每有一个协程（coroutine）要进入临界区，就执行一次\"获取\"（`acquire`），计数器减 1；\n- 计数为 0 时，后来的协程会被**挂起等待**，直到有人\"释放\"（`release`），计数器加 1。\n\n这就是它和普通锁（`Lock`）的区别：`Lock` 的计数器永远是 1（互斥），`Semaphore` 可以是任意 N（限流）。\n\n```python\nimport asyncio\n\nasync def worker(sem: asyncio.Semaphore, name: str):\n    async with sem:           # 获取信号量：计数 -1\n        print(f\"{name} 开始工作\")\n        await asyncio.sleep(1) # 模拟耗时 I/O\n        print(f\"{name} 完成\")\n    # 退出 async with：自动释放，计数 +1\n\nasync def main():\n    sem = asyncio.Semaphore(2)   # 只允许 2 个任务同时进入\n    await asyncio.gather(*(worker(sem, f\"任务{i}\") for i in range(5)))\n\nasyncio.run(main())\n```\n\n**关键结论**：信号量是一种**异步同步原语（synchronization primitive）**，用来\"限流\"而不是\"互斥\"。`asyncio.Semaphore` 必须在事件循环（event loop）内使用，也不能跨进程或跨线程共享。\n\n---\n\n## 2. `asyncio.Semaphore` 的用法：`acquire` / `release` 与 `async with`\n\n`asyncio.Semaphore` 提供了两种使用方式：\n\n1. **手动模式**：`await sem.acquire()` 与 `sem.release()`；\n2. **推荐模式**：`async with sem:`，等价于 `try/finally` 里执行上面两步，**即使中途抛异常也能正确释放**。\n\n```python\nimport asyncio\n\nasync def fetch(sem: asyncio.Semaphore, i: int):\n    await sem.acquire()            # 手动获取\n    try:\n        print(f\"fetch {i} 正在执行\")\n        await asyncio.sleep(0.5)\n        if i == 2:\n            raise ValueError(\"模拟请求失败\")\n    finally:\n        sem.release()              # 保证一定释放，否则会泄漏\"名额\"\n\nasync def main():\n    sem = asyncio.Semaphore(3)\n    tasks = [asyncio.create_task(fetch(sem, i)) for i in range(6)]\n    # 个别任务抛异常不影响其他任务继续排队\n    results = await asyncio.gather(*tasks, return_exceptions=True)\n    print(\"结果：\", results)\n\nasyncio.run(main())\n```\n\n**关键结论**：\n- 永远优先用 `async with sem:`，避免漏写 `release()` 导致\"名额泄漏\"（leak），继而让整个程序死锁。\n- `Semaphore` 的构造函数参数必须是**正整数**，`Semaphore(0)` 会让所有协程永久挂起。\n\n---\n\n## 3. 典型工程场景：用信号量包装\"有上限\"的资源池\n\n真实项目中最常见的一个模式是：**一万个 URL，但只允许同时 20 个 HTTP 请求**。这就是信号量的最佳舞台。下面这段示例不引入第三方库，用 `asyncio.sleep` 模拟网络延迟：\n\n```python\nimport asyncio\nimport time\n\nasync def download(url: str, sem: asyncio.Semaphore):\n    async with sem:                       # 最多 N 个协程同时进入\n        print(f\"[开始] {url}\")\n        await asyncio.sleep(0.8)          # 模拟网络 I/O\n        print(f\"[完成] {url}\")\n        return len(url)\n\nasync def main():\n    urls = [f\"https://example.com/page/{i}\" for i in range(10)]\n    sem = asyncio.Semaphore(3)            # 最多 3 个并发\n\n    start = time.perf_counter()\n    results = await asyncio.gather(*(download(u, sem) for u in urls))\n    elapsed = time.perf_counter() - start\n\n    print(f\"处理 {len(results)} 个 URL，耗时 {elapsed:.2f}s\")\n    # 若无限并发 → 约 0.8s；若完全串行 → 约 8s；\n    # 限流为 3 时，理论耗时 ≈ ceil(10/3) * 0.8 ≈ 3.2s\n\nasyncio.run(main())\n```\n\n**关键结论**：信号量把\"并发度\"从\"无限\"收敛到\"可控\"，是**背压（backpressure）**思想最轻量的实现。它在爬虫、数据库连接池、SDK 调用限流中无处不在。\n\n---\n\n## 4. 与 `BoundedSemaphore`、`Lock`、`TaskGroup` 的关系\n\n`asyncio` 中同步原语家族包括：`Lock`、`Event`、`Condition`、`Semaphore`、`BoundedSemaphore`。其中：\n- **`BoundedSemaphore`**：多了一层保护——如果你 `release()` 次数多于 `acquire()`，它会抛 `ValueError`，帮你及早发现 bug。\n- **`Lock`** 就是 `Semaphore(1)` 的特例。\n- **Python 3.11+ 的 `asyncio.TaskGroup`** 负责\"一起启动 / 一起收尾\"，与信号量互补：TaskGroup 管结构，Semaphore 管流量。\n\n```python\nimport asyncio\n\nasync def main():\n    # BoundedSemaphore：多 release 会立刻报错，方便定位 bug\n    sem = asyncio.BoundedSemaphore(1)\n    await sem.acquire()\n    try:\n        sem.release()\n        sem.release()   # 第二次 release 触发 ValueError\n    except ValueError as e:\n        print(\"捕获到：\", e)\n\n    # TaskGroup + Semaphore 的现代写法（Python 3.11+）\n    limiter = asyncio.Semaphore(2)\n\n    async def job(i: int):\n        async with limiter:\n            await asyncio.sleep(0.3)\n            print(f\"job {i} done\")\n\n    async with asyncio.TaskGroup() as tg:\n        for i in range(5):\n            tg.create_task(job(i))\n\nasyncio.run(main())\n```\n\n**关键结论**：\n- 生产代码里推荐用 `BoundedSemaphore`，因为\"多释放\"几乎总是逻辑 bug 的信号；\n- 和 `TaskGroup` 组合，是 Python 3.11+ 最优雅的异步并发模板。\n\n---\n\n## 5. 心智模型小结（记住这五句话）\n\n1. 信号量 = 一个初始值为 N 的计数器 + 一个等待队列。\n2. `acquire` 减 1，`release` 加 1；计数为 0 时调用者挂起。\n3. `async with sem:` 是最安全的写法，异常也会释放。\n4. 信号量解决的是\"并发度上限\"，不是\"数据一致\"——后者用 `Lock`。\n5. 它只在同一个事件循环内有效，不能跨线程、跨进程共享。\n\n---\n\n## 动手练习\n\n**任务**：写一个\"批量图片下载模拟器\"。\n\n要求：\n1. 定义 30 个假图片 URL（如 `f\"https://img.test/{i}.jpg\"`）；\n2. 用一个全局 `asyncio.Semaphore(5)` 限制同时最多 5 个\"下载\"；\n3. 每个下载任务用 `await asyncio.sleep(random.uniform(0.1, 0.5))` 模拟耗时；\n4. 在下载开始时打印 `开始 <url>`，结束时打印 `完成 <url>`；\n5. 用 `time.perf_counter()` 统计总耗时，并用注释写清楚：为什么它不是 30 个任务耗时之和，也不是最慢那个任务的耗时；\n6. **加分题**：把 `Semaphore` 换成 `BoundedSemaphore`，并故意在代码中多调用一次 `release()`，观察报错；\n7. **挑战题**：把并发上限从 5 改成 1、10、30，分别跑一次，画出\"并发上限 vs 总耗时\"的粗略规律。\n\n提示：使用 `asyncio.gather`（Python < 3.11）或 `asyncio.TaskGroup`（3.11+）组织任务。\n\n```python\nimport asyncio\nimport random\nimport time\n\nasync def download_image(url: str, sem: asyncio.Semaphore):\n    async with sem:                                  # 进入临界区：最多 N 个并发\n        print(f\"开始 {url}\")\n        await asyncio.sleep(random.uniform(0.1, 0.5))  # 模拟网络 I/O\n        print(f\"完成 {url}\")\n        return url\n\nasync def main():\n    urls = [f\"https://img.test/{i}.jpg\" for i in range(30)]\n    sem = asyncio.Semaphore(5)                        # 并发上限 = 5\n\n    start = time.perf_counter()\n    results = await asyncio.gather(*(download_image(u, sem) for u in urls))\n    elapsed = time.perf_counter() - start\n\n    print(f\"\\n共处理 {len(results)} 张图片，总耗时 {elapsed:.2f}s\")\n\nasyncio.run(main())\n```\n\n## py.async.sync_primitives\n\n# asyncio 同步原语（Synchronization Primitives）\n\n## 一句话直觉\n\n当多个协程（coroutine）并发地抢同一份资源时，你需要“红绿灯”来协调它们——`asyncio` 的同步原语就是协程世界里的锁、信号量和事件。\n\n---\n\n## 1. 为什么需要同步原语：并发不等于没有竞争\n\n`asyncio` 用单线程事件循环（event loop）跑并发协程，看起来“同一时刻只有一个协程在跑”，但**协程会在 `await` 处主动让出控制权**。这就意味着：\n\n```python\nbalance = 100\n\nasync def withdraw(amount):\n    global balance\n    if balance >= amount:   # 检查\n        await asyncio.sleep(0.1)  # 这里让出控制权，另一个协程可能也通过了检查\n        balance -= amount   # 修改\n```\n\n两个协程同时调用 `withdraw(100)`，可能都通过检查，最终余额变成 -100。这就是典型的竞态条件（race condition）。\n\n同步原语就是用来保证**临界区（critical section）**互不干扰的工具。\n\n```python\nimport asyncio\n\nbalance = 100\n\nasync def bad_withdraw(amount):\n    global balance\n    if balance >= amount:\n        await asyncio.sleep(0.1)  # 模拟 IO 让出控制权\n        balance -= amount\n\nasync def main():\n    await asyncio.gather(bad_withdraw(100), bad_withdraw(100))\n    print(balance)  # 结果常常是 -100，而不是 0\n\nasyncio.run(main())\n```\n\n---\n\n## 2. Lock：最基本的互斥锁\n\n`asyncio.Lock` 保证同一时刻只有一个协程进入临界区。用法和 `threading.Lock` 类似，但必须用 `async with`：\n\n```python\nimport asyncio\n\nbalance = 100\nlock = asyncio.Lock()\n\nasync def good_withdraw(amount):\n    global balance\n    async with lock:                 # 获取锁；若已被占用，则 await 等待\n        if balance >= amount:\n            await asyncio.sleep(0.1)\n            balance -= amount\n\nasync def main():\n    await asyncio.gather(good_withdraw(100), good_withdraw(100))\n    print(balance)  # 结果一定是 0\n\nasyncio.run(main())\n```\n\n关键点：\n- `async with lock:` 自动在退出时释放锁，即使抛异常也安全。\n- 不要用 `with lock:`，因为 `asyncio.Lock` 的获取是异步操作。\n\n---\n\n## 3. Event：一次性通知，广播唤醒\n\n`asyncio.Event` 是一个布尔标志位加等待队列。常用于“A 就绪后通知 B”的场景，比如初始化完成后放行所有等待者。\n\n```python\nimport asyncio\n\nasync def waiter(name, event):\n    print(f\"{name} 正在等待信号...\")\n    await event.wait()          # 阻塞直到 set() 被调用\n    print(f\"{name} 收到信号，开始工作\")\n\nasync def main():\n    event = asyncio.Event()\n    # 启动三个等待者\n    tasks = [asyncio.create_task(waiter(f\"worker-{i}\", event)) for i in range(3)]\n    await asyncio.sleep(1)\n    print(\"发出信号！\")\n    event.set()                  # 唤醒所有等待者\n    await asyncio.gather(*tasks)\n\nasyncio.run(main())\n```\n\n要点：\n- `set()` 后 Event 保持“已触发”状态，之后调用 `wait()` 会立即返回。\n- `clear()` 可以复位；`is_set()` 查询状态。\n- 如果只需要“一次性”的事件，Event 就够了；如果需要“计数”，用 `Semaphore`。\n\n---\n\n## 4. Semaphore：限制并发数量的闸门\n\n`asyncio.Semaphore(n)` 允许最多 n 个协程同时通过。典型用途：限制对数据库、HTTP 接口的并发访问。\n\n```python\nimport asyncio\n\nsem = asyncio.Semaphore(3)      # 最多 3 个并发\n\nasync def access_resource(i):\n    async with sem:\n        print(f\"task-{i} 进入资源\")\n        await asyncio.sleep(1)\n        print(f\"task-{i} 释放资源\")\n\nasync def main():\n    await asyncio.gather(*[access_resource(i) for i in range(10)])\n    # 同一时刻最多看到 3 条 \"进入资源\" 日志\n\nasyncio.run(main())\n```\n\n与 `Lock` 的关系：`Lock` 相当于 `Semaphore(1)`，但两者是独立实现。\n\n---\n\n## 5. Condition 与 Queue（进阶速览）\n\n- `asyncio.Condition`：配合 `wait()` / `notify()` 实现“等某个条件成立再继续”，常用于生产者-消费者模式中需要精细化通知的场景。\n- `asyncio.Queue`：跨协程的安全队列，是异步任务分发的首选。生产用 `await q.put(x)`，消费用 `await q.get()`。\n\n```python\nimport asyncio\n\nasync def producer(q):\n    for i in range(5):\n        await q.put(i)\n        await asyncio.sleep(0.1)\n    await q.put(None)           # 结束哨兵\n\nasync def consumer(q):\n    while True:\n        item = await q.get()\n        if item is None:\n            break\n        print(\"处理\", item)\n\nasync def main():\n    q = asyncio.Queue()\n    await asyncio.gather(producer(q), consumer(q))\n\nasyncio.run(main())\n```\n\n工程实践中，Queue 比手动用 Condition 写生产者-消费者更不易出错。\n\n---\n\n## 小结对照表\n\n| 原语 | 语义 | 典型场景 |\n|------|------|----------|\n| `Lock` | 互斥 | 保护共享变量 |\n| `Event` | 一次性广播 | 初始化完成通知 |\n| `Semaphore` | 限流 | 控制并发连接数 |\n| `Condition` | 条件等待 | 精细同步 |\n| `Queue` | 数据传递 | 生产者-消费者 |\n\n```python\nimport asyncio\n\n# 演示：用 Lock 修复竞态，用 Semaphore 限流，用 Event 广播唤醒\n\nbalance = 100\nlock = asyncio.Lock()\nsem = asyncio.Semaphore(2)\nready = asyncio.Event()\n\nasync def withdraw(amount):\n    global balance\n    async with lock:                    # 互斥保护临界区\n        if balance >= amount:\n            await asyncio.sleep(0.1)\n            balance -= amount\n\nasync def limited_worker(i):\n    async with sem:                     # 最多 2 个同时运行\n        print(f\"[worker-{i}] 进入\")\n        await ready.wait()              # 等待统一信号\n        await asyncio.sleep(0.5)\n        print(f\"[worker-{i}] 完成\")\n\nasync def main():\n    # 1) 并发扣款：正确结果应为 0，不会出现负数\n    await asyncio.gather(withdraw(100), withdraw(100))\n    print(\"balance =\", balance)\n\n    # 2) 限流 + 事件广播\n    workers = [asyncio.create_task(limited_worker(i)) for i in range(5)]\n    await asyncio.sleep(1)\n    print(\"发信号，全体放行\")\n    ready.set()\n    await asyncio.gather(*workers)\n\nasyncio.run(main())\n```\n",
+  "quiz": [
+    {
+      "kp": "py.async.semaphore",
+      "type": "single_choice",
+      "question": "在 asyncio 中，下面哪种场景最适合使用 Semaphore？",
+      "options": [
+        "限制同时访问某个外部资源的协程数量，例如最多同时发起 5 个网络请求",
+        "让某个协程等待另一个协程完成后继续执行",
+        "在多个线程之间安全地共享一个普通整数",
+        "取消已经启动但尚未完成的协程"
+      ],
+      "answer": 0,
+      "explanation": "Semaphore 用于限制同时进入临界区的协程数量，典型场景是限制并发连接数或并发任务数。选项 B 更像 Event 或 await task；选项 C 是线程同步问题，不是 asyncio Semaphore 的主要用途；选项 D 是 Task.cancel。",
+      "error_tag": "概念混淆",
+      "variant_group": "semaphore_use_case"
+    },
+    {
+      "kp": "py.async.semaphore",
+      "type": "single_choice",
+      "question": "执行 asyncio.Semaphore(2) 后，该信号量的初始内部计数是多少？",
+      "options": [
+        "0",
+        "1",
+        "2",
+        "取决于事件循环当前是否正在运行"
+      ],
+      "answer": 2,
+      "explanation": "Semaphore(value) 的 value 表示初始可用许可数，默认构造时传入 2，因此初始计数为 2。它不依赖事件循环是否正在运行，也不是 0 或 1。",
+      "error_tag": "参数理解错误",
+      "variant_group": "semaphore_init"
+    },
+    {
+      "kp": "py.async.semaphore",
+      "type": "single_choice",
+      "question": "关于 asyncio.Semaphore 的 release 方法，下列说法正确的是？",
+      "options": [
+        "release 必须与 acquire 在同一协程中调用，否则无效",
+        "release 会将内部计数加 1，并且可能唤醒一个等待中的 acquire",
+        "release 只能在计数为 0 时调用，否则抛出异常",
+        "release 是协程方法，必须 await"
+      ],
+      "answer": 1,
+      "explanation": "release 是普通方法，不需要 await，会将计数加 1 并可能唤醒等待者。它不要求与 acquire 在同一协程中，也不要求计数为 0 才能调用。",
+      "error_tag": "同步异步混淆",
+      "variant_group": "semaphore_release_semantics"
+    },
+    {
+      "kp": "py.async.semaphore",
+      "type": "single_choice",
+      "question": "使用 asyncio.Semaphore 限制并发下载时，如果不小心多调用了一次 release，最可能发生什么？",
+      "options": [
+        "信号量计数会比预期多 1，从而允许比设定值更多的并发任务",
+        "程序立即抛出 ValueError",
+        "信号量会被自动销毁",
+        "所有等待中的协程会被取消"
+      ],
+      "answer": 0,
+      "explanation": "release 不要求与 acquire 配对检查，多调用会使计数上溢，从而实际允许的并发数超过初始设定。它不会自动抛 ValueError、销毁信号量或取消等待者。",
+      "error_tag": "资源泄漏",
+      "variant_group": "semaphore_over_release"
+    },
+    {
+      "kp": "py.async.semaphore",
+      "type": "single_choice",
+      "question": "下面哪种写法正确地在协程中使用 asyncio.Semaphore 限制并发？",
+      "options": [
+        "sem = asyncio.Semaphore(5)\nasync def worker():\n    sem.acquire()\n    try:\n        await do_work()\n    finally:\n        sem.release()",
+        "sem = asyncio.Semaphore(5)\nasync def worker():\n    await sem.acquire()\n    try:\n        await do_work()\n    finally:\n        sem.release()",
+        "sem = asyncio.Semaphore(5)\nasync def worker():\n    async with sem:\n        await do_work()\n    sem.release()",
+        "sem = asyncio.Semaphore(5)\nasync def worker():\n    sem.acquire()\n    await do_work()\n    sem.release()"
+      ],
+      "answer": 1,
+      "explanation": "正确做法是 await sem.acquire()，并在 try/finally 中 release。选项 A 和 D 缺少 await；选项 C 使用 async with 后额外 release 会导致计数上溢。",
+      "error_tag": "缺少await",
+      "variant_group": "semaphore_correct_usage"
+    },
+    {
+      "kp": "py.async.semaphore",
+      "type": "single_choice",
+      "question": "关于 asyncio.BoundedSemaphore 与 asyncio.Semaphore 的区别，下列说法正确的是？",
+      "options": [
+        "BoundedSemaphore 的 release 会检查计数是否超过初始值，超过时抛出 ValueError",
+        "BoundedSemaphore 不能用于协程，只能用于线程",
+        "Semaphore 的 release 也会检查上界并抛出 ValueError",
+        "BoundedSemaphore 的 acquire 不需要 await"
+      ],
+      "answer": 0,
+      "explanation": "BoundedSemaphore 在 release 时若计数将超过初始值会抛出 ValueError，有助于发现 release 次数过多的问题。普通 Semaphore 不检查上界。二者都用于协程，acquire 都需要 await。",
+      "error_tag": "概念混淆",
+      "variant_group": "bounded_semaphore"
+    },
+    {
+      "kp": "py.async.semaphore",
+      "type": "single_choice",
+      "question": "在 asyncio 中，Semaphore 与 Lock 的主要区别是什么？",
+      "options": [
+        "Lock 可以允许多个协程同时进入，Semaphore 只能允许一个",
+        "Semaphore 可以设置大于 1 的初始许可数，从而允许多个协程同时进入；Lock 本质上只允许一个协程持有",
+        "Lock 只能用于多线程，Semaphore 只能用于多进程",
+        "Semaphore 不能被 await，Lock 可以"
+      ],
+      "answer": 1,
+      "explanation": "asyncio.Lock 是互斥锁，同一时刻只允许一个协程持有；Semaphore 可以设置多个许可，允许多个协程同时进入。二者都用于协程，acquire 都是 awaitable。",
+      "error_tag": "概念混淆",
+      "variant_group": "semaphore_vs_lock"
+    },
+    {
+      "kp": "py.async.semaphore",
+      "type": "single_choice",
+      "question": "如果希望 asyncio 程序最多同时处理 10 个任务，下面哪种同步原语最直接合适？",
+      "options": [
+        "asyncio.Event",
+        "asyncio.Condition",
+        "asyncio.Semaphore(10)",
+        "asyncio.Queue()"
+      ],
+      "answer": 2,
+      "explanation": "Semaphore(10) 直接表示最多 10 个许可，适合限制并发任务数。Event 用于通知，Condition 用于条件等待，Queue 用于生产者消费者模式，虽然也能间接限流但不如 Semaphore 直接。",
+      "error_tag": "选型错误",
+      "variant_group": "semaphore_use_case"
+    },
+    {
+      "kp": "py.async.semaphore",
+      "type": "single_choice",
+      "question": "关于 asyncio.Semaphore 的等待队列，下列说法正确的是？",
+      "options": [
+        "等待者总是按后进先出的顺序被唤醒",
+        "等待者按先进先出的顺序等待唤醒，但不应依赖过于严格的顺序保证",
+        "等待者会被随机唤醒，没有队列",
+        "只有第一个等待者会被唤醒，其他等待者永远不会被唤醒"
+      ],
+      "answer": 1,
+      "explanation": "asyncio 内部通常维护等待者队列，按先进先出唤醒，但实现细节可能变化，业务代码不应强依赖严格顺序。不是后进先出、随机或只唤醒第一个。",
+      "error_tag": "语义理解错误",
+      "variant_group": "semaphore_order"
+    },
+    {
+      "kp": "py.async.semaphore",
+      "type": "single_choice",
+      "question": "下面代码中，async with sem 的作用是什么？\n\nsem = asyncio.Semaphore(3)\nasync def worker():\n    async with sem:\n        await do_work()",
+      "options": [
+        "进入时自动 await acquire，退出时自动 release，即使发生异常也会释放",
+        "把 sem 的初始计数临时改为 3",
+        "让 do_work 变成同步函数",
+        "取消所有其他正在等待 sem 的协程"
+      ],
+      "answer": 0,
+      "explanation": "asyncio.Semaphore 支持异步上下文管理器协议，async with 会在进入时 await acquire，退出时 release，并在异常时保证释放。它不会修改初始计数、改变 do_work 类型或取消其他协程。",
+      "error_tag": "上下文管理理解错误",
+      "variant_group": "semaphore_async_with"
+    },
+    {
+      "kp": "py.async.semaphore",
+      "type": "single_choice",
+      "question": "假设一个 Semaphore 初始值为 1，两个协程同时尝试 await acquire。第一个协程获得许可后没有 release 就结束了。第二个协程会怎样？",
+      "options": [
+        "立即获得许可并继续执行",
+        "一直等待，因为许可没有被释放",
+        "抛出 RuntimeError 并结束",
+        "自动获得一个新的许可，计数变为 2"
+      ],
+      "answer": 1,
+      "explanation": "许可被第一个协程消耗且未释放，计数保持为 0，第二个协程会一直等待。它不会立即获得许可、抛错或自动增加计数。",
+      "error_tag": "资源泄漏",
+      "variant_group": "semaphore_leak"
+    },
+    {
+      "kp": "py.async.semaphore",
+      "type": "single_choice",
+      "question": "在 asyncio 中，以下哪种做法可能导致信号量许可泄漏？",
+      "options": [
+        "使用 async with sem 包裹临界区",
+        "在 await sem.acquire() 之后、release 之前，代码抛出异常且没有 try/finally",
+        "在 release 之后再次调用 acquire",
+        "把 Semaphore 对象作为参数传给多个协程"
+      ],
+      "answer": 1,
+      "explanation": "acquire 之后若发生异常但没有释放，许可就会泄漏。async with 会保证释放；release 后再 acquire 是正常使用；跨协程传递 Semaphore 对象也是常见且正确的做法。",
+      "error_tag": "资源泄漏",
+      "variant_group": "semaphore_leak"
+    },
+    {
+      "kp": "py.async.semaphore",
+      "type": "single_choice",
+      "question": "关于 asyncio.Semaphore 的 acquire 方法，下列说法正确的是？",
+      "options": [
+        "它是普通同步方法，调用后立即返回 True 或 False",
+        "它是一个 awaitable，计数大于 0 时会减少计数并继续，否则会挂起当前协程等待",
+        "它只能在创建 Semaphore 的同一个协程中调用",
+        "它会阻塞整个事件循环直到获得许可"
+      ],
+      "answer": 1,
+      "explanation": "asyncio.Semaphore.acquire 是一个协程方法，需要 await。计数可用时立即减少并返回；不可用时当前协程被挂起，而不是阻塞整个事件循环。它不要求必须在创建它的协程中调用。",
+      "error_tag": "同步异步混淆",
+      "variant_group": "semaphore_acquire"
+    },
+    {
+      "kp": "py.async.semaphore",
+      "type": "single_choice",
+      "question": "关于 asyncio.Semaphore 的计数，下列说法正确的是？",
+      "options": [
+        "计数可以为负数，表示欠了多少许可",
+        "计数在 acquire 成功时减 1，release 时加 1；等待中的 acquire 不会减少计数",
+        "计数只能等于 0 或初始值，不能是中间值",
+        "计数由事件循环自动维护，调用者无法通过 acquire/release 影响"
+      ],
+      "answer": 1,
+      "explanation": "成功 acquire 使计数减 1，release 使计数加 1；等待中的 acquire 尚未消耗许可，因此不减少计数。计数通常不会变为负数，也可以处于 0 和初始值之间的中间值，并且正是由 acquire/release 改变的。",
+      "error_tag": "计数变化错误",
+      "variant_group": "semaphore_count"
+    },
+    {
+      "kp": "py.async.semaphore",
+      "type": "single_choice",
+      "question": "下面代码中，sem 的初始计数为 1。执行完 with 语句块后，sem 的计数最可能变为多少？\n\nsem = asyncio.Semaphore(1)\nawait sem.acquire()\n# ... 执行一些操作 ...\nsem.release()",
+      "options": [
+        "0",
+        "1",
+        "2",
+        "取决于 with 语句块中是否发生异常"
+      ],
+      "answer": 1,
+      "explanation": "acquire 使计数从 1 减到 0，release 使计数加 1，因此恢复为 1。release 本身不会改变为其他值；异常处理若使用 try/finally 也通常会 release，但题中已明确执行 release。",
+      "error_tag": "计数变化错误",
+      "variant_group": "semaphore_release"
+    },
+    {
+      "kp": "py.async.semaphore",
+      "type": "single_choice",
+      "question": "在 asyncio 中，Semaphore(0) 的典型用途是什么？",
+      "options": [
+        "表示永远无法获得许可，因此 acquire 会立即抛出异常",
+        "作为初始不可用的门闩，等待其他协程 release 后再放行等待者",
+        "表示无限制并发，等同于不加限制",
+        "表示信号量已损坏，不应再使用"
+      ],
+      "answer": 1,
+      "explanation": "Semaphore(0) 初始没有可用许可，await acquire 会挂起等待，直到其他协程调用 release 使计数增加。它不会立即抛异常，也不代表无限制并发或损坏。",
+      "error_tag": "语义理解错误",
+      "variant_group": "semaphore_zero"
+    },
+    {
+      "kp": "py.async.semaphore",
+      "type": "single_choice",
+      "question": "当多个协程同时 await 一个计数为 0 的 Semaphore 时，release 会如何影响等待者？",
+      "options": [
+        "所有等待者会同时被唤醒并获得许可",
+        "唤醒其中一个等待者，使其获得许可并继续执行",
+        "不会唤醒任何等待者，只是增加内部计数",
+        "唤醒顺序一定与协程创建顺序相反"
+      ],
+      "answer": 1,
+      "explanation": "release 增加计数，并唤醒一个等待中的 acquire 调用者，使其获得许可继续执行；不会一次唤醒全部。唤醒顺序通常按等待顺序，但不应依赖为与创建顺序相反。",
+      "error_tag": "唤醒语义错误",
+      "variant_group": "semaphore_waiters"
+    },
+    {
+      "kp": "py.async.semaphore",
+      "type": "single_choice",
+      "question": "下面关于 asyncio.Semaphore 与 threading.Semaphore 的比较，哪项正确？",
+      "options": [
+        "两者完全等价，可以互换使用",
+        "asyncio.Semaphore 用于协程间同步，acquire 需要 await；threading.Semaphore 用于线程间同步，acquire 是阻塞调用",
+        "asyncio.Semaphore 只能用于多线程，threading.Semaphore 只能用于多进程",
+        "threading.Semaphore 也必须在 async 函数中使用 await"
+      ],
+      "answer": 1,
+      "explanation": "asyncio.Semaphore 是协程同步原语，acquire 是 awaitable；threading.Semaphore 是线程同步原语，acquire 会阻塞当前线程。二者不能直接互换，也不存在只能用于多线程或仅能 await 的限定。",
+      "error_tag": "概念混淆",
+      "variant_group": "semaphore_vs_threading"
+    },
+    {
+      "kp": "py.async.semaphore",
+      "type": "single_choice",
+      "question": "在协程中使用 asyncio.Semaphore 时，为什么通常建议配合 try/finally 或 async with？",
+      "options": [
+        "因为 acquire 必须在 release 之前调用，否则会报语法错误",
+        "为了确保即使临界区代码抛出异常，也能 release 许可，避免信号量计数永久减少",
+        "因为 async with 会自动把信号量计数重置为初始值",
+        "因为 release 只能在异常处理块中调用"
+      ],
+      "answer": 1,
+      "explanation": "如果在获得许可后进入临界区时发生异常但没有 release，许可会泄漏，其他协程可能永远等待。try/finally 或 async with 能保证释放。async with 不会自动重置为初始值，release 也不要求必须在异常块中调用。",
+      "error_tag": "资源泄漏",
+      "variant_group": "semaphore_try_finally"
+    },
+    {
+      "kp": "py.async.semaphore",
+      "type": "single_choice",
+      "question": "下面代码存在什么问题？\n\nsem = asyncio.Semaphore(3)\nfor i in range(10):\n    sem.acquire()\n    await do_work(i)\n    sem.release()",
+      "options": [
+        "Semaphore 不能在循环中使用",
+        "acquire 是协程方法，这里没有 await；而且 try/finally 缺失，异常时会泄漏许可",
+        "release 必须传入参数 i",
+        "do_work 不能是协程函数"
+      ],
+      "answer": 1,
+      "explanation": "asyncio.Semaphore.acquire 需要 await，否则不会真正等待许可，还可能产生警告。同时缺少异常安全的 release。Semaphore 可以在循环中使用，release 不需要参数，do_work 作为协程函数也没有问题。",
+      "error_tag": "缺少await",
+      "variant_group": "semaphore_await"
+    },
+    {
+      "kp": "py.async.semaphore",
+      "type": "single_choice",
+      "question": "某个 asyncio.Semaphore 初始值为 2。三个协程 A、B、C 依次调用 await acquire()，当前都没有 release。此时第三个协程 C 的状态最可能是什么？",
+      "options": [
+        "立即获得许可并继续执行",
+        "被挂起，等待其他协程 release",
+        "抛出 RuntimeError",
+        "自动将信号量计数增加到 3"
+      ],
+      "answer": 1,
+      "explanation": "初始计数 2，A 和 B 各消耗 1，计数变为 0；C 再 await acquire 时会挂起等待 release。它不会立即获得许可、抛错或自动增加计数。",
+      "error_tag": "计数变化错误",
+      "variant_group": "semaphore_wait"
+    },
+    {
+      "kp": "py.async.sync_primitives",
+      "type": "single_choice",
+      "question": "在 asyncio 中，如果多个协程需要互斥地访问一个共享资源，最合适的同步原语是？",
+      "options": [
+        "asyncio.Event",
+        "asyncio.Lock",
+        "asyncio.Queue",
+        "asyncio.Semaphore(0)"
+      ],
+      "answer": 1,
+      "explanation": "asyncio.Lock 用于保证同一时刻只有一个协程进入临界区，是最直接的互斥原语。Event 用于通知，Queue 用于生产者-消费者解耦，Semaphore(0) 初始为 0 会一直阻塞。",
+      "error_tag": "概念混淆",
+      "variant_group": "async_lock_basic"
+    },
+    {
+      "kp": "py.async.sync_primitives",
+      "type": "single_choice",
+      "question": "关于 asyncio.Lock 的 acquire 与 release，下列说法正确的是？",
+      "options": [
+        "acquire 是同步方法，不会阻塞事件循环",
+        "acquire 是协程，必须 await，未获取时会挂起当前协程而不阻塞事件循环",
+        "release 必须由最先获取锁的协程调用，否则抛异常",
+        "Lock 不支持 async with 语法"
+      ],
+      "answer": 1,
+      "explanation": "asyncio.Lock.acquire() 是协程函数，需 await。未获取到锁时挂起当前协程，让出事件循环给其他任务，而不是阻塞线程。release 不强制必须是获取者调用（但逻辑上应成对），Lock 支持 async with。",
+      "error_tag": "概念混淆",
+      "variant_group": "async_lock_basic"
+    },
+    {
+      "kp": "py.async.sync_primitives",
+      "type": "multi_choice",
+      "question": "以下哪些属于 asyncio 提供的同步原语？（多选）",
+      "options": [
+        "asyncio.Lock",
+        "asyncio.Semaphore",
+        "asyncio.Condition",
+        "asyncio.RLock",
+        "asyncio.Event"
+      ],
+      "answer": [
+        0,
+        1,
+        2,
+        4
+      ],
+      "explanation": "asyncio 提供 Lock、Semaphore、BoundedSemaphore、Event、Condition、Barrier（3.11+）等。没有 asyncio.RLock；RLock 是 threading 的。",
+      "error_tag": "记忆缺失",
+      "variant_group": "async_primitives_list"
+    },
+    {
+      "kp": "py.async.sync_primitives",
+      "type": "multi_choice",
+      "question": "关于 asyncio.Semaphore 与 asyncio.BoundedSemaphore，下列说法正确的有？（多选）",
+      "options": [
+        "Semaphore 可以超过初始值释放而不会报错",
+        "BoundedSemaphore 释放超过初始值会抛 ValueError",
+        "两者都可用于限制并发数",
+        "Semaphore 只能在同步函数中使用"
+      ],
+      "answer": [
+        0,
+        1,
+        2
+      ],
+      "explanation": "Semaphore 允许 release 使计数超过初始值（不报错但通常是 bug）。BoundedSemaphore 会检查上界并抛 ValueError，用来捕获误用。两者都是协程原语，不能直接在同步函数中 await。",
+      "error_tag": "概念混淆",
+      "variant_group": "async_semaphore"
+    },
+    {
+      "kp": "py.async.sync_primitives",
+      "type": "multi_choice",
+      "question": "在 asyncio 中，下列哪些场景适合使用 asyncio.Event？（多选）",
+      "options": [
+        "让一个协程等待某个启动信号后再继续",
+        "在所有初始化完成前阻塞多个消费者协程",
+        "替代互斥锁保护临界区",
+        "实现一次性广播通知"
+      ],
+      "answer": [
+        0,
+        1,
+        3
+      ],
+      "explanation": "Event 用于「等待/通知」语义：等待信号、等待初始化完成、一次性广播。保护临界区互斥应该用 Lock，Event 不具备互斥语义。",
+      "error_tag": "概念混淆",
+      "variant_group": "async_event"
+    },
+    {
+      "kp": "py.async.sync_primitives",
+      "type": "multi_choice",
+      "question": "使用 asyncio.Condition 时，下列说法正确的有？（多选）",
+      "options": [
+        "wait() 必须在已经持有 condition 的情况下调用",
+        "wait() 会释放内部锁，被唤醒后重新获取锁",
+        "notify() 必须在持有 condition 的情况下调用",
+        "notify_all() 会唤醒所有等待者，它们依次竞争锁"
+      ],
+      "answer": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "explanation": "Condition.wait/notify 都要求调用者持有底层锁。wait 释放锁并在被唤醒后重新获取。notify 唤醒一个等待者，notify_all 唤醒全部等待者，它们醒来后需要重新竞争锁。",
+      "error_tag": "概念混淆",
+      "variant_group": "async_condition"
+    },
+    {
+      "kp": "py.async.sync_primitives",
+      "type": "fill_blank",
+      "question": "asyncio 中用于限制并发数量的原语通常称为 ____________（填写类名，不含模块前缀）。",
+      "options": [],
+      "answer": [
+        "Semaphore",
+        "asyncio.Semaphore"
+      ],
+      "explanation": "Semaphore 通过计数限制同时进入的协程数量，是最常见的并发限制手段。",
+      "error_tag": "记忆缺失",
+      "variant_group": "async_semaphore"
+    },
+    {
+      "kp": "py.async.sync_primitives",
+      "type": "fill_blank",
+      "question": "asyncio 中用于「等待某个条件成立」并可与锁配合使用的原语是 ____________（填写类名，不含模块前缀）。",
+      "options": [],
+      "answer": [
+        "Condition",
+        "asyncio.Condition"
+      ],
+      "explanation": "Condition 内部持有锁，允许等待条件并在条件满足时被通知，是等待/通知语义的经典实现。",
+      "error_tag": "记忆缺失",
+      "variant_group": "async_condition"
+    },
+    {
+      "kp": "py.async.sync_primitives",
+      "type": "fill_blank",
+      "question": "在 asyncio 中，希望同一时刻只有一个协程执行某段代码，最直接的原语是 ____________（填写类名，不含模块前缀）。",
+      "options": [],
+      "answer": [
+        "Lock",
+        "asyncio.Lock"
+      ],
+      "explanation": "Lock 的互斥语义正好保证同一时刻只有一个协程在临界区。",
+      "error_tag": "记忆缺失",
+      "variant_group": "async_lock_basic"
+    },
+    {
+      "kp": "py.async.sync_primitives",
+      "type": "code_reading",
+      "question": "阅读以下代码，说明为什么最终计数器结果可能小于 2000，并给出修复方向。\n\nimport asyncio\n\ncounter = 0\n\nasync def inc():\n    global counter\n    for _ in range(1000):\n        tmp = counter\n        await asyncio.sleep(0)\n        counter = tmp + 1\n\nasync def main():\n    await asyncio.gather(inc(), inc())\n\nasyncio.run(main())\nprint(counter)",
+      "options": [],
+      "answer": "在 tmp = counter 与 counter = tmp + 1 之间的 await asyncio.sleep(0) 会让出事件循环，另一个协程可能读到过期的 counter，导致更新丢失（竞态）。修复：用 asyncio.Lock 包住整个读-改-写序列（async with lock: ...），避免中间被其他协程插入。",
+      "explanation": "await 点是协程切换点，读-改-写不是原子操作。用锁即可恢复原子性；移除 sleep 或改成同步循环也能规避，但正确做法是加同步原语。",
+      "error_tag": "边界错误",
+      "variant_group": "async_race"
+    },
+    {
+      "kp": "py.async.sync_primitives",
+      "type": "code_reading",
+      "question": "阅读以下代码，判断消费者是否可能永远卡住，并说明原因。\n\nimport asyncio\n\nasync def main():\n    q = asyncio.Queue()\n    async def consumer():\n        while True:\n            item = await q.get()\n            print('got', item)\n    task = asyncio.create_task(consumer())\n    await asyncio.sleep(0.1)\n    # 没有 put，也没有取消 task\n    await task\n\nasyncio.run(main())",
+      "options": [],
+      "answer": "会永远卡住。Queue.get() 在队列为空时会挂起消费者协程，主协程又 await task 等待它结束，而没有任何生产者调用 put，因此 consumer 永远阻塞、main 也永远等待，形成死锁式挂起。修复：加入生产者 put 数据，或在合适时取消该任务并处理 CancelledError。",
+      "explanation": "Queue 的 get 在空队列时挂起是设计行为，但如果没有任何生产者且调用方又同步等待任务完成，就会永久挂起。同步原语的挂起需要有人推进状态。",
+      "error_tag": "边界错误",
+      "variant_group": "async_queue"
+    },
+    {
+      "kp": "py.async.sync_primitives",
+      "type": "scenario",
+      "question": "你负责一个 asyncio 服务，需要在启动时并发拉取多个远程配置。远程配置接口对并发有限制，最多同时允许 5 个请求。你希望「只有在所有配置完成后再开始服务」，同时又不希望因为个别请求失败就整体挂掉。请描述你会使用哪些 asyncio 同步/并发原语来组织这段逻辑，并说明原因。",
+      "options": [],
+      "answer": null,
+      "explanation": "用 Semaphore(5) 限制并发数；用 asyncio.gather(..., return_exceptions=True) 并发执行并收集结果、避免单点失败拖垮整体；如果多个协程需要更新同一配置字典，用 Lock 保护写操作；用 Event 作为「配置就绪」信号，让其他等待启动的协程在事件被 set 后再继续。",
+      "error_tag": "概念混淆",
+      "variant_group": "async_scenario_design",
+      "required_keywords": [
+        "asyncio.gather",
+        "set",
+        "并发",
+        "协程"
+      ]
+    },
+    {
+      "kp": "py.async.sync_primitives",
+      "type": "single_choice",
+      "question": "asyncio.Semaphore(3) 的含义是？",
+      "options": [
+        "最多允许 3 个协程同时进入受保护的代码段",
+        "第 3 个到达的协程才能进入临界区",
+        "每次进入需要等待 3 秒",
+        "必须同时启动 3 个协程，否则报错"
+      ],
+      "answer": 0,
+      "explanation": "Semaphore(3) 初始化计数为 3，最多允许 3 个协程同时持有，常用于限制并发数量。它不涉及时间延迟，也不要求恰好 3 个协程。",
+      "error_tag": "概念混淆",
+      "variant_group": "async_semaphore"
+    },
+    {
+      "kp": "py.async.sync_primitives",
+      "type": "single_choice",
+      "question": "asyncio.Event 的 wait() 方法在被 set() 之前的表现是？",
+      "options": [
+        "立即返回 True",
+        "抛出 RuntimeError",
+        "挂起当前协程直到事件被 set",
+        "返回 None 并继续执行"
+      ],
+      "answer": 2,
+      "explanation": "Event 初始为未设置状态，wait() 会挂起调用者，直到其他协程调用 set()。这常用于「等待某个条件发生」的同步场景。",
+      "error_tag": "概念混淆",
+      "variant_group": "async_event"
+    },
+    {
+      "kp": "py.async.sync_primitives",
+      "type": "single_choice",
+      "question": "asyncio.Condition 相比 asyncio.Lock 的额外能力是？",
+      "options": [
+        "可以跨进程使用",
+        "支持在持有锁的基础上等待某个条件并释放锁，条件满足后重新获取锁",
+        "可以限制并发数量",
+        "可以在同步函数中直接使用"
+      ],
+      "answer": 1,
+      "explanation": "Condition 内部包含一个锁，wait() 会在等待时释放锁，被 notify 唤醒后重新获取锁。这使它能表达「等待条件成立」的语义，Lock 只能表达互斥。",
+      "error_tag": "概念混淆",
+      "variant_group": "async_condition"
+    },
+    {
+      "kp": "py.async.sync_primitives",
+      "type": "single_choice",
+      "question": "以下代码最可能的输出是？\n\nimport asyncio\n\nasync def worker(lock, i):\n    async with lock:\n        print(f'start {i}')\n        await asyncio.sleep(0.1)\n        print(f'end {i}')\n\nasync def main():\n    lock = asyncio.Lock()\n    await asyncio.gather(worker(lock, 1), worker(lock, 2))\n\nasyncio.run(main())",
+      "options": [
+        "start 1 / start 2 / end 1 / end 2",
+        "start 1 / end 1 / start 2 / end 2（或先 2 后 1，但不会交错）",
+        "start 2 / end 1 / start 1 / end 2",
+        "end 1 / end 2 / start 1 / start 2"
+      ],
+      "answer": 1,
+      "explanation": "Lock 保证临界区互斥，因此一个 worker 的 start/end 会连续出现，另一个才进入。两个 worker 谁先获取锁取决于调度顺序，但不会出现 start/start/end/end 的交错。",
+      "error_tag": "边界错误",
+      "variant_group": "async_lock_basic"
+    },
+    {
+      "kp": "py.async.sync_primitives",
+      "type": "single_choice",
+      "question": "asyncio 中的同步原语（如 Lock、Event）与 threading 中的同名原语相比，关键区别是？",
+      "options": [
+        "asyncio 版本使用线程阻塞等待",
+        "asyncio 版本通过挂起协程让出事件循环，不阻塞线程",
+        "两者完全相同，可以互换使用",
+        "asyncio 版本只能用在多线程环境"
+      ],
+      "answer": 1,
+      "explanation": "asyncio 原语是协程友好的：等待时会 await，让出事件循环以便其他任务运行。threading 原语会真正阻塞操作系统线程，混用会卡死事件循环。",
+      "error_tag": "概念混淆",
+      "variant_group": "async_vs_threading"
+    },
+    {
+      "kp": "py.async.sync_primitives",
+      "type": "single_choice",
+      "question": "在 asyncio 中，不使用任何同步原语，仅在两个协程之间通过「先 await 再赋值」的方式更新共享计数器，最可能的结果是？",
+      "options": [
+        "一定正确，因为协程是单线程的",
+        "可能出现竞态，因为 await 处会让出控制权",
+        "一定报错",
+        "asyncio 禁止共享变量"
+      ],
+      "answer": 1,
+      "explanation": "asyncio 单线程并不意味着自动安全：在 await 点协程可能被挂起，其他协程可能读到中间状态，从而产生竞态。需要 Lock 保护读-改-写序列。",
+      "error_tag": "概念混淆",
+      "variant_group": "async_race"
+    },
+    {
+      "kp": "py.async.sync_primitives",
+      "type": "single_choice",
+      "question": "asyncio.Queue 在生产者-消费者模型中的主要作用是？",
+      "options": [
+        "限制同时运行的任务数",
+        "在生产者和消费者之间缓冲数据并同步它们的进度",
+        "存储协程对象以供调度",
+        "替代 asyncio.gather"
+      ],
+      "answer": 1,
+      "explanation": "asyncio.Queue 提供 put/get 的异步接口，当队列满或空时会挂起相应协程，天然用于生产者-消费者解耦。限制并发通常用 Semaphore。",
+      "error_tag": "概念混淆",
+      "variant_group": "async_queue"
+    },
+    {
+      "kp": "py.async.sync_primitives",
+      "type": "single_choice",
+      "question": "关于 asyncio.Lock 的说法，错误的是？",
+      "options": [
+        "可以用 async with 语法管理获取和释放",
+        "同一个协程可以多次 acquire 而不释放导致死锁",
+        "它保证同一时刻只有一个协程在临界区内",
+        "它必须绑定到特定的事件循环，可以在任意线程的任意循环中直接使用"
+      ],
+      "answer": 3,
+      "explanation": "asyncio 的同步原语与创建它们时的事件循环绑定（新版会在首次使用时绑定到运行中的循环），跨事件循环使用通常是不安全或不被支持的。A、B、C 均正确。",
+      "error_tag": "概念混淆",
+      "variant_group": "async_lock_basic"
+    }
+  ]
+}

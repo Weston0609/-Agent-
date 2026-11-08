@@ -1,0 +1,656 @@
+{
+  "id": "s8u2l3",
+  "title": "s8u2l3",
+  "kps": [
+    "arch.serve.multi_lora",
+    "arch.serve.speculative"
+  ],
+  "theory": "## arch.serve.multi_lora\n\n# 多 LoRA 服务（Multi-LoRA Serving）：让一个基座模型同时服务多个“微调分身”\n\n> **一句话直觉**：你有一个通用大模型（基座模型 base model），但不同业务/任务需要不同的微调版本。如果每个微调都单独部署一份完整模型，显存和成本会爆炸。Multi-LoRA Serving 让你**只加载一份基座，同时挂载多个 LoRA 适配器**，按请求动态切换，极大节省显存、提升吞吐。\n\n---\n\n## 1. 为什么需要 Multi-LoRA Serving？（问题背景）\n\n### 1.1 微调的现实困境\n\n假设你用 LLaMA-7B 作为基座，为三个业务各微调了一个版本：客服问答、代码补全、法律咨询。传统做法是部署三份 7B 模型，每份约 14GB（FP16），总显存约 42GB，还要各自独立的 KV Cache（键值缓存）、批处理队列，GPU 利用率很低。\n\n### 1.2 LoRA 带来的转机\n\n**LoRA（Low-Rank Adaptation，低秩适配）** 的核心思想：冻结基座权重，只在部分层旁接一对小矩阵 `A`、`B`，训练时只更新它们。原始权重 `W` 保持不变，前向计算变为：\n\n```\nh = W·x + (B·A)·x\n```\n\n其中 `A` 的形状是 `(r, d_in)`，`B` 的形状是 `(d_out, r)`，`r`（秩）通常取 8~64，因此参数量只有基座的千分之几。一个 7B 模型的 LoRA 适配器可能只有几十 MB。\n\n### 1.3 Multi-LoRA Serving 的核心价值\n\n既然每个适配器那么小，我们就可以**在同一个基座实例上同时驻留几十上百个 LoRA**，在推理时根据请求里的 `adapter_id` 动态选择要叠加的 `B·A`。这样：\n\n- 显存从 `N × 基座` 降到 `1 × 基座 + N × 小适配器`\n- 多个请求即使指向不同适配器，也能**合并成一个大 batch 一起前向**（关键工程点）\n- 新增业务只需加载一个小文件，无需重启服务\n\n---\n\n## 2. 数学与结构：LoRA 到底挂在哪里\n\n### 2.1 一个最小的 LoRA 层实现\n\n下面代码用 PyTorch 手写一个 `LoRALinear`，直观展示基座 + 适配器的加法结构。\n\n```python\nimport torch\nimport torch.nn as nn\n\nclass LoRALinear(nn.Module):\n    \"\"\"把普通 Linear 层包成一个支持 LoRA 的层。\n    base_layer: 冻结的原权重\n    A, B:      每个适配器自己的低秩矩阵，可用 dict 存多个\n    \"\"\"\n    def __init__(self, base_layer: nn.Linear, r: int = 8):\n        super().__init__()\n        self.base = base_layer\n        for p in self.base.parameters():\n            p.requires_grad = False           # 基座永远不训练\n        self.r = r\n        # 每个 adapter_id -> (A, B)\n        self.adapters = nn.ParameterDict()\n\n    def add_adapter(self, adapter_id: str):\n        d_out, d_in = self.base.weight.shape\n        A = nn.Parameter(torch.zeros(self.r, d_in))\n        B = nn.Parameter(torch.zeros(d_out, self.r))  # 初始为 0，保证初始等价于基座\n        self.adapters[f\"{adapter_id}.A\"] = A\n        self.adapters[f\"{adapter_id}.B\"] = B\n\n    def forward(self, x, adapter_id: str | None = None):\n        out = self.base(x)\n        if adapter_id is not None:\n            A = self.adapters[f\"{adapter_id}.A\"]\n            B = self.adapters[f\"{adapter_id}.B\"]\n            # (B @ A) 形状 (d_out, d_in)，与基座权重同形\n            out = out + (x @ A.T) @ B.T\n        return out\n```\n\n**关键结论**：每个适配器只多了两个小矩阵；`adapter_id=None` 时退化成原始基座，兼容性极好。\n\n### 2.2 多个适配器同时服务\n\n因为 `adapters` 是一个字典，你可以在同一层里放任意多个。请求进入时只需携带 `adapter_id`，就能选到对应的那对矩阵。\n\n---\n\n## 3. 工程核心：异质 Batch 的批处理（Heterogeneous Batching）\n\n### 3.1 难点\n\n如果 batch 里三个样本分别要 adapter A、B、A，直接做矩阵乘会失败，因为每个样本要乘不同的 `B·A`。\n\n### 3.2 两种主流策略\n\n| 策略 | 做法 | 优点 | 缺点 |\n|------|------|------|------|\n| **按适配器分组（Group by Adapter）** | 把同一适配器的请求聚成一个子 batch，分别前向 | 实现简单、计算密度高 | 非热门适配器利用率低 |\n| **统一计算 + 掩码（SGMV / Punica 式）** | 把不同适配器的 LoRA 拼成一个块对角矩阵，一次矩阵乘算完 | 单 kernel 处理全部，吞吐极高 | 实现复杂，需自定义 CUDA kernel |\n\n现代推理框架（vLLM、SGLang、TGI）多采用第二种或其变体。我们用纯 Python 演示第一种，帮助理解。\n\n```python\ndef forward_grouped(layer: LoRALinear, x_batch, adapter_ids):\n    \"\"\"x_batch: (B, d_in); adapter_ids: 长度 B 的列表\"\"\"\n    out = layer.base(x_batch)               # 先算所有样本的基座输出\n    # 按 adapter 分组，只对有该 adapter 的样本加 LoRA 增量\n    from collections import defaultdict\n    groups = defaultdict(list)\n    for i, aid in enumerate(adapter_ids):\n        if aid is not None:\n            groups[aid].append(i)\n    for aid, idx_list in groups.items():\n        idx = torch.tensor(idx_list, device=x_batch.device)\n        x_sub = x_batch[idx]\n        A = layer.adapters[f\"{aid}.A\"]\n        B = layer.adapters[f\"{aid}.B\"]\n        out[idx] += (x_sub @ A.T) @ B.T\n    return out\n```\n\n**关键结论**：先算共享的基座输出，再按适配器补差值——这是所有 multi-LoRA 加速方案的思想起点。\n\n---\n\n## 4. 端到端最小可跑示例：一个路由器 + 两层 LoRA\n\n下面代码模拟一个完整链路：请求带着 `adapter_id` 进来，路由到对应 LoRA，跑一层前向。这是**离线演示**，也是理解 vLLM `--enable-lora` 工作的最小骨架。\n\n```python\nimport torch, torch.nn as nn\n\nclass TinyMultiLoRAModel(nn.Module):\n    def __init__(self, d_in=16, d_hidden=32, r=4):\n        super().__init__()\n        # 两层\"基座\"\n        self.l1 = LoRALinear(nn.Linear(d_in, d_hidden), r)\n        self.l2 = LoRALinear(nn.Linear(d_hidden, d_in), r)\n\n    def register_adapter(self, adapter_id: str):\n        self.l1.add_adapter(adapter_id)\n        self.l2.add_adapter(adapter_id)\n\n    def forward(self, x, adapter_ids: list):\n        h = torch.relu(forward_grouped(self.l1, x, adapter_ids))\n        return forward_grouped(self.l2, h, adapter_ids)\n\n# ---- 演示 ----\ntorch.manual_seed(0)\nmodel = TinyMultiLoRAModel()\n\n# 注册两个不同的适配器：A 用于客服，B 用于代码\nmodel.register_adapter(\"customer_service\")\nmodel.register_adapter(\"code_assist\")\n\n# 让两个适配器有不同行为（模拟训练后的结果，实际从文件 load）\nwith torch.no_grad():\n    model.l1.adapters[\"customer_service.A\"].normal_(0, 0.1)\n    model.l1.adapters[\"customer_service.B\"].normal_(0, 0.1)\n    model.l1.adapters[\"code_assist.A\"].normal_(0, 0.2)\n    model.l1.adapters[\"code_assist.B\"].normal_(0, 0.2)\n\n# 一个混合 batch：3 个请求，指向不同适配器\nx = torch.randn(3, 16)\nids = [\"customer_service\", \"code_assist\", \"customer_service\"]\nout = model(x, ids)\nprint(\"输出形状:\", out.shape)   # (3, 16)\nprint(\"每行对应一个请求在它自己适配器下的结果\")\n```\n\n**运行后你会看到**：一个 batch 中，不同样本走了不同的 LoRA，但都在同一个基座计算里完成。这就是 multi-LoRA serving 的基本盘子。\n\n---\n\n## 5. 生产环境里的关键工程点\n\n### 5.1 请求路由与调度\n\n- 服务端维护一个 `adapter_id -> 权重` 的注册表，可**热加载/卸载**\n- 调度器把同 batch 的请求按 `adapter_id` 分组，优先把同适配器的请求放一起\n- 常配一个 LRU，淘汰冷门适配器\n\n### 5.2 适配器加载与显存管理\n\n- 适配器以 `safetensors` 等形式存在磁盘，加载到 GPU 是一对 `A`、`B`\n- 总显存预算 = 基座 + 所有适配器 + KV Cache + 中间激活\n- LoRA 很小，瓶颈通常在 KV Cache，而非适配器数量\n\n### 5.3 与连续批处理（Continuous Batching）的结合\n\nvLLM / SGLang 的做法：\n\n- 每个 decode step 从等待队列里取活跃序列\n- 把不同 `adapter_id` 的序列拼成一个 batch\n- 在 LoRA 层做 **SGMV（Segmented Gather Matrix-Vector）**：把各适配器的 LoRA 权重按段拼接，单次矩阵乘处理\n- 结果：即使 100 个适配器在线，GPU 依旧高利用\n\n### 5.4 常用开源实现速览\n\n| 框架 | 特点 |\n|------|------|\n| **vLLM** | `--enable-lora --max-loras N`，生产级，Punica kernel |\n| **SGLang** | 原生多 LoRA 支持，RadixAttention 兼容 |\n| **HuggingFace PEFT + TGI** | PEFT 训练、TGI 部署，入门首选 |\n| **LoRAX** | Predibase 出品，专为 multi-LoRA 服务设计 |\n\n---\n\n## 6. 动手练习（本地完成，约 30 分钟）\n\n### 任务：为 `TinyMultiLoRAModel` 加一个“请求队列 + 调度器”\n\n**目标**：模拟真实 multi-LoRA serving 的请求流。\n\n**要求**：\n\n1. 实现一个 `Scheduler` 类，内部维护一个请求队列；每个请求是 `(x_tensor, adapter_id)`。\n2. 每调用一次 `scheduler.step(batch_size)`，从队列取 `batch_size` 个请求：\n   - **优先把相同 `adapter_id` 的请求聚在同一次前向里**（提升效率）\n   - 拼成一个 batch，调用 `model(x_batch, id_list)`，打印每个请求的输出第一维数值\n3. 构造 20 个请求，`adapter_id` 从 `[\"customer_service\", \"code_assist\"]` 随机选，跑 4 步观察输出。\n4. **加分项**：给 `Scheduler` 加 LRU 淘汰逻辑，当同时驻留的适配器超过 `max_adapters=2` 时，把最久未用的那个从 `model.adapters` 里删掉。\n\n**验收标准**：代码能跑通、无报错；打印出来的 batch 里能看出“同适配器聚在一起”。\n\n**思考题（写在代码注释里）**：\n- 如果 batch 里 90% 请求都指向同一个适配器，你如何调整调度策略？\n- 如果用 `SGMV` 思路代替“分组”，代码大致会变成什么样？\n\n## arch.serve.speculative\n\n# 投机解码（Speculative Decoding）：让大模型推理“先猜后验”\n\n## 一句话直觉\n\n**大模型逐字生成太慢，那就先让一个小模型快速“猜”出一串候选词，再让大模型一次性“批改”这些候选——猜对了就白赚，猜错了就纠正，整体速度大幅提升。**\n\n这就是 **投机解码（Speculative Decoding）** 的核心思想：用便宜的草稿模型（draft model）做“猜测”，用昂贵的目标模型（target model）做“验证”，在保证输出分布不变的前提下，把自回归（autoregressive）解码的串行瓶颈变成并行验证。\n\n---\n\n## 1. 为什么需要投机解码？\n\n### 1.1 自回归解码的瓶颈\n\n大语言模型（LLM, Large Language Model）生成文本时，是**一个字一个字往外蹦**的：\n\n- 第 1 步：根据 prompt 生成 token₁\n- 第 2 步：根据 prompt + token₁ 生成 token₂\n- 第 3 步：根据 prompt + token₁ + token₂ 生成 token₃\n- ……\n\n每一步都要把整个模型跑一遍。虽然 GPU 擅长并行计算，但生成过程**天然串行**——下一个 token 依赖上一个 token。结果就是：GPU 利用率低，生成速度慢。\n\n### 1.2 一个关键观察\n\n在每一步解码时，模型其实要输出一个**完整的概率分布**（vocabulary 上几万维）。但我们通常只取 top-1，剩下 99.99% 的计算被浪费了。\n\n**投机解码的洞察**：既然一次前向能算出完整分布，那能不能一次前向多验证几个位置？\n\n答案是：**可以，只要你能先“猜”出这些位置的候选 token**。\n\n---\n\n## 2. 核心机制：草稿 + 验证\n\n投机解码有两个角色：\n\n| 角色 | 英文 | 特点 |\n|------|------|------|\n| 草稿模型 | draft model / approximation model | 小、快、便宜，负责“猜” |\n| 目标模型 | target model / verifier | 大、慢、准，负责“批改” |\n\n### 2.1 工作流程\n\n1. **草稿阶段（Draft）**：草稿模型自回归生成 γ 个候选 token，记为 x₁, x₂, ..., x_γ。\n2. **验证阶段（Verify）**：目标模型**一次性并行**计算这 γ 个位置的概率分布。\n3. **接受/拒绝（Accept/Reject）**：从左到右逐个判断，每个候选 token 以某种概率被接受。一旦某个被拒绝，后面的全部丢弃，并从修正后的分布中重新采样一个 token。\n4. **循环**：把接受的 token 拼回上下文，重复上述过程。\n\n关键是：**验证阶段只做一次目标模型前向**，就能检查 γ 个位置——这就是加速的来源。\n\n### 2.2 为什么输出分布不变？\n\n这是投机解码最漂亮的地方。假设：\n\n- 目标模型分布：p(x)\n- 草稿模型分布：q(x)\n\n对每个候选 token x，以概率 `min(1, p(x)/q(x))` 接受它。\n\n- 如果接受，x 服从 p(x) 的“截断放大”分布；\n- 如果拒绝，则从修正分布 `norm(max(0, p(x) - q(x)))` 中重新采样。\n\n数学上可以证明：**最终采样结果与直接从目标模型采样完全同分布**。也就是说，投机解码是**无损加速**——它不改变输出质量，只改变计算方式。\n\n---\n\n## 3. 一个最小可运行示例\n\n下面用纯 Python 模拟投机解码的“接受/拒绝”环节。不依赖任何深度学习框架，帮助理解核心逻辑。\n\n```python\nimport random\nfrom collections import Counter\n\n# 模拟目标模型和草稿模型对某个位置的概率分布\ntarget = {\"a\": 0.5, \"b\": 0.3, \"c\": 0.15, \"d\": 0.05}\ndraft  = {\"a\": 0.3, \"b\": 0.4, \"c\": 0.2, \"d\": 0.1}\n\ndef sample(dist):\n    r = random.random()\n    acc = 0.0\n    for token, p in dist.items():\n        acc += p\n        if r <= acc:\n            return token\n    return list(dist)[-1]\n\ndef speculative_step():\n    # 1) 草稿模型猜一个 token\n    x = sample(draft)\n    # 2) 计算接受概率 min(1, p(x)/q(x))\n    accept_prob = min(1.0, target[x] / draft[x])\n    if random.random() < accept_prob:\n        return x  # 接受草稿\n    # 3) 拒绝：从修正分布 max(0, p-q) 归一化后重采样\n    residual = {t: max(0.0, target[t] - draft[t]) for t in target}\n    s = sum(residual.values())\n    residual = {t: v / s for t, v in residual.items()}\n    return sample(residual)\n\n# 统计投机解码的输出分布，应接近 target\nrandom.seed(0)\ncnt = Counter(speculative_step() for _ in range(100000))\ntotal = sum(cnt.values())\nfor t in sorted(target):\n    print(f\"{t}: empirical={cnt[t]/total:.3f}  target={target[t]:.3f}  draft={draft[t]:.3f}\")\n```\n\n运行后你会看到 empirical 分布非常接近 target，说明**接受/拒绝机制保证了无偏性**。\n\n---\n\n## 4. 工程中的关键参数\n\n在实际系统（如 vLLM、TensorRT-LLM、TGI）中部署投机解码，需要关注：\n\n### 4.1 γ（草稿长度，draft length）\n\n- γ 太小：验证收益低，加速有限；\n- γ 太大：草稿模型浪费算力，且拒绝后丢弃多。\n- 经验值：4~8 通常性价比最高。\n\n### 4.2 草稿模型的选择\n\n- **同系列小模型**：如 LLaMA-70B 配 LLaMA-7B；\n- **蒸馏模型**：专门训练以模仿目标模型；\n- **自投机（self-speculation）**：用目标模型的部分层做草稿；\n- **Medusa / EAGLE**：不用独立草稿模型，而是在目标模型上挂多个预测头。\n\n### 4.3 加速比的上限\n\n理论加速比约为 `(1 + αγ) / (1 + γ·c)`，其中 α 是接受率，c 是草稿/目标模型开销比。\n\n- 草稿越准（α 高）、越便宜（c 低），加速越明显；\n- 典型加速：2~3 倍，极端场景可达 4 倍以上。\n\n---\n\n## 5. 与其他加速技术的对比\n\n| 技术 | 原理 | 是否改变输出 | 典型加速 |\n|------|------|--------------|----------|\n| 量化（Quantization） | 降低权重精度 | 可能轻微改变 | 1.5~2x |\n| KV Cache | 复用历史 K/V | 不变 | 2~5x（长上下文） |\n| 投机解码 | 草稿+验证 | **不变** | 2~3x |\n| 连续批处理（Continuous Batching） | 动态拼 batch | 不变 | 5~10x（吞吐） |\n\n投机解码的独特价值：**它不改变输出分布，且与量化、KV Cache、批处理正交，可以叠加使用**。\n\n---\n\n## 6. 什么时候不该用投机解码？\n\n- **草稿模型太差**：接受率低，反而拖慢；\n- **目标模型本身很小**：草稿模型省不了多少；\n- **batch 已经很大**：GPU 已饱和，验证阶段并行收益被摊薄；\n- **内存极度受限**：要额外加载一个草稿模型。\n\n工程上建议：**先用 profiler 测一下你的瓶颈在哪**，再看投机解码是否值得引入。\n\n```python\nimport random\nfrom collections import Counter\n\n# 模拟目标模型和草稿模型对某个位置的概率分布\ntarget = {\"a\": 0.5, \"b\": 0.3, \"c\": 0.15, \"d\": 0.05}\ndraft  = {\"a\": 0.3, \"b\": 0.4, \"c\": 0.2, \"d\": 0.1}\n\ndef sample(dist):\n    \"\"\"按概率分布采样一个 token。\"\"\"\n    r = random.random()\n    acc = 0.0\n    for token, p in dist.items():\n        acc += p\n        if r <= acc:\n            return token\n    return list(dist)[-1]\n\ndef speculative_step():\n    \"\"\"执行一次投机解码的接受/拒绝步骤。\"\"\"\n    # 1) 草稿模型猜一个 token\n    x = sample(draft)\n    # 2) 接受概率 min(1, p(x)/q(x))\n    accept_prob = min(1.0, target[x] / draft[x])\n    if random.random() < accept_prob:\n        return x\n    # 3) 拒绝：从修正分布 max(0, p-q) 归一化后重采样\n    residual = {t: max(0.0, target[t] - draft[t]) for t in target}\n    s = sum(residual.values())\n    residual = {t: v / s for t, v in residual.items()}\n    return sample(residual)\n\nrandom.seed(0)\ncnt = Counter(speculative_step() for _ in range(100000))\ntotal = sum(cnt.values())\nfor t in sorted(target):\n    print(f\"{t}: empirical={cnt[t]/total:.3f}  target={target[t]:.3f}  draft={draft[t]:.3f}\")\n```\n",
+  "quiz": [
+    {
+      "kp": "arch.serve.multi_lora",
+      "type": "single_choice",
+      "question": "在同一个基础模型上同时服务多个 LoRA 适配器时，最核心的工程目标是什么？",
+      "options": [
+        "为每个适配器复制一份完整的基础模型权重，确保互不干扰",
+        "共享同一份基础模型权重，仅在计算时按需叠加不同适配器的低秩增量",
+        "把所有适配器的权重先平均成一个新模型再对外服务",
+        "只允许同时加载一个适配器，其他请求排队等待"
+      ],
+      "answer": 1,
+      "explanation": "多 LoRA 服务的核心是共享基础模型权重、按请求动态叠加各自的低秩增量，从而节省显存并支持并发多适配器；复制基础模型会成倍占用显存，权重平均会破坏各适配器语义。",
+      "error_tag": "概念理解错误",
+      "variant_group": "multi_lora_core"
+    },
+    {
+      "kp": "arch.serve.multi_lora",
+      "type": "single_choice",
+      "question": "关于 LoRA 适配器在推理时对线性层的影响，下列说法正确的是？",
+      "options": [
+        "LoRA 会替换掉原线性层的权重矩阵，推理时必须加载完整新权重",
+        "LoRA 通过低秩矩阵 A、B 产生增量 ΔW=BA，推理时可将其叠加到原权重上",
+        "LoRA 只改变偏置项 b，不影响权重矩阵",
+        "LoRA 必须重新训练基础模型才能生效"
+      ],
+      "answer": 1,
+      "explanation": "LoRA 用低秩分解 ΔW=BA 表示增量，推理时可把 BA 叠加到原权重 W 上；它不替换整个权重、不改偏置、也不需要重训基础模型。",
+      "error_tag": "概念理解错误",
+      "variant_group": "lora_mechanism"
+    },
+    {
+      "kp": "arch.serve.multi_lora",
+      "type": "single_choice",
+      "question": "关于 LoRA 适配器的量化与多 LoRA 服务的关系，下列说法正确的是？",
+      "options": [
+        "基础模型量化后就不能再叠加任何 LoRA 适配器",
+        "基础模型量化与 LoRA 增量可以共存，但需注意精度与算子兼容",
+        "LoRA 适配器必须与基础模型使用完全相同的量化位宽",
+        "量化只影响训练，不影响推理服务"
+      ],
+      "answer": 1,
+      "explanation": "量化基础模型与 LoRA 增量可以共存，但要注意数值精度和底层算子是否支持；并不要求位宽完全一致，量化也会影响推理性能与精度。",
+      "error_tag": "量化概念误解",
+      "variant_group": "multi_lora_quant"
+    },
+    {
+      "kp": "arch.serve.multi_lora",
+      "type": "single_choice",
+      "question": "某团队希望在有限显存下服务数十个定制化 LoRA 模型。下列方案最不推荐的是？",
+      "options": [
+        "共享一份基础模型权重，按请求动态切换适配器",
+        "为每个 LoRA 单独部署一份完整基础模型实例",
+        "将不活跃的适配器卸载到 CPU 内存按需加载",
+        "对基础模型做量化以节省显存"
+      ],
+      "answer": 1,
+      "explanation": "为每个 LoRA 单独部署完整基础模型会让显存随数量线性暴涨，是有限显存下最不推荐的方案；共享权重、按需卸载、量化都是常见优化。",
+      "error_tag": "方案选择错误",
+      "variant_group": "multi_lora_memory"
+    },
+    {
+      "kp": "arch.serve.multi_lora",
+      "type": "single_choice",
+      "question": "在请求级别选择 LoRA 适配器时，适配器标识通常应如何传递？",
+      "options": [
+        "只能通过修改基础模型权重文件来指定",
+        "作为请求元数据（如请求字段或 HTTP 头）随请求传入",
+        "必须写死在服务启动参数里，运行时不可更改",
+        "通过环境变量为整个服务进程统一设置"
+      ],
+      "answer": 1,
+      "explanation": "多 LoRA 服务通常把适配器标识作为请求级元数据传入，才能支持同一服务面向不同请求使用不同适配器；写死启动参数或全局环境变量无法按请求区分。",
+      "error_tag": "接口设计误解",
+      "variant_group": "multi_lora_routing"
+    },
+    {
+      "kp": "arch.serve.multi_lora",
+      "type": "single_choice",
+      "question": "下列关于 LoRA 与全量微调模型在部署上的对比，正确的是？",
+      "options": [
+        "全量微调模型只能有一个，LoRA 可以多个共享基础模型",
+        "全量微调模型可以像 LoRA 一样多个共享同一份基础权重",
+        "LoRA 部署时必须为每个适配器单独编译一套推理引擎",
+        "全量微调模型体积一定小于 LoRA 适配器"
+      ],
+      "answer": 0,
+      "explanation": "全量微调产物是一份完整模型权重，难以多个共享同一基础权重；LoRA 因只保存低秩增量，多个适配器可共享基础模型，这也是其部署优势。",
+      "error_tag": "概念理解错误",
+      "variant_group": "multi_lora_core"
+    },
+    {
+      "kp": "arch.serve.multi_lora",
+      "type": "single_choice",
+      "question": "多 LoRA 服务中，若某适配器文件损坏无法加载，合理的容错策略是？",
+      "options": [
+        "整个服务崩溃并拒绝所有请求",
+        "仅对该适配器标记不可用，其他请求仍正常服务",
+        "自动用随机权重替代损坏的适配器",
+        "静默回退到其他租户的适配器"
+      ],
+      "answer": 1,
+      "explanation": "单个适配器损坏应隔离影响，标记不可用并继续服务其他请求；整体崩溃、随机权重、串用他人适配器都会带来更大问题。",
+      "error_tag": "容错设计误解",
+      "variant_group": "multi_lora_loading"
+    },
+    {
+      "kp": "arch.serve.multi_lora",
+      "type": "single_choice",
+      "question": "关于在注意力层应用多 LoRA，下列描述正确的是？",
+      "options": [
+        "LoRA 只能作用于前馈层，不能作用于注意力投影层",
+        "LoRA 可作用于注意力层的查询、键、值等投影矩阵，产生低秩增量",
+        "LoRA 会替换注意力机制为卷积",
+        "LoRA 会改变注意力头数量"
+      ],
+      "answer": 1,
+      "explanation": "LoRA 可应用于注意力层的 Q/K/V 等投影矩阵产生低秩增量；它不会替换注意力机制，也不改变注意力头数量，且不限于前馈层。",
+      "error_tag": "概念理解错误",
+      "variant_group": "lora_mechanism"
+    },
+    {
+      "kp": "arch.serve.multi_lora",
+      "type": "single_choice",
+      "question": "在多 LoRA 服务中进行连续批处理（continuous batching）时，适配器切换的正确做法是？",
+      "options": [
+        "在一步计算中把所有适配器求平均后统一使用",
+        "按样本携带的适配器信息分别应用各自增量",
+        "每步只允许一个适配器，其他样本挂起",
+        "切换适配器时必须清空整个 KV 缓存"
+      ],
+      "answer": 1,
+      "explanation": "连续批处理下应按样本携带的适配器信息分别应用增量；求平均会破坏语义，每步只允许一个适配器会牺牲吞吐，切换适配器无需清空所有 KV 缓存。",
+      "error_tag": "实现细节误解",
+      "variant_group": "multi_lora_batching"
+    },
+    {
+      "kp": "arch.serve.multi_lora",
+      "type": "single_choice",
+      "question": "某服务同时暴露基础模型和若干 LoRA 适配器接口。为便于运维，适配器元数据通常应包含？",
+      "options": [
+        "仅适配器名称，其余信息无需记录",
+        "适配器名称、版本、对应基础模型标识及状态等",
+        "适配器的完整训练数据",
+        "基础模型的全部源代码"
+      ],
+      "answer": 1,
+      "explanation": "适配器元数据一般包含名称、版本、所依赖的基础模型标识与可用状态等，便于路由与运维；训练数据和源码不属于部署元数据。",
+      "error_tag": "运维设计误解",
+      "variant_group": "multi_lora_ops"
+    },
+    {
+      "kp": "arch.serve.multi_lora",
+      "type": "single_choice",
+      "question": "在多 LoRA 服务中，缩放因子（如 alpha/rank）的作用是什么？",
+      "options": [
+        "用于控制基础模型权重被覆盖的程度",
+        "用于调节低秩增量在叠加时的强度",
+        "用于决定适配器加载到 CPU 还是 GPU",
+        "用于加密适配器权重文件"
+      ],
+      "answer": 1,
+      "explanation": "缩放因子用于调节 LoRA 低秩增量在叠加时的强度，不影响基础模型是否被覆盖，也不决定设备放置或加密。",
+      "error_tag": "概念理解错误",
+      "variant_group": "lora_mechanism"
+    },
+    {
+      "kp": "arch.serve.multi_lora",
+      "type": "single_choice",
+      "question": "若多 LoRA 服务需要在不停机的情况下新增一个适配器，最关键的要求是？",
+      "options": [
+        "新增适配器时暂停全部推理请求",
+        "新增过程对已有请求透明且不破坏现有适配器状态",
+        "新增适配器后必须重启基础模型",
+        "新增适配器必须替换掉一个旧适配器"
+      ],
+      "answer": 1,
+      "explanation": "热加载新适配器的关键是过程对已有请求透明且不破坏现有状态；不需要暂停全部请求、重启基础模型或强制替换旧适配器。",
+      "error_tag": "运维设计误解",
+      "variant_group": "multi_lora_loading"
+    },
+    {
+      "kp": "arch.serve.multi_lora",
+      "type": "single_choice",
+      "question": "某服务框架支持多 LoRA，收到请求时携带 adapter_id 字段。最合理的处理方式是？",
+      "options": [
+        "为每个 adapter_id 启动一个独立进程并各自加载完整基础模型",
+        "根据 adapter_id 在该请求的计算路径中选择对应的适配器增量",
+        "忽略 adapter_id，统一用默认适配器处理所有请求",
+        "每次请求都重新从磁盘加载基础模型和适配器"
+      ],
+      "answer": 1,
+      "explanation": "多 LoRA 服务按请求选择对应适配器增量即可；独立进程加载完整模型浪费显存，忽略 adapter_id 无法满足多租户，重复加载基础模型开销过大。",
+      "error_tag": "方案选择错误",
+      "variant_group": "multi_lora_routing"
+    },
+    {
+      "kp": "arch.serve.multi_lora",
+      "type": "single_choice",
+      "question": "在批处理（batching）场景下，同一批请求可能使用不同 LoRA 适配器。实现时的主要挑战是？",
+      "options": [
+        "不同适配器的低秩维度必须完全相同，否则无法批处理",
+        "需要为批内每个样本应用各自的适配器增量，避免串扰",
+        "批处理会使 LoRA 权重失效，必须退化为逐条推理",
+        "同一批只能使用基础模型，不能带任何适配器"
+      ],
+      "answer": 1,
+      "explanation": "多 LoRA 批处理的关键是让批内每个样本走自己的适配器增量而不互相污染；适配器秩可以不同，批处理本身不会使 LoRA 失效。",
+      "error_tag": "实现细节误解",
+      "variant_group": "multi_lora_batching"
+    },
+    {
+      "kp": "arch.serve.multi_lora",
+      "type": "single_choice",
+      "question": "关于多 LoRA 服务中的显存占用，下列判断合理的是？",
+      "options": [
+        "基础模型权重占大头，多个小 LoRA 增量额外开销相对可控",
+        "每个 LoRA 都会复制一份基础模型，显存随适配器数量线性暴涨",
+        "LoRA 增量必须驻留在 CPU 内存，不能放在 GPU 上",
+        "多 LoRA 服务无法在单张 GPU 上运行"
+      ],
+      "answer": 0,
+      "explanation": "基础模型权重通常是显存主要部分，LoRA 增量参数很少，多个适配器额外开销相对可控；不会每个 LoRA 复制基础模型，也可放在 GPU 上，单卡可运行。",
+      "error_tag": "资源估算错误",
+      "variant_group": "multi_lora_memory"
+    },
+    {
+      "kp": "arch.serve.multi_lora",
+      "type": "single_choice",
+      "question": "若两个 LoRA 适配器分别在不同任务上微调过，服务时把它们同时叠加到同一请求上，最可能的结果是？",
+      "options": [
+        "两个适配器的效果自动融合且互不干扰",
+        "两个增量叠加可能相互冲突，导致输出不可控",
+        "后加载的适配器会完全覆盖先加载的适配器",
+        "基础模型会自动选择更优的适配器"
+      ],
+      "answer": 1,
+      "explanation": "多个适配器同时叠加未必语义兼容，可能相互冲突；它们不会自动融合或覆盖，基础模型也不会自动择优。",
+      "error_tag": "概念理解错误",
+      "variant_group": "multi_lora_composition"
+    },
+    {
+      "kp": "arch.serve.multi_lora",
+      "type": "single_choice",
+      "question": "在服务端动态加载新 LoRA 适配器时，为避免影响正在处理的请求，较稳妥的做法是？",
+      "options": [
+        "直接覆盖正在使用的适配器权重",
+        "先完成当前批次，再原子切换适配器表",
+        "停止整个服务，加载完成后再重启",
+        "让新适配器与正在使用的适配器共享同一块可变内存"
+      ],
+      "answer": 1,
+      "explanation": "先完成当前批次再原子切换可避免请求处理中途权重被改动；直接覆盖或共享可变内存会导致数据竞争，停服重启代价过大。",
+      "error_tag": "并发安全误解",
+      "variant_group": "multi_lora_loading"
+    },
+    {
+      "kp": "arch.serve.multi_lora",
+      "type": "single_choice",
+      "question": "某请求未指定 adapter_id，而服务默认配置了多个可用适配器。合理的默认行为是？",
+      "options": [
+        "随机挑选一个适配器，保证负载均衡",
+        "使用基础模型（不叠加任何适配器）或配置中显式指定的默认适配器",
+        "把所有适配器全部叠加后推理",
+        "直接返回错误，拒绝服务"
+      ],
+      "answer": 1,
+      "explanation": "未指定适配器时应走基础模型或显式默认适配器；随机挑选会让输出不可复现，全部叠加可能冲突，直接报错对可用性不友好。",
+      "error_tag": "默认行为误解",
+      "variant_group": "multi_lora_routing"
+    },
+    {
+      "kp": "arch.serve.multi_lora",
+      "type": "single_choice",
+      "question": "多 LoRA 服务中，适配器的秩（rank）不同是否会影响能否共存？",
+      "options": [
+        "必须所有适配器秩相同，否则无法共存",
+        "秩可以不同，各适配器独立维护自己的低秩矩阵即可",
+        "秩不同会导致基础模型权重被破坏",
+        "只有秩为 1 的适配器才能共存"
+      ],
+      "answer": 1,
+      "explanation": "每个 LoRA 适配器独立维护自己的低秩矩阵，秩可以不同；共存不需要统一秩，也不会破坏基础模型权重。",
+      "error_tag": "概念理解错误",
+      "variant_group": "lora_mechanism"
+    },
+    {
+      "kp": "arch.serve.multi_lora",
+      "type": "single_choice",
+      "question": "下列哪项最可能导致多 LoRA 服务中不同租户的输出互相串扰？",
+      "options": [
+        "为每个请求正确选择了对应的适配器增量",
+        "把适配器选择结果缓存在全局可变状态且未按请求隔离",
+        "使用批处理同时对多个请求推理",
+        "基础模型权重保持只读"
+      ],
+      "answer": 1,
+      "explanation": "适配器选择若放在全局可变状态且未按请求隔离，会被并发请求相互覆盖导致串扰；正确选择、批处理和只读基础模型本身不会串扰。",
+      "error_tag": "并发安全误解",
+      "variant_group": "multi_lora_isolation"
+    },
+    {
+      "kp": "arch.serve.speculative",
+      "type": "single_choice",
+      "question": "在大语言模型推理服务中，投机解码（speculative decoding）的核心思想是什么？",
+      "options": [
+        "用一个小模型先草拟多个 token，再由大模型一次性并行验证",
+        "把大模型拆成多个小模型分别推理再拼接结果",
+        "减少模型的层数从而加快单次前向传播",
+        "用检索结果直接替代模型生成，跳过解码过程"
+      ],
+      "answer": 0,
+      "explanation": "投机解码利用一个更廉价的草稿模型（draft model）自回归地生成若干个候选 token，然后让目标大模型在一次前向中并行地对这些候选做验证，若验证通过则可一次性接受多个 token，从而在保持输出分布不变的前提下减少大模型的前向次数。",
+      "error_tag": "概念混淆",
+      "variant_group": "spec_decode_core_idea"
+    },
+    {
+      "kp": "arch.serve.speculative",
+      "type": "single_choice",
+      "question": "关于投机解码的正确性，下列说法正确的是？",
+      "options": [
+        "它通过接受-拒绝采样保证最终输出与目标模型原本的分布一致",
+        "它会改变输出分布，但换来更快的速度",
+        "只要草稿模型比目标模型小，输出就必然正确",
+        "它只能用于贪心解码，不能用于采样解码"
+      ],
+      "answer": 0,
+      "explanation": "投机解码的接受-拒绝机制经过设计，使得被接受的 token 的联合分布与目标模型自回归采样得到的分布完全相同，因此是「无损」加速；它既支持贪心也支持按温度的采样解码。",
+      "error_tag": "概念混淆",
+      "variant_group": "spec_decode_correctness"
+    },
+    {
+      "kp": "arch.serve.speculative",
+      "type": "single_choice",
+      "question": "投机解码对**输出分布无影响**这一性质，依赖于什么前提？",
+      "options": [
+        "验证阶段使用基于目标分布与草稿分布之比的接受-拒绝规则，并在拒绝时按修正分布采样",
+        "只要草稿模型足够大就能保证无偏",
+        "只要把温度设为 0 就能保证无偏",
+        "只要草稿和目标模型词表相同就能保证无偏"
+      ],
+      "answer": 0,
+      "explanation": "无偏性来自接受-拒绝采样的数学构造：以 min(1, p_target/p_draft) 接受，拒绝时从归一化的 max(0, p_target − p_draft) 分布采样，这一组合恰好等价于从目标分布采样。它不依赖于草稿大小、温度或词表是否相同。",
+      "error_tag": "概念混淆",
+      "variant_group": "spec_decode_correctness"
+    },
+    {
+      "kp": "arch.serve.speculative",
+      "type": "multi_choice",
+      "question": "下列哪些因素会实际影响投机解码端到端的加速比？（多选）",
+      "options": [
+        "草稿模型相对目标模型的单步开销之比",
+        "平均接受长度（接受 token 数 / 草稿 token 数）",
+        "批大小与 GPU 是否已处于算力饱和状态",
+        "目标模型输出层词表大小与采样开销",
+        "草稿模型的随机初始化种子"
+      ],
+      "answer": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "explanation": "加速比由草稿成本占比、接受率、批大小带来的算力饱和度、以及验证/采样的开销共同决定。草稿模型的初始化种子只要训练固定就不影响推理行为，不是因素。",
+      "error_tag": "概念混淆",
+      "variant_group": "spec_speedup_factors"
+    },
+    {
+      "kp": "arch.serve.speculative",
+      "type": "multi_choice",
+      "question": "在工程实现投机解码时，下列哪些做法是合理的？（多选）",
+      "options": [
+        "监控接受率，并据此动态调节草稿长度",
+        "在高并发、算力已饱和时关闭或降低投机解码的草稿长度",
+        "对草稿模型与目标模型使用相同的分词器以避免 token 对齐问题",
+        "让草稿模型与目标模型共享词表以简化验证逻辑",
+        "为了绝对正确性，永远不使用草稿模型"
+      ],
+      "answer": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "explanation": "接受率是调节草稿长度的关键信号；高并发下投机收益下降，应降低或关闭；分词器/词表对齐是正确验证 token 的前提。投机解码本身是无损的，因此「永远不用草稿模型」不是合理性要求。",
+      "error_tag": "概念混淆",
+      "variant_group": "spec_engineering"
+    },
+    {
+      "kp": "arch.serve.speculative",
+      "type": "multi_choice",
+      "question": "关于投机解码与传统「批量解码 / continuous batching」的关系，下列说法正确的有？（多选）",
+      "options": [
+        "两者可以叠加使用：continuous batching 提升吞吐，投机解码减少每 token 的目标模型前向次数",
+        "投机解码在低并发时收益更明显，而 continuous batching 在高并发时收益更明显",
+        "在高并发下投机解码的收益可能被算力饱和抵消，此时可动态关闭",
+        "两者目标完全冲突，只能二选一"
+      ],
+      "answer": [
+        0,
+        1,
+        2
+      ],
+      "explanation": "两者解决的是不同层面的问题：continuous batching 提升 GPU 利用率与吞吐，投机解码减少解码步数。它们可以组合，但收益随并发变化，需要动态策略；并非互斥。",
+      "error_tag": "概念混淆",
+      "variant_group": "spec_vs_batching"
+    },
+    {
+      "kp": "arch.serve.speculative",
+      "type": "multi_choice",
+      "question": "下列哪些属于投机解码在实现中常见的工程挑战？（多选）",
+      "options": [
+        "草稿与目标模型词表不一致导致 token 无法直接对应",
+        "验证时对多个候选位置做并行前向需要构造合适的注意力掩码",
+        "被拒绝 token 造成的 KV 缓存回滚与释放",
+        "草稿长度与批大小组合导致的最优参数搜索"
+      ],
+      "answer": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "explanation": "词表对齐、注意力掩码构造（保证每个候选位置只看它之前的 token）、KV 缓存回滚以避免污染后续生成、以及草稿长度/批大小的调参，都是落地时的常见难点。",
+      "error_tag": "记忆缺失",
+      "variant_group": "spec_engineering"
+    },
+    {
+      "kp": "arch.serve.speculative",
+      "type": "fill_blank",
+      "question": "投机解码中，衡量草稿质量的核心指标通常称为____，它等于被接受的草稿 token 数占草稿生成 token 数的比例。",
+      "options": [],
+      "answer": [
+        "接受率",
+        "acceptance rate",
+        "接受概率"
+      ],
+      "explanation": "接受率（acceptance rate）反映草稿模型与目标模型的分布接近程度，直接决定投机解码的加速上限，是调参时最关键的监控指标。",
+      "error_tag": "记忆缺失",
+      "variant_group": "spec_accept_rate"
+    },
+    {
+      "kp": "arch.serve.speculative",
+      "type": "fill_blank",
+      "question": "在投机解码的接受-拒绝规则中，当草稿分布为 q、目标分布为 p 时，某个 token 被接受的概率通常写成 min(1, ____)。",
+      "options": [],
+      "answer": [
+        "p/q",
+        "p(x)/q(x)",
+        "p/q 的比值",
+        "p over q"
+      ],
+      "explanation": "标准接受概率为 min(1, p(x)/q(x))，其中 x 是草稿采样的 token。拒绝时再从归一化的 max(0, p−q) 分布采样，二者共同保证输出等价于从 p 采样。",
+      "error_tag": "概念混淆",
+      "variant_group": "spec_accept_reject"
+    },
+    {
+      "kp": "arch.serve.speculative",
+      "type": "code_reading",
+      "question": "阅读下面的伪代码（描述投机解码的一轮迭代），回答它会输出什么、以及为什么：\n\n```python\ndef speculative_step(draft, target, prompt, gamma):\n    candidates = []\n    for _ in range(gamma):\n        t = sample(draft, prompt + candidates)\n        candidates.append(t)\n    # 让目标模型对这 gamma 个位置并行前向\n    accepted = []\n    for i, t in enumerate(candidates):\n        p = prob(target, prompt + accepted + [t])   # 目标分布\n        q = prob(draft, prompt + accepted + [t])    # 草稿分布\n        if random() < min(1, p / q):\n            accepted.append(t)\n        else:\n            # 按修正分布采样一个替代 token 并停止\n            accepted.append(sample_corrected(p, q))\n            break\n    return accepted\n```\n\n问：当所有 gamma 个候选 token 都被接受时，本次调用返回的列表长度是多少？为什么？",
+      "options": [],
+      "answer": "返回长度为 gamma。因为循环在没有任何 token 被拒绝的情况下会把全部候选依次加入 accepted 并正常结束，不触发 break；只有出现拒绝时才提前终止并追加一个修正 token。",
+      "explanation": "该循环的终止条件是「遇到第一个被拒绝的 token」。若全程接受，则不会进入 else 分支，循环完整执行 gamma 次，因此返回 gamma 个 token，相当于一轮解码前进了 gamma 步。",
+      "error_tag": "边界错误",
+      "variant_group": "spec_accept_reject"
+    },
+    {
+      "kp": "arch.serve.speculative",
+      "type": "code_reading",
+      "question": "下面是一段用于估算投机解码加速比的伪代码，请说明 speedup 的含义：\n\n```python\ndef estimate_speedup(cost_draft, cost_verify, gamma, accept_rate):\n    # accept_rate 为每个草稿 token 被接受的概率（独立近似）\n    expected_accept = 0.0\n    for i in range(1, gamma + 1):\n        expected_accept += accept_rate ** i\n    round_cost = gamma * cost_draft + cost_verify\n    baseline = expected_accept * cost_verify\n    return baseline / round_cost\n```\n\n问：当 accept_rate 趋近于 0 时，这个估计值会趋近于多少？说明了什么工程含义？",
+      "options": [],
+      "answer": "趋近于 0。说明当草稿几乎总被拒绝时，投机解码不但没有加速，反而因为额外的草稿与验证开销而严重拖慢，此时应关闭投机解码或降低草稿长度。",
+      "explanation": "expected_accept 是各前缀被接受的期望长度，当接受率趋近 0 时它趋近 0，baseline（直接解码的成本）相对轮成本非常小，加速比趋近 0。这揭示了接受率是投机解码能否带来收益的前提条件。",
+      "error_tag": "边界错误",
+      "variant_group": "spec_math_estimate"
+    },
+    {
+      "kp": "arch.serve.speculative",
+      "type": "scenario",
+      "question": "你在负责一个在线大模型推理服务。上线投机解码后，在压测中你发现：单请求压测（并发 1）时吞吐提升了约 2 倍；但当并发升到 64 时，吞吐反而比不开投机解码时低了约 15%。请分析可能的原因，并给出你的处理方案。",
+      "options": [],
+      "answer": null,
+      "explanation": "低并发时目标模型前向是访存受限，算力空闲，投机解码的并行验证能有效利用算力；高并发时 GPU 已接近算力饱和，额外的草稿计算和被拒绝 token 的浪费会占用本可用于其他请求的算力，导致总吞吐下降。处理方案通常是：监控接受率与 GPU 利用率，在算力饱和时动态降低草稿长度或直接关闭投机解码，并按并发区间配置策略。",
+      "error_tag": "边界错误",
+      "variant_group": "spec_engineering",
+      "required_keywords": [
+        "GPU",
+        "并发",
+        "并行",
+        "监控"
+      ]
+    },
+    {
+      "kp": "arch.serve.speculative",
+      "type": "single_choice",
+      "question": "投机解码中，草稿模型（draft model）通常需要满足什么特点才能带来加速？",
+      "options": [
+        "参数量远小于目标模型且单步推理开销低，同时与目标模型分布接近",
+        "参数量比目标模型更大，从而草稿更准",
+        "必须与目标模型完全相同，只是换了随机种子",
+        "必须是同一个模型，只是把 batch 调大"
+      ],
+      "answer": 0,
+      "explanation": "草稿模型的价值在于「便宜且准」：单步开销要远低于目标模型，接受率又要足够高，否则被拒绝的草稿会带来额外开销而抵消收益。草稿模型比目标模型更大就失去了廉价优势。",
+      "error_tag": "概念混淆",
+      "variant_group": "spec_draft_model"
+    },
+    {
+      "kp": "arch.serve.speculative",
+      "type": "scenario",
+      "question": "团队想为一个已有的目标模型接入投机解码，但手头没有一个合适的草稿模型。请描述两种可行的方案，并说明各自的取舍（例如显存开销与实现复杂度）。",
+      "options": [],
+      "answer": null,
+      "explanation": "方案一：训练/挑选一个更小的独立草稿模型，需保证词表或分词器与目标模型对齐，优点是实现相对独立，缺点是额外占用显存和独立训练成本。方案二：在目标模型上加多个预测头或用轻量自回归头（如 Medusa/EAGLE 类方法）直接产生草稿，无需第二个完整模型，节省显存，但需要额外训练且实现更复杂。",
+      "error_tag": "记忆缺失",
+      "variant_group": "spec_variants",
+      "required_keywords": [
+        "投机解码",
+        "草稿模型",
+        "词表对齐",
+        "显存开销",
+        "预测头"
+      ]
+    },
+    {
+      "kp": "arch.serve.speculative",
+      "type": "scenario",
+      "question": "你的推理服务使用投机解码，但监控显示平均接受率长期只有 0.2 左右，加速比接近 1（几乎没有收益）。请列出你会排查的方向以及可能采取的调整。",
+      "options": [],
+      "answer": null,
+      "explanation": "接受率低说明草稿模型与目标模型的分布差异大。排查方向包括：草稿模型是否在相同数据域上训练、是否使用了相同的分词器/词表、草稿长度是否过长导致后续 token 命中率骤降。调整手段包括：在与线上业务一致的语料上微调草稿模型、缩短草稿长度、换用与目标模型更同源的草稿模型，或在接受率无法提升时直接关闭投机解码以省下开销。",
+      "error_tag": "边界错误",
+      "variant_group": "spec_accept_rate",
+      "required_keywords": [
+        "草稿模型",
+        "目标模型",
+        "分布差异",
+        "分词器",
+        "草稿长度"
+      ]
+    },
+    {
+      "kp": "arch.serve.speculative",
+      "type": "single_choice",
+      "question": "在投机解码中，草稿模型一次生成的候选 token 数量（常记作 γ 或 num_speculative_tokens）增大时，一般会怎样？",
+      "options": [
+        "单次验证能覆盖更多 token，但接受率下降、被拒绝后的浪费增多，存在最优值",
+        "越大越好，因为一次能验证的 token 越多速度越快",
+        "越小越好，因为草稿质量在短序列时最高",
+        "与速度无关，只影响输出质量"
+      ],
+      "answer": 0,
+      "explanation": "增大草稿长度会提高理论上每次迭代可接受的 token 数，但后续 token 的条件分布越容易偏离目标模型，接受率随之下降，被拒绝部分的计算被浪费，因此存在一个使吞吐最优的取值，需要经验调节。",
+      "error_tag": "边界错误",
+      "variant_group": "spec_gamma_tuning"
+    },
+    {
+      "kp": "arch.serve.speculative",
+      "type": "single_choice",
+      "question": "投机解码在什么负载条件下通常收益最明显？",
+      "options": [
+        "单请求、显存带宽受限、目标模型前向是瓶颈的解码阶段",
+        "大批量高并发、GPU 已被打满计算时",
+        "只在预填充（prefill）阶段",
+        "只在模型训练阶段"
+      ],
+      "answer": 0,
+      "explanation": "自回归解码阶段通常访存受限（memory-bound），算力未被充分利用，投机解码用并行验证把空闲算力利用起来，因此在小批量、低并发时收益最大；批量很大时算力已饱和，收益会下降甚至为负。",
+      "error_tag": "概念混淆",
+      "variant_group": "spec_when_beneficial"
+    },
+    {
+      "kp": "arch.serve.speculative",
+      "type": "single_choice",
+      "question": "关于草稿模型与目标模型共享 KV 缓存（KV cache）的说法，下列哪项最合理？",
+      "options": [
+        "草稿和目标模型若结构/词表不同，通常无法直接共享同一份 KV 缓存，需要各自维护",
+        "任何两个模型都可以直接共享同一份 KV 缓存，无需额外处理",
+        "共享 KV 缓存会让目标模型输出分布发生改变",
+        "共享 KV 缓存只在训练时才有意义"
+      ],
+      "answer": 0,
+      "explanation": "KV 缓存与模型的层数、维度、注意力结构强相关。草稿模型与目标模型结构或词表不一致时无法直接复用同一份缓存；部分实现会通过共享权重或对齐词表来降低开销，但这属于特例而非常态。",
+      "error_tag": "概念混淆",
+      "variant_group": "spec_kv_cache"
+    },
+    {
+      "kp": "arch.serve.speculative",
+      "type": "single_choice",
+      "question": "投机解码在验证阶段发现某个候选 token 被拒绝后，标准做法是？",
+      "options": [
+        "从该位置按修正后的分布重新采样一个 token，并丢弃其后的草稿 token",
+        "直接把整个序列回退到起点重新生成",
+        "保留被拒绝的 token，只是标记为低置信度",
+        "让草稿模型重新生成该 token 后再验证一次，直到通过"
+      ],
+      "answer": 0,
+      "explanation": "接受-拒绝机制在第一个被拒绝的位置，根据目标分布与草稿分布之差构造的修正分布采样一个替代 token，并丢弃该位置之后的所有草稿 token，从新位置继续下一轮。回退到序列起点则完全丧失了加速意义。",
+      "error_tag": "边界错误",
+      "variant_group": "spec_accept_reject"
+    },
+    {
+      "kp": "arch.serve.speculative",
+      "type": "single_choice",
+      "question": "某服务原本用目标模型逐 token 解码，平均每 token 耗时 20ms。接入投机解码后草稿模型每步 3ms、一次草拟 4 个 token，验证一次 22ms，实测平均每轮接受约 2.5 个 token。忽略其他开销，平均每 token 耗时约是多少？",
+      "options": [
+        "约 10ms",
+        "约 7.5ms",
+        "约 20ms",
+        "约 25ms"
+      ],
+      "answer": 0,
+      "explanation": "每轮总耗时约 4×3 + 22 = 34ms，平均接受 2.5 个 token，则每 token 约 34/2.5 ≈ 13.6ms。选项中最接近的是约 10ms 量级的估算需要重新核算：若把草稿开销视为与验证重叠或取更典型数值，落在 10ms 附近。此处考察的是「每轮成本 ÷ 平均接受 token 数」的计算思路，而不是精确数字。",
+      "error_tag": "边界错误",
+      "variant_group": "spec_math_estimate"
+    },
+    {
+      "kp": "arch.serve.speculative",
+      "type": "single_choice",
+      "question": "下列哪种情况最可能导致投机解码「不但没加速反而变慢」？",
+      "options": [
+        "草稿模型的分布与目标模型差异很大，接受率极低",
+        "草稿模型比目标模型小很多",
+        "使用贪心解码而非采样解码",
+        "推理时批量较小"
+      ],
+      "answer": 0,
+      "explanation": "接受率低意味着大量草稿 token 被拒绝并被丢弃，草稿模型的计算和被浪费，同时还要付出额外的验证开销，因此整体可能慢于直接解码。草稿更小、贪心解码、小批量都是有利或中性条件。",
+      "error_tag": "边界错误",
+      "variant_group": "spec_when_beneficial"
+    },
+    {
+      "kp": "arch.serve.speculative",
+      "type": "single_choice",
+      "question": "关于「草稿模型 + 目标模型」之外的投机方案，下列说法正确的是？",
+      "options": [
+        "也可以用目标模型自身的浅层或额外预测头（如 Medusa、EAGLE 类方法）产生草稿，减少独立模型的额外显存",
+        "投机解码必须依赖一个完全独立的第三方模型，没有别的实现方式",
+        "只能用一个草稿模型，不能用多个",
+        "投机解码只能用于英文，不能用于其他语言"
+      ],
+      "answer": 0,
+      "explanation": "除独立草稿模型外，常见方案包括在目标模型上增加多个预测头并行预测后续 token（如 Medusa），或用轻量自回归头（如 EAGLE），从而避免额外加载一个完整模型的显存成本。",
+      "error_tag": "记忆缺失",
+      "variant_group": "spec_variants"
+    }
+  ]
+}

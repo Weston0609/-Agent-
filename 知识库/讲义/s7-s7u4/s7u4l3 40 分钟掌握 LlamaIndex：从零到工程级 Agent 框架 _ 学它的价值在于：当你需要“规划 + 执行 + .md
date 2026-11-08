@@ -1,0 +1,887 @@
+# s7u4l3 40 分钟掌握 LlamaIndex：从零到工程级 Agent 框架 / 学它的价值在于：当你需要“规划 + 执行 + 审查 +
+
+> 来源 `content/lessons/s7u4l3.json`
+
+## agent.fw.llamaindex
+
+# 40 分钟掌握 LlamaIndex：从零到工程级 Agent 框架
+
+## 一句话直觉
+
+LlamaIndex 是帮你把「私有数据」变成「大模型（LLM, Large Language Model）可查询知识」的 Python 框架，也是构建 Agent（智能体，Agent）应用最常用的起点之一。
+
+学它的理由很直接：真实业务里，模型本身不知道你的文档、数据库、API。LlamaIndex 负责索引（Index）、检索（Retrieval）、工具调用（Tool Calling）和 Agent 编排（Orchestration），让你少写胶水代码，更快做出可用的 AI 应用。
+
+---
+
+## 第 1 节：为什么需要 LlamaIndex？
+
+大模型有三个天然短板：
+
+1. **不知道私有数据**：你的 PDF、Notion、SQL 表它没见过。  
+2. **上下文有限**：不能把 1000 页文档一次性塞进提示词（Prompt）。  
+3. **不会主动查资料**：默认只会根据已有上下文回答。
+
+LlamaIndex 的核心思路是 **RAG（Retrieval-Augmented Generation，检索增强生成）**：先把文档切成块（Chunk），转向量（Embedding），存进索引；用户提问时先检索最相关的块，再交给 LLM 生成答案。
+
+```python
+# 安装：pip install llama-index
+# 一句话理解：LlamaIndex 把"文档 -> 索引 -> 检索 -> LLM"串成流水线
+
+from llama_index.core import Document
+
+docs = [
+    Document(text="LlamaIndex 是一个用于构建 LLM 应用的数据框架。"),
+    Document(text="它支持索引、检索、Agent 和工具调用。"),
+]
+print(docs[0].text)  # 输出：LlamaIndex 是一个用于构建 LLM 应用的数据框架。
+```
+
+---
+
+## 第 2 节：最小 RAG 流程：文档 -> 索引 -> 查询
+
+LlamaIndex 最基础的用法只有三步：
+
+1. 加载文档  
+2. 构建索引  
+3. 查询引擎（Query Engine）提问
+
+```python
+from llama_index.core import VectorStoreIndex, SimpleDirectoryReader
+
+# 1. 加载文档（这里假设当前目录有 data 文件夹）
+# documents = SimpleDirectoryReader("data").load_data()
+
+# 为了可运行，这里直接用内存文档
+from llama_index.core import Document
+documents = [Document(text="LlamaIndex 支持向量索引和关键词索引。")]
+
+# 2. 构建向量索引
+index = VectorStoreIndex.from_documents(documents)
+
+# 3. 创建查询引擎并提问
+query_engine = index.as_query_engine()
+response = query_engine.query("LlamaIndex 支持什么索引？")
+print(response)
+```
+
+工程要点：  
+- `VectorStoreIndex` 默认使用嵌入模型（Embedding Model）把文本转向量。  
+- 查询时会先检索相似块，再让 LLM 总结答案。  
+- 生产环境通常会把向量存到外部向量数据库（Vector Store），而不是内存。
+
+---
+
+## 第 3 节：从查询引擎到 Agent：让模型会「用工具」
+
+查询引擎只能查索引，Agent 则能决定「下一步做什么」。LlamaIndex 的 Agent 可以调用工具（Tool），例如：
+
+- 查询向量索引  
+- 调用天气 API  
+- 执行 Python 函数  
+- 访问数据库  
+
+```python
+from llama_index.core.tools import FunctionTool
+from llama_index.core.agent import ReActAgent
+from llama_index.llms.openai import OpenAI
+
+# 定义一个工具：根据城市返回天气（示例数据）
+def get_weather(city: str) -> str:
+    """根据城市名返回天气信息。"""
+    data = {"北京": "晴，25°C", "上海": "小雨，22°C"}
+    return data.get(city, "未知城市")
+
+weather_tool = FunctionTool.from_defaults(fn=get_weather)
+
+# 创建 ReAct Agent（需要配置 LLM，例如 OpenAI）
+# llm = OpenAI(model="gpt-4o-mini")
+# agent = ReActAgent.from_tools([weather_tool], llm=llm, verbose=True)
+# response = agent.chat("北京天气怎么样？")
+# print(response)
+```
+
+说明：  
+- `FunctionTool` 把普通 Python 函数包装成 Agent 可调用的工具。  
+- `ReActAgent` 采用 ReAct（Reasoning + Acting）模式：先推理，再行动，再观察结果。  
+- 真实运行时需要配置 API Key 和 LLM。
+
+---
+
+## 第 4 节：工程级关键：持久化、分块与检索策略
+
+当数据量变大，直接每次重建索引会很慢。LlamaIndex 支持持久化（Persist）和加载。
+
+```python
+# 持久化索引到磁盘
+# index.storage_context.persist(persist_dir="./storage")
+
+# 从磁盘加载
+# from llama_index.core import StorageContext, load_index_from_storage
+# storage_context = StorageContext.from_defaults(persist_dir="./storage")
+# index = load_index_from_storage(storage_context)
+
+# 自定义分块大小
+from llama_index.core.node_parser import SentenceSplitter
+
+splitter = SentenceSplitter(chunk_size=256, chunk_overlap=20)
+nodes = splitter.get_nodes_from_documents([
+    Document(text="很长很长的文档内容..." * 100)
+])
+print(len(nodes))  # 输出分块数量
+```
+
+工程要点：  
+- `chunk_size` 太小会丢失上下文，太大则检索不精准。  
+- `chunk_overlap` 让相邻块有重叠，避免句子被切断。  
+- 生产环境常配合重排序（Rerank）、混合检索（Hybrid Search）提升效果。
+
+---
+
+## 第 5 节：完整 Agent + RAG 组合思路
+
+最终形态通常是：  
+**索引 + 查询引擎 + 工具 + Agent**
+
+流程：  
+1. 用户提问  
+2. Agent 判断是否需要查索引或调用工具  
+3. 检索结果交给 LLM  
+4. 生成最终回答  
+
+```python
+# 组合示例（伪代码，需配置 LLM）
+# query_engine = index.as_query_engine()
+# query_tool = QueryEngineTool.from_defaults(
+#     query_engine=query_engine,
+#     name="doc_search",
+#     description="用于检索私有文档"
+# )
+# agent = ReActAgent.from_tools([query_tool, weather_tool], llm=llm)
+# print(agent.chat("根据文档解释 LlamaIndex，并告诉我北京天气"))
+```
+
+---
+
+## 动手练习
+
+任务：在本地完成一个最小 RAG + Agent 应用。
+
+要求：  
+1. 创建 `data` 文件夹，放入 2~3 个 `.txt` 文件。  
+2. 使用 `SimpleDirectoryReader` 加载文档。  
+3. 构建 `VectorStoreIndex`，并持久化到 `./storage`。  
+4. 创建一个 `FunctionTool`，功能是「输入数字，返回平方」。  
+5. 创建 `ReActAgent`，同时拥有查询引擎工具和平方工具。  
+6. 分别提问：  
+   - 「文档里讲了什么？」  
+   - 「请计算 12 的平方。」  
+
+提示：需要安装 `llama-index`，并配置 OpenAI 或其他兼容 LLM 的 API Key。
+
+## agent.fw.autogen
+
+## 一句话直觉
+**AutoGen**（Microsoft AutoGen，微软开源的多智能体对话框架）让你像“组建一个 AI 项目组”一样写程序：把不同职责的 Agent（智能体）放进群聊里，让它们自动对话、分工协作、调用工具，最终把任务做完。
+
+学它的价值在于：当你需要“规划 + 执行 + 审查 + 重试”这类多步骤、多角色的 AI 任务时，单个 Agent 容易乱、难控；AutoGen 提供了**可组合的 Agent 抽象**、**群聊编排**与**工具调用**，把复杂流程工程化。
+
+---
+
+## 1. 为什么需要 AutoGen：从“单次问答”到“多角色协作”
+零基础先建立心智模型：
+- 单 Agent：一次输入 → 一次输出，适合简单问答。
+- 多 Agent：多个角色（如“写代码的人”“审查代码的人”“运行代码的人”）轮流发言，互相纠错，适合复杂任务。
+
+AutoGen 的核心就是把**对话**当作**控制流**：谁在什么时候说话、说什么、是否调用工具、是否终止，都可以配置。
+
+下面用一个最小例子感受 AutoGen 的“两个 Agent 对话”。（需要先安装：`pip install -U "autogen-agentchat" "autogen-ext[openai]"`，并设置 `OPENAI_API_KEY`。）
+
+```python
+# 文件：01_two_agents.py
+# 目标：最小可运行的 AutoGen 双 Agent 对话
+
+import asyncio
+from autogen_agentchat.agents import AssistantAgent
+from autogen_agentchat.teams import RoundRobinGroupChat
+from autogen_agentchat.conditions import TextMentionTermination
+from autogen_ext.models.openai import OpenAIChatCompletionClient
+
+async def main():
+    # 1) 定义模型客户端：Agent 的“大脑”
+    model = OpenAIChatCompletionClient(model="gpt-4o-mini")
+
+    # 2) 定义两个 Agent：一个负责写，一个负责审
+    writer = AssistantAgent(
+        name="writer",
+        model_client=model,
+        system_message="你是技术写作专家。用三句话解释 AutoGen 是什么。"
+    )
+    reviewer = AssistantAgent(
+        name="reviewer",
+        model_client=model,
+        system_message="你是严格审稿人。检查 writer 的解释是否准确，最后输出 TERMINATE。"
+    )
+
+    # 3) 用群聊把 Agent 编排起来：轮流发言，直到出现 TERMINATE
+    team = RoundRobinGroupChat(
+        participants=[writer, reviewer],
+        termination_condition=TextMentionTermination("TERMINATE")
+    )
+
+    # 4) 运行并打印消息流
+    result = await team.run(task="请完成写作与审查。")
+    for msg in result.messages:
+        print(f"[{msg.source}] {msg.content}\n")
+
+if __name__ == "__main__":
+    asyncio.run(main())
+```
+
+**关键结论**：AutoGen 的基本单位是 Agent（智能体），协作方式是 Team（团队/群聊），终止条件是 Termination Condition（终止条件）。
+
+---
+
+## 2. Agent 的三种常见能力：对话、工具、代码执行
+在 AutoGen 里，Agent 不只是“会说话”，还可以：
+- **对话**：基于 system_message 与上下文生成回复。
+- **工具调用**（Tool Use / Function Calling）：让模型决定调用你提供的 Python 函数。
+- **代码执行**（Code Execution）：在受控环境里运行生成的代码（工程上要特别注意安全隔离）。
+
+下面演示“工具调用”：让 Agent 调用一个本地函数计算复利。
+
+```python
+# 文件：02_tool_agent.py
+# 目标：给 Agent 注册一个 Python 工具函数，让它自动调用
+
+import asyncio
+from autogen_agentchat.agents import AssistantAgent
+from autogen_ext.models.openai import OpenAIChatCompletionClient
+
+# 1) 定义普通 Python 函数作为工具
+# 注意：类型注解和 docstring 会影响模型是否正确调用
+def compound_interest(principal: float, rate: float, years: int) -> float:
+    """计算复利终值：principal*(1+rate)^years"""
+    return principal * (1 + rate) ** years
+
+async def main():
+    model = OpenAIChatCompletionClient(model="gpt-4o-mini")
+
+    # 2) 把工具注册给 Agent
+    agent = AssistantAgent(
+        name="finance_agent",
+        model_client=model,
+        tools=[compound_interest],
+        system_message="你是理财助手。需要计算复利时必须调用工具，不要心算。"
+    )
+
+    # 3) 提出需要工具的问题
+    result = await agent.run(task="本金10000元，年利率5%，存10年，复利终值是多少？")
+    print(result.messages[-1].content)
+
+if __name__ == "__main__":
+    asyncio.run(main())
+```
+
+**关键结论**：工具的**函数名、参数类型、docstring**就是模型的“使用说明书”，写清楚能显著提升调用正确率。
+
+---
+
+## 3. 编排（Orchestration）：让多个 Agent 有秩序地协作
+AutoGen 提供多种团队编排方式，常见的有：
+- **RoundRobinGroupChat**：按顺序轮流发言，简单稳定。
+- **SelectorGroupChat**：由一个“选择器”决定下一个发言者，更灵活。
+- **Swarm**：Agent 之间通过“交接”（Handoff）转移控制权，适合流程式任务。
+
+初学者先用 RoundRobin，理解后再上 Selector/Swarm。下面演示 SelectorGroupChat 的基本用法。
+
+```python
+# 文件：03_selector_team.py
+# 目标：用 SelectorGroupChat 让“规划者/执行者/审查者”按需发言
+
+import asyncio
+from autogen_agentchat.agents import AssistantAgent
+from autogen_agentchat.teams import SelectorGroupChat
+from autogen_agentchat.conditions import MaxMessageTermination, TextMentionTermination
+from autogen_ext.models.openai import OpenAIChatCompletionClient
+
+async def main():
+    model = OpenAIChatCompletionClient(model="gpt-4o-mini")
+
+    planner = AssistantAgent(
+        name="planner", model_client=model,
+        system_message="你是规划者。把任务拆成3步以内的计划。完成后说：请执行者开始。"
+    )
+    executor = AssistantAgent(
+        name="executor", model_client=model,
+        system_message="你是执行者。按计划逐步执行并给出结果。完成后说：请审查者检查。"
+    )
+    reviewer = AssistantAgent(
+        name="reviewer", model_client=model,
+        system_message="你是审查者。检查结果是否正确，最后输出 TERMINATE。"
+    )
+
+    # 终止条件：出现 TERMINATE 或消息数超过 12 条
+    termination = TextMentionTermination("TERMINATE") | MaxMessageTermination(12)
+
+    team = SelectorGroupChat(
+        participants=[planner, executor, reviewer],
+        model_client=model,          # 选择器也用模型来决定下一个发言者
+        termination_condition=termination
+    )
+
+    result = await team.run(task="设计一个Python函数：判断字符串是否为回文，并给出测试用例。")
+    for msg in result.messages:
+        print(f"[{msg.source}] {msg.content}\n")
+
+if __name__ == "__main__":
+    asyncio.run(main())
+```
+
+**关键结论**：编排（Orchestration）决定“谁来说、说几轮、何时停”。生产环境务必设置**终止条件**（如最大消息数），避免无限对话。
+
+---
+
+## 4. 工程化要点：配置、可观测、安全与成本
+把 AutoGen 用到工程里，除了跑通 Demo，还要关注：
+- **配置管理**：API Key、模型名、超时、重试等用环境变量或配置中心管理。
+- **可观测性**（Observability）：记录每条消息、工具调用参数与结果，便于回放与调试。
+- **安全**：代码执行要用沙箱/容器隔离；工具函数要做输入校验。
+- **成本与延迟**：多 Agent 会放大 token 消耗，需限制轮数、选用合适模型。
+
+下面演示“运行后结构化查看消息与工具调用”，这是最基础的观测手段。
+
+```python
+# 文件：04_observe.py
+# 目标：运行后遍历消息，打印来源与工具调用信息
+
+import asyncio, json
+from autogen_agentchat.agents import AssistantAgent
+from autogen_ext.models.openai import OpenAIChatCompletionClient
+
+def add(a: float, b: float) -> float:
+    """两数相加"""
+    return a + b
+
+async def main():
+    model = OpenAIChatCompletionClient(model="gpt-4o-mini")
+    agent = AssistantAgent(
+        name="calc", model_client=model, tools=[add],
+        system_message="需要计算时调用工具。"
+    )
+    result = await agent.run(task="计算 12.5 + 7.25")
+
+    # 逐条打印消息，观察 type 与 source
+    for msg in result.messages:
+        print("----")
+        print("source:", msg.source)
+        print("type:", type(msg).__name__)
+        print("content:", getattr(msg, "content", None))
+
+if __name__ == "__main__":
+    asyncio.run(main())
+```
+
+**关键结论**：AutoGen 的调试核心是**消息流**。学会打印与解析消息，你就掌握了排错主动权。
+
+---
+
+## 5. 什么时候用 AutoGen，什么时候不用
+- 适合：多角色协作、需要工具调用、需要“生成-检查-修正”闭环、流程可对话化的任务。
+- 不适合：单次简单问答（用一次 API 调用即可）、强确定性流程（用普通代码/工作流引擎更稳）、对延迟与成本极敏感的场景。
+
+一句话选型：**任务越像“团队协作”，AutoGen 越合适；任务越像“固定流水线”，越应该用普通代码。**
+
+---
+
+## 动手练习
+**任务**：在本地实现一个“数学作业批改小组”。
+1. 创建三个 Agent：`solver`（解题）、`checker`（检查）、`grader`（打分）。
+2. 给 `solver` 注册至少两个工具函数：`add(a,b)` 与 `multiply(a,b)`。
+3. 用 `RoundRobinGroupChat` 或 `SelectorGroupChat` 编排，终止条件设为出现 `TERMINATE` 或最多 10 条消息。
+4. 运行任务：“计算 (3+5)*7 等于多少，并检查是否正确。”
+5. 打印完整消息流，观察每个 Agent 的发言与工具调用。
+
+**提交物**：一个 `.py` 文件 + 终端运行截图或消息流文本。
+
+
+---
+
+## 本课题目
+
+### single_choice · None
+
+
+
+- [A] Index（索引），它把文档切分、向量化并组织成可供检索的数据结构
+- [B] Thread（线程），它负责并行调度模型调用
+- [C] Socket（套接字），它负责与模型服务端通信
+- [D] Cursor（游标），它负责逐条读取文档
+
+**参考答案**：0
+
+**解析**：LlamaIndex 面向检索增强生成，核心是把文档构建成 Index 以供查询；Thread/Socket/Cursor 都不是它在检索场景下的核心抽象。
+
+### single_choice · None
+
+
+
+- [A] NodeParser（节点解析器），负责把文档切分成 Node
+- [B] Tokenizer（分词器），负责把文本转成 token id
+- [C] Loader（加载器），负责从磁盘读取原始文件
+- [D] Embedding（嵌入模型），负责把文本转为向量
+
+**参考答案**：0
+
+**解析**：切分文档并产生可检索单元由 NodeParser 完成，产出 Node；Loader 只负责读取，Tokenizer 只做分词，Embedding 只做向量化。
+
+### single_choice · None
+
+
+
+- [A] 集中配置 LLM、Embedding 模型、切分器等全局组件
+- [B] 存放用户登录密码
+- [C] 存储检索到的 Node 内容
+- [D] 定义数据库表结构
+
+**参考答案**：0
+
+**解析**：这类对象是全局配置入口，用来指定模型与解析器等；它与密码、Node 存储、表结构无关。
+
+### single_choice · None
+
+
+
+- [A] 混合检索（Hybrid Retrieval）
+- [B] 只使用向量检索
+- [C] 只使用全文检索
+- [D] 与检索无关的模型微调
+
+**参考答案**：0
+
+**解析**：把稀疏（关键词）与稠密（向量）检索结合即混合检索；单独任一种都不是混合，模型微调与检索方式无关。
+
+### single_choice · None
+
+
+
+- [A] 使用 NodePostprocessor 对检索到的 Node 做过滤或重排
+- [B] 修改 Python 的 sys.path
+- [C] 重新安装 Python 解释器
+- [D] 更改操作系统的环境变量 PATH
+
+**参考答案**：0
+
+**解析**：NodePostprocessor 用于检索后处理；环境相关操作与检索后处理无关。
+
+### single_choice · None
+
+
+
+- [A] 根据问题选择合适的索引或查询引擎来回答
+- [B] 把用户的网络请求路由到不同服务器
+- [C] 把文档路由到不同文件夹
+- [D] 把模型输出路由到日志文件
+
+**参考答案**：0
+
+**解析**：路由查询引擎根据问题决定走哪个索引/引擎；它与网络路由、文件路由、日志路由无关。
+
+### single_choice · None
+
+
+
+- [A] 复用已有的 Embedding 结果或索引，而不是每次都重新编码全部文本
+- [B] 每次都把所有文档重新下载并重新编码
+- [C] 把文档数量人为减少到 1 个
+- [D] 关闭所有缓存并禁用持久化
+
+**参考答案**：0
+
+**解析**：复用已有向量/索引可避免重复计算；重复下载编码、人为减少文档、禁用缓存都会增加开销。
+
+### single_choice · None
+
+
+
+- [A] 它把加载、切分、向量化等步骤组织成可复用的处理流水线
+- [B] 它专门用于训练大语言模型
+- [C] 它只能处理图片不能处理文本
+- [D] 它只能用于部署 Web 服务
+
+**参考答案**：0
+
+**解析**：IngestionPipeline 用于组织数据摄取流程；它与模型训练、图片专属处理、Web 部署无关。
+
+### single_choice · None
+
+
+
+- [A] 切分粒度或 top_k 设置不合适，导致关键内容没被检索到
+- [B] Python 版本太低，与检索无关
+- [C] 显示器分辨率太低，看不清文档
+- [D] 没有给变量起中文名字
+
+**参考答案**：0
+
+**解析**：回答遗漏多与检索质量相关，如切分粒度、top_k；Python 版本、显示器、变量命名不影响检索结果。
+
+### single_choice · None
+
+
+
+- [A] 先把结构化数据转成可检索的文本行或 Node，再纳入索引
+- [B] 直接把 CSV 二进制内容当作向量输入
+- [C] 把 CSV 文件改名为 .txt 后不做任何解析
+- [D] 把 CSV 内容直接拼接成一个大字符串不切分
+
+**参考答案**：0
+
+**解析**：结构化数据需转成可检索文本块再索引；直接对二进制或不解析的文件做处理无法得到有效检索单元，不切分的大字符串也会降低检索效果。
+
+### single_choice · None
+
+
+
+- [A] 查询引擎通常内部使用检索器获取相关 Node，再交给合成器生成回答
+- [B] 检索器内部调用查询引擎来生成回答
+- [C] 两者完全无关，不能一起使用
+- [D] 查询引擎只能用于图像检索
+
+**参考答案**：0
+
+**解析**：查询引擎是「检索 + 合成」的上层封装，内部会用到检索器；反过来不成立，也与图像专属无关。
+
+### single_choice · None
+
+
+
+- [A] 在检索时使用元数据过滤，只保留符合来源条件的 Node
+- [B] 把所有文档都删掉只留一个
+- [C] 修改 Python 的全局变量来记录来源
+- [D] 在问题前面加随机字符串
+
+**参考答案**：0
+
+**解析**：通过元数据过滤可在检索阶段限定来源；删文档、改全局变量、加随机字符串都不能正确实现该需求。
+
+### single_choice · None
+
+
+
+- [A] QueryEngine（查询引擎）的 query 方法
+- [B] Document 对象的 read 方法
+- [C] ServiceContext 的 start 方法
+- [D] Node 的 append 方法
+
+**参考答案**：0
+
+**解析**：QueryEngine 负责「检索 + 合成回答」的完整流程，query 是主要入口；Document.read、Node.append、ServiceContext.start 都不是这个用途。
+
+### single_choice · None
+
+
+
+- [A] Document 是整体文档，Node 是文档切分后的小块，二者可关联
+- [B] Node 是整体文档，Document 是切分后的小块
+- [C] Document 与 Node 是同一个类的两个别名
+- [D] Node 只能来自网络抓取，Document 只能来自本地文件
+
+**参考答案**：0
+
+**解析**：Document 表示完整文档，Node 是切分后的检索单元，且 Node 通常记录其来源 Document；其余说法颠倒或错误。
+
+### single_choice · None
+
+
+
+- [A] Embedding 模型，把问题和文本块映射到同一向量空间比较相似度
+- [B] 分类模型，把问题归到固定类别
+- [C] 语音识别模型，把问题转成文字
+- [D] 扩散模型，根据问题生成图像
+
+**参考答案**：0
+
+**解析**：语义检索依赖 Embedding 模型计算向量相似度；分类、语音识别、扩散模型与语义检索无关。
+
+### single_choice · None
+
+
+
+- [A] 让查询流程返回「无法从已知资料中回答」而不是强行编造
+- [B] 直接把用户问题原样返回当作答案
+- [C] 忽略检索结果，直接让大模型自由发挥
+- [D] 重复调用相同的检索直到凑够字数
+
+**参考答案**：0
+
+**解析**：检索增强生成的价值在于基于资料回答，资料不足时应明确告知而非编造；其余做法会降低可信度或造成死循环。
+
+### single_choice · None
+
+
+
+- [A] 把检索到的多个 Node 内容与大模型结合，合成最终回答
+- [B] 把原始文档切分成多个 Node
+- [C] 把 Node 转换成向量并写入索引
+- [D] 把用户的问题翻译成多种语言
+
+**参考答案**：0
+
+**解析**：ResponseSynthesizer 负责「合成」阶段，即把检索结果组织后交给大模型生成回答；切分、向量化、翻译都不是它的职责。
+
+### single_choice · None
+
+
+
+- [A] 它把 Node 的向量存入向量存储，查询时按相似度取回相关 Node
+- [B] 它是一个关系型数据库，用 SQL 的 WHERE 做精确过滤
+- [C] 它只能存储图片，不能存储文本向量
+- [D] 它只能存储一个 Node，超过一个就会报错
+
+**参考答案**：0
+
+**解析**：VectorStoreIndex 基于向量相似度检索；它不是关系型数据库，不限于图片，也不限制 Node 数量。
+
+### single_choice · None
+
+
+
+- [A] 检索阶段最多取回相似度最高的 3 个 Node 交给后续合成
+- [B] 只允许用户输入 3 个字符
+- [C] 把文档切分成 3 份
+- [D] 最多生成 3 个字的回答
+
+**参考答案**：0
+
+**解析**：similarity_top_k 控制检索返回的候选块数量；它与输入长度、切分份数、输出字数无关。
+
+### single_choice · None
+
+
+
+- [A] 使用索引的持久化能力把索引保存到磁盘，下次再加载
+- [B] 每次启动都重新下载所有文档
+- [C] 把索引内容打印到控制台手动抄写
+- [D] 把索引对象序列化成图片保存
+
+**参考答案**：0
+
+**解析**：LlamaIndex 支持索引持久化到磁盘并可重新加载；其余做法不可行或不合理。
+
+### single_choice · None
+
+
+
+- [A] 只使用 AssistantAgent，它内置代码执行能力
+- [B] 使用 AssistantAgent 负责推理，UserProxyAgent 负责执行代码并回传结果
+- [C] 使用两个 AssistantAgent 互相调用，无需代理执行
+- [D] 使用 GroupChat 替代所有单体智能体，代码由框架自动运行
+
+**参考答案**：1
+
+**解析**：AutoGen 的经典模式是 AssistantAgent 负责生成/推理（如给出代码），UserProxyAgent 作为代理执行代码、调用工具并把结果回传给 AssistantAgent，形成对话循环。AssistantAgent 本身不执行代码，因此 A 错；两个 AssistantAgent 无法真正落地执行，C 错；GroupChat 是管理多个智能体对话的机制，不负责自动运行代码，D 错。
+
+### single_choice · None
+
+
+
+- [A] GroupChat 与 GroupChatManager，并设置合适的 speaker_selection_method
+- [B] 仅设置两个 AssistantAgent 直接对话
+- [C] 使用单个 UserProxyAgent 反复调用自身
+- [D] 关闭所有智能体的人机交互选项
+
+**参考答案**：0
+
+**解析**：多智能体轮流发言且可管理发言顺序，标准做法是用 GroupChat 管理参与者集合，再由 GroupChatManager 负责选择下一个发言者（speaker_selection_method 可为 round_robin、auto 等），人类可通过 human_input_mode 介入。B 缺少调度管理，C 无法真正多角色，D 与需求相反。
+
+### multi_choice · None
+
+
+
+- [A] 在 Docker 容器中执行生成的代码
+- [B] 设置 max_consecutive_auto_reply 防止无限循环
+- [C] 将 human_input_mode 设为 ALWAYS 以便关键步骤人工确认
+- [D] 允许智能体无条件执行任意 shell 命令
+- [E] 对可调用的函数/工具做白名单限制
+
+**参考答案**：[0, 1, 2, 4]
+
+**解析**：容器隔离、限制自动回复轮次、关键步骤人工确认、工具白名单都有助于降低风险。无条件执行任意 shell 命令会显著放大风险，属于应当避免的做法，因此不选 D。
+
+### multi_choice · None
+
+
+
+- [A] AssistantAgent 通常负责基于模型生成回复或代码建议
+- [B] UserProxyAgent 可以代表人类发起对话，也可配置执行代码
+- [C] 两者必须成对使用，否则无法创建
+- [D] 通过合理配置，UserProxyAgent 也能把执行结果作为消息回传给 AssistantAgent
+
+**参考答案**：[0, 1, 3]
+
+**解析**：AssistantAgent 偏向生成/推理，UserProxyAgent 可代表用户并可执行代码，执行结果能回传形成闭环。二者并非必须成对创建，单独实例化或组织成 GroupChat 都是可行的，因此 C 错误。
+
+### multi_choice · None
+
+
+
+- [A] 为不同职责（规划、执行、审查）分配不同角色/系统提示词
+- [B] 为整个对话设置终止条件，避免无限循环
+- [C] 把所有逻辑塞进一个超大 prompt，不使用任何工具
+- [D] 对模型调用与工具调用记录日志，便于排查与复现
+- [E] 敏感操作前引入人工审核环节
+
+**参考答案**：[0, 1, 3, 4]
+
+**解析**：角色分工、终止条件、日志记录、人工审核都是稳健的多智能体工程实践。把所有逻辑塞进一个巨大提示词、完全不借助工具会降低可维护性与可靠性，不是推荐做法，因此不选 C。
+
+### multi_choice · None
+
+
+
+- [A] 可以为智能体注册可调用的函数，让模型在需要时触发
+- [B] 函数调用后通常需要把执行结果回传，智能体才能据此继续推理
+- [C] 函数调用可以完全替代大模型推理，无需任何提示词
+- [D] 若函数签名或描述不清，模型可能无法正确调用
+
+**参考答案**：[0, 1, 3]
+
+**解析**：注册函数、回传结果形成闭环、描述清晰便于模型正确触发，都是正确认识。函数调用是增强而非完全替代模型推理，仍需提示词与上下文，故 C 错误。
+
+### fill_blank · None
+
+
+
+**参考答案**：["max_consecutive_auto_reply", "max_consecutive_auto_reply 参数"]
+
+**解析**：max_consecutive_auto_reply 用于控制连续自动回复的轮次上限，超出后若无人类输入则通常转为等待或终止，是防止对话无限进行的重要参数。
+
+### fill_blank · None
+
+
+
+**参考答案**：["GroupChatManager", "GroupChatManager 类"]
+
+**解析**：GroupChat 负责定义参与者与消息集合，GroupChatManager 负责按 speaker_selection_method 选择下一个发言者并驱动对话。
+
+### code_reading · None
+
+
+
+**参考答案**：由于 UserProxyAgent 配置了 code_execution_config 且 human_input_mode 为 NEVER，它会自动执行 assistant 返回的代码（在本地，因为 use_docker 为 False），然后把执行结果作为消息回传给 assistant，由 assistant 继续推理或给出最终答复；整个过程不需要人类确认。
+
+**解析**：该配置让 UserProxyAgent 扮演代码执行代理：在 NEVER 模式下遇到需要执行的代码不会请求人类输入，而是直接按配置执行并将结果回传，形成 AutoGen 的典型「生成—执行—回传」闭环。由于 use_docker 为 False，代码在本地执行。
+
+### code_reading · None
+
+
+
+**参考答案**：max_round=3 限制这次群聊最多进行 3 轮（3 次发言/轮次），达到上限后对话停止。若去掉该限制且没有其他终止条件，多个智能体可能持续互相回复、消耗大量 token 与时间，形成无限对话，也难以收敛到结论。
+
+**解析**：GroupChat 的 max_round 是防止群聊无限进行的轮次上限，与 max_consecutive_auto_reply 类似，都属于控制对话长度的边界机制；缺省或过大时容易造成资源浪费与不收敛。
+
+### single_choice · None
+
+
+
+- [A] 智能体完全停止工作
+- [B] 代理不会向人类请求输入，遇到需要确认时按自动策略处理（如直接执行或终止）
+- [C] 只有第一次对话需要人类输入
+- [D] 人类必须始终在场并逐条确认
+
+**参考答案**：1
+
+**解析**："NEVER" 表示代理在任何情况下都不请求人类输入，适合自动化流水线；此时它按配置（如 code_execution_config、max_consecutive_auto_reply）自动决定执行或终止。"ALWAYS" 才是每次都要人类确认，"TERMINATE" 是在满足终止条件时请求输入。A、C、D 均不准确。
+
+### single_choice · None
+
+
+
+- [A] 限制整个对话中消息的总字符数
+- [B] 限制某个智能体在无人干预时可以连续自动回复的次数，超出后通常转为请求人类输入或终止
+- [C] 设置单个函数的递归深度
+- [D] 指定模型返回结果的最大 token 数
+
+**参考答案**：1
+
+**解析**：max_consecutive_auto_reply 用于防止智能体之间无限自动对话，限制的是「连续自动回复」的轮次；达到上限后，若没有人类输入则流程会停止或转为等待输入。它不控制字符数、递归深度或 token（这些分别由其他参数控制）。
+
+### single_choice · None
+
+
+
+- [A] use_cache
+- [B] use_docker
+- [C] human_input_mode
+- [D] cache_seed
+
+**参考答案**：1
+
+**解析**：code_execution_config 中 use_docker 决定是否在 Docker 容器中执行代码。设为 False（或显式指定本地执行环境）时会在本地直接运行，方便调试；设为 True 则借助 Docker 隔离提升安全性。use_cache 与缓存有关，human_input_mode 是智能体级别参数，cache_seed 用于控制缓存随机性，均与本地/容器执行选择无关。
+
+### single_choice · None
+
+
+
+- [A] 纯文本字符串
+- [B] JSON 对象
+- [C] 包含 role 和 content 等字段的字典（对话消息）
+- [D] 二进制字节流
+
+**参考答案**：2
+
+**解析**：AutoGen 智能体对话基于消息列表，每条消息通常是含 role（如 user、assistant）与 content 的字典，还可能包含 name 等字段。纯文本是 content 的内容而非消息结构本身；JSON 对象、二进制流均不符合默认形态。
+
+### single_choice · None
+
+
+
+- [A] 在回复中直接手工粘贴工具结果
+- [B] 为该智能体注册可调用的函数/工具，并在需要时触发函数调用
+- [C] 把所有工具逻辑写进系统提示词
+- [D] 让 UserProxyAgent 直接修改模型权重
+
+**参考答案**：1
+
+**解析**：AutoGen 支持通过注册函数（如注册可调用对象）让智能体在对话中触发工具调用，从而实现「生成→执行→回传」的闭环。手工粘贴不可扩展，系统提示词无法真正执行，修改模型权重既不现实也非工具调用机制。
+
+### single_choice · None
+
+
+
+- [A] "round_robin" 按固定顺序轮流选发言人；"auto" 由模型根据上下文决定下一个发言人
+- [B] 两者完全相同，只是名称不同
+- [C] "round_robin" 只能用于两人对话；"auto" 用于三人以上
+- [D] "auto" 模式下不产生任何消息
+
+**参考答案**：0
+
+**解析**："round_robin" 按参与者列表顺序循环选择发言者，确定性高；"auto" 让模型依据当前对话内容选择最合适的下一个发言者，更灵活但可能不确定。二者都与人数无关，也都会产生消息，因此 B、C、D 错误。
+
+### single_choice · None
+
+
+
+- [A] 设置 cache_seed 为 None 通常会禁用缓存，使每次调用都重新请求模型
+- [B] cache_seed 越大模型越聪明
+- [C] 缓存会改变模型的权重
+- [D] 缓存只对代码执行结果生效，对模型回复无效
+
+**参考答案**：0
+
+**解析**：cache_seed 用于控制是否启用以及使用哪一份缓存；将其设为 None 通常表示禁用缓存，从而每次真实调用模型。它不影响模型能力或权重，也不限于代码执行结果——模型回复同样可被缓存。B、C、D 均为常见误解。
+
+### single_choice · None
+
+
+
+- [A] 在对话中依赖某个关键字（如 "TERMINATE"）或自定义判别函数来决定何时停止
+- [B] 始终让对话无限进行，直到人工关闭进程
+- [C] 设置 max_consecutive_auto_reply 为 0 永久禁用终止
+- [D] 删除 UserProxyAgent 以避免终止判断
+
+**参考答案**：0
+
+**解析**：AutoGen 支持基于关键字（如检测到 "TERMINATE"）或自定义 is_termination_msg 判断是否结束对话；配合 max_consecutive_auto_reply 可防止无限循环。无限进行、禁用终止、删除代理都不是正确的终止设计。

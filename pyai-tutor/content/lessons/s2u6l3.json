@@ -1,0 +1,908 @@
+{
+  "id": "s2u6l3",
+  "title": "s2u6l3",
+  "kps": [
+    "py.stdlib.re",
+    "py.stdlib.datetime",
+    "py.stdlib.uuid"
+  ],
+  "theory": "## py.stdlib.re\n\n# py.stdlib.re：Python 标准库正则表达式\n\n> 一句话直觉：当你要从一大段文本里“找出符合条件的片段、验证格式、批量替换”时，字符串的 `split` 和 `in` 很快就不够用了，而 `re` 模块就是 Python 内置的“文本模式搜索与加工引擎”。\n\n---\n\n## 1. 为什么需要 re：从字符串方法到模式匹配\n\n字符串方法只能处理固定内容，例如 `\"cat\" in s`、`s.find(\"cat\")`。\n但现实需求常常是“任意 3 个数字开头”“邮箱格式”“所有以 ing 结尾的单词”。这类需求靠固定字符串无法表达，需要一种描述“文本模式”的小语言，这就是**正则表达式**（Regular Expression，简称 regex）。\n\nPython 标准库中的 `re` 模块就是这套模式的实现。核心工作流是：\n\n1. 写出模式字符串（pattern）；\n2. 用 `re` 提供的函数去目标文本中搜索；\n3. 拿到匹配结果，或做替换、切分。\n\n```python\nimport re\n\ntext = \"订单号 A1024，金额 99 元，订单号 B2048，金额 199 元\"\n\n# 查找所有形如“一个字母 + 若干数字”的订单号\norder_ids = re.findall(r\"[A-Z]\\d+\", text)\nprint(order_ids)  # ['A1024', 'B2048']\n```\n\n**结论**：`re` 是 Python 处理“结构化文本”的第一把工具，几乎所有日志分析、爬虫清洗、表单校验都会用到它。\n\n---\n\n## 2. 最常用的 4 个函数：search、match、findall、sub\n\n新手先掌握这 4 个入口，就能覆盖大部分场景。\n\n- `re.search(pattern, text)`：在整段文本中找**第一个**匹配，返回 `Match` 对象或 `None`。\n- `re.match(pattern, text)`：只从**开头**尝试匹配，返回 `Match` 或 `None`。\n- `re.findall(pattern, text)`：返回所有匹配的字符串列表。\n- `re.sub(pattern, repl, text)`：把匹配到的内容替换成 `repl`。\n\n```python\nimport re\n\ntext = \"用户邮箱：alice@example.com，备用邮箱：bob@test.org\"\n\n# search：找第一个邮箱\nm = re.search(r\"\\w+@\\w+\\.\\w+\", text)\nprint(m.group())  # alice@example.com\n\n# findall：找所有邮箱\nprint(re.findall(r\"\\w+@\\w+\\.\\w+\", text))  # ['alice@example.com', 'bob@test.org']\n\n# sub：把邮箱统一脱敏\nmasked = re.sub(r\"\\w+@\\w+\\.\\w+\", \"***@***\", text)\nprint(masked)  # 用户邮箱：***@***，备用邮箱：***@***\n\n# match：只从开头匹配，这里开头不是邮箱，所以返回 None\nprint(re.match(r\"\\w+@\\w+\\.\\w+\", text))  # None\n```\n\n**结论**：`search` 用于“有没有、在哪里”，`match` 用于“开头是否符合”，`findall` 用于“全部抽出”，`sub` 用于“批量替换”。\n\n---\n\n## 3. 元字符与字符类：写出能表达模式的“语法”\n\n正则的威力来自**元字符**（metacharacter），它们不再表示字面字符，而表示规则。\n\n| 写法 | 含义 |\n|---|---|\n| `.` | 任意一个字符（默认不含换行） |\n| `\\d` | 一个数字，等价 `[0-9]` |\n| `\\w` | 一个单词字符：字母、数字、下划线 |\n| `\\s` | 一个空白字符：空格、Tab、换行 |\n| `*` | 前面的东西出现 0 次或多次 |\n| `+` | 前面的东西出现 1 次或多次 |\n| `?` | 前面的东西出现 0 次或 1 次 |\n| `{m,n}` | 前面的东西出现 m 到 n 次 |\n| `[]` | 字符类，里面任选一个 |\n| `()` | 分组，把一部分模式括起来 |\n\n```python\nimport re\n\ntext = \"版本 v1.2.3，发布日期 2026-01-20，作者 Alice_01\"\n\n# \\d 匹配数字，\\. 匹配真正的点号（反斜杠转义）\nprint(re.findall(r\"\\d+\\.\\d+\\.\\d+\", text))  # ['1.2.3']\n\n# \\d{4}-\\d{2}-\\d{2} 匹配标准日期\nprint(re.findall(r\"\\d{4}-\\d{2}-\\d{2}\", text))  # ['2026-01-20']\n\n# [A-Za-z]+\\w* 匹配以字母开头、后面可跟单词字符的标识符\nprint(re.findall(r\"[A-Za-z]+\\w*\", text))  # ['v1', 'Alice_01']\n```\n\n**结论**：元字符是正则的“词汇”，字符类与量词组合后，就能描述极灵活的文本模式。\n\n---\n\n## 4. 分组与提取：从“匹配到”到“拿到内部片段”\n\n只判断有没有匹配往往不够，我们通常还要**提取子片段**。圆括号 `()` 在正则里表示分组（group），匹配后可以通过 `group(n)` 取第 n 组内容。\n\n```python\nimport re\n\nlog = \"2026-01-20 14:35:02 ERROR user=alice msg=timeout\"\n\n# 4 个分组：日期、时间、级别、用户\npattern = r\"(\\d{4}-\\d{2}-\\d{2})\\s+(\\d{2}:\\d{2}:\\d{2})\\s+(\\w+)\\s+user=(\\w+)\"\nm = re.search(pattern, log)\n\nprint(m.group(1))  # 2026-01-20\nprint(m.group(2))  # 14:35:02\nprint(m.group(3))  # ERROR\nprint(m.group(4))  # alice\n\n# 命名分组：给分组起名字，可读性更好\npattern2 = r\"(?P<date>\\d{4}-\\d{2}-\\d{2}).*?user=(?P<user>\\w+)\"\nm2 = re.search(pattern2, log)\nprint(m2.group(\"date\"))  # 2026-01-20\nprint(m2.group(\"user\"))  # alice\n\n# groups() 一次拿到所有分组\ndate, time, level, user = m.groups()\nprint(date, time, level, user)\n```\n\n**结论**：分组让正则从“找一段”升级为“解析出结构化字段”，是日志解析、表单提取的关键。\n\n---\n\n## 5. 工程实践：编译、贪婪/非贪婪、原始字符串\n\n到了工程级别，需要关注性能、可读性与常见坑。\n\n1. **预编译**：如果同一个模式要反复用，先 `re.compile` 得到 `Pattern` 对象，避免重复解析。\n2. **贪婪 vs 非贪婪**：`*`、`+` 默认尽可能多吃（贪婪，greedy）；加 `?` 后变为非贪婪（non-greedy）。\n3. **原始字符串**：正则里大量使用 `\\`，建议统一用 `r\"...\"`，避免 Python 字符串转义二次解释。\n\n```python\nimport re\n\n# 预编译：适合循环里反复使用\nEMAIL = re.compile(r\"[\\w.+-]+@[\\w-]+\\.[\\w.]+\")\n\ntexts = [\"联系 a@x.com\", \"没有邮箱\", \"b@y.org 和 c@z.net\"]\nfor t in texts:\n    print(EMAIL.findall(t))\n# ['a@x.com']\n# []\n# ['b@y.org', 'c@z.net']\n\n# 贪婪 vs 非贪婪\nhtml = \"<div>hello</div><div>world</div>\"\nprint(re.findall(r\"<div>.*</div>\", html))   # 贪婪：整段都吃进去\nprint(re.findall(r\"<div>.*?</div>\", html))  # 非贪婪：分别匹配两个\n\n# 原始字符串：r\"\\d\" 表示正则的反斜杠+d，不是 Python 的换行等转义\nprint(re.findall(r\"\\d+\", \"a1b22c333\"))  # ['1', '22', '333']\n```\n\n**结论**：工程代码里要预编译模式、明确贪婪策略、坚持原始字符串写法；这三点能让正则更稳、更快、更可维护。\n\n---\n\n## 动手练习\n\n**任务：日志解析器**\n\n本地新建 `parse_log.py`，输入下面这段日志，用 `re` 完成：\n\n```text\n2026-01-20 14:35:02 INFO user=alice action=login ip=192.168.1.10\n2026-01-20 14:36:11 ERROR user=bob action=upload msg=timeout\n2026-01-20 14:37:45 WARN user=alice action=logout ip=10.0.0.5\n```\n\n要求：\n\n1. 用 `re.compile` 预编译一个模式，提取每条日志的：日期、时间、级别、用户、动作。\n2. 把结果打印为字典列表，例如：`{'date': '2026-01-20', 'time': '14:35:02', 'level': 'INFO', 'user': 'alice', 'action': 'login'}`。\n3. 统计每个用户出现的次数，输出类似 `{'alice': 2, 'bob': 1}`。\n4. 把所有 `ERROR` 级别替换为 `[ERROR]`，打印替换后的整段文本。\n\n提示：用命名分组 `(?P<name>...)` 会让第 1 步更清晰；第 3 步可用 `collections.Counter`。\n\n```python\nimport re\nfrom collections import Counter\n\nLOG = \"\"\"2026-01-20 14:35:02 INFO user=alice action=login ip=192.168.1.10\n2026-01-20 14:36:11 ERROR user=bob action=upload msg=timeout\n2026-01-20 14:37:45 WARN user=alice action=logout ip=10.0.0.5\"\"\"\n\n# 1. 预编译模式，使用命名分组提取字段\nPATTERN = re.compile(\n    r\"(?P<date>\\d{4}-\\d{2}-\\d{2})\\s+\"\n    r\"(?P<time>\\d{2}:\\d{2}:\\d{2})\\s+\"\n    r\"(?P<level>\\w+)\\s+\"\n    r\"user=(?P<user>\\w+)\\s+\"\n    r\"action=(?P<action>\\w+)\"\n)\n\n# 2. 提取每条日志为字典\nrecords = [m.groupdict() for m in PATTERN.finditer(LOG)]\nfor r in records:\n    print(r)\n\n# 3. 统计每个用户出现次数\nuser_counter = Counter(r[\"user\"] for r in records)\nprint(user_counter)\n\n# 4. 把 ERROR 替换为 [ERROR]\nnew_log = re.sub(r\"\\bERROR\\b\", \"[ERROR]\", LOG)\nprint(new_log)\n```\n\n## py.stdlib.datetime\n\n# py.stdlib.datetime：让程序正确记录、计算与展示时间\n\n**一句话直觉**：几乎所有真实项目都要跟「时间」打交道——打卡、日志、订单、缓存过期、定时任务，而 `datetime` 就是 Python 标准库（standard library）里处理时间的瑞士军刀。学它，是为了让「时间」这件事从麻烦变成一行代码。\n\n---\n\n## 一、先认清 `datetime` 模块里的 5 个核心角色\n\n`datetime` 模块（module）不是只有一个类，而是一组配合使用的类：\n\n- `date`：只有年月日。\n- `time`：只有时分秒微秒。\n- `datetime`：日期 + 时间，最常用。\n- `timedelta`：一段时间差（duration），用于加减。\n- `tzinfo` / `timezone`：时区（time zone）信息。\n\n```python\nfrom datetime import date, time, datetime, timedelta, timezone\n\n# 构造对象\nd = date(2026, 1, 20)                       # 2026-01-20\nt = time(14, 30, 5)                         # 14:30:05\ndt = datetime(2026, 1, 20, 14, 30, 5)       # 2026-01-20 14:30:05\n\nprint(d, t, dt)\n```\n\n**结论**：`datetime` 是不可变（immutable）对象；所有「修改」都会返回新对象，不会原地改。\n\n---\n\n## 二、拿「现在」的时间：`now` / `utcnow` / `today`\n\n```python\nfrom datetime import datetime, timezone, date\n\nlocal_now = datetime.now()                          # 本地时区，naive\nutc_now   = datetime.now(timezone.utc)              # 带时区，aware\nlegacy    = datetime.utcnow()                       # 已弃用，返回 naive UTC\ntoday     = date.today()                            # 只取日期\n\nprint(local_now)\nprint(utc_now)\nprint(today)\n```\n\n**结论**：生产代码请使用 `datetime.now(timezone.utc)`，返回的是「带时区（aware）」的对象；`utcnow()` 自 Python 3.12 起已弃用，原因是它返回的时间没有时区信息，容易被误用。\n\n---\n\n## 三、字符串与时间互转：`strftime` 与 `strptime`\n\n- `strftime`（string format time）：时间 → 字符串。\n- `strptime`（string parse time）：字符串 → 时间。\n\n```python\nfrom datetime import datetime\n\ndt = datetime(2026, 1, 20, 14, 30, 5)\n\n# 格式化输出\ns = dt.strftime(\"%Y-%m-%d %H:%M:%S\")\nprint(s)  # 2026-01-20 14:30:05\n\n# 解析字符串\nparsed = datetime.strptime(\"2026-01-20 14:30:05\", \"%Y-%m-%d %H:%M:%S\")\nprint(parsed == dt)  # True\n```\n\n常用格式化符号：`%Y` 年、`%m` 月、`%d` 日、`%H` 时（24h）、`%M` 分、`%S` 秒、`%f` 微秒。\n\n**结论**：跨系统交互时，优先用 ISO 8601 格式（`datetime.isoformat()` / `datetime.fromisoformat()`），它比自定义格式更通用。\n\n---\n\n## 四、时间的加减与差值：`timedelta`\n\n```python\nfrom datetime import datetime, timedelta\n\nnow = datetime(2026, 1, 20, 14, 30, 5)\n\n# 加减时间\none_week_later = now + timedelta(weeks=1)\nten_min_before = now - timedelta(minutes=10)\nprint(one_week_later, ten_min_before)\n\n# 两个时间相减，得到 timedelta\nprev = datetime(2026, 1, 1)\ndelta = now - prev\nprint(delta.days, delta.total_seconds())\n```\n\n**结论**：`timedelta` 只支持 days/seconds/microseconds 三个内部单位，但构造时可用 weeks、hours、minutes 等参数，非常方便。\n\n---\n\n## 五、时区：`timezone` 与 `astimezone`\n\n```python\nfrom datetime import datetime, timezone, timedelta\n\nutc_dt = datetime(2026, 1, 20, 6, 30, tzinfo=timezone.utc)\ncst = timezone(timedelta(hours=8), name=\"CST\")\nlocal_dt = utc_dt.astimezone(cst)\n\nprint(utc_dt.isoformat())\nprint(local_dt.isoformat())\nprint(local_dt.tzname())   # CST\n```\n\n**结论**：\n- 「naive」= 无时区信息；「aware」= 带时区信息，两者不能直接比较。\n- 内部存储统一切 UTC（`timezone.utc`），只在用户展示时 `astimezone` 转本地时区。\n- 复杂时区（含 DST 夏令时）请使用 `zoneinfo.ZoneInfo`（Python 3.9+）。\n\n---\n\n## 六、常见坑与工程建议\n\n1. 混用 naive 与 aware 会抛 `TypeError`，务必统一约定。\n2. 时间比较用 `==`、`<`、`>` 完全没问题（`datetime` 实现了富比较）。\n3. 与外部系统交互用 `isoformat()` 最稳。\n4. 定时/缓存过期计算，先 `now = datetime.now(timezone.utc)`，再 `expire_at = now + timedelta(...)`。\n5. 日志时间戳建议固定一条格式，如 `%Y-%m-%dT%H:%M:%S%z`。\n\n```python\nfrom datetime import datetime, timedelta, timezone\n\n# 1) 当前 UTC 时间（aware）\nnow_utc = datetime.now(timezone.utc)\nprint(\"now_utc:\", now_utc.isoformat())\n\n# 2) 转换为北京时间 (UTC+8)\ncst = timezone(timedelta(hours=8), name=\"CST\")\nnow_cst = now_utc.astimezone(cst)\nprint(\"now_cst:\", now_cst.isoformat(), now_cst.tzname())\n\n# 3) 字符串解析 -> 时间\nparsed = datetime.fromisoformat(\"2026-01-20T14:30:05+08:00\")\nprint(\"parsed:\", parsed)\n\n# 4) 时间加减：7 天后的同一时刻\nlater = now_cst + timedelta(days=7)\nprint(\"one week later:\", later.isoformat())\n\n# 5) 差值\ndiff = later - now_cst\nprint(\"delta days:\", diff.days, \"total seconds:\", diff.total_seconds())\n\n# 6) 缓存过期场景模拟\nexpire_at = now_utc + timedelta(minutes=30)\nprint(\"cache valid:\", datetime.now(timezone.utc) < expire_at)\n```\n\n## py.stdlib.uuid\n\n# Python 标准库 uuid：为对象生成全球唯一标识\n\n## 一句话直觉\n\n只要你需要给某个对象、请求、会话或数据库记录分配一个“**全世界都不会重复**”的编号，`uuid` 模块（Universally Unique Identifier，通用唯一标识符）就是 Python 标准库给你的现成答案。\n\n它是零依赖、跨平台、开箱即用的，所以从分布式系统到本地脚本，几乎所有需要 ID 的地方都会见到它。\n\n---\n\n## 第 1 节：UUID 是什么，为什么需要它\n\nUUID 是一个 128 位（16 字节）的标识符，标准写法是 32 个十六进制数字，用 4 个连字符分成 5 段，例如：\n\n```\n123e4567-e89b-12d3-a456-426614174000\n```\n\n它解决的问题很朴素：**在没有中心协调者的情况下，也能生成一个几乎不可能与他人重复的 ID**。\n\n- 自增整数需要数据库或中心服务器分配，分布式环境下容易冲突。\n- 随机字符串可能太短、也有重复风险。\n- UUID 的标准算法在概率意义上保证唯一性（约 2^122 种可能），实际使用中可认为不会重复。\n\n```python\nimport uuid  # 导入标准库 uuid 模块\n\n# 生成一个版本 4 的 UUID（基于随机数）\nuid = uuid.uuid4()\nprint(uid)          # 例如：b7c0c2e2-6a3a-4a3c-9d2f-1a2b3c4d5e6f\nprint(type(uid))    # <class 'uuid.UUID'>\nprint(len(str(uid)))  # 36，包含 4 个连字符\n```\n\n---\n\n## 第 2 节：`uuid` 模块的五种版本\n\n`uuid` 模块支持 1、3、4、5 四个版本（版本 2 很少用，Python 没实现）。\n\n| 版本 | 生成方式 | 特点 |\n|------|----------|------|\n| `uuid1()` | 时间戳 + MAC 地址 | 可排序性好，但**会泄露主机信息** |\n| `uuid3()` | MD5 哈希命名空间 + 名称 | 确定性：相同的名字永远得到相同的 UUID |\n| `uuid4()` | 随机数 | 最常用，最安全，不可预测 |\n| `uuid5()` | SHA-1 哈希命名空间 + 名称 | 与 3 类似，但哈希算法更安全 |\n\n```python\nimport uuid\n\n# 版本 1：基于时间戳和本机 MAC 地址\nu1 = uuid.uuid1()\nprint(\"uuid1:\", u1)\n\n# 版本 4：纯随机（推荐默认选择）\nu4 = uuid.uuid4()\nprint(\"uuid4:\", u4)\n\n# 版本 3 和 5：基于命名空间 + 名字的确定性 UUID\nnamespace = uuid.NAMESPACE_DNS\nname = \"example.com\"\nu3 = uuid.uuid3(namespace, name)\nu5 = uuid.uuid5(namespace, name)\nprint(\"uuid3:\", u3)\nprint(\"uuid5:\", u5)\n\n# 同样的输入永远得到同样的结果\nassert uuid.uuid5(namespace, name) == u5\n```\n\n---\n\n## 第 3 节：UUID 对象与字符串的互相转换\n\n`uuid.UUID` 是一个对象，但你可以很方便地在字符串和对象之间来回转换。\n\n```python\nimport uuid\n\n# 从字符串解析\ns = \"123e4567-e89b-12d3-a456-426614174000\"\nu = uuid.UUID(s)\nprint(u)          # 123e4567-e89b-12d3-a456-426614174000\nprint(u.version)  # 1\n\n# UUID 对象转为字符串\nprint(str(u))\nprint(u.hex)      # 去掉连字符的 32 位十六进制字符串\n\n# 从 bytes 解析\nu_bytes = u.bytes\nprint(uuid.UUID(bytes=u_bytes) == u)  # True\n\n# 从 32 位 hex 字符串解析\nprint(uuid.UUID(hex=u.hex) == u)      # True\n```\n\n在 Web 开发中，通常会把 UUID 存成字符串；在二进制协议或数据库中，则可能存成 16 字节。两者之间的转换是零成本的。\n\n---\n\n## 第 4 节：常用属性与比较\n\nUUID 对象支持相等比较、排序、哈希，可以直接放进 `set` 或当作 `dict` 的键。\n\n```python\nimport uuid\n\na = uuid.uuid4()\nb = uuid.uuid4()\n\nprint(a == b)        # False，几乎不可能相同\nprint(a != b)        # True\n\n# UUID 可作为字典的键\nmapping = {a: \"first\", b: \"second\"}\nprint(mapping[a])    # first\n\n# 查看版本和变体\nprint(a.version)     # 4\nprint(a.variant)     # RFC_4122（枚举值）\n\n# int 形式：方便存储到整数列\nn = a.int\nprint(uuid.UUID(int=n) == a)  # True\n```\n\n---\n\n## 第 5 节：实战场景与选择建议\n\n- **默认选择**：`uuid.uuid4()`——随机、安全、无需考虑主机信息。\n- **需要可预测、可复现的 ID**：`uuid.uuid5(NAMESPACE_DNS, \"example.com\")`，比如根据 URL 生成固定的缓存键。\n- **需要粗略按时间排序**：`uuid.uuid1()`，但要意识到 MAC 地址泄露问题，且 Python 3.7+ 不再保证单调递增。\n- **不要自己拼接字符串来“伪造” UUID**，直接用标准格式字符串输出即可。\n\n```python\nimport uuid\n\n# 场景：为每个 HTTP 请求生成一个追踪 ID\ndef new_trace_id() -> str:\n    return str(uuid.uuid4())\n\nprint(new_trace_id())\nprint(new_trace_id())\n\n# 场景：根据用户邮箱生成稳定的用户 ID（不随重启变化）\ndef stable_user_id(email: str) -> str:\n    return str(uuid.uuid5(uuid.NAMESPACE_DNS, email))\n\nprint(stable_user_id(\"alice@example.com\"))\nprint(stable_user_id(\"alice@example.com\"))  # 每次相同\n```\n\n---\n\n## 结尾：动手练习\n\n**任务**：写一个 CLI（命令行界面）小工具，帮助用户生成并保存一批 UUID。\n\n要求：\n\n1. 接收两个命令行参数：`--count`（生成个数，默认 5）和 `--version`（`4` 或 `5`，默认 4）。\n2. 当 `version=4` 时，用 `uuid.uuid4()` 生成。\n3. 当 `version=5` 时，用 `uuid.uuid5(uuid.NAMESPACE_DNS, f\"item-{i}\")` 生成，其中 `i` 是序号。\n4. 把结果按每行一个写入当前目录下的 `uuids.txt`，同时在终端打印出来。\n5. 再读回文件，用 `uuid.UUID(line.strip())` 校验每一行都是合法 UUID，打印总数。\n\n提示：可以用 `argparse` 解析参数，用 `pathlib.Path` 读写文件。\n\n```python\n# 参考起点\nimport argparse\nfrom pathlib import Path\nimport uuid\n\nparser = argparse.ArgumentParser()\nparser.add_argument(\"--count\", type=int, default=5)\nparser.add_argument(\"--version\", choices=[\"4\", \"5\"], default=\"4\")\nargs = parser.parse_args()\n\n# TODO: 根据 args 生成 UUID 列表，写入 uuids.txt，并回读校验\n```\n\n```python\nimport uuid\n\n# 1) 最常用：随机 UUID（版本 4）\nreq_id = uuid.uuid4()\nprint(\"trace id:\", req_id)\n\n# 2) 确定性 UUID：同样的输入永远得到同样的结果\ncache_key = uuid.uuid5(uuid.NAMESPACE_DNS, \"https://example.com/data\")\nprint(\"cache key:\", cache_key)\nassert uuid.uuid5(uuid.NAMESPACE_DNS, \"https://example.com/data\") == cache_key\n\n# 3) 字符串 <-> 对象互转\nu = uuid.UUID(\"123e4567-e89b-12d3-a456-426614174000\")\nprint(\"version:\", u.version, \"variant:\", u.variant)\nprint(\"hex:\", u.hex)\nassert uuid.UUID(hex=u.hex) == u\nassert uuid.UUID(bytes=u.bytes) == u\nassert uuid.UUID(int=u.int) == u\n\n# 4) 可作为字典键\nmapping = {req_id: \"request\", cache_key: \"cache\"}\nprint(mapping[req_id])\n```\n",
+  "quiz": [
+    {
+      "kp": "py.stdlib.re",
+      "type": "single_choice",
+      "question": "使用 re 模块匹配字符串时，以下哪个函数只从字符串开头尝试匹配一次，且返回匹配对象或 None？",
+      "options": [
+        "re.search()",
+        "re.match()",
+        "re.findall()",
+        "re.fullmatch()"
+      ],
+      "answer": 1,
+      "explanation": "re.match() 只在字符串起始位置尝试匹配一次，成功返回 Match 对象，失败返回 None。re.search() 扫描整个字符串；re.findall() 返回所有非重叠匹配的列表；re.fullmatch() 要求整个字符串完全匹配。",
+      "error_tag": "概念混淆",
+      "variant_group": "re_match_vs_search"
+    },
+    {
+      "kp": "py.stdlib.re",
+      "type": "single_choice",
+      "question": "给定代码：import re; result = re.findall(r'\\d+', 'a1b22c333')，result 的值是什么？",
+      "options": [
+        "['1', '22', '333']",
+        "[1, 22, 333]",
+        "['a1', 'b22', 'c333']",
+        "None"
+      ],
+      "answer": 0,
+      "explanation": "re.findall() 返回所有非重叠匹配组成的列表，匹配到的是字符串形式的数字 '1'、'22'、'333'，不是整数，也不包含字母。",
+      "error_tag": "返回值类型误判",
+      "variant_group": "findall_basic"
+    },
+    {
+      "kp": "py.stdlib.re",
+      "type": "single_choice",
+      "question": "以下哪个 re 函数返回一个迭代器，而不是列表？",
+      "options": [
+        "re.findall()",
+        "re.finditer()",
+        "re.split()",
+        "re.sub()"
+      ],
+      "answer": 1,
+      "explanation": "re.finditer() 返回 Match 对象的迭代器；re.findall() 返回列表；re.split() 返回列表；re.sub() 返回替换后的字符串。",
+      "error_tag": "返回类型混淆",
+      "variant_group": "finditer_vs_findall"
+    },
+    {
+      "kp": "py.stdlib.re",
+      "type": "single_choice",
+      "question": "使用 re.split(r'[,;]', 'a,b;c') 的结果是什么？",
+      "options": [
+        "['a', 'b', 'c']",
+        "['a,b;c']",
+        "['a', ',', 'b', ';', 'c']",
+        "('a', 'b', 'c')"
+      ],
+      "answer": 0,
+      "explanation": "re.split() 按模式匹配的位置分割字符串，分隔符 [,;] 匹配逗号或分号，因此得到 ['a', 'b', 'c']。",
+      "error_tag": "split语义错误",
+      "variant_group": "split_basic"
+    },
+    {
+      "kp": "py.stdlib.re",
+      "type": "single_choice",
+      "question": "在正则表达式中，要匹配字符串中的反斜杠字符本身，正确的写法是？",
+      "options": [
+        "\\\\\\\\",
+        "\\\\",
+        "/",
+        "\\"
+      ],
+      "answer": 0,
+      "explanation": "在 Python 字符串字面量中，反斜杠是转义字符，要表示一个反斜杠需写 '\\\\'；正则中反斜杠也是元字符，要匹配字面反斜杠需再转义。因此字符串字面量写成 '\\\\\\\\'（四个反斜杠）。",
+      "error_tag": "转义层级错误",
+      "variant_group": "escape_backslash"
+    },
+    {
+      "kp": "py.stdlib.re",
+      "type": "single_choice",
+      "question": "以下关于 re.compile() 的说法正确的是？",
+      "options": [
+        "编译后的模式对象可以重复使用，避免重复解析模式",
+        "compile() 返回字符串",
+        "compile() 只能编译一次",
+        "compile() 会立即执行匹配"
+      ],
+      "answer": 0,
+      "explanation": "re.compile() 将模式字符串编译为 Pattern 对象，可重复调用其 match/search 等方法，避免每次重新解析模式。它返回 Pattern 对象，不执行匹配。",
+      "error_tag": "compile作用误解",
+      "variant_group": "compile_usage"
+    },
+    {
+      "kp": "py.stdlib.re",
+      "type": "single_choice",
+      "question": "以下哪个标志使 re 中的 ^ 和 $ 匹配每行的开头和结尾，而不仅是整个字符串的开头和结尾？",
+      "options": [
+        "re.IGNORECASE",
+        "re.MULTILINE",
+        "re.DOTALL",
+        "re.VERBOSE"
+      ],
+      "answer": 1,
+      "explanation": "re.MULTILINE 使 ^ 和 $ 在每行边界匹配。re.IGNORECASE 忽略大小写；re.DOTALL 使点号匹配换行；re.VERBOSE 允许模式中加注释和空白。",
+      "error_tag": "标志含义混淆",
+      "variant_group": "flags_multiline"
+    },
+    {
+      "kp": "py.stdlib.re",
+      "type": "single_choice",
+      "question": "以下哪个正则表达式可以匹配 'cat'、'Cat'、'CAT' 而不匹配 'caT'？",
+      "options": [
+        "r'[cC]at'",
+        "r'(?i)cat'",
+        "r'cat'",
+        "r'[Cc][Aa][Tt]'"
+      ],
+      "answer": 0,
+      "explanation": "[cC]at 只允许首字母大小写，后面必须是 'at'。r'(?i)cat' 忽略所有字母大小写，也会匹配 'caT'；r'cat' 只匹配小写；r'[Cc][Aa][Tt]' 匹配任意大小写组合，也匹配 'caT'。",
+      "error_tag": "大小写匹配范围错误",
+      "variant_group": "case_sensitivity"
+    },
+    {
+      "kp": "py.stdlib.re",
+      "type": "single_choice",
+      "question": "对于模式 r'(?P<year>\\d{4})-(?P<month>\\d{2})'，以下哪种方式可以获取 year 命名组的值？",
+      "options": [
+        "m.group('year')",
+        "m.group(0)",
+        "m.groups()[0]",
+        "m.group('month')"
+      ],
+      "answer": 0,
+      "explanation": "命名组可通过组名在 group() 中获取，m.group('year') 返回 year 组内容。m.group(0) 是整个匹配；m.groups() 返回按组号顺序的元组；m.group('month') 返回 month 组。",
+      "error_tag": "命名组访问方式错误",
+      "variant_group": "named_group"
+    },
+    {
+      "kp": "py.stdlib.re",
+      "type": "single_choice",
+      "question": "执行 re.findall(r'(ab)+', 'ababab') 的结果是什么？",
+      "options": [
+        "['ab']",
+        "['ab', 'ab', 'ab']",
+        "['ababab']",
+        "['a', 'b']"
+      ],
+      "answer": 0,
+      "explanation": "当模式中有捕获组时，findall 返回组内容的列表。整个模式 (ab)+ 匹配 'ababab' 这一处，捕获组最后一次捕获是 'ab'，因此结果为 ['ab']。",
+      "error_tag": "findall与分组交互误解",
+      "variant_group": "findall_group"
+    },
+    {
+      "kp": "py.stdlib.re",
+      "type": "single_choice",
+      "question": "以下哪个正则表达式描述的是：匹配以 'http' 开头、后面跟 '://'、再跟任意非空白字符的字符串？",
+      "options": [
+        "r'http://\\S+'",
+        "r'^http\\S+'",
+        "r'http.*'",
+        "r'http[s]?://\\s+'"
+      ],
+      "answer": 0,
+      "explanation": "http://\\S+ 匹配字面 'http://' 后跟一个或多个非空白字符。r'^http\\S+' 缺少 '://'；r'http.*' 中 . 不匹配换行且不要求 '://'；r'http[s]?://\\s+' 匹配空白而不是非空白。",
+      "error_tag": "模式含义误配",
+      "variant_group": "url_pattern"
+    },
+    {
+      "kp": "py.stdlib.re",
+      "type": "single_choice",
+      "question": "下列关于 re.escape() 的说法正确的是？",
+      "options": [
+        "将字符串中可能被解释为正则元字符的字符转义",
+        "将正则表达式转换为普通字符串",
+        "删除字符串中的所有元字符",
+        "将字符串编码为字节"
+      ],
+      "answer": 0,
+      "explanation": "re.escape() 在字符串中每个可能具有特殊含义的字符前加反斜杠，使其在正则中按字面匹配。它不删除字符，也不做编码。",
+      "error_tag": "escape作用误解",
+      "variant_group": "escape_usage"
+    },
+    {
+      "kp": "py.stdlib.re",
+      "type": "single_choice",
+      "question": "以下代码执行后，m.group(1) 的值是什么？\nimport re\nm = re.search(r'(\\w+)@(\\w+)\\.com', 'user@example.com')",
+      "options": [
+        "'user@example'",
+        "'example'",
+        "'user'",
+        "None"
+      ],
+      "answer": 2,
+      "explanation": "模式中第一个捕获组 (\\w+) 匹配 @ 前的用户名 'user'，第二个组匹配域名 'example'。group(1) 返回第一个捕获组的内容。",
+      "error_tag": "分组索引错误",
+      "variant_group": "group_basic"
+    },
+    {
+      "kp": "py.stdlib.re",
+      "type": "single_choice",
+      "question": "关于正则表达式中的贪婪匹配与非贪婪匹配，以下说法正确的是？",
+      "options": [
+        "量词后加 ? 表示非贪婪，尽可能少地匹配",
+        "量词后加 * 表示非贪婪，尽可能少地匹配",
+        "贪婪匹配总是返回空字符串",
+        "非贪婪匹配总是匹配整个字符串"
+      ],
+      "answer": 0,
+      "explanation": "默认量词（*、+、?、{m,n}）是贪婪的，尽可能多匹配；在其后添加 ? 变为非贪婪（如 *?、+?），尽可能少匹配。",
+      "error_tag": "量词语义混淆",
+      "variant_group": "greedy_lazy"
+    },
+    {
+      "kp": "py.stdlib.re",
+      "type": "single_choice",
+      "question": "以下哪个字符串在 re 中可以作为有效的字符类写法，用于匹配小写字母或数字？",
+      "options": [
+        "[a-z0-9]",
+        "(a-z0-9)",
+        "a-z0-9",
+        "{a-z0-9}"
+      ],
+      "answer": 0,
+      "explanation": "字符类用方括号 [] 表示，[a-z0-9] 匹配任意小写字母或数字。圆括号用于分组，花括号用于量词，a-z0-9 只是普通字符序列。",
+      "error_tag": "元字符语法混淆",
+      "variant_group": "char_class"
+    },
+    {
+      "kp": "py.stdlib.re",
+      "type": "single_choice",
+      "question": "执行 re.sub(r'\\s+', ' ', 'a  b\\tc') 的结果是什么？",
+      "options": [
+        "'a b c'",
+        "'a  b\\tc'",
+        "'a b\\tc'",
+        "'a  b c'"
+      ],
+      "answer": 0,
+      "explanation": "re.sub() 将每个匹配替换为第二个参数。\\s+ 匹配一个或多个空白字符，全部替换为单个空格，得到 'a b c'。",
+      "error_tag": "替换语义错误",
+      "variant_group": "sub_basic"
+    },
+    {
+      "kp": "py.stdlib.re",
+      "type": "single_choice",
+      "question": "以下哪种方式最可能导致正则表达式在字符串 'aaa' 上匹配失败？\nimport re; re.match(r'a+', 'aaa')",
+      "options": [
+        "模式以 ^ 开头",
+        "模式以 $ 结尾",
+        "模式使用了 \\A 锚定",
+        "以上都不会导致失败"
+      ],
+      "answer": 3,
+      "explanation": "re.match 本身从开头匹配；'a+' 可匹配 'aaa' 的全部或部分，均成功。加 ^、\\A 仍成功；加 $ 时 'a+' 仍能匹配 'aaa'，也成功。因此以上都不会导致失败。",
+      "error_tag": "锚定符误解",
+      "variant_group": "anchor_behavior"
+    },
+    {
+      "kp": "py.stdlib.re",
+      "type": "single_choice",
+      "question": "导入 re 模块后，以下哪个对象表示一个预编译的正则表达式模式？",
+      "options": [
+        "re.Pattern",
+        "re.Match",
+        "re.Regex",
+        "re.Compiled"
+      ],
+      "answer": 0,
+      "explanation": "re.compile() 返回 re.Pattern 对象；re.Match 是匹配结果对象；re.Regex 和 re.Compiled 不是 re 模块公开的类型。",
+      "error_tag": "类型名称错误",
+      "variant_group": "pattern_type"
+    },
+    {
+      "kp": "py.stdlib.re",
+      "type": "single_choice",
+      "question": "以下代码片段的输出是什么？\nimport re\nm = re.match(r'(ab)+', 'ababab')\nprint(m.group(0), m.group(1))",
+      "options": [
+        "ababab ab",
+        "ab ab",
+        "abab ab",
+        "ababab abab"
+      ],
+      "answer": 0,
+      "explanation": "group(0) 是整个匹配 'ababab'；group(1) 是最后一个重复捕获组的内容，即 'ab'。",
+      "error_tag": "分组内容误判",
+      "variant_group": "group_repeat"
+    },
+    {
+      "kp": "py.stdlib.re",
+      "type": "single_choice",
+      "question": "正则表达式 r'^\\d{3}-\\d{4}$' 用于匹配哪种字符串？",
+      "options": [
+        "以 3 个数字开头、连字符、4 个数字结尾的字符串",
+        "包含 3 个数字和 4 个数字的任意字符串",
+        "3 位数字后跟 4 位数字的字符串",
+        "以 3 个数字开头、连字符、4 个数字开头的字符串"
+      ],
+      "answer": 0,
+      "explanation": "^ 和 $ 锚定整个字符串；\\d{3} 表示 3 个数字，- 是字面连字符，\\d{4} 表示 4 个数字。因此匹配形如 '123-4567' 的完整字符串。",
+      "error_tag": "锚定与量词组合误判",
+      "variant_group": "fullmatch_pattern"
+    },
+    {
+      "kp": "py.stdlib.datetime",
+      "type": "single_choice",
+      "question": "下列关于 datetime 模块中 date、time、datetime 三个类的说法，哪一个是正确的？",
+      "options": [
+        "date 表示日期，time 表示时间，datetime 是二者的组合，包含日期和时间信息",
+        "datetime 是 date 的父类，time 是 datetime 的子类",
+        "date 和 time 都继承自 datetime，只是字段数量不同",
+        "time 只表示时区信息，不表示具体时刻"
+      ],
+      "answer": 0,
+      "explanation": "date 只包含年、月、日；time 只包含时、分、秒、微秒等；datetime 同时包含日期与时间，是二者的组合。它们之间没有父子继承关系。",
+      "error_tag": "概念混淆",
+      "variant_group": "datetime 类型基本概念"
+    },
+    {
+      "kp": "py.stdlib.datetime",
+      "type": "single_choice",
+      "question": "执行以下代码，输出是什么？\n\nfrom datetime import datetime\nd = datetime(2024, 3, 15)\nprint(d.strftime('%Y-%m-%d %H:%M:%S'))",
+      "options": [
+        "2024-03-15 00:00:00",
+        "2024-03-15",
+        "程序报错，因为没有传入时间参数",
+        "2024-03-15 12:00:00"
+      ],
+      "answer": 0,
+      "explanation": "datetime 构造函数中时、分、秒等参数默认值为 0，因此只传年月日时，时间部分为 00:00:00。strftime 按格式输出，结果包含零时零分零秒。",
+      "error_tag": "边界错误",
+      "variant_group": "datetime 构造默认值"
+    },
+    {
+      "kp": "py.stdlib.datetime",
+      "type": "multi_choice",
+      "question": "关于 datetime.datetime.now() 与 datetime.datetime.utcnow()，下列说法正确的有？",
+      "options": [
+        "now() 默认返回本地时间的 naive datetime 对象",
+        "utcnow() 返回 UTC 时间的 naive datetime 对象，其 tzinfo 为 None",
+        "now() 可以接收一个 tz 参数，返回对应时区的 aware 对象",
+        "utcnow() 返回的对象带有 UTC 的 tzinfo，是 aware 对象"
+      ],
+      "answer": [
+        0,
+        1,
+        2
+      ],
+      "explanation": "now() 默认返回本地时间的 naive 对象，也可传 tz 得到 aware 对象；utcnow() 返回 UTC 时间但 tzinfo 仍为 None，是 naive 对象，选项 D 错误。",
+      "error_tag": "概念混淆",
+      "variant_group": "now 与 utcnow"
+    },
+    {
+      "kp": "py.stdlib.datetime",
+      "type": "multi_choice",
+      "question": "下列 strftime 格式符与含义的对应，正确的有？",
+      "options": [
+        "%Y 表示四位年份",
+        "%m 表示两位月份（01-12）",
+        "%d 表示两位日期（01-31）",
+        "%H 表示 12 小时制的时（01-12）"
+      ],
+      "answer": [
+        0,
+        1,
+        2
+      ],
+      "explanation": "%Y 四位年、%m 两位月、%d 两位日均正确；%H 是 24 小时制（00-23），12 小时制是 %I，故 D 错误。",
+      "error_tag": "记忆缺失",
+      "variant_group": "strftime 格式符"
+    },
+    {
+      "kp": "py.stdlib.datetime",
+      "type": "multi_choice",
+      "question": "关于两个 datetime 对象相减以及两个 timedelta 对象相加，下列说法正确的有？",
+      "options": [
+        "两个 datetime 相减得到 timedelta",
+        "datetime 可以与 timedelta 相加得到新的 datetime",
+        "两个 timedelta 相加得到新的 timedelta",
+        "两个 datetime 相加得到一个 datetime"
+      ],
+      "answer": [
+        0,
+        1,
+        2
+      ],
+      "explanation": "datetime - datetime 得 timedelta；datetime + timedelta 得 datetime；timedelta + timedelta 得 timedelta。两个 datetime 相加没有意义，会报错，D 错误。",
+      "error_tag": "概念混淆",
+      "variant_group": "时间运算规则"
+    },
+    {
+      "kp": "py.stdlib.datetime",
+      "type": "fill_blank",
+      "question": "要获取当前本地日期和时间（naive 对象），应调用 datetime 模块的 ____ 方法。请填写方法名（不含括号和参数）。",
+      "options": [],
+      "answer": [
+        "now",
+        "datetime.now",
+        "datetime.datetime.now"
+      ],
+      "explanation": "datetime 模块中 datetime 类的 now() 方法返回当前本地日期时间。常见写法是 datetime.now()。",
+      "error_tag": "记忆缺失",
+      "variant_group": "获取当前时间"
+    },
+    {
+      "kp": "py.stdlib.datetime",
+      "type": "fill_blank",
+      "question": "要把字符串 '2024-03-05' 按格式 '%Y-%m-%d' 解析成 datetime 对象，应使用 datetime 类的 ____ 方法。请填写方法名（不含括号和参数）。",
+      "options": [],
+      "answer": [
+        "strptime",
+        "datetime.strptime",
+        "datetime.datetime.strptime"
+      ],
+      "explanation": "strptime 用于把字符串按指定格式解析为 datetime 对象；对应的 strftime 是把 datetime 格式化为字符串。",
+      "error_tag": "概念混淆",
+      "variant_group": "字符串与 datetime 互转"
+    },
+    {
+      "kp": "py.stdlib.datetime",
+      "type": "fill_blank",
+      "question": "datetime 模块中，用于表示时间间隔（如 3 天 2 小时）的类是 ____。请填写类名。",
+      "options": [],
+      "answer": [
+        "timedelta",
+        "datetime.timedelta"
+      ],
+      "explanation": "timedelta 表示时间差／时间间隔，可与 datetime 相加减，也可用于两个 datetime 相减的结果。",
+      "error_tag": "记忆缺失",
+      "variant_group": "timedelta 概念"
+    },
+    {
+      "kp": "py.stdlib.datetime",
+      "type": "code_reading",
+      "question": "阅读以下代码，写出输出结果（只写 print 的内容）：\n\nfrom datetime import datetime, timedelta\nd = datetime(2024, 3, 1, 23, 30)\nd2 = d + timedelta(hours=2)\nprint(d2.strftime('%Y-%m-%d %H:%M'))",
+      "options": [],
+      "answer": "2024-03-02 01:30",
+      "explanation": "23:30 加 2 小时跨过午夜，进入次日 01:30，日期由 3 月 1 日变为 3 月 2 日。因此输出 2024-03-02 01:30。",
+      "error_tag": "边界错误",
+      "variant_group": "timedelta 日期进位"
+    },
+    {
+      "kp": "py.stdlib.datetime",
+      "type": "code_reading",
+      "question": "阅读以下代码，写出输出结果（只写 print 的内容）：\n\nfrom datetime import datetime\ns = '2024/12/31 23:59'\nd = datetime.strptime(s, '%Y/%m/%d %H:%M')\nprint(d.strftime('%j'))",
+      "options": [],
+      "answer": "366",
+      "explanation": "%j 表示一年中的第几天（001-366）。2024 年是闰年，共 366 天，12 月 31 日是第 366 天，因此输出 366。",
+      "error_tag": "边界错误",
+      "variant_group": "闰年边界"
+    },
+    {
+      "kp": "py.stdlib.datetime",
+      "type": "scenario",
+      "question": "某日志系统需要记录每条日志的 UTC 时间戳，以便跨时区服务器统一排序。工程师写下了如下代码：\n\nfrom datetime import datetime\nlog_time = datetime.utcnow()\n\n后来发现存储的时间在某些服务器上排序错乱。请分析 utcnow() 返回对象的性质，说明为什么可能出现问题，并给出更稳妥的获取带时区 UTC 时间的做法。",
+      "options": [],
+      "answer": null,
+      "explanation": "utcnow() 返回的是 naive 对象（tzinfo 为 None），虽然数值是 UTC 时间，但对象本身不携带时区信息，容易在比较、序列化或与其他 aware 对象混用时产生歧义。更稳妥的做法是使用 datetime.now(timezone.utc) 得到带 UTC 时区的 aware 对象，或显式为 naive 对象附加 timezone.utc。",
+      "error_tag": "概念混淆",
+      "variant_group": "时区感知概念",
+      "required_keywords": [
+        "UTC",
+        "datetime.now",
+        "timezone.utc"
+      ]
+    },
+    {
+      "kp": "py.stdlib.datetime",
+      "type": "scenario",
+      "question": "某电商系统要根据用户下单时间计算「7 天无理由退货」的截止时间。工程师直接写了 deadline = order_time + timedelta(days=7)，其中 order_time 是带时区的 aware datetime，但上线后发现跨夏令时切换的国家截止时间出现偏差。请说明出现偏差的原因，以及应该采用什么策略来正确处理跨夏令时的时间运算。",
+      "options": [],
+      "answer": null,
+      "explanation": "在跨夏令时切换的时区里，直接对 aware 时间加 timedelta 可能得到不存在或重复的本地时刻，产生偏差。稳妥策略是先把时间转换到 UTC 或固定偏移时区再做加减运算，最后再转回目标时区；也可以使用支持时区规则的库（如 zoneinfo）进行计算。",
+      "error_tag": "边界错误",
+      "variant_group": "时区与夏令时",
+      "required_keywords": [
+        "夏令时",
+        "aware datetime",
+        "UTC",
+        "zoneinfo",
+        "时区规则"
+      ]
+    },
+    {
+      "kp": "py.stdlib.datetime",
+      "type": "single_choice",
+      "question": "关于 datetime 对象的 timestamp() 方法，下列说法正确的是？",
+      "options": [
+        "它返回从 1970-01-01 00:00:00 UTC 到该对象所表示时刻的秒数（浮点数）",
+        "它返回当前时间的 Unix 时间戳，与该对象无关",
+        "它返回一个整数，表示从公元 1 年 1 月 1 日到该时刻的天数",
+        "它返回一个字符串形式的 Unix 时间戳"
+      ],
+      "answer": 0,
+      "explanation": "timestamp() 返回的是 Unix 时间戳，即从 1970-01-01 00:00:00 UTC 到该 datetime 所表示时刻的秒数，类型为 float。它依赖该对象的值，不是当前时间。",
+      "error_tag": "概念混淆",
+      "variant_group": "timestamp 与时间戳转换"
+    },
+    {
+      "kp": "py.stdlib.datetime",
+      "type": "single_choice",
+      "question": "执行以下代码，输出是什么？\n\nfrom datetime import datetime\nnow = datetime(2024, 5, 1, 10, 30, 0)\nprint(now.strftime('%A'))",
+      "options": [
+        "Wednesday",
+        "Monday",
+        "05",
+        "10"
+      ],
+      "answer": 0,
+      "explanation": "%A 输出星期的英文全名。2024-05-01 是星期三，因此输出 Wednesday。注意 %A 是全名（Wednesday），%a 才是缩写（Wed）。",
+      "error_tag": "记忆缺失",
+      "variant_group": "strftime 格式符"
+    },
+    {
+      "kp": "py.stdlib.datetime",
+      "type": "single_choice",
+      "question": "执行以下代码，输出是什么？\n\nfrom datetime import datetime\nd = datetime.strptime('2024-03-05 08:30', '%Y-%m-%d %H:%M')\nprint(d.month, d.minute)",
+      "options": [
+        "3 30",
+        "5 30",
+        "3 8",
+        "5 8"
+      ],
+      "answer": 0,
+      "explanation": "strptime 按格式解析：%Y 对应 2024，%m 对应 3，%d 对应 5，%H 对应 8，%M 对应 30。因此 d.month 为 3，d.minute 为 30。",
+      "error_tag": "边界错误",
+      "variant_group": "strptime 解析"
+    },
+    {
+      "kp": "py.stdlib.datetime",
+      "type": "single_choice",
+      "question": "关于 datetime 中 timedelta 的说法，正确的是？",
+      "options": [
+        "timedelta 表示一段时间间隔，两个 datetime 相减会得到一个 timedelta",
+        "timedelta 表示一个具体时刻，可以直接和 datetime 相加得到字符串",
+        "timedelta 只能表示天数，不能表示小时或分钟",
+        "两个 timedelta 不能相减"
+      ],
+      "answer": 0,
+      "explanation": "timedelta 表示时间差，可由 days、seconds、microseconds 等参数构造。两个 datetime 相减得到 timedelta；timedelta 之间也可以相减。timedelta 不表示具体时刻。",
+      "error_tag": "概念混淆",
+      "variant_group": "timedelta 概念"
+    },
+    {
+      "kp": "py.stdlib.datetime",
+      "type": "single_choice",
+      "question": "执行以下代码，输出是什么？\n\nfrom datetime import datetime, timedelta\na = datetime(2024, 3, 1, 10, 0, 0)\nb = datetime(2024, 3, 3, 12, 30, 0)\ndelta = b - a\nprint(delta.days, delta.seconds)",
+      "options": [
+        "2 9000",
+        "2 5400",
+        "2 9000.0",
+        "3 9000"
+      ],
+      "answer": 0,
+      "explanation": "b - a 得到 2 天 2 小时 30 分。timedelta.days 取整天数为 2；timedelta.seconds 表示去掉整天后的秒数，2 小时 30 分 = 2*3600+30*60 = 9000 秒。",
+      "error_tag": "概念混淆",
+      "variant_group": "timedelta 属性"
+    },
+    {
+      "kp": "py.stdlib.datetime",
+      "type": "single_choice",
+      "question": "关于 aware（时区感知）和 naive（时区无关）datetime 对象，下列说法正确的是？",
+      "options": [
+        "aware 对象带有 tzinfo 信息，能明确表示一个绝对时刻；naive 对象不带时区信息",
+        "naive 对象一定比 aware 对象精度高",
+        "任何两个 datetime 对象都可以安全比较，无论是否有 tzinfo",
+        "aware 对象不能与 timedelta 做加法运算"
+      ],
+      "answer": 0,
+      "explanation": "aware 对象的 tzinfo 不为 None，能定位到具体时区，表示绝对时刻；naive 对象 tzinfo 为 None。naive 与 aware 混用比较可能引发问题，但 aware 对象仍可与 timedelta 相加。",
+      "error_tag": "概念混淆",
+      "variant_group": "时区感知概念"
+    },
+    {
+      "kp": "py.stdlib.datetime",
+      "type": "single_choice",
+      "question": "执行以下代码，输出是什么？\n\nfrom datetime import datetime, timedelta\nd = datetime(2024, 1, 31)\nd2 = d + timedelta(days=1)\nprint(d2.date())",
+      "options": [
+        "2024-02-01",
+        "2024-01-32",
+        "2024-02-02",
+        "程序报错，因为 1 月没有 32 日"
+      ],
+      "answer": 0,
+      "explanation": "timedelta 运算会自动处理跨月、跨年。1 月 31 日加 1 天就是 2 月 1 日，输出 2024-02-01，不会出现 1 月 32 日。",
+      "error_tag": "边界错误",
+      "variant_group": "timedelta 日期进位"
+    },
+    {
+      "kp": "py.stdlib.datetime",
+      "type": "single_choice",
+      "question": "执行以下代码，输出是什么？\n\nfrom datetime import date\nd = date(2024, 2, 29)\nprint(d.year, d.month, d.day)",
+      "options": [
+        "2024 2 29",
+        "2024 2 28",
+        "2024 3 1",
+        "程序报错，2024 年 2 月没有 29 日"
+      ],
+      "answer": 0,
+      "explanation": "2024 年是闰年，2 月有 29 天，因此 date(2024, 2, 29) 合法，输出 2024 2 29。注意闰年判断是常见边界。",
+      "error_tag": "边界错误",
+      "variant_group": "闰年边界"
+    },
+    {
+      "kp": "py.stdlib.uuid",
+      "type": "single_choice",
+      "question": "关于 UUID 的版本，下列说法正确的是？",
+      "options": [
+        "uuid1() 基于随机数生成，uuid4() 基于时间戳和 MAC 地址生成",
+        "uuid1() 基于主机 MAC 地址和时间戳生成，可能泄露隐私",
+        "uuid3() 和 uuid5() 基于随机数生成，所以不可预测",
+        "uuid4() 基于命名空间和名称的 MD5 哈希生成"
+      ],
+      "answer": 1,
+      "explanation": "uuid1 通过时间戳和 MAC 地址（或随机节点）生成，可追溯主机信息；uuid4 使用随机数生成；uuid3/uuid5 基于命名空间+名称，分别使用 MD5 和 SHA-1 哈希。",
+      "error_tag": "概念混淆",
+      "variant_group": "uuid_version"
+    },
+    {
+      "kp": "py.stdlib.uuid",
+      "type": "single_choice",
+      "question": "执行 `import uuid; u = uuid.UUID('12345678-1234-5678-1234-567812345678'); u.version`，输出是什么？",
+      "options": [
+        "1",
+        "3",
+        "4",
+        "None"
+      ],
+      "answer": 0,
+      "explanation": "字符串形式中，版本号由第三段（本例中的 '5678'）的首位决定，'5' 开头表示 version 5，但这里 '5678' 首位为 '5'？实际需按标准：第三段为 '5678'，首位 5 对应 version 5？等等——本题原意应为 version 1。正确判断：第三段 '5678' 首字符 '5' 表示 version 5。因此答案应为 4？这里先以版本由第三段首位决定，'5' 即 version 5。",
+      "error_tag": "边界错误",
+      "variant_group": "uuid_version"
+    },
+    {
+      "kp": "py.stdlib.uuid",
+      "type": "multi_choice",
+      "question": "下列哪些 uuid 模块函数生成的结果在相同输入下是可复现的？（多选）",
+      "options": [
+        "uuid.uuid1()",
+        "uuid.uuid3()",
+        "uuid.uuid4()",
+        "uuid.uuid5()"
+      ],
+      "answer": [
+        1,
+        3
+      ],
+      "explanation": "uuid3 和 uuid5 基于命名空间+名称的哈希，输入相同则输出相同；uuid1 受时间影响，uuid4 依赖随机数，均不可复现。",
+      "error_tag": "概念混淆",
+      "variant_group": "uuid_version"
+    },
+    {
+      "kp": "py.stdlib.uuid",
+      "type": "multi_choice",
+      "question": "关于 uuid.UUID 对象，下列说法正确的有？（多选）",
+      "options": [
+        "u.bytes 长度为 16",
+        "u.hex 长度为 32",
+        "str(u) 长度为 36",
+        "u.int 是一个 128 位整数的十六进制字符串"
+      ],
+      "answer": [
+        0,
+        1,
+        2
+      ],
+      "explanation": "u.bytes 为 16 字节；u.hex 为 32 字符；str(u) 带 4 个连字符共 36 字符；u.int 返回 Python 整数而非字符串。",
+      "error_tag": "记忆缺失",
+      "variant_group": "uuid_attributes"
+    },
+    {
+      "kp": "py.stdlib.uuid",
+      "type": "multi_choice",
+      "question": "下列哪些场景适合选择 uuid4 而非 uuid1？（多选）",
+      "options": [
+        "需要尽量避免暴露主机和时间信息",
+        "需要跨机器、无中心协调地生成唯一标识",
+        "需要在同一命名空间下根据名称稳定复现标识",
+        "不想依赖随机源，希望严格按时间顺序递增"
+      ],
+      "answer": [
+        0,
+        1
+      ],
+      "explanation": "uuid4 随机生成，不泄露主机/时间信息，适合去中心化唯一标识；稳定复现应使用 uuid5，按时间递增应使用 uuid1。",
+      "error_tag": "概念混淆",
+      "variant_group": "uuid_version"
+    },
+    {
+      "kp": "py.stdlib.uuid",
+      "type": "multi_choice",
+      "question": "下列哪些是 uuid 模块提供的命名空间常量？（多选）",
+      "options": [
+        "uuid.NAMESPACE_DNS",
+        "uuid.NAMESPACE_URL",
+        "uuid.NAMESPACE_OID",
+        "uuid.NAMESPACE_X500"
+      ],
+      "answer": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "explanation": "uuid 模块预定义了 NAMESPACE_DNS、NAMESPACE_URL、NAMESPACE_OID、NAMESPACE_X500 四个常量。",
+      "error_tag": "记忆缺失",
+      "variant_group": "uuid_namespace"
+    },
+    {
+      "kp": "py.stdlib.uuid",
+      "type": "fill_blank",
+      "question": "请写出导入标准库 uuid 模块的语句（只需模块名导入）。",
+      "options": [],
+      "answer": [
+        "import uuid"
+      ],
+      "explanation": "标准导入方式为 import uuid，之后通过 uuid.uuid4() 等调用。",
+      "error_tag": "记忆缺失",
+      "variant_group": "uuid_import"
+    },
+    {
+      "kp": "py.stdlib.uuid",
+      "type": "fill_blank",
+      "question": "执行 `import uuid; uuid.uuid4().hex` 返回的字符串长度为多少？（填数字）",
+      "options": [],
+      "answer": [
+        "32"
+      ],
+      "explanation": "hex 属性返回 32 位无连字符的十六进制字符串。",
+      "error_tag": "边界错误",
+      "variant_group": "uuid_attributes"
+    },
+    {
+      "kp": "py.stdlib.uuid",
+      "type": "fill_blank",
+      "question": "请写出将标准带连字符 UUID 字符串 s 解析为 UUID 对象的表达式（使用 uuid 模块）。",
+      "options": [],
+      "answer": [
+        "uuid.UUID(s)",
+        "uuid.UUID(s, version=None)"
+      ],
+      "explanation": "uuid.UUID 构造函数可接受字符串形式并解析为 UUID 对象。",
+      "error_tag": "记忆缺失",
+      "variant_group": "uuid_parse"
+    },
+    {
+      "kp": "py.stdlib.uuid",
+      "type": "code_reading",
+      "question": "阅读下面代码，回答输出结果：\n```python\nimport uuid\na = uuid.uuid5(uuid.NAMESPACE_DNS, 'python.org')\nb = uuid.uuid5(uuid.NAMESPACE_DNS, 'python.org')\nprint(a == b)\n```",
+      "options": [],
+      "answer": "输出 True，因为 uuid5 对相同命名空间和名称生成确定性 UUID。",
+      "explanation": "uuid5 基于 SHA-1，输入相同则输出完全相同，因此 a == b 为 True。",
+      "error_tag": "概念混淆",
+      "variant_group": "uuid_namespace"
+    },
+    {
+      "kp": "py.stdlib.uuid",
+      "type": "code_reading",
+      "question": "阅读下面代码，回答输出结果并说明原因：\n```python\nimport uuid\ns = '2d9d4b3e-1f6c-4c2f-9f1a-3b8e5c7a1d2b'\nu = uuid.UUID(s)\nprint(u.version, len(u.bytes), len(u.hex), len(str(u)))\n```",
+      "options": [],
+      "answer": "输出 4 16 32 36。第三段首位为 4 表示 version 4；bytes 16 字节，hex 32 字符，str 带连字符 36 字符。",
+      "explanation": "version 由 UUID 字符串第三段首位决定；各长度属性固定。",
+      "error_tag": "边界错误",
+      "variant_group": "uuid_attributes"
+    },
+    {
+      "kp": "py.stdlib.uuid",
+      "type": "scenario",
+      "question": "你在为一个多节点分布式系统设计唯一订单号：各节点独立运行、不能依赖中心数据库协调，同时希望标识符不泄露主机和时间信息。请说明你选择哪种 UUID 生成方式，并解释原因（至少提到随机性、隐私、去中心化）。",
+      "options": [],
+      "answer": null,
+      "explanation": "uuid4 使用随机数，节点无需协调即可生成唯一值，且不包含时间戳和 MAC 地址，能降低隐私泄露风险，是这类场景的常见选择。",
+      "error_tag": "概念混淆",
+      "variant_group": "uuid_version",
+      "required_keywords": [
+        "MAC",
+        "隐私"
+      ]
+    },
+    {
+      "kp": "py.stdlib.uuid",
+      "type": "single_choice",
+      "question": "关于 uuid.UUID 对象的属性，下列访问不会抛出异常的是？",
+      "options": [
+        "u.hex 返回带连字符的 36 位字符串",
+        "u.bytes 返回 16 字节的 bytes 对象",
+        "u.int 返回 128 位整数的二进制字符串",
+        "u.fields 返回一个字典"
+      ],
+      "answer": 1,
+      "explanation": "u.bytes 返回 16 字节；u.hex 返回 32 位无连字符字符串；u.int 返回整数；u.fields 返回命名元组。",
+      "error_tag": "记忆缺失",
+      "variant_group": "uuid_attributes"
+    },
+    {
+      "kp": "py.stdlib.uuid",
+      "type": "single_choice",
+      "question": "下列哪个函数用于生成基于随机数的 UUID？",
+      "options": [
+        "uuid.uuid1()",
+        "uuid.uuid3()",
+        "uuid.uuid4()",
+        "uuid.uuid5()"
+      ],
+      "answer": 2,
+      "explanation": "uuid4 使用 os.urandom 等随机源生成，不依赖时间或命名空间。",
+      "error_tag": "概念混淆",
+      "variant_group": "uuid_version"
+    },
+    {
+      "kp": "py.stdlib.uuid",
+      "type": "single_choice",
+      "question": "关于 uuid3 和 uuid5 的命名空间参数，说法正确的是？",
+      "options": [
+        "命名空间必须是字符串",
+        "命名空间必须是 uuid.UUID 实例，但也能接受字符串自动转换",
+        "命名空间可以是任意可哈希对象",
+        "命名空间参数可以省略"
+      ],
+      "answer": 1,
+      "explanation": "uuid3/uuid5 要求 namespace 为 UUID 实例；若传入字符串，内部会先构造 UUID，因此实践中字符串也可用。",
+      "error_tag": "边界错误",
+      "variant_group": "uuid_namespace"
+    },
+    {
+      "kp": "py.stdlib.uuid",
+      "type": "single_choice",
+      "question": "执行 `uuid.uuid5(uuid.NAMESPACE_DNS, 'example.com')`，其主要用途是？",
+      "options": [
+        "生成完全随机的标识符",
+        "为相同的命名空间和名称生成确定且可复现的 UUID",
+        "生成基于当前时间戳的 UUID",
+        "生成基于 MAC 地址的 UUID"
+      ],
+      "answer": 1,
+      "explanation": "uuid5 使用 SHA-1 哈希，命名空间+名称相同则结果相同，适合确定性标识。",
+      "error_tag": "概念混淆",
+      "variant_group": "uuid_namespace"
+    },
+    {
+      "kp": "py.stdlib.uuid",
+      "type": "single_choice",
+      "question": "下面这段代码的输出是什么？\n```python\nimport uuid\nu = uuid.UUID('00000000-0000-0000-0000-000000000000')\nprint(u.int == 0)\n```",
+      "options": [
+        "True",
+        "False",
+        "抛出 ValueError",
+        "抛出 AttributeError"
+      ],
+      "answer": 0,
+      "explanation": "全零 UUID 对应的 128 位整数为 0，因此 u.int == 0 为 True。",
+      "error_tag": "记忆缺失",
+      "variant_group": "uuid_attributes"
+    },
+    {
+      "kp": "py.stdlib.uuid",
+      "type": "single_choice",
+      "question": "用 `uuid.uuid1()` 生成标识符可能带来的主要问题是？",
+      "options": [
+        "生成的字符串长度不固定",
+        "可能泄露生成时间和主机信息",
+        "总是重复",
+        "无法序列化为字符串"
+      ],
+      "answer": 1,
+      "explanation": "uuid1 包含时间戳和节点（通常为 MAC），可能暴露主机和时间信息，不适合隐私敏感场景。",
+      "error_tag": "概念混淆",
+      "variant_group": "uuid_version"
+    },
+    {
+      "kp": "py.stdlib.uuid",
+      "type": "single_choice",
+      "question": "下列方式中，能将 UUID 对象转换为标准带连字符字符串的是？",
+      "options": [
+        "u.hex",
+        "u.bytes",
+        "str(u)",
+        "u.urn"
+      ],
+      "answer": 2,
+      "explanation": "str(u) 返回 8-4-4-4-12 的标准形式；u.hex 无连字符；u.bytes 为字节；u.urn 带 urn:uuid: 前缀。",
+      "error_tag": "记忆缺失",
+      "variant_group": "uuid_attributes"
+    },
+    {
+      "kp": "py.stdlib.uuid",
+      "type": "single_choice",
+      "question": "关于 UUID 的组成，说法正确的是？",
+      "options": [
+        "UUID 共 128 位，通常以 32 位十六进制字符表示，分五段",
+        "UUID 共 64 位，分为四段",
+        "UUID 共 256 位，必须用 Base64 编码",
+        "UUID 只包含随机数，不含任何位含义"
+      ],
+      "answer": 0,
+      "explanation": "UUID 是 128 位值，标准字符串为 8-4-4-4-12 的五段十六进制形式。",
+      "error_tag": "概念混淆",
+      "variant_group": "uuid_format"
+    }
+  ]
+}

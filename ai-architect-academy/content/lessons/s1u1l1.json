@@ -1,0 +1,28 @@
+{
+  "id": "s1u1l1",
+  "title": "环境搭建与你的第一个程序",
+  "kps": ["py.env.install", "py.env.venv", "py.env.pip", "py.hello.print"],
+  "theory": "# 环境搭建与第一个 Python 程序\n\n## 1. 安装 Python\n\n去官方站点 python.org 下载最新稳定版（本课程基于 Python 3.12+）。安装时**务必勾选 “Add Python to PATH”**，这样命令行里才能直接敲 `python`。\n\n安装完成后验证：\n\n```\npython --version\n```\n\n看到类似 `Python 3.12.6` 的输出即成功。\n\n## 2. 虚拟环境（venv）\n\n每个项目独立环境是工程级习惯，避免依赖冲突：\n\n```\npython -m venv venv\n```\n\n激活（Windows）：\n\n```\nvenv\\Scripts\\activate\n```\n\n激活后命令行前面会出现 `(venv)` 标记。\n\n## 3. pip 安装包\n\npip 是 Python 的包管理器：\n\n```\npip install requests\n```\n\n查看已装包：\n\n```\npip list\n```\n\n## 4. 你的第一个程序\n\n新建 `hello.py`：\n\n```python\nprint(\"hello\")\n```\n\n运行：\n\n```\npython hello.py\n```\n\n`print()` 把括号里的内容输出到屏幕。这是所有 Python 程序的起点——从这里出发，逐步走向 AI 架构师。\n",
+  "quiz": [
+    {
+      "question": "安装 Python 时，必须勾选哪个选项，才能在命令行直接使用 python 命令？",
+      "options": ["Add Python to PATH", "Install pip", "Install for all users", "Download debug symbols"],
+      "answer": 0
+    },
+    {
+      "question": "创建一个名为 venv 的虚拟环境，正确的命令是？",
+      "options": ["python -m venv venv", "python create venv", "pip install venv", "python --venv"],
+      "answer": 0
+    },
+    {
+      "question": "print(\"hello\") 的作用是？",
+      "options": ["把 hello 输出到屏幕", "定义变量 hello", "导入模块 hello", "打开文件 hello"],
+      "answer": 0
+    },
+    {
+      "question": "pip 的作用是？",
+      "options": ["管理 Python 包（安装/卸载）", "运行 Python 程序", "编译 Python 代码", "创建虚拟环境"],
+      "answer": 0
+    }
+  ]
+}

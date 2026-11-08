@@ -1,0 +1,637 @@
+{
+  "id": "s1u3l1",
+  "title": "s1u3l1",
+  "kps": [
+    "py.flow.if",
+    "py.flow.elif_else"
+  ],
+  "theory": "## py.flow.if\n\n# Python 条件语句 `if`：从直觉到工程实践\n\n## 一句话直觉\n\n**程序不是只会从上到下执行，`if` 让代码学会「看情况做决定」——这是所有逻辑分支的起点。**\n\n---\n\n## 1. 为什么需要 `if`：程序的「十字路口」\n\n计算机默认按顺序执行代码。但现实中我们经常需要：**满足条件才做某事，否则做另一件事**。比如登录时检查密码、除零时避免崩溃。`if` 就是 Python 提供的最基础流程控制语句（flow control statement）。\n\n```python\n# 无 if 的世界：只能一条路走到黑\nx = -5\n# print(x ** 0.5)  # 这里会报错，因为没有判断\n\n# 有 if 的世界：程序会「看情况」\nimport math\nx = -5\nif x >= 0:\n    print(math.sqrt(x))\nelse:\n    print(\"负数不能开平方\")\n```\n\n**关键结论**：`if` 让程序具备「分支」能力，是后续 `for`、`while`、函数、异常处理的基础。\n\n---\n\n## 2. 基本语法：`if` / `elif` / `else`\n\nPython 用**缩进（indentation）**表示代码块，而不是花括号。冒号 `:` 后换行缩进（通常 4 个空格）就是「条件成立时执行的代码」。\n\n```python\nscore = 85\n\nif score >= 90:\n    grade = \"A\"\nelif score >= 80:      # elif = else if，当前面条件不满足时继续判断\n    grade = \"B\"\nelif score >= 70:\n    grade = \"C\"\nelse:                  # 所有条件都不满足时执行\n    grade = \"D\"\n\nprint(grade)  # 输出 B\n```\n\n**关键结论**：\n- `if` 可单独使用；`elif` 和 `else` 必须跟在 `if` 后面。\n- 判断是**从上到下**的，一旦某个条件为真，后面的分支不再判断。\n\n---\n\n## 3. 真值判断：什么算「真」？\n\nPython 中几乎所有对象都能被判断真假（truthiness）：\n\n| 为假（False）的值 | 为真的值 |\n|---|---|\n| `False`、`0`、`0.0` | 非零数字 |\n| `\"\"`（空字符串） | 非空字符串 |\n| `[]`、`()`、`{}`、`set()` | 非空容器 |\n| `None` | 绝大多数对象 |\n\n```python\nname = \"\"\nif name:                # 等价于 if len(name) > 0，但更 Pythonic\n    print(\"你好，\" + name)\nelse:\n    print(\"名字不能为空\")\n\nitems = [1, 2, 3]\nif items:               # 推荐：直接判断序列真假\n    print(f\"有 {len(items)} 个元素\")\n```\n\n**关键结论**（来自 PEP 8 风格指南）：\n- 判断空序列用 `if not seq:` / `if seq:`，**不要**用 `if len(seq):`。\n- 判断布尔值用 `if greeting:`，**不要**写 `if greeting == True:`，更不要写 `if greeting is True:`。\n\n---\n\n## 4. 条件表达式：三元运算符\n\n当只想根据条件选一个值时，可以用**条件表达式（conditional expression）**一行写完：\n\n```python\nx = 10\nlabel = \"正数\" if x > 0 else \"非正数\"\nprint(label)  # 正数\n\n# 等价于：\nif x > 0:\n    label = \"正数\"\nelse:\n    label = \"非正数\"\n```\n\n**关键结论**：条件表达式适合简单赋值，逻辑复杂时仍用 `if/else` 块更清晰。\n\n---\n\n## 5. 工程级建议：写出可维护的 `if`\n\n### 5.1 避免用切片判断前缀/后缀\n\n```python\nfoo = \"bar_baz\"\n\n# 正确：用 startswith / endswith\nif foo.startswith(\"bar\"):\n    print(\"以 bar 开头\")\n\n# 错误：切片容易出错且不清晰\nif foo[:3] == \"bar\":\n    print(\"以 bar 开头\")\n```\n\n### 5.2 类型判断用 `isinstance()`\n\n```python\nobj = 42\n\n# 正确\nif isinstance(obj, int):\n    print(\"是整数\")\n\n# 错误：不推荐直接比较 type\nif type(obj) is type(1):\n    print(\"是整数\")\n```\n\n### 5.3 函数中提前返回，减少嵌套\n\n```python\nimport math\n\ndef sqrt_or_none(x):\n    \"\"\"负数和 None 直接返回，避免深层 if 嵌套。\"\"\"\n    if x is None or x < 0:\n        return None\n    return math.sqrt(x)\n\nprint(sqrt_or_none(9))   # 3.0\nprint(sqrt_or_none(-1))  # None\n```\n\n**关键结论**：把「边界情况」提前 `return`，主逻辑保持平坦，可读性显著提升。\n\n---\n\n## 6. 多行条件：PEP 8 推荐写法\n\n当 `if` 条件很长时，用括号换行：\n\n```python\nthis_is_one_thing = True\nthat_is_another_thing = True\n\n# 推荐：括号内换行\nif (this_is_one_thing and\n        that_is_another_thing):\n    print(\"两个条件都成立\")\n```\n\n**关键结论**：括号内换行时，续行缩进不是强制的 4 空格，但应与代码块有视觉区分。\n\n---\n\n## 动手练习\n\n**任务：写一个成绩等级判定函数**\n\n要求：\n1. 定义函数 `grade(score)`，输入一个 0~100 的分数。\n2. 如果分数不在 0~100 范围内，返回 `\"无效分数\"`。\n3. 90 及以上返回 `\"A\"`；80~89 返回 `\"B\"`；70~79 返回 `\"C\"`；60~69 返回 `\"D\"`；60 以下返回 `\"F\"`。\n4. 用**提前返回**的方式写，避免多层嵌套。\n5. 测试：`grade(95)` 返回 `\"A\"`，`grade(101)` 返回 `\"无效分数\"`，`grade(-5)` 返回 `\"无效分数\"`。\n\n参考骨架（请补全逻辑）：\n\n```python\ndef grade(score):\n    if not isinstance(score, (int, float)):\n        return \"无效分数\"\n    # 在此继续写...\n\nprint(grade(95))   # A\nprint(grade(101))  # 无效分数\nprint(grade(-5))   # 无效分数\nprint(grade(75))   # C\n```\n\n完成后思考：如果不用提前返回，代码会嵌套几层？哪种更好读？\n\n```python\n# 综合示例：用 if 实现安全的平方根计算器\nimport math\n\ndef safe_sqrt(x):\n    \"\"\"返回 x 的平方根；若 x 为负数或 None，返回 None。\"\"\"\n    if x is None:\n        return None\n    if x < 0:\n        return None\n    return math.sqrt(x)\n\ndef grade(score):\n    \"\"\"根据分数返回等级，提前返回避免嵌套。\"\"\"\n    if not isinstance(score, (int, float)):\n        return \"无效分数\"\n    if score < 0 or score > 100:\n        return \"无效分数\"\n    if score >= 90:\n        return \"A\"\n    if score >= 80:\n        return \"B\"\n    if score >= 70:\n        return \"C\"\n    if score >= 60:\n        return \"D\"\n    return \"F\"\n\n# 测试\nprint(safe_sqrt(16))    # 4.0\nprint(safe_sqrt(-4))    # None\nprint(safe_sqrt(None))  # None\n\nprint(grade(95))        # A\nprint(grade(85))        # B\nprint(grade(75))        # C\nprint(grade(65))        # D\nprint(grade(55))        # F\nprint(grade(101))       # 无效分数\nprint(grade(-5))        # 无效分数\n\n# Pythonic 真值判断\nname = \"\"\nif name:\n    print(\"你好，\" + name)\nelse:\n    print(\"名字为空\")\n\n# 三元表达式\nx = 10\nlabel = \"正数\" if x > 0 else \"非正数\"\nprint(label)            # 正数\n\n# startswith / endswith 而不是切片\nfoo = \"bar_baz\"\nif foo.startswith(\"bar\"):\n    print(\"以 bar 开头\")\n\n# isinstance 而不是 type 比较\nobj = 42\nif isinstance(obj, int):\n    print(\"obj 是整数\")\n```\n\n## py.flow.elif_else\n\n# 条件分支：`if` / `elif` / `else`\n\n> **一句话直觉**：程序不是只会从上往下一条道走到黑，`if / elif / else` 让代码能根据不同情况走不同的路——这是所有 AI 工程里“判断、分支、决策”的最小基石。\n\n---\n\n## 1. 为什么需要条件分支\n\n你写程序时，几乎每时每刻都在做判断：\n\n- 如果 loss 比上次小，就保存模型；\n- 如果用户输入是数字，就继续计算；否则提示格式错误；\n- 如果 GPU 可用，就放到 GPU 上；否则用 CPU。\n\n这些“如果……就……否则……”在 Python 里用 `if / elif / else` 表达。\n\n最基本的写法是：\n\n```python\nx = 10\nif x > 0:\n    print(\"正数\")\n```\n\n注意冒号 `:` 和缩进（indentation）。Python 用缩进来表示“这些代码属于上面那个条件”。\n\n---\n\n## 2. `if` 加 `else`：二选一\n\n`else` 表示“前面条件都不成立时怎么办”。\n\n```python\ntemperature = 30\n\nif temperature >= 25:\n    print(\"开空调\")\nelse:\n    print(\"不开空调\")\n```\n\n`if` 和 `else` 只会有一个分支被执行，不可能两个都执行。\n\n---\n\n## 3. `elif`：多个条件依次判断\n\n现实情况往往不止两种。`elif`（else if 的缩写）可以串起多个条件，**从上到下依次检查，遇到第一个为真就执行对应分支，然后直接跳过后面所有分支**。\n\n```python\nscore = 76\n\nif score >= 90:\n    grade = \"A\"\nelif score >= 80:\n    grade = \"B\"\nelif score >= 70:\n    grade = \"C\"\nelif score >= 60:\n    grade = \"D\"\nelse:\n    grade = \"F\"\n\nprint(grade)\n```\n\n**顺序很重要**：如果把 `score >= 70` 放在 `score >= 90` 前面，那么 95 分也会被判成 C。`elif` 是“短路”的——第一个为真后，后面全部不再判断。\n\n---\n\n## 4. 条件本身是“真值”而不是必须 `True`\n\nPython 中任何对象都能当条件用。以下这些被视为 **假值（falsy）**：\n\n- `False`、`None`\n- 数字 `0`、`0.0`\n- 空字符串 `\"\"`\n- 空列表 `[]`、空元组 `()`、空字典 `{}`、空集合 `set()`\n\n其它都被视为 **真值（truthy）**。所以你可以写：\n\n```python\ndata = []\n\nif data:\n    print(\"有数据\")\nelse:\n    print(\"没有数据\")\n```\n\n但注意：判断 `None` 时要用 `is None` / `is not None`，不要用 `== None`。\n\n```python\nvalue = None\nif value is None:\n    print(\"未设置\")\n```\n\n---\n\n## 5. 工程级写法：可读性、提前返回、避免深嵌套\n\n初学者常写出“金字塔式”的多层嵌套；工程中更推荐**提前返回（early return）**或用 `elif` 把逻辑拍平。\n\n```python\ndef classify(value):\n    if value is None:\n        return \"缺失\"\n    if value < 0:\n        return \"负数\"\n    if value == 0:\n        return \"零\"\n    return \"正数\"\n```\n\n另外，`if / elif / else` 是可以嵌套在另一个分支里的，但嵌套超过两层就要怀疑是否需要重构。\n\n---\n\n## 6. 与 AI 工程的一点联系\n\n你在训练/推理脚本里天天会碰到这种结构：\n\n```python\nif device == \"cuda\" and torch.cuda.is_available():\n    device = \"cuda\"\nelif device == \"mps\" and torch.backends.mps.is_available():\n    device = \"mps\"\nelse:\n    device = \"cpu\"\n```\n\n`and` 是逻辑与，可以组合多个条件；`or` 是逻辑或；`not` 取反。它们是条件分支的好搭档。\n\n---\n\n## 7. 小结\n\n| 结构 | 含义 |\n|---|---|\n| `if cond:` | 条件为真时执行 |\n| `if cond: ... else: ...` | 二选一 |\n| `if / elif / else` | 多路分支，自上而下短路判断 |\n| `and` / `or` / `not` | 组合条件 |\n| 缩进 | 决定代码块归属，Python 强制要求 |\n\n记住三个关键词：**条件、缩进、短路**。\n\n```python\n# 学生成绩分级 —— 演示 if / elif / else 的完整用法\n\n\ndef grade_of(score):\n    \"\"\"根据分数返回等级字符串。\"\"\"\n    if score is None or not isinstance(score, (int, float)):\n        return \"输入无效\"\n    if not 0 <= score <= 100:\n        return \"超出范围\"\n    if score >= 90:\n        return \"A\"\n    elif score >= 80:\n        return \"B\"\n    elif score >= 70:\n        return \"C\"\n    elif score >= 60:\n        return \"D\"\n    else:\n        return \"F\"\n\n\n# 批量测试\nsamples = [95, 83, 76, 60, 42, None, 120, -1, \"abc\"]\nfor s in samples:\n    print(f\"{s!r:>6} -> {grade_of(s)}\")\n\n# 真值判断示例\nhistory = []\nif not history:\n    print(\"还没有训练历史\")\nelse:\n    print(f\"最新 loss = {history[-1]}\")\n```\n",
+  "quiz": [
+    {
+      "kp": "py.flow.if",
+      "type": "single_choice",
+      "question": "关于 Python 中 if 语句的缩进，下列说法正确的是？",
+      "options": [
+        "if 语句块必须用花括号 {} 包裹",
+        "if 语句块通过缩进表示，同一块内缩进必须一致",
+        "if 语句块必须恰好缩进一个空格",
+        "if 语句块必须用 end 关键字结束"
+      ],
+      "answer": 1,
+      "explanation": "Python 用缩进表示代码块，不用花括号。同一代码块内缩进必须一致，但具体几个空格（通常 4 个）不是语法强制，只要块内一致即可。",
+      "error_tag": "概念混淆",
+      "variant_group": "if语句缩进"
+    },
+    {
+      "kp": "py.flow.if",
+      "type": "single_choice",
+      "question": "执行以下代码后，输出是什么？\n\nx = 0\nif x:\n    print(\"真\")\nelse:\n    print(\"假\")",
+      "options": [
+        "真",
+        "假",
+        "报错",
+        "什么都不输出"
+      ],
+      "answer": 1,
+      "explanation": "整数 0 的布尔值为 False，因此条件不成立，执行 else 分支，输出“假”。",
+      "error_tag": "概念混淆",
+      "variant_group": "真值判断"
+    },
+    {
+      "kp": "py.flow.if",
+      "type": "multi_choice",
+      "question": "下列哪些值在 if 条件中会被判定为假（False）？（多选）",
+      "options": [
+        "None",
+        "0",
+        "空列表 []",
+        "\"False\"",
+        "[0, 0]"
+      ],
+      "answer": [
+        0,
+        1,
+        2
+      ],
+      "explanation": "None、0、空容器（如空列表）都是假值。字符串 \"False\" 非空为真；[0, 0] 是非空列表，也为真。",
+      "error_tag": "概念混淆",
+      "variant_group": "真值判断"
+    },
+    {
+      "kp": "py.flow.if",
+      "type": "multi_choice",
+      "question": "关于 if / elif / else 结构，下列说法正确的有？（多选）",
+      "options": [
+        "elif 可以有多个",
+        "else 最多一个",
+        "各分支按从上到下的顺序判断，命中一个后其余分支不再执行",
+        "elif 可以单独使用而不需要 if"
+      ],
+      "answer": [
+        0,
+        1,
+        2
+      ],
+      "explanation": "elif 可以有任意多个，else 最多一个，判断自上而下，命中即结束。elif 不能脱离 if 单独存在，因此选项 3 错误。",
+      "error_tag": "概念混淆",
+      "variant_group": "if结构"
+    },
+    {
+      "kp": "py.flow.if",
+      "type": "multi_choice",
+      "question": "下列表达式中，属于合法 if 条件的有？（多选）",
+      "options": [
+        "if a and b:",
+        "if not flag:",
+        "if x > 0 or y > 0:",
+        "if a = b:"
+      ],
+      "answer": [
+        0,
+        1,
+        2
+      ],
+      "explanation": "and、not、or 都是合法的布尔运算符组合。而 a = b 是赋值语句，不能作为条件，会引发语法错误。",
+      "error_tag": "边界错误",
+      "variant_group": "条件运算符"
+    },
+    {
+      "kp": "py.flow.if",
+      "type": "multi_choice",
+      "question": "以下关于 Python 条件表达式（三目运算符）的说法，正确的有？（多选）",
+      "options": [
+        "形式为 值1 if 条件 else 值2",
+        "条件为真时取 值1",
+        "条件为假时取 值2",
+        "它必须配合 print 才能使用"
+      ],
+      "answer": [
+        0,
+        1,
+        2
+      ],
+      "explanation": "条件表达式形式为 值1 if 条件 else 值2，真取前、假取后，可用于任何需要表达式的地方，不限于 print。",
+      "error_tag": "概念混淆",
+      "variant_group": "条件表达式"
+    },
+    {
+      "kp": "py.flow.if",
+      "type": "fill_blank",
+      "question": "补全代码，使程序在 n 大于 0 时输出“正数”，等于 0 时输出“零”，否则输出“负数”：\n\nif n > 0:\n    print(\"正数\")\n____ n == 0:\n    print(\"零\")\nelse:\n    print(\"负数\")",
+      "options": [],
+      "answer": [
+        "elif",
+        "elif "
+      ],
+      "explanation": "多分支判断中，第二个条件使用 elif，它只在前面条件不成立时才会继续判断。",
+      "error_tag": "记忆缺失",
+      "variant_group": "if结构"
+    },
+    {
+      "kp": "py.flow.if",
+      "type": "fill_blank",
+      "question": "请填写能让下列代码输出“命中”的运算符：\n\nname = \"apple\"\nif name ____ \"app\":\n    print(\"命中\")",
+      "options": [],
+      "answer": [
+        "in"
+      ],
+      "explanation": "in 用于判断子串是否存在于字符串中，\"app\" 是 \"apple\" 的子串，因此条件成立。",
+      "error_tag": "记忆缺失",
+      "variant_group": "条件运算符"
+    },
+    {
+      "kp": "py.flow.if",
+      "type": "code_reading",
+      "question": "阅读代码，写出输出结果：\n\nx = 5\nif x > 10:\n    print(\"大\")\nelif x > 3:\n    print(\"中\")\nelif x > 1:\n    print(\"小\")\nelse:\n    print(\"微\")",
+      "options": [],
+      "answer": "中",
+      "explanation": "x=5 不满足 >10，满足 >3，命中第一个 elif 后即结束，不再判断后续分支，输出“中”。",
+      "error_tag": "逻辑错误",
+      "variant_group": "elif分支顺序"
+    },
+    {
+      "kp": "py.flow.if",
+      "type": "code_reading",
+      "question": "阅读代码，写出输出结果：\n\nif 0:\n    print(\"A\")\nelif \"\":\n    print(\"B\")\nelif None:\n    print(\"C\")\nelse:\n    print(\"D\")",
+      "options": [],
+      "answer": "D",
+      "explanation": "0、空字符串和 None 都是假值，三个条件均不成立，因此执行 else 分支，输出 D。",
+      "error_tag": "概念混淆",
+      "variant_group": "真值判断"
+    },
+    {
+      "kp": "py.flow.if",
+      "type": "code_reading",
+      "question": "阅读代码，写出输出结果：\n\nn = 7\nprint(\"偶\" if n % 2 == 0 else \"奇\")",
+      "options": [],
+      "answer": "奇",
+      "explanation": "n % 2 为 1，条件 n % 2 == 0 不成立，因此条件表达式取 else 后的值，输出“奇”。",
+      "error_tag": "逻辑错误",
+      "variant_group": "条件表达式"
+    },
+    {
+      "kp": "py.flow.if",
+      "type": "scenario",
+      "question": "在一个用户登录校验场景中，需要根据输入的用户名是否为空决定是否继续验证。工程师写下：\n\nif username == \"\":\n    print(\"用户名不能为空\")\n\n后来发现当 username 为 None 时，程序出现异常。请说明发生了什么，并给出更稳妥的判断方式。",
+      "options": [],
+      "answer": null,
+      "explanation": "username 为 None 时，== \"\" 判断为 False，无法识别出空的情况；而依赖真值判断（如 if not username）可以同时覆盖 None、空字符串等假值。因此推荐用真值判断而非与空字符串比较。",
+      "error_tag": "边界错误",
+      "variant_group": "真值判断",
+      "required_keywords": [
+        "None",
+        "空字符串",
+        "真值判断",
+        "假值",
+        "if not username"
+      ]
+    },
+    {
+      "kp": "py.flow.if",
+      "type": "single_choice",
+      "question": "下列哪个值在 if 条件中会被判定为假（False）？",
+      "options": [
+        "字符串 \"0\"",
+        "列表 [0]",
+        "空字符串 \"\"",
+        "整数 -1"
+      ],
+      "answer": 2,
+      "explanation": "空字符串是假值。字符串 \"0\" 非空为真；列表 [0] 非空为真；-1 非零为真。",
+      "error_tag": "概念混淆",
+      "variant_group": "真值判断"
+    },
+    {
+      "kp": "py.flow.if",
+      "type": "scenario",
+      "question": "在成绩等级评定场景中，产品要求：90 分及以上为 A，60 分及以上为 B，其余为 C。某实习生写下：\n\nif score >= 60:\n    print(\"B\")\nelif score >= 90:\n    print(\"A\")\nelse:\n    print(\"C\")\n\n测试时发现 95 分被输出为 B，请分析原因并说明应如何修改。",
+      "options": [],
+      "answer": null,
+      "explanation": "多分支从上到下依次判断且互斥，先判断 >=60 会把 90 分以上的也截获。应把更严格的 >=90 放在前面，或将条件按从高到低排列。",
+      "error_tag": "逻辑错误",
+      "variant_group": "elif分支顺序",
+      "required_keywords": [
+        "条件顺序",
+        "多分支",
+        "互斥",
+        "从高到低",
+        "区间判断"
+      ]
+    },
+    {
+      "kp": "py.flow.if",
+      "type": "single_choice",
+      "question": "执行以下代码，输出是什么？\n\nscore = 75\nif score >= 90:\n    print(\"A\")\nelif score >= 60:\n    print(\"B\")\nelse:\n    print(\"C\")",
+      "options": [
+        "A",
+        "B",
+        "C",
+        "B 和 C"
+      ],
+      "answer": 1,
+      "explanation": "score 为 75，不满足 >=90，满足 >=60，因此进入第一个 elif 分支输出 B。elif 是互斥的，只会执行一个分支。",
+      "error_tag": "逻辑错误",
+      "variant_group": "elif分支顺序"
+    },
+    {
+      "kp": "py.flow.if",
+      "type": "single_choice",
+      "question": "以下代码的输出是什么？\n\nif True:\n    print(1)\n    print(2)\nprint(3)",
+      "options": [
+        "1",
+        "1 换行 2",
+        "1 换行 2 换行 3",
+        "1 换行 3"
+      ],
+      "answer": 2,
+      "explanation": "print(1) 和 print(2) 都在 if 块内（有缩进），都会执行；print(3) 没有缩进，位于 if 块外，无条件执行。",
+      "error_tag": "边界错误",
+      "variant_group": "if语句缩进"
+    },
+    {
+      "kp": "py.flow.if",
+      "type": "single_choice",
+      "question": "关于条件表达式中 in 运算符的说法，正确的是？",
+      "options": [
+        "in 只能用于字符串",
+        "in 可用于检查元素是否属于序列或集合等容器",
+        "in 只能用于列表",
+        "in 在 if 中出现会导致语法错误"
+      ],
+      "answer": 1,
+      "explanation": "in 是成员运算符，可用于字符串、列表、元组、集合、字典（检查键）等容器，在 if 条件中很常见。",
+      "error_tag": "概念混淆",
+      "variant_group": "条件运算符"
+    },
+    {
+      "kp": "py.flow.if",
+      "type": "single_choice",
+      "question": "以下代码输出什么？\n\nage = 18\nif age > 18:\n    print(\"成年\")\nelif age == 18:\n    print(\"刚成年\")\nelse:\n    print(\"未成年\")",
+      "options": [
+        "成年",
+        "刚成年",
+        "未成年",
+        "什么都不输出"
+      ],
+      "answer": 1,
+      "explanation": "age 等于 18，不满足 >18，满足 ==18，因此输出“刚成年”。",
+      "error_tag": "逻辑错误",
+      "variant_group": "elif分支顺序"
+    },
+    {
+      "kp": "py.flow.if",
+      "type": "single_choice",
+      "question": "下列代码能否正常运行？\n\nif x = 5:\n    print(\"ok\")",
+      "options": [
+        "能运行，输出 ok",
+        "报语法错误，因为条件中应使用 == 而不是 =",
+        "能运行，但不输出任何内容",
+        "报运行时错误，因为 x 未定义"
+      ],
+      "answer": 1,
+      "explanation": "在条件表达式中 = 是赋值语句而非比较，会导致语法错误（SyntaxError），比较应使用 ==。",
+      "error_tag": "边界错误",
+      "variant_group": "赋值与比较"
+    },
+    {
+      "kp": "py.flow.if",
+      "type": "single_choice",
+      "question": "以下关于 if 嵌套的说法，正确的是？",
+      "options": [
+        "if 语句不能嵌套",
+        "if 语句可以嵌套，内层 if 的缩进要比外层更深",
+        "if 语句可以嵌套，但内层缩进必须和外层一样",
+        "嵌套 if 时必须使用 elif"
+      ],
+      "answer": 1,
+      "explanation": "if 可以嵌套，内层代码块相对外层需要更深的缩进，以体现层级关系。",
+      "error_tag": "概念混淆",
+      "variant_group": "if语句缩进"
+    },
+    {
+      "kp": "py.flow.if",
+      "type": "single_choice",
+      "question": "以下代码输出是什么？\n\nvalues = [1, 2, 3]\nif values:\n    print(\"非空\")\nelse:\n    print(\"空\")",
+      "options": [
+        "非空",
+        "空",
+        "报错",
+        "输出列表内容"
+      ],
+      "answer": 0,
+      "explanation": "非空列表的布尔值为 True，因此输出“非空”。",
+      "error_tag": "概念混淆",
+      "variant_group": "真值判断"
+    },
+    {
+      "kp": "py.flow.elif_else",
+      "type": "single_choice",
+      "question": "阅读下面代码，程序会输出什么？\n\nx = 7\nif x > 10:\n    print(\"A\")\nelif x > 5:\n    print(\"B\")\nelif x > 0:\n    print(\"C\")\nelse:\n    print(\"D\")",
+      "options": [
+        "A",
+        "B",
+        "C",
+        "D"
+      ],
+      "answer": 1,
+      "explanation": "x=7 不满足 x>10，满足 x>5，因此执行第一个 elif 分支并输出 B。elif 链一旦匹配就跳过后续所有分支，所以即使 x>0 也成立，也不会再执行输出 C 的分支。",
+      "error_tag": "概念混淆",
+      "variant_group": "elif_first_match"
+    },
+    {
+      "kp": "py.flow.elif_else",
+      "type": "single_choice",
+      "question": "下面代码执行后 num 的值是多少？\n\nnum = 4\nif num > 10:\n    num = 1\nelif num > 8:\n    num = 2\nelif num > 2:\n    num = 3\nelse:\n    num = 4",
+      "options": [
+        "1",
+        "2",
+        "3",
+        "4"
+      ],
+      "answer": 2,
+      "explanation": "num=4 不满足 num>10 和 num>8，满足 num>2，所以执行 num=3。之后 elif 链结束，不再检查 else，num 为 3。",
+      "error_tag": "边界错误",
+      "variant_group": "elif_first_match"
+    },
+    {
+      "kp": "py.flow.elif_else",
+      "type": "single_choice",
+      "question": "下面代码有什么问题？\n\nif x > 0:\n    print(\"A\")\nelse:\n    print(\"B\")\nelif x > 10:\n    print(\"C\")",
+      "options": [
+        "elif 不能出现在 else 之后，会触发 SyntaxError",
+        "elif 条件写反了",
+        "print 应改为 return",
+        "没有问题"
+      ],
+      "answer": 0,
+      "explanation": "if/elif/else 结构中，else 必须是最后一个分支。把 elif 放在 else 之后属于语法错误，Python 会抛 SyntaxError。正确顺序应为 if → elif → else。",
+      "error_tag": "边界错误",
+      "variant_group": "elif_syntax"
+    },
+    {
+      "kp": "py.flow.elif_else",
+      "type": "single_choice",
+      "question": "下面代码输出什么？\n\nx = 5\nif x == 1:\n    print(\"一\")\nelif x == 2:\n    print(\"二\")\nelif x == 3:\n    print(\"三\")",
+      "options": [
+        "一",
+        "二",
+        "三",
+        "什么都不输出"
+      ],
+      "answer": 3,
+      "explanation": "x=5 不满足任何一个 if/elif 条件，且该结构没有 else 兜底，因此所有分支都被跳过，程序不产生任何输出，也不会报错。缺少 else 时可能无输出是常见陷阱。",
+      "error_tag": "边界错误",
+      "variant_group": "elif_no_else"
+    },
+    {
+      "kp": "py.flow.elif_else",
+      "type": "multi_choice",
+      "question": "关于 if/elif/else 结构，下列说法正确的有哪些？",
+      "options": [
+        "elif 可以有多个，按书写顺序从上到下依次判断",
+        "else 最多出现一次，且必须位于所有 elif 之后",
+        "每个 elif 都必须带一个条件表达式",
+        "当某个 elif 条件为真时，会先执行该分支，再继续检查后面的 elif"
+      ],
+      "answer": [
+        0,
+        1,
+        2
+      ],
+      "explanation": "elif 可以有任意多个，按顺序判断；else 最多一次且在最末；每个 elif 必须有条件表达式。选项 D 错误，因为第一个为真的分支执行后，整个结构即结束，不再检查后面的分支。",
+      "error_tag": "概念混淆",
+      "variant_group": "elif_semantics"
+    },
+    {
+      "kp": "py.flow.elif_else",
+      "type": "multi_choice",
+      "question": "下面哪些情况下，程序可能没有任何输出（假设其中使用了 if/elif 结构且无 else）？",
+      "options": [
+        "所有 if 和 elif 的条件都为假",
+        "第一个 if 条件为真",
+        "最后一个 elif 条件为真",
+        "使用了 if 但条件表达式为 0"
+      ],
+      "answer": [
+        0,
+        3
+      ],
+      "explanation": "当所有条件都为假且没有 else 时，没有任何分支执行，程序无输出；条件表达式为 0 等价于假，同理可能无输出。第一个 if 为真、或某个 elif 为真都会产生输出。",
+      "error_tag": "边界错误",
+      "variant_group": "elif_no_else"
+    },
+    {
+      "kp": "py.flow.elif_else",
+      "type": "multi_choice",
+      "question": "下面代码片段中，哪些写法是合法的 if/elif/else 结构？",
+      "options": [
+        "if a: pass\nelif b: pass\nelse: pass",
+        "if a: pass\nelse: pass\nelif b: pass",
+        "if a: pass\nif b: pass",
+        "elif a: pass"
+      ],
+      "answer": [
+        0,
+        2
+      ],
+      "explanation": "if 可以单独使用，也可以带 elif/else；两个独立 if 也是合法的。但在 else 之后再写 elif 属于语法错误；直接以 elif 开头（前面没有 if）也是语法错误。",
+      "error_tag": "边界错误",
+      "variant_group": "elif_syntax"
+    },
+    {
+      "kp": "py.flow.elif_else",
+      "type": "multi_choice",
+      "question": "下列关于 elif 与独立 if 的区别，说法正确的有哪些？",
+      "options": [
+        "用 elif 时，成功匹配的分支之后的判断会被跳过",
+        "用多个独立 if 时，所有条件为真的分支都会执行",
+        "elif 和 if 在语义上完全等价，可以随意替换",
+        "当多个条件可能同时为真时，elif 只会执行其中一个分支"
+      ],
+      "answer": [
+        0,
+        1,
+        3
+      ],
+      "explanation": "elif 是互斥的：第一个为真即结束，后续跳过的判断不会再执行；多个独立 if 会各自判断、可能全部执行。两者语义不同，不能随意替换，因此在“条件可能同时为真但只需执行一个分支”时应使用 elif。",
+      "error_tag": "概念混淆",
+      "variant_group": "elif_vs_independent_if"
+    },
+    {
+      "kp": "py.flow.elif_else",
+      "type": "fill_blank",
+      "question": "请补全代码，使得当 score 在 90 及以上输出 A，80 到 89 输出 B，其他情况输出 C：\n\nif score >= 90:\n    print(\"A\")\n____ score >= 80:\n    print(\"B\")\nelse:\n    print(\"C\")\n\n横线处应填写的关键字是____。",
+      "options": [],
+      "answer": [
+        "elif",
+        "elif "
+      ],
+      "explanation": "要在第一个条件之后再补一个互斥条件，应该使用 elif。若填 if，当 score>=90 和 score>=80 同时成立时会输出两行，破坏互斥性。",
+      "error_tag": "记忆缺失",
+      "variant_group": "elif_keyword"
+    },
+    {
+      "kp": "py.flow.elif_else",
+      "type": "fill_blank",
+      "question": "在 if/elif/else 结构中，当 if 和所有 elif 的条件都为____时，才会执行 else 分支（填一个字或词）。",
+      "options": [],
+      "answer": [
+        "假",
+        "false",
+        "False",
+        "为假",
+        "假值"
+      ],
+      "explanation": "else 是兜底分支，仅在所有 if 和 elif 条件都为假（False）时执行。这也是它被称为“默认分支”的原因。",
+      "error_tag": "概念混淆",
+      "variant_group": "elif_semantics"
+    },
+    {
+      "kp": "py.flow.elif_else",
+      "type": "code_reading",
+      "question": "阅读下面代码，说明为什么输出结果是 \"B\" 而不是 \"C\"，并指出关键判断逻辑。\n\nx = 7\nif x > 10:\n    print(\"A\")\nelif x > 5:\n    print(\"B\")\nelif x > 0:\n    print(\"C\")",
+      "options": [],
+      "answer": "x=7 时，第一个条件 x>10 为假，第二个条件 x>5 为真，进入该 elif 分支并执行 print(\"B\")。由于 if/elif 是互斥结构，一旦某个分支的条件为真并执行完，后续所有 elif 分支都会被跳过，因此尽管 x>0 也为真，输出 \"C\" 的分支不会再执行，最终只输出 B。",
+      "explanation": "本题考查 elif 链的“首个为真即结束”规则。关键是理解：后续 elif 虽然条件也可能为真，但由于前面已有分支命中，它们不会被检查。",
+      "error_tag": "概念混淆",
+      "variant_group": "elif_first_match"
+    },
+    {
+      "kp": "py.flow.elif_else",
+      "type": "scenario",
+      "question": "某电商系统按订单金额决定折扣：满 500 打 8 折，满 300 打 9 折，否则不打折。开发者小王写了如下代码：\n\nif amount >= 500:\n    discount = 0.8\nif amount >= 300:\n    discount = 0.9\nelse:\n    discount = 1.0\n\n测试发现金额为 600 时折扣变成了 0.9，而不是预期的 0.8。请说明问题原因，并给出修正方案。",
+      "options": [],
+      "answer": null,
+      "explanation": "原来的三个分支使用了两个独立 if，第一个 if 与第二个 if 是各自判断的，导致 amount=600 时先被赋为 0.8，随后又进入第二个 if 被覆盖为 0.9。修正方式是改用 if/elif/else 形成互斥多分支：条件从上到下判断，第一个满足的分支执行后即结束，不会覆盖。修正后 amount>=500 时只执行 0.8 分支。",
+      "error_tag": "概念混淆",
+      "variant_group": "elif_vs_independent_if",
+      "required_keywords": [
+        "if/elif/else",
+        "互斥",
+        "多分支",
+        "条件覆盖",
+        "从上到下"
+      ]
+    },
+    {
+      "kp": "py.flow.elif_else",
+      "type": "single_choice",
+      "question": "下面代码输出什么？\n\nscore = 85\nif score >= 90:\n    grade = \"A\"\nelif score >= 80:\n    grade = \"B\"\nelif score >= 70:\n    grade = \"C\"\nprint(grade)",
+      "options": [
+        "A",
+        "B",
+        "C",
+        "报错：grade 未定义（在满足 70≤score<80 时才会这样）"
+      ],
+      "answer": 1,
+      "explanation": "score=85 满足 score>=80，执行 grade=\"B\"，输出 B。elif 是顺序判断，第一个满足条件的分支被执行后其余分支被跳过。选项 D 描述的是当条件落在未覆盖区间时的潜在问题，但本题 score=85 已被覆盖，因此不报错。",
+      "error_tag": "概念混淆",
+      "variant_group": "elif_first_match"
+    },
+    {
+      "kp": "py.flow.elif_else",
+      "type": "single_choice",
+      "question": "关于 if/elif/else 的执行逻辑，下列说法正确的是？",
+      "options": [
+        "所有满足条件的 elif 分支都会被执行",
+        "elif 分支可以不写条件表达式",
+        "一旦某个分支的条件为真，执行该分支后整个 if/elif/else 结构结束",
+        "else 必须与每个 elif 配对出现"
+      ],
+      "answer": 2,
+      "explanation": "if/elif/else 是互斥的多分支结构：从上到下检查，第一个为真的分支执行后，整个结构就结束，后面的分支不再检查。elif 必须有条件表达式；else 是可选的且最多出现一次，不需要与每个 elif 配对。",
+      "error_tag": "概念混淆",
+      "variant_group": "elif_semantics"
+    },
+    {
+      "kp": "py.flow.elif_else",
+      "type": "single_choice",
+      "question": "下面两段代码的输出是否相同？\n\n代码一：\nx = 5\nif x > 0:\n    print(\"正\")\nif x > 3:\n    print(\"大\")\n\n代码二：\nx = 5\nif x > 0:\n    print(\"正\")\nelif x > 3:\n    print(\"大\")",
+      "options": [
+        "相同，都输出两行",
+        "不相同：代码一输出两行，代码二只输出一行",
+        "不相同：代码一输出一行，代码二输出两行",
+        "相同，都只输出一行"
+      ],
+      "answer": 1,
+      "explanation": "代码一用两个独立的 if，两个条件互不影响，都会检查并执行，输出“正”和“大”两行。代码二用 if/elif，x>0 已为真，elif 被跳过，只输出“正”一行。这就是用 elif 替代连续 if 时的关键区别。",
+      "error_tag": "概念混淆",
+      "variant_group": "elif_vs_independent_if"
+    },
+    {
+      "kp": "py.flow.elif_else",
+      "type": "single_choice",
+      "question": "下面代码会输出什么？\n\nvalue = 0\nif value:\n    print(\"真\")\nelif value == 0:\n    print(\"零\")\nelse:\n    print(\"假\")",
+      "options": [
+        "真",
+        "零",
+        "假",
+        "什么都不输出"
+      ],
+      "answer": 1,
+      "explanation": "value=0 在布尔语境下为假，所以 if value 不成立。接着检查 elif value == 0，该表达式为 True，输出“零”。注意区分“真值判断”（if value）与“相等判断”（value == 0）。",
+      "error_tag": "概念混淆",
+      "variant_group": "elif_truthiness"
+    },
+    {
+      "kp": "py.flow.elif_else",
+      "type": "single_choice",
+      "question": "下面代码中，哪一行属于语法错误或结构错误？\n\nif a > 0:\n    print(\"A\")\nelif:\n    print(\"B\")",
+      "options": [
+        "if a > 0: 这一行",
+        "print(\"A\") 这一行",
+        "elif: 这一行，elif 缺少条件表达式",
+        "整体没有错误"
+      ],
+      "answer": 2,
+      "explanation": "elif 必须跟一个条件表达式，写成裸的 elif: 会触发 SyntaxError。只有 else 才是不带条件的，elif 不能省略条件。",
+      "error_tag": "边界错误",
+      "variant_group": "elif_syntax"
+    },
+    {
+      "kp": "py.flow.elif_else",
+      "type": "single_choice",
+      "question": "下面代码输出什么？\n\nn = -3\nif n > 0:\n    print(\"正数\")\nelif n < 0:\n    print(\"负数\")\nelse:\n    print(\"零\")",
+      "options": [
+        "正数",
+        "负数",
+        "零",
+        "报错"
+      ],
+      "answer": 1,
+      "explanation": "n=-3 不满足 n>0，满足 n<0，因此执行 elif 分支输出“负数”。这是典型的三分支互斥结构。",
+      "error_tag": "概念混淆",
+      "variant_group": "elif_first_match"
+    },
+    {
+      "kp": "py.flow.elif_else",
+      "type": "single_choice",
+      "question": "在一个 if/elif/else 结构中，else 分支的作用是什么？",
+      "options": [
+        "当且仅当所有 if 和 elif 条件都为假时执行",
+        "当任意一个 elif 条件为假时执行",
+        "无论条件真假都会执行",
+        "必须与每个 elif 一一对应"
+      ],
+      "answer": 0,
+      "explanation": "else 是兜底分支，只有当上面所有的 if 和 elif 条件都不成立时才执行。它不是对单个 elif 的补充，而是整个链的默认出口，最多出现一次。",
+      "error_tag": "概念混淆",
+      "variant_group": "elif_semantics"
+    },
+    {
+      "kp": "py.flow.elif_else",
+      "type": "single_choice",
+      "question": "下列代码中，如果想让 x=8 输出 \"中\"，x=2 输出 \"小\"，x=100 输出 \"大\"，横线处最合适的写法是？\n\nif x > 50:\n    print(\"大\")\n____ x > 5:\n    print(\"中\")\nelse:\n    print(\"小\")",
+      "options": [
+        "if",
+        "elif",
+        "else",
+        "while"
+      ],
+      "answer": 1,
+      "explanation": "要实现互斥的三分支判断，第一个条件之后应使用 elif，这样当 x>50 成立时就不会再检查 x>5。若用 if 会变成独立判断，可能导致多个分支同时执行。while 是循环，不适用。",
+      "error_tag": "概念混淆",
+      "variant_group": "elif_vs_independent_if"
+    }
+  ]
+}

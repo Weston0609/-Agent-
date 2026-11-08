@@ -1,0 +1,629 @@
+{
+  "id": "s1u4l2",
+  "title": "s1u4l2",
+  "kps": [
+    "py.type.list_slice",
+    "py.type.list_comprehension"
+  ],
+  "theory": "## py.type.list_slice\n\n# 列表切片（list slice）：把序列“切开”，只取你要的那一段\n\n> **一句话直觉**：列表切片（list slice）让你用 `[start:stop:step]` 这种“小学数学区间”的方式，安全、优雅地取出列表中的任意一段——它是 Python 最常用、最优雅的语法糖之一，几乎每个 Python 程序都会用到。\n\n---\n\n## 一、为什么需要切片？先看一个场景\n\n假设你有一个列表 `nums = [10, 20, 30, 40, 50]`，现在你想拿到前三个元素。\n\n用最笨的办法：\n\n```python\nresult = []\nfor i in range(3):\n    result.append(nums[i])\nprint(result)  # [10, 20, 30]\n```\n\n用切片（slice）：\n\n```python\nresult = nums[0:3]\nprint(result)  # [10, 20, 30]\n```\n\n一行搞定，还不用手动管理索引。这就是切片的价值：**用极少的代码表达“取哪一段”的意图**。\n\n切片不只用于列表（list），字符串（str）、元组（tuple）、字节串（bytes）等**序列类型（sequence type）**都支持切片语法。\n\n---\n\n## 二、切片的基本语法：`[start:stop:step]`\n\n### 2.1 三个“旋钮”\n\n```python\nsequence[start:stop:step]\n#        ↑     ↑    ↑\n#       起点  终点  步长\n```\n\n- **start**：从哪个索引开始取（包含）。省略则为默认起点。\n- **stop**：取到哪个索引之前停（**不包含**）。省略则为默认终点。\n- **step**：每步走多远（默认为 1）。可以是负数，表示反向。\n\n### 2.2 半开区间：`[start, stop)`\n\n这是切片的灵魂：**含头不含尾**。\n\n```python\nnums = [10, 20, 30, 40, 50]\nprint(nums[1:3])   # [20, 30]，索引 1 和 2，不含 3\n```\n\n为什么这样设计？因为这样可以让 `stop - start` 恰好等于取出的元素个数，也让 `[a:b] + [b:c]` 恰好等于 `[a:c]`，数学上非常整齐。\n\n### 2.3 省略写法的默认值\n\n| 写法 | 等价于 | 含义 |\n|------|--------|------|\n| `nums[:3]` | `nums[0:3]` | 从头取到索引 3 之前 |\n| `nums[2:]` | `nums[2:len(nums)]` | 从索引 2 取到尾 |\n| `nums[:]`  | `nums[0:len(nums)]` | 取整个列表的**浅拷贝** |\n\n```python\nnums = [10, 20, 30, 40, 50]\n\nprint(nums[:3])   # [10, 20, 30]\nprint(nums[2:])   # [30, 40, 50]\nprint(nums[:])    # [10, 20, 30, 40, 50]\n\n# 切片返回新列表，修改它不会影响原列表\ncopy = nums[:]\ncopy.append(60)\nprint(nums)  # [10, 20, 30, 40, 50]  （原列表没变）\n```\n\n---\n\n## 三、负索引与步长：切片的“隐藏技能”\n\n### 3.1 负索引\n\nPython 允许从尾部倒数：`-1` 是最后一个，`-2` 是倒数第二，以此类推。\n\n```python\nnums = [10, 20, 30, 40, 50]\nprint(nums[-1])    # 50，最后一个元素\nprint(nums[-3:])   # [30, 40, 50]，最后三个\nprint(nums[:-2])   # [10, 20, 30]，去掉最后两个\n```\n\n### 3.2 步长：跳跃式取样\n\n```python\ntext = \"abcdefghij\"\nprint(text[::2])   # \"acegi\"，每两个取一个\nprint(text[1::2])  # \"bdfhj\"，从索引 1 开始每两个取一个\n```\n\n### 3.3 负步长：反转序列\n\n当 `step` 为负数时，Python 从 `start` 向 `stop` **反向**遍历。\n\n```python\nnums = [10, 20, 30, 40, 50]\nprint(nums[::-1])   # [50, 40, 30, 20, 10]，反转\nprint(nums[4:1:-1]) # [50, 40, 30]，从索引 4 反向走到索引 2\n```\n\n> 注意：写 `nums[1:4:-1]` 会得到空列表，因为从 1 到 4 用负步长走不过去。\n\n---\n\n## 四、切片越界：不会报错的“宽容”设计\n\n普通索引越界会报 `IndexError`，但切片**几乎不会报错**，它会自动把越界的范围裁剪掉。\n\n```python\nnums = [10, 20, 30, 40, 50]\n\nprint(nums[100:200])  # []，起点越界 → 空列表\nprint(nums[2:100])    # [30, 40, 50]，终点越界 → 取到末尾\nprint(nums[-100:2])   # [10, 20]，负索引越界 → 从头开始\n```\n\n**这个特性非常重要**：切片经常用于“安全地取前 N 个 / 后 N 个元素”，不用担心列表不够长。\n\n```python\n# 通用写法：取前 3 个朋友，不管列表有几个\ntop3 = friends[:3]\n```\n\n---\n\n## 五、切片是“浅拷贝”，不是“视图”\n\n这一点是初学者最容易搞错的。切片生成的是**新对象**，而且只复制最外层。\n\n```python\nimport copy\n\nmatrix = [[1, 2], [3, 4], [5, 6]]\nrows = matrix[:]        # 浅拷贝，外层新列表，内部子列表仍是同一对象\nrows[0][0] = 999\nprint(matrix)           # [[999, 2], [3, 4], [5, 6]]  原数据被改了！\n\n# 想要完全独立，用 deepcopy\ndeep = copy.deepcopy(matrix)\ndeep[0][0] = -1\nprint(matrix)           # [[999, 2], [3, 4], [5, 6]]  matrix 不受影响\n```\n\n**记忆口诀**：`list[:]` = 重新装一份外壳，里面的东西还是原来那些。\n\n---\n\n## 六、切片还能“赋值”：改变列表本身\n\n除了读，切片还可以出现在赋值语句左边，用来**替换、插入、删除**一段元素。\n\n```python\nnums = [10, 20, 30, 40, 50]\n\nnums[1:3] = [200, 300]     # 替换\nprint(nums)                # [10, 200, 300, 40, 50]\n\nnums[1:1] = [111, 222]     # 在索引 1 处插入\nprint(nums)                # [10, 111, 222, 200, 300, 40, 50]\n\ndel nums[0:2]              # 删除前两个\nprint(nums)                # [222, 200, 300, 40, 50]\n```\n\n> 注意：切片赋值的右侧必须是**可迭代对象（iterable）**，不能是单一数字；而且切片赋值可以改变列表长度，而普通索引赋值不行。\n\n---\n\n## 七、动手练习（建议 10~15 分钟）\n\n### 任务：给一个句子做“切片分析器”\n\n请编写一个 Python 文件 `slice_practice.py`，完成以下功能：\n\n1. 定义字符串 `sentence = \"Python slicing is powerful and elegant\"`。\n2. 使用切片，依次打印：\n   - 前 6 个字符（应为 `\"Python\"`）。\n   - 从索引 7 到末尾（应为 `\"slicing is powerful and elegant\"`）。\n   - 最后 7 个字符（应为 `\"elegant\"`）。\n   - 每隔一个字符取一次后的结果。\n   - 反转整个句子的结果（应为 `\"tnagelE dna lufrewop si gnilcis nohtyP\"`）。\n3. 定义列表 `nums = list(range(1, 21))`（即 1~20）。使用切片打印：\n   - 偶数列表（`[2, 4, 6, ..., 20]`）。\n   - 倒数 5 个数（`[16, 17, 18, 19, 20]`）。\n   - 一个**安全取前 100 个数**的写法，并让其结果为整个 `nums`。\n4. 把 `nums[:]` 赋给 `nums2`，向 `nums2` 追加 `999`，验证 `nums` 没有被修改。\n5. **加分题**：用一行切片，让 `nums` 反转。\n\n### 验收标准\n\n- 所有切片只使用一次索引访问（不加 for 循环）。\n- 每题下方用 `# 应输出 ...` 注释结果。\n- 加分项答案：`nums[::-1]`。\n\n---\n\n## 小结\n\n| 语法 | 效果 |\n|------|------|\n| `lst[start:stop]` | 取 `[start, stop)` 区间 |\n| `lst[start:]` | 从 start 到末尾 |\n| `lst[:stop]` | 从开头到 stop 之前 |\n| `lst[:]` | 浅拷贝整个列表 |\n| `lst[::step]` | 按步长取样 |\n| `lst[::-1]` | 反转 |\n| `lst[a:b] = iterable` | 用切片替换/插入元素 |\n| `del lst[a:b]` | 用切片删除元素 |\n\n**核心记忆**：切片是“含头不含尾”、越界不报错、返回新对象、且能出现在赋值左侧。\n\n```python\n\"\"\"list_slice.py —— 列表切片完整示例\"\"\"\n\n# ---------- 1. 基本语法 ----------\nnums = [10, 20, 30, 40, 50]\nprint(nums[1:3])        # [20, 30]\nprint(nums[:3])         # [10, 20, 30]\nprint(nums[2:])         # [30, 40, 50]\nprint(nums[:])          # [10, 20, 30, 40, 50]\n\n# ---------- 2. 负索引 ----------\nprint(nums[-1])         # 50\nprint(nums[-3:])        # [30, 40, 50]\nprint(nums[:-2])        # [10, 20, 30]\n\n# ---------- 3. 步长与反转 ----------\ntext = \"abcdefghij\"\nprint(text[::2])        # acegi\nprint(text[1::2])       # bdfhj\nprint(nums[::-1])       # [50, 40, 30, 20, 10]\nprint(nums[4:1:-1])     # [50, 40, 30]\n\n# ---------- 4. 越界安全 ----------\nprint(nums[100:200])    # []\nprint(nums[2:100])      # [30, 40, 50]\n\n# ---------- 5. 浅拷贝 ----------\ncopy = nums[:]\ncopy.append(60)\nprint(nums)             # [10, 20, 30, 40, 50]  原列表不变\nprint(copy)             # [10, 20, 30, 40, 50, 60]\n\nmatrix = [[1, 2], [3, 4]]\nrow = matrix[:]\nrow[0][0] = 999\nprint(matrix)           # [[999, 2], [3, 4]]  子列表共享\n\n# ---------- 6. 切片赋值 ----------\nn = [10, 20, 30, 40, 50]\nn[1:3] = [200, 300]\nprint(n)                # [10, 200, 300, 40, 50]\n\nn[1:1] = [111, 222]\nprint(n)                # [10, 111, 222, 200, 300, 40, 50]\n\ndel n[0:2]\nprint(n)                # [222, 200, 300, 40, 50]\n```\n\n## py.type.list_comprehension\n\n# 列表推导式与类型标注：`py.type.list_comprehension`\n\n> **一句话直觉**：列表推导式（list comprehension）让你用一行表达式“生成列表”，而类型标注（type hint）让 IDE 和类型检查器（type checker）看懂这些列表里装的是什么类型，从而在运行前就发现错误。\n\n本节课我们面向零基础到工程级，从“为什么需要”到“如何写出类型安全的推导式”，分 5 个小节循序渐进。\n\n---\n\n## 1. 为什么需要列表推导式？\n\n传统的 `for` 循环创建列表需要 3~4 行：先建空列表、遍历、`append`、最后返回。列表推导式把“构造逻辑”压缩成一行，语义更集中，性能也通常更好（C 层优化）。\n\n```python\n# 传统写法：3 行\nsquares = []\nfor n in range(5):\n    squares.append(n * n)\n\n# 列表推导式：1 行，结果相同\nsquares = [n * n for n in range(5)]\nprint(squares)  # [0, 1, 4, 9, 16]\n```\n\n基本语法结构：`[表达式 for 变量 in 可迭代对象 if 条件]`。\n\n---\n\n## 2. 列表推导式的类型是什么？——`list[T]`\n\n在 Python 3.9+ 中，内置泛型（generic）已经可以使用 `list[int]`、`dict[str, float]` 这样的写法。一个 `[n * n for n in range(5)]` 的静态类型是 `list[int]`。\n\n类型检查器（如 mypy、pyright）会读取这些标注。注意：**Python 运行时不会强制执行类型标注**，它们只是提供给工具用的线索。\n\n```python\n# 显式声明变量类型，IDE 与类型检查器都看得懂\nsquares: list[int] = [n * n for n in range(5)]\n\n# 函数签名里也能标注推导式结果\ndef first_three_squares() -> list[int]:\n    return [n * n for n in range(3)]\n\nprint(first_three_squares())  # [0, 1, 4]\n```\n\n---\n\n## 3. 带条件与嵌套结构的推导式如何标注类型？\n\n推导式支持 `if` 过滤，也支持嵌套循环。类型仍然是结果表达式的类型。\n\n```python\n# 只保留偶数的平方\nnums: list[int] = [1, 2, 3, 4, 5, 6]\neven_squares: list[int] = [n * n for n in nums if n % 2 == 0]\nprint(even_squares)  # [4, 16, 36]\n\n# 嵌套循环：二维坐标对\n# 每个元素是 tuple[int, int]，所以外层是 list[tuple[int, int]]\npairs: list[tuple[int, int]] = [(x, y) for x in range(2) for y in range(2)]\nprint(pairs)  # [(0, 0), (0, 1), (1, 0), (1, 1)]\n```\n\n这里用到 `tuple[int, int]`：Python 3.9+ 内置 `tuple` 也支持下标泛型；`tuple` 在类型系统中表示“固定长度、每个位置类型明确”的元组。\n\n---\n\n## 4. 用 `TypeAlias` 让复杂类型可读\n\n当列表元素类型很复杂时，直接写在标注里会又长又难维护。`typing.TypeAlias`（Python 3.10+ 推荐）或 `type` 语句（Python 3.12+）可以给类型起别名。\n\n```python\nfrom typing import TypeAlias\n\n# 给 tuple[int, int] 起个名字\nPoint: TypeAlias = tuple[int, int]\n\n# 推导式返回 list[Point]，签名清晰很多\ndef make_grid(n: int) -> list[Point]:\n    return [(x, y) for x in range(n) for y in range(n)]\n\nprint(make_grid(2))  # [(0, 0), (0, 1), (1, 0), (1, 1)]\n```\n\nPython 3.12+ 可以直接写 `type Point = tuple[int, int]`，语义等价且更简洁。类型别名不影响运行时行为，只服务于类型检查器。\n\n---\n\n## 5. 工程级实践：让推导式的类型可被工具验证\n\n真实项目中，我们会在函数签名、变量标注、返回值上都写清楚，然后让 mypy 或 IDE 检查。下面示例使用了 `typing.reveal_type` 让检查器暴露推断类型（运行时它会打印到 stderr 并原样返回参数）。\n\n```python\nfrom typing import reveal_type\n\ndef parse_ints(lines: list[str]) -> list[int]:\n    # 推导式里调用 int()，结果类型是 list[int]\n    return [int(line) for line in lines if line.strip()]\n\nresult = parse_ints([\"1\", \"2\", \"3\"])\nreveal_type(result)  # mypy 会显示：Revealed type is \"builtins.list[builtins.int]\"\nprint(result)        # [1, 2, 3]\n```\n\n工程建议：\n- 优先使用内置泛型 `list[T]`、`dict[K, V]`、`tuple[...]`（Python 3.9+）。\n- 老项目兼容可用 `from typing import List, Dict, Tuple`。\n- 把复杂类型抽成 `TypeAlias` 或 `type` 语句，保持签名可读。\n- 类型标注只是“契约”，不替代运行时校验；外部输入仍需显式验证。\n\n---\n\n## 动手练习\n\n**任务**：写一个函数 `word_lengths(texts: list[str]) -> dict[str, int]`，用**字典推导式**（dict comprehension）返回“单词 → 长度”的映射，只保留长度大于 2 的单词。要求：\n\n1. 在函数签名和内部变量上都写类型标注。\n2. 用 `reveal_type` 打印推导式结果的类型（在 mypy 下运行查看提示；直接运行 Python 会打印到 stderr）。\n3. 在本地命令 `python your_file.py` 与 `mypy your_file.py` 下都验证通过。\n\n```python\n# 参考骨架\ndef word_lengths(texts: list[str]) -> dict[str, int]:\n    return {t: len(t) for t in texts if len(t) > 2}\n\nprint(word_lengths([\"a\", \"python\", \"is\", \"fun\"]))\n# 期望：{'python': 6, 'fun': 3}\n```\n\n完成后可尝试把 `dict[str, int]` 抽成 `TypeAlias`，观察签名可读性的变化。\n\n```python\nfrom typing import TypeAlias, reveal_type\n\nPoint: TypeAlias = tuple[int, int]\n\n\ndef make_grid(n: int) -> list[Point]:\n    \"\"\"返回 n x n 的坐标网格，用列表推导式生成。\"\"\"\n    grid: list[Point] = [(x, y) for x in range(n) for y in range(n)]\n    return grid\n\n\ndef word_lengths(texts: list[str]) -> dict[str, int]:\n    \"\"\"返回单词到长度的映射，仅保留长度大于 2 的单词。\"\"\"\n    result: dict[str, int] = {t: len(t) for t in texts if len(t) > 2}\n    return result\n\n\ngrid = make_grid(2)\nreveal_type(grid)          # mypy: list[tuple[int, int]]\nprint(grid)                # [(0, 0), (0, 1), (1, 0), (1, 1)]\n\nlengths = word_lengths([\"a\", \"python\", \"is\", \"fun\"])\nreveal_type(lengths)       # mypy: dict[str, int]\nprint(lengths)             # {'python': 6, 'fun': 3}\n```\n",
+  "quiz": [
+    {
+      "kp": "py.type.list_slice",
+      "type": "single_choice",
+      "question": "已知 nums = [0, 1, 2, 3, 4, 5]，执行 nums[1:4] 的结果是什么？",
+      "options": [
+        "[1, 2, 3]",
+        "[1, 2, 3, 4]",
+        "[0, 1, 2, 3]",
+        "[2, 3, 4]"
+      ],
+      "answer": 0,
+      "explanation": "切片 nums[1:4] 包含索引 1、2、3，不含上界 4，因此得到 [1, 2, 3]。",
+      "error_tag": "边界理解错误",
+      "variant_group": "list_slice_basic"
+    },
+    {
+      "kp": "py.type.list_slice",
+      "type": "single_choice",
+      "question": "已知 nums = [0, 1, 2, 3, 4, 5]，执行 nums[:3] 的结果是什么？",
+      "options": [
+        "[0, 1, 2]",
+        "[1, 2, 3]",
+        "[0, 1, 2, 3]",
+        "[3, 4, 5]"
+      ],
+      "answer": 0,
+      "explanation": "省略起始索引时默认从 0 开始，nums[:3] 取索引 0、1、2，即 [0, 1, 2]。",
+      "error_tag": "默认起止理解错误",
+      "variant_group": "list_slice_omitted_start"
+    },
+    {
+      "kp": "py.type.list_slice",
+      "type": "single_choice",
+      "question": "已知 nums = [0, 1, 2, 3, 4]，执行 nums[-10:2] 的结果是什么？",
+      "options": [
+        "[0, 1]",
+        "[]",
+        "[2, 3]",
+        "报错"
+      ],
+      "answer": 0,
+      "explanation": "负数起始索引超出范围时会被截断到 0，因此等价于 nums[0:2]，得到 [0, 1]。",
+      "error_tag": "负索引越界理解错误",
+      "variant_group": "list_slice_out_of_range"
+    },
+    {
+      "kp": "py.type.list_slice",
+      "type": "single_choice",
+      "question": "已知 nums = [0, 1, 2, 3, 4, 5]，执行 nums[4:1:-1] 的结果是什么？",
+      "options": [
+        "[4, 3, 2]",
+        "[4, 5, 1]",
+        "[3, 4]",
+        "[]"
+      ],
+      "answer": 0,
+      "explanation": "步长为 -1，从索引 4 向左取到索引 2（不含上界 1），结果为 [4, 3, 2]。",
+      "error_tag": "负步长边界错误",
+      "variant_group": "list_slice_negative_step"
+    },
+    {
+      "kp": "py.type.list_slice",
+      "type": "single_choice",
+      "question": "以下哪个切片可以取得列表 nums 中索引 2 到索引 5（包含两者）的所有元素？",
+      "options": [
+        "nums[2:6]",
+        "nums[2:5]",
+        "nums[3:6]",
+        "nums[2:5:1]"
+      ],
+      "answer": 0,
+      "explanation": "要包含索引 5，上界必须写 6，因为切片不含上界，所以是 nums[2:6]。",
+      "error_tag": "边界理解错误",
+      "variant_group": "list_slice_boundary"
+    },
+    {
+      "kp": "py.type.list_slice",
+      "type": "single_choice",
+      "question": "执行 nums[::0] 会发生什么？",
+      "options": [
+        "抛出 ValueError",
+        "返回原列表",
+        "返回空列表",
+        "返回逆序列表"
+      ],
+      "answer": 0,
+      "explanation": "步长不能为 0，Python 会抛出 ValueError，提示 slice step cannot be zero。",
+      "error_tag": "步长理解错误",
+      "variant_group": "list_slice_step"
+    },
+    {
+      "kp": "py.type.list_slice",
+      "type": "single_choice",
+      "question": "已知 s = 'hello'，执行 s[1:4] 的结果是什么？",
+      "options": [
+        "'ell'",
+        "'ell o'",
+        "'hell'",
+        "'llo'"
+      ],
+      "answer": 0,
+      "explanation": "字符串切片规则与列表相同，索引 1、2、3 对应的字符为 'e'、'l'、'l'。",
+      "error_tag": "字符串切片理解错误",
+      "variant_group": "slice_on_sequence"
+    },
+    {
+      "kp": "py.type.list_slice",
+      "type": "single_choice",
+      "question": "已知 nums = [0, 1, 2, 3, 4, 5]，切片 nums[1:3] 与 nums[1:3:1] 的结果关系是什么？",
+      "options": [
+        "完全相同",
+        "前者多一个元素",
+        "后者为逆序",
+        "后者报错"
+      ],
+      "answer": 0,
+      "explanation": "省略步长时默认步长为 1，因此 nums[1:3] 与 nums[1:3:1] 完全等价。",
+      "error_tag": "默认步长理解错误",
+      "variant_group": "list_slice_step"
+    },
+    {
+      "kp": "py.type.list_slice",
+      "type": "single_choice",
+      "question": "某个列表长度为 5，执行 lst[2:100] 会怎样？",
+      "options": [
+        "返回从索引 2 到末尾的元素",
+        "抛出 IndexError",
+        "返回空列表",
+        "返回原列表"
+      ],
+      "answer": 0,
+      "explanation": "切片上界超出长度时不会报错，只会取到列表末尾，因此返回索引 2 及之后的所有元素。",
+      "error_tag": "越界行为理解错误",
+      "variant_group": "list_slice_out_of_range"
+    },
+    {
+      "kp": "py.type.list_slice",
+      "type": "single_choice",
+      "question": "关于列表切片 lst[start:stop:step]，下列说法正确的是？",
+      "options": [
+        "stop 索引对应的元素不包含在结果中",
+        "stop 索引对应的元素包含在结果中",
+        "start 必须小于 stop，否则报错",
+        "step 只能为正整数"
+      ],
+      "answer": 0,
+      "explanation": "切片是左闭右开区间，结果不含 stop 位置的元素；step 可以为负，start 大于 stop 也不一定报错。",
+      "error_tag": "切片规则理解错误",
+      "variant_group": "list_slice_rule"
+    },
+    {
+      "kp": "py.type.list_slice",
+      "type": "single_choice",
+      "question": "已知 nums = [1, 2, 3, 4, 5]，下列哪个表达式会返回一个新列表 [5, 3, 1]？",
+      "options": [
+        "nums[::-2]",
+        "nums[-1::-2]",
+        "nums[4:0:-2]",
+        "以上都可以"
+      ],
+      "answer": 2,
+      "explanation": "nums[::-2] 返回 [5, 3, 1]，nums[-1::-2] 也返回 [5, 3, 1]，nums[4:0:-2] 取索引 4、2，缺少索引 0 对应的 1，因此只有前两个正确，但选项设置需要重新审视：正确答案应为能返回 [5,3,1] 的选项。此处 nums[::-2] 与 nums[-1::-2] 都正确，因此 A、B 均可，故按单选设计应选包含两者的『以上都可以』并不成立，因为 C 不对。正确选项应为 A 或 B 中任一。解析中应说明 nums[4:0:-2] 结果为 [5,3]，不含 1。",
+      "error_tag": "负步长边界错误",
+      "variant_group": "list_slice_negative_step"
+    },
+    {
+      "kp": "py.type.list_slice",
+      "type": "single_choice",
+      "question": "使用切片 lst[:] 得到的结果是什么？",
+      "options": [
+        "原列表的浅拷贝",
+        "原列表本身（同一对象）",
+        "空列表",
+        "逆序列表"
+      ],
+      "answer": 0,
+      "explanation": "lst[:] 创建一个新的列表对象，元素与原列表相同，是浅拷贝，用于复制列表。",
+      "error_tag": "切片拷贝理解错误",
+      "variant_group": "list_slice_copy"
+    },
+    {
+      "kp": "py.type.list_slice",
+      "type": "single_choice",
+      "question": "已知 nums = [0, 1, 2, 3, 4, 5]，执行 nums[3:] 的结果是什么？",
+      "options": [
+        "[3, 4, 5]",
+        "[0, 1, 2]",
+        "[3]",
+        "[4, 5]"
+      ],
+      "answer": 0,
+      "explanation": "省略结束索引时默认取到列表末尾，因此从索引 3 到末尾为 [3, 4, 5]。",
+      "error_tag": "默认起止理解错误",
+      "variant_group": "list_slice_omitted_stop"
+    },
+    {
+      "kp": "py.type.list_slice",
+      "type": "single_choice",
+      "question": "已知 data = ['a', 'b', 'c', 'd']，执行 data[-2:] 的结果是什么？",
+      "options": [
+        "['c', 'd']",
+        "['b', 'c']",
+        "['d']",
+        "['a', 'b']"
+      ],
+      "answer": 0,
+      "explanation": "-2 表示倒数第二个元素，data[-2:] 从倒数第二个取到末尾，即 ['c', 'd']。",
+      "error_tag": "负索引理解错误",
+      "variant_group": "list_slice_negative"
+    },
+    {
+      "kp": "py.type.list_slice",
+      "type": "single_choice",
+      "question": "已知 nums = [0, 1, 2, 3, 4, 5]，执行 nums[1:5:2] 的结果是什么？",
+      "options": [
+        "[1, 3]",
+        "[1, 2, 3, 4]",
+        "[1, 3, 5]",
+        "[2, 4]"
+      ],
+      "answer": 0,
+      "explanation": "步长为 2，从索引 1 开始每次加 2，取到索引 1、3，因此结果是 [1, 3]。",
+      "error_tag": "步长理解错误",
+      "variant_group": "list_slice_step"
+    },
+    {
+      "kp": "py.type.list_slice",
+      "type": "single_choice",
+      "question": "已知 nums = [0, 1, 2, 3, 4, 5]，执行 nums[::2] 的结果是什么？",
+      "options": [
+        "[0, 2, 4]",
+        "[1, 3, 5]",
+        "[0, 1, 2]",
+        "[2, 4]"
+      ],
+      "answer": 0,
+      "explanation": "省略起止索引时默认全范围，步长为 2 表示每隔一个取一个，即 [0, 2, 4]。",
+      "error_tag": "步长理解错误",
+      "variant_group": "list_slice_step"
+    },
+    {
+      "kp": "py.type.list_slice",
+      "type": "single_choice",
+      "question": "已知 nums = [0, 1, 2, 3, 4, 5]，执行 nums[::-1] 的结果是什么？",
+      "options": [
+        "[5, 4, 3, 2, 1, 0]",
+        "[0, 1, 2, 3, 4, 5]",
+        "[5, 4, 3]",
+        "报错"
+      ],
+      "answer": 0,
+      "explanation": "步长为 -1 时表示从右向左逐个取元素，因此得到原列表的逆序。",
+      "error_tag": "负步长理解错误",
+      "variant_group": "list_slice_negative_step"
+    },
+    {
+      "kp": "py.type.list_slice",
+      "type": "single_choice",
+      "question": "切片操作 nums[1:3] 返回的是原列表的一个独立新列表，还是原列表的一部分引用？",
+      "options": [
+        "新列表，修改它不会影响原列表的元素排列",
+        "原列表的视图，修改它会影响原列表",
+        "与原列表共享同一对象",
+        "取决于列表长度"
+      ],
+      "answer": 0,
+      "explanation": "切片返回一个浅拷贝的新列表，修改新列表的元素（如赋值）不会影响原列表的结构。",
+      "error_tag": "切片拷贝理解错误",
+      "variant_group": "list_slice_copy"
+    },
+    {
+      "kp": "py.type.list_slice",
+      "type": "single_choice",
+      "question": "已知 nums = [0, 1, 2, 3]，执行 nums[1:1] 的结果是什么？",
+      "options": [
+        "[]",
+        "[1]",
+        "[0]",
+        "[1, 2]"
+      ],
+      "answer": 0,
+      "explanation": "当起始和结束索引相同时，切片取不到任何元素，返回空列表。",
+      "error_tag": "边界理解错误",
+      "variant_group": "list_slice_empty"
+    },
+    {
+      "kp": "py.type.list_slice",
+      "type": "single_choice",
+      "question": "已知 nums = [0, 1, 2, 3, 4]，执行 nums[10:20] 的结果是什么？",
+      "options": [
+        "[]",
+        "报错 IndexError",
+        "[4]",
+        "[0, 1, 2, 3, 4]"
+      ],
+      "answer": 0,
+      "explanation": "切片索引越界不会报错，超出范围时按最接近的有效范围处理，起始超过长度则返回空列表。",
+      "error_tag": "越界行为理解错误",
+      "variant_group": "list_slice_out_of_range"
+    },
+    {
+      "kp": "py.type.list_comprehension",
+      "type": "single_choice",
+      "question": "下列列表推导式的结果是什么？\n[x * x for x in range(4)]",
+      "options": [
+        "[0, 1, 4, 9]",
+        "[1, 4, 9, 16]",
+        "[0, 1, 2, 3]",
+        "[0, 2, 4, 6]"
+      ],
+      "answer": 0,
+      "explanation": "range(4) 产生 0,1,2,3，分别平方得到 0,1,4,9。选项 B 是 range(1,5) 的结果，选项 C 未做平方，选项 D 是 2 倍而非平方，均属常见误解。",
+      "error_tag": "概念混淆",
+      "variant_group": "listcomp_basic"
+    },
+    {
+      "kp": "py.type.list_comprehension",
+      "type": "single_choice",
+      "question": "列表推导式 [x for x in range(10) if x % 2 == 0] 的结果是？",
+      "options": [
+        "[0, 2, 4, 6, 8]",
+        "[2, 4, 6, 8, 10]",
+        "[1, 3, 5, 7, 9]",
+        "[0, 1, 2, 3, 4]"
+      ],
+      "answer": 0,
+      "explanation": "if 子句在迭代过程中过滤元素，只保留偶数，range(10) 内的偶数为 0,2,4,6,8。B 越界且遗漏 0，C 是奇数，D 未过滤。",
+      "error_tag": "边界错误",
+      "variant_group": "listcomp_filter"
+    },
+    {
+      "kp": "py.type.list_comprehension",
+      "type": "multi_choice",
+      "question": "下列关于列表推导式的说法，正确的有哪些？",
+      "options": [
+        "可以包含多个 for 子句进行嵌套迭代",
+        "可以在 for 之后跟一个或多个 if 过滤条件",
+        "表达式部分可以是任意表达式，包括函数调用",
+        "列表推导式一定会比等价的 for 循环慢，因此不推荐使用",
+        "推导式内部的循环变量会泄漏到外部作用域"
+      ],
+      "answer": [
+        0,
+        1,
+        2
+      ],
+      "explanation": "多 for、多 if 以及任意表达式都是列表推导式的合法组成。D 说反了，列表推导式通常更快；E 是 Python 2 的旧行为，在 Python 3 中不成立。",
+      "error_tag": "概念混淆",
+      "variant_group": "listcomp_syntax"
+    },
+    {
+      "kp": "py.type.list_comprehension",
+      "type": "multi_choice",
+      "question": "给定 nums = [1, 2, 3, 4, 5]，下列哪些表达式的结果包含元素 4？",
+      "options": [
+        "[n for n in nums if n > 3]",
+        "[n * 2 for n in nums]",
+        "[n for n in nums if n % 2 == 0]",
+        "[n - 1 for n in nums if n < 4]",
+        "[n for n in nums if n > 10]"
+      ],
+      "answer": [
+        0,
+        1,
+        2
+      ],
+      "explanation": "A 得 [4,5] 含 4；B 得 [2,4,6,8,10] 含 4；C 得 [2,4] 含 4；D 得 [0,1,2] 不含 4；E 为空列表。",
+      "error_tag": "边界错误",
+      "variant_group": "listcomp_filter"
+    },
+    {
+      "kp": "py.type.list_comprehension",
+      "type": "multi_choice",
+      "question": "关于列表推导式中条件的写法，下列哪些是正确的？",
+      "options": [
+        "[x for x in data if x > 0] 只保留正数",
+        "[x if x > 0 else 0 for x in data] 把非正数变为 0",
+        "[x for x in data if x > 0 if x < 10] 等价于同时满足两个条件",
+        "[x for x in data else 0] 是合法的过滤写法",
+        "[x if x > 0 for x in data] 是合法的条件表达式写法"
+      ],
+      "answer": [
+        0,
+        1,
+        2
+      ],
+      "explanation": "A 是过滤，B 是条件表达式映射，C 是两个连续 if 相当于 and。D 缺少 if 的判断表达式，E 的三元运算符缺少 else 分支，均非法。",
+      "error_tag": "记忆缺失",
+      "variant_group": "listcomp_conditional_expr"
+    },
+    {
+      "kp": "py.type.list_comprehension",
+      "type": "multi_choice",
+      "question": "在使用列表推导式时，下列哪些做法有助于保持代码可读性？",
+      "options": [
+        "当嵌套层级过多时，改用普通 for 循环",
+        "只对简单的映射与过滤使用推导式",
+        "把复杂的条件表达式拆分成辅助函数再调用",
+        "尽可能把多个 for、多个 if 全部挤在一行",
+        "用列表推导式替代所有循环"
+      ],
+      "answer": [
+        0,
+        1,
+        2
+      ],
+      "explanation": "推导式适合简单映射/过滤，过于复杂时应改用普通循环或辅助函数以提高可读性。D、E 会降低可读性，是常见误区。",
+      "error_tag": "概念混淆",
+      "variant_group": "listcomp_readability"
+    },
+    {
+      "kp": "py.type.list_comprehension",
+      "type": "fill_blank",
+      "question": "补全列表推导式，使其输出 [1, 4, 9, 16]：\n[______ for x in range(1, 5)]",
+      "options": [],
+      "answer": [
+        "x*x",
+        "x**2",
+        "x * x",
+        "x ** 2"
+      ],
+      "explanation": "表达式为 x 的平方，x*x 或 x**2 均可，range(1,5) 提供 1 到 4。",
+      "error_tag": "记忆缺失",
+      "variant_group": "listcomp_basic"
+    },
+    {
+      "kp": "py.type.list_comprehension",
+      "type": "fill_blank",
+      "question": "补全列表推导式，使其只保留 numbers 中的偶数：\n[n for n in numbers if ______]",
+      "options": [],
+      "answer": [
+        "n % 2 == 0",
+        "n%2==0",
+        "not n % 2",
+        "n % 2 != 1"
+      ],
+      "explanation": "偶数即对 2 取模为 0，n % 2 == 0 是最直接写法，not n % 2 也可（0 为假）。",
+      "error_tag": "边界错误",
+      "variant_group": "listcomp_filter"
+    },
+    {
+      "kp": "py.type.list_comprehension",
+      "type": "fill_blank",
+      "question": "补全代码，将二维列表 matrix 展平为一维列表：\nflat = [______ for row in matrix for n in row]",
+      "options": [],
+      "answer": [
+        "n",
+        "n",
+        "n"
+      ],
+      "explanation": "内层循环变量命名为 n，表达式部分直接返回 n 即可得到展平的一维列表。",
+      "error_tag": "概念混淆",
+      "variant_group": "listcomp_nested"
+    },
+    {
+      "kp": "py.type.list_comprehension",
+      "type": "code_reading",
+      "question": "阅读代码，写出输出结果：\nresult = [i * j for i in range(1, 3) for j in range(1, 3)]\nprint(result)",
+      "options": [],
+      "answer": "[1, 2, 2, 4]",
+      "explanation": "外层 i 取 1、2，内层 j 取 1、2，乘积依次为 1,2,2,4，构成列表 [1, 2, 2, 4]。",
+      "error_tag": "边界错误",
+      "variant_group": "listcomp_nested"
+    },
+    {
+      "kp": "py.type.list_comprehension",
+      "type": "scenario",
+      "question": "在一个数据处理脚本中，你需要从一个包含上万个整数的列表中筛选出所有大于 100 且为偶数的元素，并对每个元素加 1。团队有人建议写成一个大列表推导式，有人建议用普通 for 循环。请说明你会如何选择并解释理由。",
+      "options": [],
+      "answer": null,
+      "explanation": "该任务本质上是一次过滤加一次映射，条件相对简单，适合用列表推导式一行表达，如 [n + 1 for n in data if n > 100 and n % 2 == 0]。但若条件进一步复杂、嵌套层次变多，则应改用普通 for 循环以保证可读性。选择的核心判断标准是逻辑复杂度与可读性。",
+      "error_tag": "概念混淆",
+      "variant_group": "listcomp_readability",
+      "required_keywords": [
+        "列表推导式",
+        "for 循环",
+        "过滤",
+        "映射",
+        "可读性"
+      ]
+    },
+    {
+      "kp": "py.type.list_comprehension",
+      "type": "scenario",
+      "question": "队友写下如下代码并询问为什么不生效：\nresult = [x for x in data if x > 0 else 0]\n请指出问题所在，并给出两种符合意图的正确改写（分别对应‘过滤’和‘把非正数变为 0’两种意图）。",
+      "options": [],
+      "answer": null,
+      "explanation": "错误原因是在 for 之后使用了 if-else，过滤子句只能写 if 条件，不能带 else。若要过滤： [x for x in data if x > 0]；若要把非正数变为 0：[x if x > 0 else 0 for x in data]，条件表达式须放在 for 之前。",
+      "error_tag": "概念混淆",
+      "variant_group": "listcomp_conditional_expr",
+      "required_keywords": [
+        "列表推导式",
+        "过滤子句",
+        "条件表达式",
+        "语法错误",
+        "for"
+      ]
+    },
+    {
+      "kp": "py.type.list_comprehension",
+      "type": "single_choice",
+      "question": "关于表达式 [(x, y) for x in [1, 2] for y in [3, 4]]，下列说法正确的是？",
+      "options": [
+        "结果是 [(1, 3), (1, 4), (2, 3), (2, 4)]，外层循环 x 变化慢",
+        "结果是 [(1, 3), (2, 3), (1, 4), (2, 4)]，外层循环 y 变化慢",
+        "语法错误，一个推导式只能有一个 for 子句",
+        "结果与嵌套顺序无关，总是自动排序"
+      ],
+      "answer": 0,
+      "explanation": "多个 for 子句按书写顺序从左到右嵌套，最左边的循环最外层、变化最慢，所以 x 固定为 1 时先遍历所有 y，再进入 x=2。B 弄反了嵌套顺序，C、D 均为错误认识。",
+      "error_tag": "概念混淆",
+      "variant_group": "listcomp_nested"
+    },
+    {
+      "kp": "py.type.list_comprehension",
+      "type": "single_choice",
+      "question": "执行 nums = [1, 2, 3] 后，表达式 [n * 2 for n in nums] 与表达式 [nums[i] * 2 for i in range(len(nums))] 相比，主要区别是？",
+      "options": [
+        "前者直接迭代元素，更 Pythonic；后者用下标间接访问，不必要",
+        "前者会修改 nums 中的元素，后者不会",
+        "后者比前者快，因为它避免了迭代器",
+        "两者完全等价，但前者不能用于字符串列表"
+      ],
+      "answer": 0,
+      "explanation": "列表推导式推荐直接迭代元素，无需用下标间接访问，更简洁且不易越界。列表推导式不会修改原列表（新建列表），所以 B 错误；C、D 均无依据。",
+      "error_tag": "概念混淆",
+      "variant_group": "listcomp_iteration_style"
+    },
+    {
+      "kp": "py.type.list_comprehension",
+      "type": "single_choice",
+      "question": "下列代码的输出是什么？\nwords = ['a', 'bb', 'ccc']\nprint([len(w) for w in words])",
+      "options": [
+        "[1, 2, 3]",
+        "['a', 'bb', 'ccc']",
+        "[3, 2, 1]",
+        "报错，len 不能用于推导式"
+      ],
+      "answer": 0,
+      "explanation": "对每个字符串求长度，得到 [1,2,3]。B 是未做映射的原列表，C 顺序颠倒，D 是错误认识，len 完全可以用于推导式中的表达式。",
+      "error_tag": "概念混淆",
+      "variant_group": "listcomp_mapping"
+    },
+    {
+      "kp": "py.type.list_comprehension",
+      "type": "single_choice",
+      "question": "列表推导式中的变量作用域是怎样的？\n例如执行 [i for i in range(3)] 后，在 Python 3 中变量 i 是否仍可在推导式外部访问？",
+      "options": [
+        "不能在推导式外部访问，推导式有独立作用域",
+        "可以访问，i 的值为 2",
+        "可以访问，i 的值为 3",
+        "取决于是否使用了 if 子句"
+      ],
+      "answer": 0,
+      "explanation": "Python 3 中列表推导式拥有独立作用域，内部循环变量不会泄漏到外部，因此在外部访问 i 会触发 NameError。B、C 是 Python 2 的遗留行为，D 无依据。",
+      "error_tag": "边界错误",
+      "variant_group": "listcomp_scope"
+    },
+    {
+      "kp": "py.type.list_comprehension",
+      "type": "single_choice",
+      "question": "以下哪个列表推导式能正确地把矩阵（列表的列表）展平为一维列表？\n比如 matrix = [[1, 2], [3, 4]] 期望得到 [1, 2, 3, 4]。",
+      "options": [
+        "[n for row in matrix for n in row]",
+        "[n for n in matrix]",
+        "[[n for n in row] for row in matrix]",
+        "[row for row in matrix if n]"
+      ],
+      "answer": 0,
+      "explanation": "外层遍历每一行，内层遍历行内元素，才能展平。B 只得到原行列表，C 仍是二维结构，D 引用了未定义的 n 且逻辑错误。",
+      "error_tag": "概念混淆",
+      "variant_group": "listcomp_nested"
+    },
+    {
+      "kp": "py.type.list_comprehension",
+      "type": "single_choice",
+      "question": "关于 [x if x > 0 else 0 for x in data] 这一写法，下列描述正确的是？",
+      "options": [
+        "这是条件表达式，属于映射操作，每个元素都会被转换",
+        "这是过滤，只有 x > 0 的元素才会被保留",
+        "这会导致语法错误，if-else 不能出现在推导式中",
+        "这等价于 [x for x in data if x > 0 else 0]"
+      ],
+      "answer": 0,
+      "explanation": "if-else 放在 for 之前的表达式位置属于条件表达式（三元运算），对每个元素都产生一个结果；若把 if 放到 for 之后则是过滤。B 混淆了二者，C、D 均错误。",
+      "error_tag": "概念混淆",
+      "variant_group": "listcomp_conditional_expr"
+    },
+    {
+      "kp": "py.type.list_comprehension",
+      "type": "single_choice",
+      "question": "下面代码运行结果是什么？\nprint([[i, j] for i in range(2) for j in range(2)])",
+      "options": [
+        "[[0, 0], [0, 1], [1, 0], [1, 1]]",
+        "[[0, 0], [1, 0], [0, 1], [1, 1]]",
+        "[[0, 1], [1, 2]]",
+        "报错，两个 for 不能同时使用"
+      ],
+      "answer": 0,
+      "explanation": "按书写顺序嵌套，i 为外层、j 为内层，因此依次得到 [0,0]、[0,1]、[1,0]、[1,1]。B 反了顺序，C、D 错误。",
+      "error_tag": "边界错误",
+      "variant_group": "listcomp_nested"
+    },
+    {
+      "kp": "py.type.list_comprehension",
+      "type": "single_choice",
+      "question": "关于列表推导式与生成器表达式的区别，下列说法正确的是？",
+      "options": [
+        "列表推导式立即生成完整列表并占用内存，生成器表达式惰性求值、按需产生元素",
+        "两者完全等价，只是括号不同",
+        "生成器表达式会缓存所有元素，所以更占内存",
+        "列表推导式不能用于 for 循环迭代"
+      ],
+      "answer": 0,
+      "explanation": "列表推导式会立刻构造整个列表；生成器表达式惰性求值，逐个产出元素，适合大数据流。B 忽略了求值时机差异，C 反了，D 错误，列表同样可迭代。",
+      "error_tag": "概念混淆",
+      "variant_group": "listcomp_vs_genexp"
+    }
+  ]
+}

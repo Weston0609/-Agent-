@@ -1,0 +1,961 @@
+{
+  "id": "s2u1l7",
+  "title": "s2u1l7",
+  "kps": [
+    "py.oop.abstract",
+    "py.oop.protocol",
+    "py.oop.duck_typing"
+  ],
+  "theory": "## py.oop.abstract\n\n# Python 抽象类与协议（Abstract Class & Protocol）\n\n## 一句话直觉\n\n抽象类和协议就是“接口合同”：它们不关心你怎么实现，只强制规定你必须提供哪些方法，这样调用方就能放心地依赖“能力”而不是具体类型。\n\n这是面向对象设计（Object-Oriented Design）的起点，也是大型工程中解耦模块的关键机制。\n\n---\n\n## 1. 为什么需要抽象？——从“必须是某类”到“能做事就行”\n\n在 Python 中，函数常常需要对参数做某种操作，比如“把对象转成整数”、“读取一行文本”。如果只依赖具体类（如 `int`、`list`），代码就会绑死；如果依赖“具备某方法”的能力，代码就能接受很多不同对象。\n\n**抽象类（Abstract Base Class, ABC）** 就是用来声明这种“必须具备哪些方法”的工具。凡是继承它的类，如果不实现这些方法，就无法实例化。\n\n```python\nfrom abc import ABC, abstractmethod\n\nclass Shape(ABC):\n    @abstractmethod\n    def area(self) -> float:\n        \"\"\"返回面积\"\"\"\n        ...\n\n# Shape()  # 会报错：Cannot instantiate abstract class\n\nclass Circle(Shape):\n    def __init__(self, r: float):\n        self.r = r\n\n    def area(self) -> float:\n        return 3.14159 * self.r ** 2\n\nprint(Circle(2).area())  # 12.56636\n```\n\n要点：\n- `ABC` 是抽象基类；`@abstractmethod` 标记必须被重写的方法。\n- 只要还有未实现的抽象方法，子类就不能实例化。\n- 抽象类不能直接 `Shape()`，它只是“合同”。\n\n---\n\n## 2. 抽象类与普通类的区别：强制 vs 建议\n\n普通类可以被任意继承和覆盖；抽象类不同：它明确告诉你“这些方法是必须的”，否则连对象都创建不了。\n\n```python\nfrom abc import ABC, abstractmethod\n\nclass Payment(ABC):\n    @abstractmethod\n    def pay(self, amount: float) -> bool:\n        ...\n\nclass WeChatPay(Payment):\n    def pay(self, amount: float) -> bool:\n        print(f\"微信支付 {amount} 元\")\n        return True\n\nclass Alipay(Payment):\n    def pay(self, amount: float) -> bool:\n        print(f\"支付宝支付 {amount} 元\")\n        return True\n\nfor p in [WeChatPay(), Alipay()]:\n    p.pay(100.0)\n```\n\n要点：\n- 抽象方法是“编译期/实例化时”的强制检查。\n- 不同子类只要实现了 `pay`，就可以被统一调用，这叫多态（Polymorphism）。\n- 抽象类适合“同一家族、共享部分实现”的场景，也可以在 ABC 中提供普通方法。\n\n---\n\n## 3. 协议（Protocol）：比抽象类更轻的“鸭子类型合同”\n\nPython 有句名言：如果它走起来像鸭子、叫起来像鸭子，那它就是鸭子（Duck Typing）。`typing.Protocol` 把这种思想用类型系统（Type System）表达出来：只要对象有某些方法/属性，就满足协议，不要求继承。\n\n```python\nfrom typing import Protocol\n\nclass SupportsRead(Protocol):\n    def read(self) -> str:\n        ...\n\ndef load_text(source: SupportsRead) -> str:\n    return source.read()\n\nclass StringFile:\n    def read(self) -> str:\n        return \"hello\"\n\nclass OtherReader:\n    def read(self) -> str:\n        return \"world\"\n\nprint(load_text(StringFile()))  # hello\nprint(load_text(OtherReader())) # world\n# 这两个类都没有继承 SupportsRead，却都满足协议\n```\n\n标准库也大量使用协议，例如：\n- `typing.SupportsInt`：只要有 `__int__`。\n- `typing.SupportsBytes`：只要有 `__bytes__`。\n- `typing.SupportsFloat`：只要有 `__float__`。\n- `typing.SupportsRound`：只要有 `__round__`。\n- `typing.IO`、`TextIO`、`BinaryIO`：表示文件流类型，但它们不是协议，接口比较宽。\n- `io.Reader`、`io.Writer`：更简单的协议，只要求 `read` 或 `write`。\n\n要点：\n- 协议不要求继承，只看“有没有这些方法”。\n- 协议让类型检查器（如 mypy、pyright）能帮你在静态检查时发现错误。\n- 协议适合“不同来源、不同类层次，但能力相同”的场景。\n\n---\n\n## 4. 抽象类 vs 协议：怎么选？\n\n| 维度 | 抽象类 ABC | 协议 Protocol |\n|------|------------|---------------|\n| 是否要求继承 | 是 | 否 |\n| 是否能在运行时强制检查 | 是（实例化时） | 一般靠静态类型检查 |\n| 适用场景 | 同一家族、共享实现 | 跨家族、只需能力 |\n| 典型例子 | `Shape`、`Payment` | `SupportsInt`、`io.Reader` |\n\n一句话选型：**要“血脉传承”就用抽象类；要“能力匹配”就用协议。**\n\n---\n\n## 5. 工程级用法：按接口编程，不按实现编程\n\n大型工程中，模块之间只通过抽象类或协议交互，具体实现可替换。这叫依赖倒置（Dependency Inversion）。\n\n```python\nfrom abc import ABC, abstractmethod\nfrom typing import Protocol\n\n# 存储抽象：可以是内存、文件、数据库\nclass Storage(ABC):\n    @abstractmethod\n    def save(self, key: str, value: str) -> None: ...\n    @abstractmethod\n    def load(self, key: str) -> str | None: ...\n\nclass MemoryStorage(Storage):\n    def __init__(self):\n        self._data: dict[str, str] = {}\n    def save(self, key: str, value: str) -> None:\n        self._data[key] = value\n    def load(self, key: str) -> str | None:\n        return self._data.get(key)\n\n# 日志协议：只要有 write 方法就行\nclass Writer(Protocol):\n    def write(self, s: str) -> int: ...\n\ndef audit(storage: Storage, logger: Writer) -> None:\n    storage.save(\"user:1\", \"Alice\")\n    logger.write(\"saved user:1\\n\")\n\nimport sys\naudit(MemoryStorage(), sys.stdout)\n```\n\n要点：\n- 抽象类可以作为“必需实现”的骨架。\n- 协议可以让第三方对象（如 `sys.stdout`）无缝接入，无需继承你的类。\n- 你的业务代码只依赖接口，测试时可注入假的实现。\n\n---\n\n## 6. 常见误区与注意事项\n\n- **抽象类不能被实例化**，但可以包含已实现的方法，供子类复用。\n- **协议不等于运行时检查**：`Protocol` 主要服务于静态类型检查；运行时不会自动阻止你传入不满足的对象。\n- **不要滥用抽象**：只有一个实现时，过早抽象会增加复杂度。\n- **抽象方法名大小写敏感**：`area` 和 `Area` 不同。\n- **`ABC` 与 `Protocol` 可配合使用**：`Protocol` 本身也可以有抽象属性/方法，甚至可 `@runtime_checkable` 做有限的运行时检查。\n\n```python\nfrom typing import Protocol, runtime_checkable\n\n@runtime_checkable\nclass HasLen(Protocol):\n    def __len__(self) -> int: ...\n\nprint(isinstance([1, 2, 3], HasLen))  # True\nprint(isinstance(42, HasLen))          # False\n```\n\n---\n\n## 动手练习\n\n**任务：设计一个可插拔的“数据导出器”。**\n\n要求：\n1. 定义一个抽象类 `Exporter`，包含抽象方法 `export(self, rows: list[dict]) -> str`。\n2. 实现两个子类：`CsvExporter`（把行转成 CSV 字符串）和 `JsonExporter`（把行转成 JSON 字符串）。\n3. 定义一个协议 `Writable`，要求有 `write(self, s: str) -> int` 方法。\n4. 写一个函数 `run(exporter: Exporter, sink: Writable) -> None`，调用 `exporter.export(...)` 并把结果写入 `sink`。\n5. 用一个假的 `MemorySink` 类（只需有 `write` 方法）验证协议式调用；再用 `sys.stdout` 直接测试。\n6. 额外挑战：给 `Writable` 加上 `@runtime_checkable`，用 `isinstance` 验证 `sys.stdout` 和 `MemorySink` 都满足协议。\n\n提示：\n- `CsvExporter` 可用 `\"\\n\".join(\",\".join(row.values()) for row in rows)`。\n- `JsonExporter` 用 `import json; json.dumps(rows, ensure_ascii=False)`。\n- 运行命令建议：`python -m mypy your_file.py` 观察类型检查结果。\n\n完成后你会同时掌握：抽象类强制接口、协议按能力匹配、以及依赖注入（Dependency Injection）的基本形态。\n\n```python\nfrom abc import ABC, abstractmethod\nfrom typing import Protocol, runtime_checkable\nimport json\nimport sys\n\n\nclass Exporter(ABC):\n    \"\"\"抽象类：任何导出器必须实现 export\"\"\"\n\n    @abstractmethod\n    def export(self, rows: list[dict]) -> str:\n        \"\"\"把行数据导出为字符串\"\"\"\n        ...\n\n\nclass CsvExporter(Exporter):\n    def export(self, rows: list[dict]) -> str:\n        if not rows:\n            return \"\"\n        header = \",\".join(rows[0].keys())\n        body = \"\\n\".join(\n            \",\".join(str(v) for v in row.values()) for row in rows\n        )\n        return f\"{header}\\n{body}\"\n\n\nclass JsonExporter(Exporter):\n    def export(self, rows: list[dict]) -> str:\n        return json.dumps(rows, ensure_ascii=False, indent=2)\n\n\n@runtime_checkable\nclass Writable(Protocol):\n    \"\"\"协议：只要有 write(str) 方法就满足\"\"\"\n\n    def write(self, s: str) -> int: ...\n\n\nclass MemorySink:\n    \"\"\"不继承 Writable，但满足协议\"\"\"\n\n    def __init__(self) -> None:\n        self.buffer: list[str] = []\n\n    def write(self, s: str) -> int:\n        self.buffer.append(s)\n        return len(s)\n\n\ndef run(exporter: Exporter, sink: Writable) -> None:\n    rows = [\n        {\"id\": 1, \"name\": \"Alice\"},\n        {\"id\": 2, \"name\": \"Bob\"},\n    ]\n    sink.write(exporter.export(rows))\n\n\nif __name__ == \"__main__\":\n    # 使用抽象类子类 + 满足协议的内存 sink\n    mem = MemorySink()\n    run(CsvExporter(), mem)\n    print(\"MemorySink 收到的内容：\")\n    print(\"\".join(mem.buffer))\n\n    # 使用 JSON 导出器 + 标准输出（满足 Writable 协议）\n    print(\"\\n--- 使用 sys.stdout ---\")\n    run(JsonExporter(), sys.stdout)\n\n    # 运行时协议检查\n    print(\"\\n\\nsys.stdout 满足 Writable？\", isinstance(sys.stdout, Writable))\n    print(\"mem 满足 Writable？\", isinstance(mem, Writable))\n\n    # 尝试实例化抽象类会失败，取消注释可验证：\n    # Exporter()  # TypeError: Can't instantiate abstract class\n```\n\n## py.oop.protocol\n\n# Python 协议（Protocol）：让鸭子类型（Duck Typing）可被静态类型检查器理解\n\n> **一句话直觉**：Python 是“鸭子类型”的语言——“看起来像鸭子、走起来像鸭子，就是鸭子”。但类型检查器（mypy、pyright）看不懂这种“看起来像”，`Protocol` 就是把这句口头禅写成一份可被静态检查的“接口合同（interface contract）”。\n\n---\n\n## 1. 从“鸭子类型”的痛点讲起\n\n传统 Python 面向对象（OOP）用继承表达“是什么”：\n\n```python\nclass Dog:\n    def quack(self): print(\"woof\")\n\ndef say(q):          # 注解写什么？\n    q.quack()\n```\n\n`say()` 参数注解如果写 `Dog`，那么任何“不是 Dog 但有 `quack`”的对象在 mypy 下都会报错——而这恰恰是 Python 运行时最常用的用法。问题核心：**运行时看的是“有没有这个方法”，静态检查看的是“是不是这个类”。**\n\n`Protocol` 解决这个裂缝：用结构（structure）而不是继承（inheritance）作为类型依据。\n\n---\n\n## 2. 定义并实现一个 Protocol\n\n`Protocol`（协议）来自标准库 `typing`。定义时用 `class X(Protocol)`，方法体用 `...` 表示只声明、不实现。任何类只要“结构对得上”，就被静态类型检查器视为该协议的实例——**不需要显式继承**。\n\n```python\nfrom typing import Protocol\n\nclass Quacker(Protocol):\n    def quack(self) -> str: ...\n\nclass Duck:\n    def quack(self) -> str:\n        return \"quack\"\n\nclass Robot:\n    def quack(self) -> str:\n        return \"beep\"\n\ndef announce(q: Quacker) -> None:\n    print(q.quack())\n\nannounce(Duck())   # OK\nannounce(Robot())  # OK —— 没有继承 Quacker，也通过类型检查\n```\n\n**关键结论**：协议是“隐式实现（implicit implementation）”。类型检查器只看方法/属性的名字是否齐全，不管继承链。\n\n---\n\n## 3. 用 @runtime_checkable 做运行时检查\n\n默认情况下，`Protocol` 只在**静态类型检查**阶段生效，`isinstance()` / `issubclass()` 会直接抛 `TypeError`。如果你想在**运行时**也用 `isinstance` 判断，需要加 `@runtime_checkable` 装饰器。\n\n```python\nfrom typing import Protocol, runtime_checkable\n\n@runtime_checkable\nclass Quacker(Protocol):\n    def quack(self) -> str: ...\n\nprint(isinstance(Duck(), Quacker))   # True\nprint(isinstance(Robot(), Quacker))  # True\nprint(isinstance(42, Quacker))       # False\n```\n\n**必须记住的两个陷阱**：\n\n1. `@runtime_checkable` **只检查方法/属性是否存在，不检查类型签名**。例如 `ssl.SSLObject` 有 `__init__`，所以能通过 `Callable` 的 `issubclass` 检查，但它在运行时其实不可调用（只用于抛 `TypeError`）。\n2. 对 `runtime_checkable` 协议做 `isinstance` 检查**性能明显慢于普通类**——在性能敏感代码里，可以退化为 `hasattr()` 手动判断。\n3. 从 Python 3.12 起，内部实现改用 `inspect.getattr_static()` 查找属性（以前是 `hasattr()`），且协议成员在类创建后“冻结”：即使后续 monkey-patch 增加属性，也不会影响 `isinstance` 结果。\n4. Python 3.15 起，对“**未显式加 `@runtime_checkable`**、但继承自 runtime-checkable 协议的类”调用 `isinstance` / `issubclass` 已弃用，将在 3.20 抛 `TypeError`——**装饰器要写在直接被检查的协议上**。\n\n---\n\n## 4. 让协议更有表达力：属性、泛型与工具函数\n\n协议里不仅可以写方法，还可以写**属性**（只需注解，不赋值）：\n\n```python\nfrom typing import Protocol, get_protocol_members\n\nclass Sized2(Protocol):\n    size: int\n    def resize(self, n: int) -> None: ...\n\nprint(get_protocol_members(Sized2))\n# frozenset({'size', 'resize'})   —— Python 3.13+\n```\n\n协议支持泛型（使用 PEP 695 语法）：\n\n```python\nfrom typing import Protocol\n\nclass Container[T](Protocol):\n    def get(self) -> T: ...\n```\n\n标准库还提供了一组**开箱即用的协议**，比如 `SupportsInt`、`SupportsFloat`、`SupportsBytes`、`SupportsIndex`、`SupportsRound`——当你只想表达“这个对象能 `int()` 出来”时，用它们远比写一个自定义类更贴切。\n\n---\n\n## 5. 与 abc/ABC、TypedDict 的关系（一句话区分）\n\n- `abc.ABC`：**显式继承**才成为子类，运行时 `isinstance` 靠 `__subclasshook__` / 注册。\n- `Protocol`：**隐式结构匹配**，天然贴合 Python 动态风格；`@runtime_checkable` 后既能过 mypy，又能过 `isinstance`。\n- `TypedDict`：把“字典”的结构约束下来，同样只在静态阶段检查，运行时仍是普通 `dict`。它跟 Protocol 都是“结构类型（structural typing）”家族，但用途不同。\n\n---\n\n## 动手练习\n\n**任务**：定义一个 `Repository` 协议，要求实现方具备 `get(id: int) -> dict` 与 `save(data: dict) -> None`。\n\n1. 不加 `@runtime_checkable`，写两个实现类：一个是真的内存仓库 `MemoryRepo`，一个是“伪装仓库” `FakeRepo`（只有 `get` 没有 `save`）。用 mypy 检查，`FakeRepo` 应该被报错。\n2. 给 `Repository` 加上 `@runtime_checkable`，在运行时用 `isinstance` 判断上面两个实例，并打印结果（提示：`FakeRepo` 会返回 `False`，因为缺 `save`）。\n3. 思考题：为什么 `isinstance(FakeRepo(), Repository)` 返回 `False`，即使 `FakeRepo` 有 `get` 方法？把它写在代码注释里。\n\n**进阶**：把 `Repository` 改成泛型协议 `Repository[T]`，`get` 返回 `T`，`save` 接收 `T`，然后用 `MemoryRepo` 实现 `Repository[dict]`。\n\n```python\n# 可运行示例：Protocol 的静态 + 运行时双向检查\nfrom typing import Protocol, runtime_checkable\n\n@runtime_checkable\nclass Repository(Protocol):\n    def get(self, id: int) -> dict: ...\n    def save(self, data: dict) -> None: ...\n\nclass MemoryRepo:\n    def __init__(self) -> None:\n        self._db: dict[int, dict] = {}\n    def get(self, id: int) -> dict:\n        return self._db.get(id, {})\n    def save(self, data: dict) -> None:\n        self._db[data['id']] = data\n\nclass FakeRepo:\n    def get(self, id: int) -> dict:   # 缺 save，结构不完整\n        return {'id': id}\n\nm, f = MemoryRepo(), FakeRepo()\nprint(isinstance(m, Repository))  # True：get 和 save 都具备\nprint(isinstance(f, Repository))  # False：缺 save\n\n# 注意：@runtime_checkable 只查名字，不查签名\n# 下面这个类 get 的参数类型不对，但仍会通过 isinstance\nclass SloppyRepo:\n    def get(self, id: str) -> dict: ...\n    def save(self, data: dict) -> None: ...\nprint(isinstance(SloppyRepo(), Repository))  # True —— 运行时不检查签名\n```\n\n## py.oop.duck_typing\n\n# 鸭子类型（Duck Typing）：Python 动态多态的精髓\n\n## 一句话直觉\n\n**“如果它走起来像鸭子，叫起来像鸭子，那它就是鸭子。”**  \n在 Python 中，你不需要关心对象“是什么类”，只需要关心它“能做什么”——只要对象有你需要的方法或属性，就可以拿来用。这就是鸭子类型（Duck Typing），它让代码更灵活、更通用，也是 Python 多态（polymorphism）最自然的实现方式。\n\n---\n\n## 1. 为什么需要鸭子类型？从“类型检查”说起\n\n在静态类型语言（如 Java、C++）中，函数通常要求参数必须是某个特定类或其子类。例如，一个 `print_area(shape)` 函数可能要求 `shape` 是 `Shape` 类型。但在 Python 中，我们更关心对象**是否支持我们调用的操作**。\n\n```python\n# 示例：两个毫不相关的类，只要都有 area() 方法，就能被同一个函数处理\nclass Circle:\n    def __init__(self, r):\n        self.r = r\n    def area(self):\n        return 3.14 * self.r ** 2\n\nclass Rectangle:\n    def __init__(self, w, h):\n        self.w = w\n        self.h = h\n    def area(self):\n        return self.w * self.h\n\ndef print_area(shape):\n    # 不检查 shape 是什么类型，只调用它的 area() 方法\n    print(f\"面积是: {shape.area()}\")\n\nprint_area(Circle(2))       # 面积是: 12.56\nprint_area(Rectangle(3, 4)) # 面积是: 12\n```\n\n**关键结论**：Python 的函数参数没有类型限制，只要传入的对象**在运行时**拥有所需的方法（这里是 `area()`），调用就能成功。这就是鸭子类型的核心——**运行时决定，而非编译时决定**。\n\n---\n\n## 2. 鸭子类型与多态：同一接口，不同实现\n\n多态（polymorphism）指“同一操作作用于不同对象，产生不同结果”。鸭子类型让多态变得极其简单：不需要继承同一个基类，也不需要实现同一个接口，只要方法名相同即可。\n\n```python\nclass Dog:\n    def speak(self):\n        return \"汪汪\"\n\nclass Cat:\n    def speak(self):\n        return \"喵喵\"\n\nclass Robot:\n    def speak(self):\n        return \"哔哔\"\n\ndef make_sound(animal):\n    # 传入任何有 speak() 方法的对象都可以\n    print(animal.speak())\n\nfor obj in [Dog(), Cat(), Robot()]:\n    make_sound(obj)\n# 输出：汪汪 / 喵喵 / 哔哔\n```\n\n**关键结论**：鸭子类型实现了“隐式接口”——不靠 `interface` 关键字，而靠**方法的存在性**来约定协议。这使代码更松耦合，更容易扩展：新增一个类，只要实现 `speak()`，就能无缝接入。\n\n---\n\n## 3. 鸭子类型与内置协议：Python 的“魔法方法”\n\nPython 中许多内置操作都依赖鸭子类型。例如，`len(obj)` 实际上调用 `obj.__len__()`；`for x in obj` 调用 `obj.__iter__()`。任何实现了这些方法的类，都能融入 Python 的语法生态。\n\n```python\nclass MyList:\n    def __init__(self, data):\n        self.data = data\n    def __len__(self):\n        return len(self.data)\n    def __iter__(self):\n        return iter(self.data)\n\nml = MyList([1, 2, 3])\nprint(len(ml))        # 3，因为实现了 __len__\nfor x in ml:          # 可迭代，因为实现了 __iter__\n    print(x)\n```\n\n**关键结论**：鸭子类型不仅适用于自定义方法，也适用于 Python 的**数据模型协议**（如 `__len__`、`__iter__`、`__getitem__` 等）。实现这些“魔法方法”，对象就能像内置类型一样被使用。\n\n---\n\n## 4. 鸭子类型 vs 类型提示（Type Hints）：互补而非冲突\n\nPython 3.5+ 引入了类型提示（type hints），但它**不会在运行时强制检查**。类型提示主要用于静态分析工具（如 mypy、IDE），帮助提前发现错误。鸭子类型依然有效：你可以写 `def f(x: SomeProtocol)` 来声明“x 需要满足某些方法”，但运行时仍接受任何有这些方法的对象。\n\n```python\nfrom typing import Protocol\n\nclass Speaker(Protocol):\n    def speak(self) -> str: ...\n\ndef greet(s: Speaker) -> None:\n    print(s.speak())\n\nclass Duck:\n    def speak(self) -> str:\n        return \"嘎嘎\"\n\ngreet(Duck())  # 合法：Duck 有 speak 方法，即使没有显式继承 Speaker\n```\n\n**关键结论**：`Protocol` 是鸭子类型的“静态表达”。它让类型检查器理解“只要满足方法签名即可”，而不是要求继承。运行时依旧遵循鸭子类型——有方法就能用。\n\n---\n\n## 5. 工程实践：如何用好鸭子类型？\n\n- **优点**：灵活、可扩展、代码简洁，适合快速开发和插件式架构。\n- **风险**：错误可能延迟到运行时才暴露（如拼错方法名）。\n- **应对**：\n  - 使用 `hasattr()` 或 `callable()` 做防御性检查（慎用，可能破坏多态）。\n  - 结合 `Protocol` 和类型检查器（mypy）提前发现接口不匹配。\n  - 编写清晰的文档，说明期望的方法。\n  - 单元测试覆盖不同实现。\n\n```python\ndef safe_call(obj):\n    if hasattr(obj, 'speak') and callable(obj.speak):\n        obj.speak()\n    else:\n        print(\"对象不支持 speak 方法\")\n```\n\n**关键结论**：鸭子类型是 Python 动态多态的基石。理解它，就能写出更 Pythonic、更灵活的代码；配合类型提示，可以在灵活性和安全性之间取得平衡。\n\n---\n\n## 动手练习\n\n**任务**：创建一个 `Playlist` 类，它内部存储一个列表。要求：\n- 实现 `__len__`，使 `len(playlist)` 返回歌曲数量。\n- 实现 `__iter__`，使 `for song in playlist` 能遍历歌曲。\n- 实现 `add_song(song)` 方法添加歌曲。\n- 再写一个函数 `play_all(playlist)`，它接受任何“可迭代且长度可用”的对象（即实现了 `__iter__` 和 `__len__`），打印每首歌并显示总数。\n- 测试：用 `Playlist` 实例和一个普通列表分别调用 `play_all`，观察鸭子类型如何让两者都能工作。\n\n```python\n# 你的代码写在这里\n```\n\n**提示**：普通列表本身就有 `__len__` 和 `__iter__`，所以 `play_all([\"a\", \"b\"])` 应该也能运行。\n\n```python\n# 鸭子类型完整示例：不同类只要方法相同，就能被同一函数处理\n\nclass Duck:\n    def quack(self):\n        return \"嘎嘎叫\"\n\nclass Person:\n    def quack(self):\n        return \"模仿鸭子叫\"\n\nclass Robot:\n    def quack(self):\n        return \"电子合成嘎嘎声\"\n\ndef make_it_quack(duck_like):\n    # 不检查类型，只调用 quack 方法\n    print(duck_like.quack())\n\n# 三个完全无关的类，都能被 make_it_quack 处理\nfor obj in [Duck(), Person(), Robot()]:\n    make_it_quack(obj)\n\n# 输出：\n# 嘎嘎叫\n# 模仿鸭子叫\n# 电子合成嘎嘎声\n```\n",
+  "quiz": [
+    {
+      "kp": "py.oop.abstract",
+      "type": "single_choice",
+      "question": "在 Python 中直接使用 abc 模块定义抽象基类时，下面哪种写法能正确声明一个抽象方法？",
+      "options": [
+        "使用 @abc.abstractmethod 装饰器修饰方法，并让类继承 abc.ABC",
+        "在方法体里写 raise NotImplementedError 即可，无需任何装饰器",
+        "使用 @abstractmethod 装饰器，但类不需要继承任何基类",
+        "把方法名前面加上两个下划线使其变为抽象方法"
+      ],
+      "answer": 0,
+      "explanation": "abc.ABC 与 @abc.abstractmethod 搭配是标准做法；仅 raise NotImplementedError 只是运行时报错，不阻止实例化；@abstractmethod 必须与 ABC 或 ABCMeta 元类配合才生效；双下划线只是名称改写，与抽象无关。",
+      "error_tag": "概念混淆",
+      "variant_group": "abstract_basic"
+    },
+    {
+      "kp": "py.oop.abstract",
+      "type": "single_choice",
+      "question": "以下代码运行结果是什么？\n\nimport abc\n\nclass Base(abc.ABC):\n    @abc.abstractmethod\n    def run(self):\n        pass\n\nb = Base()",
+      "options": [
+        "正常创建 Base 实例",
+        "抛出 TypeError，提示不能实例化抽象类",
+        "抛出 AttributeError",
+        "抛出 NotImplementedError"
+      ],
+      "answer": 1,
+      "explanation": "含有未实现抽象方法的 ABC 子类无法被实例化，Python 会抛出 TypeError。NotImplementedError 只是方法体内 raise 时才触发，与实例化无关。",
+      "error_tag": "运行时行为误解",
+      "variant_group": "abstract_basic"
+    },
+    {
+      "kp": "py.oop.abstract",
+      "type": "single_choice",
+      "question": "以下代码中，Sub 能否被实例化？\n\nimport abc\n\nclass Base(abc.ABC):\n    @abc.abstractmethod\n    def f(self): ...\n\nclass Sub(Base):\n    def f(self):\n        return super().f() if False else 1\n\ns = Sub()",
+      "options": [
+        "不能，因为 super().f() 不存在",
+        "可以，Sub 已覆盖实现 f",
+        "不能，因为 Base.f 没有函数体",
+        "不能，因为 ABC 子类必须先注册"
+      ],
+      "answer": 1,
+      "explanation": "Sub 覆盖了抽象方法 f，满足实例化条件；Base.f 虽然函数体为空仍然是可调用对象，且代码中 if False 使该分支不会真正执行。",
+      "error_tag": "过度约束",
+      "variant_group": "abstract_subclass"
+    },
+    {
+      "kp": "py.oop.abstract",
+      "type": "single_choice",
+      "question": "下面哪种写法正确地让一个抽象方法同时作为类方法抽象？",
+      "options": [
+        "@classmethod\n@abc.abstractmethod\ndef m(cls): ...",
+        "@abc.abstractmethod\n@classmethod\ndef m(cls): ...",
+        "@abc.abstractclassmethod\ndef m(cls): ...",
+        "@abc.abstractmethod\ndef m(self): ... 并加 @staticmethod"
+      ],
+      "answer": 0,
+      "explanation": "正确顺序是 @classmethod 在最外层、@abc.abstractmethod 在内层，这样类方法保持抽象性。顺序反了会退化为普通类方法，abstractclassmethod 已被弃用。",
+      "error_tag": "装饰器顺序错误",
+      "variant_group": "abstract_decorator"
+    },
+    {
+      "kp": "py.oop.abstract",
+      "type": "single_choice",
+      "question": "以下代码运行结果为？\n\nimport abc\n\nclass A(abc.ABC):\n    @abc.abstractmethod\n    def x(self): ...\n\nclass B(A):\n    def x(self): return 1\n\nprint(isinstance(B(), A))",
+      "options": [
+        "True",
+        "False",
+        "抛出 TypeError",
+        "打印 None"
+      ],
+      "answer": 0,
+      "explanation": "B 实现了抽象方法，可以实例化且是 A 的实例，isinstance 返回 True。抽象基类仍遵循常规继承关系。",
+      "error_tag": "继承关系误解",
+      "variant_group": "abstract_isinstance"
+    },
+    {
+      "kp": "py.oop.abstract",
+      "type": "single_choice",
+      "question": "关于抽象基类与 register 方法，下面说法正确的是？",
+      "options": [
+        "register 可把不相关的类注册为抽象基类的虚拟子类，但不检查抽象方法实现",
+        "register 会强制被注册类实现所有抽象方法",
+        "register 只能注册抽象类本身",
+        "register 会把被注册类的抽象方法自动实现"
+      ],
+      "answer": 0,
+      "explanation": "register 用于声明虚拟子类关系，isinstance/issubclass 会返回 True，但不会检查或补全抽象方法实现。",
+      "error_tag": "概念混淆",
+      "variant_group": "abstract_register"
+    },
+    {
+      "kp": "py.oop.abstract",
+      "type": "single_choice",
+      "question": "下面哪个断言描述的是含抽象方法的类的正确行为？",
+      "options": [
+        "抽象类本身不可被实例化，即使它的抽象方法都有默认实现",
+        "抽象类可以被实例化，只要不调用抽象方法",
+        "抽象类可以被实例化，Python 会自动用 None 实现抽象方法",
+        "抽象类可以被实例化，但必须先删除抽象方法"
+      ],
+      "answer": 0,
+      "explanation": "只要类中仍标记有未被子类覆盖的抽象方法，即使抽象方法体有默认实现，该抽象类也不能被实例化。",
+      "error_tag": "运行时行为误解",
+      "variant_group": "abstract_basic"
+    },
+    {
+      "kp": "py.oop.abstract",
+      "type": "single_choice",
+      "question": "阅读代码：\n\nimport abc\n\nclass A(abc.ABC):\n    @abc.abstractmethod\n    def m(self): ...\n\nclass B(A):\n    pass\n\nclass C(B):\n    def m(self): return 2\n\nC()",
+      "options": [
+        "可以实例化，C 实现了 m，抽象约束沿继承链传递",
+        "不能实例化，因为 B 是抽象类",
+        "不能实例化，因为 C 没有直接继承 A",
+        "不能实例化，因为抽象方法不能被多层覆盖"
+      ],
+      "answer": 0,
+      "explanation": "抽象方法沿继承链传递，C 通过覆盖 m 满足了所有要求，因此可以实例化。",
+      "error_tag": "继承链误解",
+      "variant_group": "abstract_subclass"
+    },
+    {
+      "kp": "py.oop.abstract",
+      "type": "single_choice",
+      "question": "以下代码会在哪一步抛出异常？\n\nimport abc\n\nclass A(abc.ABC):\n    @abc.abstractmethod\n    def m(self): ...\n\nclass B(A):\n    pass\n\nb = B()",
+      "options": [
+        "import abc 时",
+        "定义 class B 时",
+        "执行 b = B() 时",
+        "不会抛异常"
+      ],
+      "answer": 2,
+      "explanation": "定义 B 时不会立即检查抽象方法实现；异常在尝试实例化 B 时以 TypeError 形式抛出。",
+      "error_tag": "时机错误",
+      "variant_group": "abstract_basic"
+    },
+    {
+      "kp": "py.oop.abstract",
+      "type": "single_choice",
+      "question": "关于 @abc.abstractproperty 与 @property + @abc.abstractmethod 组合，说法正确的是？",
+      "options": [
+        "@abc.abstractproperty 已弃用，推荐用 @property 叠加 @abc.abstractmethod",
+        "两者效果完全相同，没有弃用问题",
+        "@property 不能与 @abc.abstractmethod 组合",
+        "@abc.abstractproperty 只能用于类属性"
+      ],
+      "answer": 0,
+      "explanation": "从 Python 3.3 起 @abc.abstractproperty 被弃用，推荐将 @property 与 @abc.abstractmethod 组合使用。",
+      "error_tag": "版本差异误解",
+      "variant_group": "abstract_property"
+    },
+    {
+      "kp": "py.oop.abstract",
+      "type": "single_choice",
+      "question": "以下代码输出是什么？\n\nimport abc\n\nclass A(abc.ABC):\n    @abc.abstractmethod\n    def m(self):\n        return 10\n\nclass B(A):\n    def m(self):\n        return super().m() + 5\n\nprint(B().m())",
+      "options": [
+        "15",
+        "10",
+        "抛出 TypeError",
+        "抛出 NotImplementedError"
+      ],
+      "answer": 0,
+      "explanation": "抽象方法允许有实现体，B.m 通过 super().m() 调用父类默认实现返回 10，再加 5 得到 15。",
+      "error_tag": "父类方法调用误解",
+      "variant_group": "abstract_decorator"
+    },
+    {
+      "kp": "py.oop.abstract",
+      "type": "single_choice",
+      "question": "下列哪种做法能让一个本身不继承某抽象基类的第三方类通过该抽象基类的 isinstance 检查？",
+      "options": [
+        "调用抽象基类的 register 方法注册该类",
+        "在第三方类上加 @abc.abstractmethod",
+        "修改第三方类的 __bases__ 使其继承抽象基类再回滚",
+        "在抽象基类中实现第三方类的所有方法"
+      ],
+      "answer": 0,
+      "explanation": "register 提供虚拟子类注册机制，使得第三方类通过 isinstance/issubclass 检查而不需要真正改变继承结构。其他选项要么不成立，要么是错误做法。",
+      "error_tag": "概念混淆",
+      "variant_group": "abstract_register"
+    },
+    {
+      "kp": "py.oop.abstract",
+      "type": "single_choice",
+      "question": "如下定义中，Child 无法被实例化，原因是什么？\n\nimport abc\n\nclass Base(abc.ABC):\n    @abc.abstractmethod\n    def foo(self): ...\n    @abc.abstractmethod\n    def bar(self): ...\n\nclass Child(Base):\n    def foo(self):\n        return 1",
+      "options": [
+        "Child 没有实现 foo",
+        "Child 没有实现 bar",
+        "Child 没有继承 abc.ABC",
+        "Child 的 foo 返回值类型不对"
+      ],
+      "answer": 1,
+      "explanation": "子类必须实现父类中全部抽象方法才能实例化；Child 仅实现了 foo，缺少 bar。返回值类型与抽象方法约束无关。",
+      "error_tag": "遗漏抽象方法",
+      "variant_group": "abstract_subclass"
+    },
+    {
+      "kp": "py.oop.abstract",
+      "type": "single_choice",
+      "question": "以下关于 abstractmethod 装饰器的说法哪一项正确？",
+      "options": [
+        "它只能用于静态方法，不能用于普通实例方法",
+        "它修饰的方法可以包含实现代码，子类可用 super() 调用它",
+        "被它修饰的方法在父类中不能有函数体",
+        "它只能和 @property 一起使用"
+      ],
+      "answer": 1,
+      "explanation": "抽象方法允许有实现体，子类可以覆盖后通过 super() 调用；它可用于实例方法、类方法、静态方法等多种形式；父类中也可以写函数体；与 @property 搭配是可选用法之一，但不是唯一用法。",
+      "error_tag": "特性理解错误",
+      "variant_group": "abstract_decorator"
+    },
+    {
+      "kp": "py.oop.abstract",
+      "type": "single_choice",
+      "question": "以下代码能否正常执行？\n\nfrom abc import ABC, abstractmethod\n\nclass Shape(ABC):\n    @abstractmethod\n    def area(self): ...\n\nclass Square(Shape):\n    def __init__(self, side):\n        self.side = side\n    def area(self):\n        return self.side ** 2\n\ns = Square(3)",
+      "options": [
+        "可以，Square 实现了所有抽象方法",
+        "不可以，Shape 仍有抽象方法",
+        "不可以，__init__ 也需要是抽象方法",
+        "不可以，ABC 需要显式调用 __init__"
+      ],
+      "answer": 0,
+      "explanation": "Square 完整实现了 area，因此可以实例化。ABC 不需要在子类中显式调用 __init__，__init__ 也不是抽象方法。",
+      "error_tag": "过度约束",
+      "variant_group": "abstract_subclass"
+    },
+    {
+      "kp": "py.oop.abstract",
+      "type": "single_choice",
+      "question": "下面的类定义会触发什么行为？\n\nimport abc\n\nclass Mixin(abc.ABC):\n    @abc.abstractmethod\n    def save(self): ...\n    def helper(self):\n        return \"h\"",
+      "options": [
+        "Mixin 中可以同时包含抽象方法和普通方法",
+        "Mixin 中的所有方法都会自动变成抽象方法",
+        "普通方法 helper 会阻止 Mixin 被继承",
+        "ABC 子类不允许定义普通方法"
+      ],
+      "answer": 0,
+      "explanation": "抽象基类可同时包含抽象方法和普通（已实现）方法，子类只需实现抽象方法即可。其他选项均属误解。",
+      "error_tag": "概念混淆",
+      "variant_group": "abstract_mixin"
+    },
+    {
+      "kp": "py.oop.abstract",
+      "type": "single_choice",
+      "question": "以下代码运行后输出是什么？\n\nimport abc\n\nclass P(abc.ABC):\n    @abc.abstractmethod\n    def m(self): ...\n\nclass Q(P):\n    pass\n\ntry:\n    Q()\nexcept TypeError as e:\n    print(\"TypeError\")",
+      "options": [
+        "无输出，Q 可以实例化",
+        "输出 TypeError",
+        "输出 NotImplementedError",
+        "输出 AttributeError"
+      ],
+      "answer": 1,
+      "explanation": "Q 未实现抽象方法 m，因此实例化时会抛出 TypeError，被 except 捕获并打印。",
+      "error_tag": "运行时行为误解",
+      "variant_group": "abstract_subclass"
+    },
+    {
+      "kp": "py.oop.abstract",
+      "type": "single_choice",
+      "question": "关于抽象方法在父类中的函数体，下面说法正确的是？",
+      "options": [
+        "必须写成 pass 或 ...，不能有任何语句",
+        "可以写实现代码，子类常用 super() 调用",
+        "不能包含 return 语句",
+        "只能写 raise NotImplementedError"
+      ],
+      "answer": 1,
+      "explanation": "抽象方法可以写实现体，常见模式是父类提供默认逻辑，子类通过 super() 复用；并不强制只能写 pass、... 或 raise。",
+      "error_tag": "特性理解错误",
+      "variant_group": "abstract_decorator"
+    },
+    {
+      "kp": "py.oop.abstract",
+      "type": "single_choice",
+      "question": "以下定义有什么问题？\n\nfrom abc import abstractmethod\n\nclass A:\n    @abstractmethod\n    def m(self): ...\n\na = A()",
+      "options": [
+        "A 未继承 abc.ABC 或使用 ABCMeta，抽象约束不生效，a 能创建",
+        "abstractmethod 装饰器不存在，会 ImportError",
+        "a 的创建会抛出 TypeError",
+        "m 会被自动转成类方法"
+      ],
+      "answer": 0,
+      "explanation": "仅使用 @abstractmethod 而不通过 ABC 或 ABCMeta 元类时，抽象约束不会生效，类仍可实例化。装饰器确实存在于 abc 模块中，不会 ImportError。",
+      "error_tag": "缺失元类",
+      "variant_group": "abstract_metaclass"
+    },
+    {
+      "kp": "py.oop.abstract",
+      "type": "single_choice",
+      "question": "关于 ABCMeta，下列说法正确的是？",
+      "options": [
+        "它是 abc 模块提供的元类，可让普通类具备抽象约束能力",
+        "它只能用于 Python 2，Python 3 中已移除",
+        "它能自动为子类生成所有抽象方法的实现",
+        "它只能用于多重继承场景"
+      ],
+      "answer": 0,
+      "explanation": "ABCMeta 是 abc 模块中的元类，Python 3 仍然可用；它不会自动生成实现；也不限于多重继承。",
+      "error_tag": "概念混淆",
+      "variant_group": "abstract_metaclass"
+    },
+    {
+      "kp": "py.oop.protocol",
+      "type": "single_choice",
+      "question": "在 Python 中，下面关于「协议（protocol）」式多态的说法，哪一项是正确的？",
+      "options": [
+        "一个类必须显式继承某个抽象基类，才能被 for 循环迭代",
+        "只要对象实现了所需的方法（如 __iter__、__len__），它就能配合相应的语法或内置函数工作",
+        "协议要求对象必须注册到某个全局注册表中才生效",
+        "只有内置类型才能满足协议，用户自定义类无法满足"
+      ],
+      "answer": 1,
+      "explanation": "Python 采用「鸭子类型」式的协议：只要对象在运行时具备所需的方法（如 __iter__ 支持迭代、__len__ 支持 len()），就能配合相应语法工作，无需继承或注册。",
+      "error_tag": "概念混淆",
+      "variant_group": "协议基本概念"
+    },
+    {
+      "kp": "py.oop.protocol",
+      "type": "single_choice",
+      "question": "下面哪个「特殊方法」被实现后，可以让对象支持 `len(obj)` 调用？",
+      "options": [
+        "__length__",
+        "__size__",
+        "__len__",
+        "__count__"
+      ],
+      "answer": 2,
+      "explanation": "len() 会调用对象的 __len__ 方法，它应返回一个非负整数。其它名称并非 Python 的协议方法。",
+      "error_tag": "记忆缺失",
+      "variant_group": "协议方法名"
+    },
+    {
+      "kp": "py.oop.protocol",
+      "type": "single_choice",
+      "question": "运行下面代码，输出是什么？\n\nclass Counter:\n    def __init__(self): self.n = 0\n    def __call__(self):\n        self.n += 1\n        return self.n\n\nc = Counter()\nprint(c(), c(), c.n)",
+      "options": [
+        "1 2 2",
+        "0 0 0",
+        "1 1 1",
+        "报错：Counter 不可调用"
+      ],
+      "answer": 0,
+      "explanation": "实现了 __call__ 的实例可像函数一样被调用。每次调用 n 自增 1，所以返回 1、2，n 最终为 2。这体现了可调用对象协议。",
+      "error_tag": "概念混淆",
+      "variant_group": "可调用协议"
+    },
+    {
+      "kp": "py.oop.protocol",
+      "type": "single_choice",
+      "question": "下面哪种做法最符合「显式声明类满足某协议」的现代实践（假设使用 typing.Protocol）？",
+      "options": [
+        "class MyClass(Protocol): pass",
+        "让类结构化地实现所需方法；在静态类型检查语境下用 Protocol 做结构化子类型标注",
+        "在类中写 @protocol 装饰器",
+        "调用 register(MyClass) 注册到 typing 模块"
+      ],
+      "answer": 1,
+      "explanation": "typing.Protocol 支持结构化子类型：只要类实现了协议中声明的方法，类型检查器就认为它满足该协议，无需显式继承。@protocol 装饰器并不存在。",
+      "error_tag": "概念混淆",
+      "variant_group": "协议与类型检查"
+    },
+    {
+      "kp": "py.oop.protocol",
+      "type": "multi_choice",
+      "question": "下面哪些「特殊方法」属于让对象支持常见内置操作/语法的协议方法？（多选）",
+      "options": [
+        "__iter__",
+        "__len__",
+        "__enter__ 和 __exit__",
+        "__repr__",
+        "__main__"
+      ],
+      "answer": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "explanation": "__iter__ 支持迭代，__len__ 支持 len()，__enter__/__exit__ 支持 with，__repr__ 支持 repr()。__main__ 只是一个模块级名称约定，不是特殊方法。",
+      "error_tag": "概念混淆",
+      "variant_group": "协议方法名"
+    },
+    {
+      "kp": "py.oop.protocol",
+      "type": "multi_choice",
+      "question": "关于「真值测试协议」，下面说法正确的是？（多选）",
+      "options": [
+        "对象未定义 __bool__ 时，会退回到调用 __len__",
+        "__bool__ 应返回一个布尔值",
+        "只要对象非 None，bool(obj) 一定为 True",
+        "如果同时定义了 __bool__ 和 __len__，优先使用 __bool__",
+        "bool(obj) 会直接调用 __nonzero__（Python 3 中）"
+      ],
+      "answer": [
+        0,
+        1,
+        3
+      ],
+      "explanation": "Python 3 中：优先 __bool__，其次 __len__（返回 0 则假）；__bool__ 应返回布尔值。__nonzero__ 是 Python 2 的名字，Python 3 不再使用。对象为假不一定只因是 None，例如空列表也为假。",
+      "error_tag": "概念混淆",
+      "variant_group": "真值协议"
+    },
+    {
+      "kp": "py.oop.protocol",
+      "type": "multi_choice",
+      "question": "下面哪些做法可以让一个类的实例正确地作为迭代器（iterator）使用？（多选）",
+      "options": [
+        "定义 __iter__ 返回 self，并定义 __next__ 在耗尽时抛出 StopIteration",
+        "定义 __iter__ 返回一个生成器对象",
+        "只定义 __next__ 而不定义 __iter__",
+        "定义 __iter__ 返回一个列表",
+        "定义 __iter__ 返回新的独立迭代器对象，每次迭代互不影响"
+      ],
+      "answer": [
+        0,
+        1,
+        4
+      ],
+      "explanation": "迭代器协议要求 __iter__（返回迭代器自身或新迭代器）和 __next__（返回值或抛 StopIteration）。只定义 __next__ 不是迭代器（for 会报 TypeError）；__iter__ 返回列表是「可迭代对象」而非迭代器本身，但它确实能被 for 使用——不过在「作为迭代器」的标准语义上应返回迭代器。第 5 项是更安全的可迭代对象做法。",
+      "error_tag": "概念混淆",
+      "variant_group": "迭代协议"
+    },
+    {
+      "kp": "py.oop.protocol",
+      "type": "fill_blank",
+      "question": "要让对象支持 `with obj:` 语法，类中必须实现的两个特殊方法是 ____ 和 ____（填写两个下划线方法名，用空格或逗号分隔）。",
+      "options": [],
+      "answer": [
+        "__enter__ __exit__",
+        "__enter__,__exit__",
+        "__enter__ 和 __exit__",
+        "__enter__和__exit__"
+      ],
+      "explanation": "with 语句依赖上下文管理器协议，要求 __enter__（进入时调用）和 __exit__（退出时调用，负责清理/异常处理）同时存在。",
+      "error_tag": "记忆缺失",
+      "variant_group": "上下文管理协议"
+    },
+    {
+      "kp": "py.oop.protocol",
+      "type": "fill_blank",
+      "question": "在 Python 中，用于让对象支持 `len(obj)` 的特殊方法名是 ____；用于让对象支持 `obj[key]` 读取的特殊方法名是 ____。",
+      "options": [],
+      "answer": [
+        "__len__ __getitem__",
+        "__len__, __getitem__",
+        "__len__ 和 __getitem__",
+        "__len__和__getitem__"
+      ],
+      "explanation": "len() 调用 __len__，下标读取 obj[key] 调用 __getitem__。两者都是常见的协议方法。",
+      "error_tag": "记忆缺失",
+      "variant_group": "协议方法名"
+    },
+    {
+      "kp": "py.oop.protocol",
+      "type": "code_reading",
+      "question": "阅读下面代码，写出运行结果：\n\nclass Wrap:\n    def __init__(self, data):\n        self.data = data\n    def __getitem__(self, i):\n        return self.data[i]\n\nw = Wrap([10, 20, 30])\nprint(list(w))",
+      "options": [],
+      "answer": "[10, 20, 30]",
+      "explanation": "Wrap 没有定义 __iter__，但定义了 __getitem__，Python 会使用旧式序列迭代协议，从下标 0 开始依次取元素直到 IndexError，因此 list(w) 得到 [10, 20, 30]。",
+      "error_tag": "概念混淆",
+      "variant_group": "迭代协议"
+    },
+    {
+      "kp": "py.oop.protocol",
+      "type": "code_reading",
+      "question": "阅读下面代码，解释为什么 `print(repr(p))` 不会显示内存地址：\n\nclass Point:\n    def __init__(self, x, y):\n        self.x, self.y = x, y\n    def __repr__(self):\n        return f\"Point({self.x}, {self.y})\"\n\np = Point(1, 2)\nprint(repr(p))",
+      "options": [],
+      "answer": "因为 Point 实现了 __repr__，repr() 会调用它，返回自定义字符串 \"Point(1, 2)\"，而不是默认的 <Point object at 0x...>。",
+      "explanation": "__repr__ 属于对象表示协议。实现后，repr() 和交互式回显都会使用它；未定义时才退回默认形式（含内存地址）。",
+      "error_tag": "概念混淆",
+      "variant_group": "对象表示协议"
+    },
+    {
+      "kp": "py.oop.protocol",
+      "type": "scenario",
+      "question": "你在实现一个「数据库连接包装类」，希望使用者这样写：\n\nwith DBConnection(dsn) as conn:\n    conn.query(...)\n\n无论 with 块内是否抛出异常，连接都必须被关闭。请说明你需要实现哪些方法、每个方法大致做什么，以及如何处理异常。",
+      "options": [],
+      "answer": null,
+      "explanation": "需要实现上下文管理器协议：__enter__ 建立/返回连接（供 as 使用），__exit__ 负责关闭连接；即使 with 块抛出异常，__exit__ 也会被调用，可在其中清理资源。",
+      "error_tag": "概念混淆",
+      "variant_group": "上下文管理协议",
+      "required_keywords": [
+        "上下文管理器协议",
+        "__enter__",
+        "__exit__",
+        "关闭连接",
+        "异常传播"
+      ]
+    },
+    {
+      "kp": "py.oop.protocol",
+      "type": "single_choice",
+      "question": "要让一个自定义类的实例能被 `for x in obj:` 迭代，至少需要实现哪个方法？",
+      "options": [
+        "__next__",
+        "__iter__",
+        "__getitem__ 且必须同时实现 __len__",
+        "__iter__ 或 __getitem__ 之一即可（旧式序列协议）"
+      ],
+      "answer": 3,
+      "explanation": "现代做法是实现 __iter__ 返回迭代器；作为兼容，若类实现了 __getitem__，Python 也能以整数下标方式迭代（旧式序列协议）。因此 __iter__ 或 __getitem__ 之一即可让 for 工作。",
+      "error_tag": "概念混淆",
+      "variant_group": "迭代协议"
+    },
+    {
+      "kp": "py.oop.protocol",
+      "type": "scenario",
+      "question": "团队里有个自定义容器类只实现了 __getitem__，成员小张看到 `for x in container:` 能跑就认为它「是迭代器」。请解释这种理解为什么不对，并说明它实际满足什么、以及若要确保每次迭代互不干扰应该怎么做。",
+      "options": [],
+      "answer": null,
+      "explanation": "只实现 __getitem__ 的对象可被 for 迭代（旧式序列协议），属于「可迭代对象」，但它本身不是迭代器（未定义 __iter__ 和 __next__）。若希望在多次迭代中互不影响、语义清晰，应实现 __iter__ 返回一个新的独立迭代器。",
+      "error_tag": "概念混淆",
+      "variant_group": "迭代协议",
+      "required_keywords": [
+        "可迭代对象",
+        "迭代器",
+        "__iter__",
+        "__next__",
+        "__getitem__"
+      ]
+    },
+    {
+      "kp": "py.oop.protocol",
+      "type": "single_choice",
+      "question": "运行下面代码，输出是什么？\n\nclass Box:\n    def __init__(self, items):\n        self.items = items\n    def __len__(self):\n        return len(self.items)\n\nb = Box([1, 2, 3])\nprint(bool(b), len(b))",
+      "options": [
+        "True 3",
+        "False 3",
+        "True 0",
+        "报错：Box 没有定义 __bool__"
+      ],
+      "answer": 0,
+      "explanation": "当对象没有定义 __bool__ 时，bool() 会退回到调用 __len__；长度为 3 非零，因此为 True。这也是「真值测试协议」的一部分。",
+      "error_tag": "概念混淆",
+      "variant_group": "真值协议"
+    },
+    {
+      "kp": "py.oop.protocol",
+      "type": "single_choice",
+      "question": "关于「上下文管理器协议」，下面说法正确的是？",
+      "options": [
+        "只要实现了 __enter__ 就能用于 with 语句，__exit__ 可选",
+        "必须同时实现 __enter__ 和 __exit__，with 语句才会正常工作",
+        "上下文管理器必须继承 contextlib.ContextDecorator",
+        "with 语句只能用于文件对象"
+      ],
+      "answer": 1,
+      "explanation": "with 语句要求对象同时具备 __enter__ 和 __exit__ 两个方法，构成完整的上下文管理器协议。缺少任一个都会在运行时报错。",
+      "error_tag": "概念混淆",
+      "variant_group": "上下文管理协议"
+    },
+    {
+      "kp": "py.oop.protocol",
+      "type": "single_choice",
+      "question": "下面哪一项最能说明「协议」与「抽象基类」在 Python 中的区别？",
+      "options": [
+        "协议必须通过继承实现，抽象基类通过实现方法即可",
+        "抽象基类需要显式继承或注册，协议是隐式的、只在运行时检查所需方法",
+        "两者完全等价，只是名字不同",
+        "协议只能用于内置类型，抽象基类只能用于自定义类型"
+      ],
+      "answer": 1,
+      "explanation": "抽象基类通过继承或 register 建立名义上的关联；协议（如迭代、上下文管理）是隐式的，只要对象具备相应方法即可，无需继承关系。",
+      "error_tag": "概念混淆",
+      "variant_group": "协议与抽象基类"
+    },
+    {
+      "kp": "py.oop.protocol",
+      "type": "single_choice",
+      "question": "下面代码中，`obj == other` 会调用哪个特殊方法（假设 obj 的类定义了它）？",
+      "options": [
+        "__eq__",
+        "__cmp__",
+        "__equals__",
+        "__compare__"
+      ],
+      "answer": 0,
+      "explanation": "== 运算符会调用左操作数的 __eq__ 方法。__cmp__ 是 Python 2 的旧协议，Python 3 已移除。",
+      "error_tag": "记忆缺失",
+      "variant_group": "比较协议"
+    },
+    {
+      "kp": "py.oop.protocol",
+      "type": "single_choice",
+      "question": "若要让对象支持 `with obj as x:` 且 x 能拿到 __enter__ 的返回值，下面写法正确的是？",
+      "options": [
+        "def __enter__(self): return self",
+        "def __enter__(self, exc_type): return self",
+        "def __enter__(): pass",
+        "def __enter__(self): pass  # 无需返回值"
+      ],
+      "answer": 0,
+      "explanation": "__enter__ 接收 self 并返回一个值，该值赋给 as 后的变量。第一项符合协议；第三项缺少 self；第二项参数签名错误；第四项返回 None 使 as 变量为 None。",
+      "error_tag": "边界错误",
+      "variant_group": "上下文管理协议"
+    },
+    {
+      "kp": "py.oop.protocol",
+      "type": "single_choice",
+      "question": "关于 `__getitem__` 与迭代的关系，下面说法正确的是？",
+      "options": [
+        "只要实现了 __getitem__，就一定能对对象使用 for 循环（旧式协议）",
+        "实现了 __getitem__ 后必须再实现 __iter__ 才能 for 循环",
+        "__getitem__ 与迭代完全无关",
+        "__getitem__ 只能接受字符串键"
+      ],
+      "answer": 0,
+      "explanation": "若对象没有 __iter__ 但有 __getitem__，for 会从索引 0 开始依次调用 obj[0]、obj[1]……直到 IndexError。这就是旧式序列迭代协议。",
+      "error_tag": "概念混淆",
+      "variant_group": "迭代协议"
+    },
+    {
+      "kp": "py.oop.protocol",
+      "type": "single_choice",
+      "question": "下面哪个方法被实现后能让对象支持 `+` 运算符？",
+      "options": [
+        "__plus__",
+        "__add__",
+        "__concat__",
+        "__sum__"
+      ],
+      "answer": 1,
+      "explanation": "二元 + 运算符会调用左操作数的 __add__（必要时回退到右操作数的 __radd__）。其它名称不是 Python 协议方法。",
+      "error_tag": "记忆缺失",
+      "variant_group": "运算符协议"
+    },
+    {
+      "kp": "py.oop.duck_typing",
+      "type": "single_choice",
+      "question": "关于 Python 中的「鸭子类型」，下面哪种说法最准确？",
+      "options": [
+        "一个对象只要继承自某个特定基类，就能被当作该类型使用",
+        "一个对象只要具备所需的方法/属性，就能在该场景中被当作相应类型使用",
+        "只有显式实现了某个接口（Protocol）并注册的对象才能被使用",
+        "鸭子类型要求对象的类型在运行时不能被修改"
+      ],
+      "answer": 1,
+      "explanation": "鸭子类型的核心是「关注行为而非类型」：只要对象提供了调用方需要的方法或属性，就可以在该场景中使用，不要求继承关系。继承是名义类型（nominal typing）的思路；Protocol 是静态检查工具对结构化类型的支持，并非运行时前提；鸭子类型与对象能否被修改无关。",
+      "error_tag": "概念混淆",
+      "variant_group": "duck_typing_definition"
+    },
+    {
+      "kp": "py.oop.duck_typing",
+      "type": "single_choice",
+      "question": "阅读下面代码：\n\nclass Parser:\n    def parse(self, text):\n        return text.split(',')\n\nclass Counter:\n    def parse(self, text):\n        return text.count(',')\n\ndef process(obj, text):\n    return obj.parse(text)\n\nprint(type(process(Parser(), 'a,b,c')).__name__)\nprint(process(Counter(), 'a,b,c'))\n\n两次输出的组合是？",
+      "options": [
+        "list 和 2",
+        "str 和 [a, b, c]",
+        "list 和 [a, b, c]",
+        "TypeError 和 2"
+      ],
+      "answer": 0,
+      "explanation": "process 只依赖传入对象具有 parse 方法，这就是鸭子类型。Parser.parse 返回 list，Counter.parse 返回 int（'a,b,c' 中有 2 个逗号）。因此第一次打印类型名 list，第二次打印 2。两个类没有继承关系也不影响调用。",
+      "error_tag": "概念混淆",
+      "variant_group": "duck_typing_basic_call"
+    },
+    {
+      "kp": "py.oop.duck_typing",
+      "type": "multi_choice",
+      "question": "在工程中为了在享受鸭子类型灵活性的同时降低风险，下面哪些做法是合理的？（多选）",
+      "options": [
+        "在文档或类型注解中明确说明对象需要提供哪些方法/属性",
+        "对外部传入的对象做必要的属性检查或使用 try/except 处理缺失方法",
+        "为协作的多个实现类抽取共同的 Protocol 或用测试固定其接口",
+        "把所有对象的类型都限制为 object，避免任何类型信息",
+        "依赖对象恰好有某个方法，出错时不做任何处理"
+      ],
+      "answer": [
+        0,
+        1,
+        2
+      ],
+      "explanation": "文档/注解说明接口、属性检查与异常处理、用 Protocol 或测试固定接口，都能在保持鸭子类型灵活性的同时降低运行时风险。把类型都放宽到 object 并放弃信息，或者完全不处理错误，只会让问题更晚暴露。",
+      "error_tag": "记忆缺失",
+      "variant_group": "duck_typing_best_practice"
+    },
+    {
+      "kp": "py.oop.duck_typing",
+      "type": "multi_choice",
+      "question": "关于鸭子类型与继承的关系，下面说法正确的有？（多选）",
+      "options": [
+        "鸭子类型不要求两个类之间有继承关系",
+        "一个类即使不继承任何基类，只要具备所需方法也能被鸭子类型使用",
+        "鸭子类型意味着继承完全无用",
+        "继承仍可用于复用实现，而鸭子类型关注的是行为兼容",
+        "如果一个对象没有继承某个类，就一定不能被传给需要该类型的方法"
+      ],
+      "answer": [
+        0,
+        1,
+        3
+      ],
+      "explanation": "鸭子类型不依赖继承，具备所需行为即可使用；继承仍然有价值，用于复用实现和表达「是某种类型」的关系，两者关注点不同。真正不成立的是「没有继承就一定不能用」以及「继承完全无用」，它们把继承和鸭子类型对立化了。",
+      "error_tag": "概念混淆",
+      "variant_group": "duck_typing_vs_inheritance"
+    },
+    {
+      "kp": "py.oop.duck_typing",
+      "type": "fill_blank",
+      "question": "当调用方只依赖对象是否具备某个方法，而不检查它属于哪个类时，这种风格通常被称为 ______ 类型。（填英文术语，两个单词，用下划线连接）",
+      "options": [],
+      "answer": [
+        "duck typing",
+        "duck_typing",
+        "Duck typing",
+        "Duck Typing"
+      ],
+      "explanation": "这种按行为而非类型判断的风格即 duck typing（鸭子类型）。它不要求继承关系，只要对象能响应被调用的方法或属性即可。",
+      "error_tag": "记忆缺失",
+      "variant_group": "duck_typing_definition"
+    },
+    {
+      "kp": "py.oop.duck_typing",
+      "type": "fill_blank",
+      "question": "阅读代码并填空：\n\ndef render(shapes):\n    return [s.area() for s in shapes]\n\n这段代码对 shapes 中元素的要求是：每个元素都必须能响应 ______ 方法。",
+      "options": [],
+      "answer": [
+        "area",
+        "area()",
+        "area 方法",
+        ".area",
+        "area方法"
+      ],
+      "explanation": "列表推导对每个 s 调用 s.area()，因此鸭子类型视角下要求每个元素具备 area 方法（可调用），具体是什么类并不重要。",
+      "error_tag": "记忆缺失",
+      "variant_group": "duck_typing_basic_call"
+    },
+    {
+      "kp": "py.oop.duck_typing",
+      "type": "fill_blank",
+      "question": "在 Python 中，若对象缺少被调用的方法，运行时通常会抛出 ______ 异常。（填异常类名）",
+      "options": [],
+      "answer": [
+        "AttributeError",
+        "AttributeError异常",
+        "attributeerror",
+        "Attribute Error"
+      ],
+      "explanation": "属性查找失败（例如对象没有该属性/方法）会抛出 AttributeError，这是鸭子类型调用常见的失败形式。它不是类型继承检查失败，而是属性访问失败。",
+      "error_tag": "边界错误",
+      "variant_group": "duck_typing_failure_mode"
+    },
+    {
+      "kp": "py.oop.duck_typing",
+      "type": "code_reading",
+      "question": "阅读代码，写出运行结果：\n\nclass A:\n    def speak(self):\n        return 'A'\n\nclass B:\n    def speak(self):\n        return 'B'\n\ndef talk(x):\n    return x.speak()\n\nprint(talk(A()) + talk(B()))\n\n输出是什么？",
+      "options": [],
+      "answer": "AB",
+      "explanation": "talk 只依赖参数具备 speak 方法，A 和 B 都满足，因此 talk(A()) 返回 'A'，talk(B()) 返回 'B'，字符串相加得到 'AB'。这里没有继承关系，体现了鸭子类型。",
+      "error_tag": "概念混淆",
+      "variant_group": "duck_typing_basic_call"
+    },
+    {
+      "kp": "py.oop.duck_typing",
+      "type": "code_reading",
+      "question": "阅读代码，说明运行结果并解释原因：\n\nclass Logger:\n    def log(self, msg):\n        return f'LOG: {msg}'\n\nclass Silent:\n    pass\n\ndef record(obj, msg):\n    if hasattr(obj, 'log'):\n        return obj.log(msg)\n    return 'no logger'\n\nprint(record(Logger(), 'hi'))\nprint(record(Silent(), 'hi'))\n\n两次输出分别是什么？为什么这里用 hasattr？",
+      "options": [],
+      "answer": "第一次输出 'LOG: hi'，第二次输出 'no logger'。record 通过 hasattr 检测对象是否具备 log 能力，从而在缺失该方法时走兜底分支，避免直接调用抛出 AttributeError。",
+      "explanation": "鸭子类型的理想情况是「有方法就调用」，但可选能力需要用能力检测（hasattr/getattr/try-except）来安全处理。Logger 有 log，所以返回格式化字符串；Silent 没有 log，被兜底分支处理，避免了 AttributeError。",
+      "error_tag": "边界错误",
+      "variant_group": "duck_typing_capability_check"
+    },
+    {
+      "kp": "py.oop.duck_typing",
+      "type": "code_reading",
+      "question": "阅读代码，指出潜在问题并说明原因：\n\nclass Mouse:\n    def click(self):\n        return 'click'\n\nclass Touchpad:\n    def tap(self):\n        return 'tap'\n\ndef use_device(device):\n    return device.click()\n\nuse_device(Touchpad())\n\n运行这段代码会发生什么？为什么？",
+      "options": [],
+      "answer": "会抛出 AttributeError，因为 Touchpad 没有 click 方法，use_device 在运行时调用 device.click() 时属性查找失败。问题在于把「有 click 能力」当成了隐含前提，而传入的对象不具备该能力。",
+      "explanation": "这是鸭子类型常见的运行时失败：调用方隐式要求 click 方法，但传入对象只提供 tap。若要支持多种设备，应统一接口（例如都提供 click），或在调用前做能力检查，或使用 Protocol 明确契约。",
+      "error_tag": "边界错误",
+      "variant_group": "duck_typing_failure_mode"
+    },
+    {
+      "kp": "py.oop.duck_typing",
+      "type": "scenario",
+      "question": "你维护一个函数 export(data, writer)，它只调用 writer.write(...) 把内容写出去，从不检查 writer 的具体类型。最近有同事传入一个只有 save() 方法而没有 write() 的对象，程序在运行时才报错。请说明为什么会有这种错误，并提出两种降低此类风险的改进方式。",
+      "options": [],
+      "answer": null,
+      "explanation": "该函数依赖对象具备 write 能力，属于鸭子类型。由于类型信息在运行时才解析，缺少方法只能在调用时暴露为 AttributeError。改进方式包括：用文档/类型注解或 Protocol 明确 write 契约；在函数入口做 hasattr/callable 能力检查或输入校验；统一协作对象的接口（让新对象也提供 write）；在测试中覆盖不同实现的接口一致性。",
+      "error_tag": "边界错误",
+      "variant_group": "duck_typing_best_practice",
+      "required_keywords": [
+        "AttributeError",
+        "接口",
+        "契约",
+        "一致性"
+      ]
+    },
+    {
+      "kp": "py.oop.duck_typing",
+      "type": "scenario",
+      "question": "在重构一个模块时，你发现多处代码用 for 循环遍历自定义对象、用 len() 取长度、用 + 拼接，却从没检查这些对象的类型。同事担心「类型不安全」，主张给每个对象加显式基类继承。请解释这些代码为什么能工作，并说明用显式继承替代是否必要。",
+      "options": [],
+      "answer": null,
+      "explanation": "这些代码能工作是因为 Python 的许多操作按能力判断：可迭代只要求 __iter__（或 __getitem__），len() 只要求 __len__，+ 只要求实现了相应运算符方法，这就是鸭子类型。为每个对象强加显式继承并不必要：继承可用于复用实现或表达类型关系，但并不会自动带来鸭子类型所要求的接口兼容；更合适的做法是用 Protocol/文档/测试明确这些能力契约，并在必要处做能力检查。",
+      "error_tag": "概念混淆",
+      "variant_group": "duck_typing_builtin_example",
+      "required_keywords": [
+        "兼容",
+        "接口",
+        "契约"
+      ]
+    },
+    {
+      "kp": "py.oop.duck_typing",
+      "type": "single_choice",
+      "question": "下面哪一项最能说明「鸭子类型」与「基于继承的多态」的区别？",
+      "options": [
+        "鸭子类型只能用于静态类型语言",
+        "基于继承的多态要求对象属于同一继承体系，而鸭子类型只要求对象具备相容的行为",
+        "鸭子类型不允许把一个类的实例传给另一个类的参数",
+        "基于继承的多态在运行时无法解析方法调用"
+      ],
+      "answer": 1,
+      "explanation": "基于继承的多态通过共同的基类/虚函数建立「是某种类型」的关系；鸭子类型不关心继承，只关心对象是否能响应调用方使用的方法或属性。其余选项均与实际相反：鸭子类型常见于动态类型语言，实例可以跨类传递，方法在运行时才解析。",
+      "error_tag": "概念混淆",
+      "variant_group": "duck_typing_vs_inheritance"
+    },
+    {
+      "kp": "py.oop.duck_typing",
+      "type": "scenario",
+      "question": "团队里两个类 A 和 B 都提供了 save() 方法但没有任何继承关系，一个只接受 A 的旧函数却被用来处理 B，结果在调用 save() 前做了 isinstance(obj, A) 判断而把 B 拒之门外。请分析这里的判断是否与鸭子类型冲突，并给出更符合鸭子类型的写法。",
+      "options": [],
+      "answer": null,
+      "explanation": "isinstance(obj, A) 基于名义类型，只接受 A 及其子类，与鸭子类型「按能力判断」的思想冲突：B 明明有 save 能力，却因不属于 A 继承体系而被拒。更符合鸭子类型的写法是检查能力（如 hasattr(obj, 'save') 或 callable(getattr(obj, 'save', None))），并用 Protocol/文档/测试明确 save 契约，让 A 和 B 都能被接受。",
+      "error_tag": "概念混淆",
+      "variant_group": "duck_typing_vs_inheritance",
+      "required_keywords": [
+        "鸭子类型",
+        "isinstance",
+        "名义类型",
+        "hasattr",
+        "save"
+      ]
+    },
+    {
+      "kp": "py.oop.duck_typing",
+      "type": "single_choice",
+      "question": "对于一个完全依赖鸭子类型调用的函数，下面哪种测试最可能暴露出隐藏的接口不匹配问题？",
+      "options": [
+        "只用一个实现了全部所需方法的「理想」对象进行测试",
+        "用一个缺少某个所需方法的对象测试，看是否抛出 AttributeError",
+        "只测试函数在空输入下的返回值",
+        "只看函数的文档字符串是否符合规范"
+      ],
+      "answer": 1,
+      "explanation": "鸭子类型的风险在于运行时才发现接口不匹配。用一个缺少所需方法的对象去调用，可以验证程序是否会抛出 AttributeError，从而暴露对具体方法的隐式依赖。只测理想对象或空输入都可能掩盖问题。",
+      "error_tag": "边界错误",
+      "variant_group": "duck_typing_failure_mode"
+    },
+    {
+      "kp": "py.oop.duck_typing",
+      "type": "single_choice",
+      "question": "下面代码执行时会发生什么？\n\nclass NoQuack:\n    def bark(self):\n        return 'woof'\n\ndef quack_like(duck):\n    return duck.quack()\n\nquack_like(NoQuack())",
+      "options": [
+        "正常返回 'woof'",
+        "抛出 AttributeError，因为 NoQuack 没有 quack 方法",
+        "抛出 TypeError，因为 NoQuack 不是 Duck 的子类",
+        "返回 None"
+      ],
+      "answer": 1,
+      "explanation": "鸭子类型只要求对象在运行时提供被调用的方法。NoQuack 只有 bark，没有 quack，调用 duck.quack() 会在运行时抛出 AttributeError。它不是类型检查错误，而是属性查找失败。",
+      "error_tag": "边界错误",
+      "variant_group": "duck_typing_failure_mode"
+    },
+    {
+      "kp": "py.oop.duck_typing",
+      "type": "single_choice",
+      "question": "为什么在实践中常建议用「显式检查能力」而不是「无脑依赖鸭子类型」来处理可选行为？",
+      "options": [
+        "因为 Python 禁止任何鸭子类型调用",
+        "因为调用方无法预知对象是否具备某个可选方法，直接调用可能抛出 AttributeError",
+        "因为显式检查会让代码运行得更快",
+        "因为显式检查可以替代所有类型注解"
+      ],
+      "answer": 1,
+      "explanation": "当某个方法是可选的（有的对象有、有的没有）时，直接调用可能触发 AttributeError。常用做法是 hasattr(obj, 'method')、callable(getattr(obj, 'method', None)) 或 try/except，把「能力检测」显式化。性能或替代类型注解都不是主要动机。",
+      "error_tag": "边界错误",
+      "variant_group": "duck_typing_capability_check"
+    },
+    {
+      "kp": "py.oop.duck_typing",
+      "type": "single_choice",
+      "question": "下面关于静态类型检查器（如 mypy）与鸭子类型关系的说法，正确的是？",
+      "options": [
+        "使用静态检查器就必须放弃鸭子类型的所有用法",
+        "结构化类型（如 typing.Protocol）可以在静态检查中表达鸭子类型的接口约束",
+        "Protocol 只能在运行时使用，无法用于静态检查",
+        "静态检查器会逐行执行代码来验证鸭子类型"
+      ],
+      "answer": 1,
+      "explanation": "Protocol 是结构化类型的表达方式，它不要求显式继承，只要求对象提供相应的方法/属性，因此可以在静态检查中描述鸭子类型的接口约束。静态检查器做的是静态分析而非逐行执行。",
+      "error_tag": "记忆缺失",
+      "variant_group": "duck_typing_typing_protocol"
+    },
+    {
+      "kp": "py.oop.duck_typing",
+      "type": "single_choice",
+      "question": "下面哪个 Python 内置机制最能体现鸭子类型的思想？",
+      "options": [
+        "isinstance(obj, SomeClass) 检查继承关系",
+        "for x in obj 只要求 obj 实现了 __iter__ 或 __getitem__",
+        "class Sub(Base) 显式继承",
+        "typing.cast(obj, SomeClass) 强制转换"
+      ],
+      "answer": 1,
+      "explanation": "for 循环不检查对象是否继承自某个迭代器基类，只要求它能通过 __iter__（或旧式的 __getitem__）产生元素，这正是鸭子类型：按能力而非类型判断。isinstance 和显式继承基于名义类型。",
+      "error_tag": "概念混淆",
+      "variant_group": "duck_typing_builtin_example"
+    },
+    {
+      "kp": "py.oop.duck_typing",
+      "type": "multi_choice",
+      "question": "下列哪些情况符合鸭子类型的用法？（多选）",
+      "options": [
+        "函数接收一个对象，只调用其 read() 方法，不关心它是不是某种 IO 基类的子类",
+        "用 for 循环遍历一个自定义对象，因为它实现了 __iter__",
+        "用 isinstance 判断对象是否属于某个具体类后再决定是否调用方法",
+        "调用 len(obj) 时，只要 obj 实现了 __len__ 就能工作",
+        "强制要求参数必须是 str 类型，否则报错"
+      ],
+      "answer": [
+        0,
+        1,
+        3
+      ],
+      "explanation": "鸭子类型关注对象是否具备所需能力：只调用 read、实现 __iter__ 支持迭代、实现 __len__ 支持 len，都属于按能力判断。isinstance 判断具体类属于名义类型；强制 str 是显式类型限制，都与鸭子类型思想相反。",
+      "error_tag": "概念混淆",
+      "variant_group": "duck_typing_usage"
+    },
+    {
+      "kp": "py.oop.duck_typing",
+      "type": "multi_choice",
+      "question": "下面哪些操作可能因为鸭子类型而在运行时失败？（多选）",
+      "options": [
+        "调用 obj.method() 但 obj 没有 method 属性",
+        "对 obj 使用 for 迭代但 obj 既无 __iter__ 也无 __getitem__",
+        "对定义了 __len__ 的对象调用 len(obj)",
+        "调用 obj() 但 obj 不是可调用对象",
+        "对实现了 __add__ 的两个对象使用 + 运算符"
+      ],
+      "answer": [
+        0,
+        1,
+        3
+      ],
+      "explanation": "鸭子类型的失败通常发生在运行时属性/协议查找失败：缺方法会 AttributeError，不可迭代会 TypeError，不可调用会 TypeError。而实现了 __len__ 的对象调用 len、实现了 __add__ 的对象使用 + 都是正常成功的，不属于失败情形。",
+      "error_tag": "边界错误",
+      "variant_group": "duck_typing_failure_mode"
+    }
+  ]
+}

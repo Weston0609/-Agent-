@@ -1,0 +1,622 @@
+{
+  "id": "s6u2l5",
+  "title": "s6u2l5",
+  "kps": [
+    "ai.nn.training_loop",
+    "ai.nn.overfit_debug"
+  ],
+  "theory": "## ai.nn.training_loop\n\n# 训练循环：从零到工程级\n\n## 一句话直觉\n\n**训练循环（training loop）** 是让神经网络（neural network）从“随机胡猜”变成“会预测”的反复学习过程：每轮拿一批数据算预测、算误差、算梯度、更新参数，循环直到模型变好。\n\n---\n\n## 1. 为什么需要训练循环？\n\n神经网络一开始的参数（parameter）是随机初始化的，所以它一开始的输出没有意义。训练循环就是把它变成一个“会学习”的系统。\n\n训练循环通常包含 5 个核心动作：\n\n1. **前向传播（forward pass）**：输入数据，得到预测。\n2. **计算损失（loss）**：衡量预测和真实答案差多少。\n3. **反向传播（backward pass）**：自动计算每个参数对损失的梯度（gradient）。\n4. **参数更新（optimizer step）**：按梯度方向微调参数。\n5. **清零梯度（zero grad）**：防止梯度累积。\n\n```python\nimport torch\nimport torch.nn as nn\n\n# 1. 定义一个极简模型：1 个输入 -> 1 个输出\nmodel = nn.Linear(1, 1)\n\n# 2. 损失函数：均方误差\ncriterion = nn.MSELoss()\n\n# 3. 优化器：随机梯度下降\noptimizer = torch.optim.SGD(model.parameters(), lr=0.01)\n\n# 4. 造一批训练数据：y = 2x + 1\nx = torch.tensor([[1.0], [2.0], [3.0], [4.0]])\ny = torch.tensor([[3.0], [5.0], [7.0], [9.0]])\n\n# 5. 训练循环\nfor epoch in range(100):\n    y_pred = model(x)              # 前向传播\n    loss = criterion(y_pred, y)    # 计算损失\n\n    optimizer.zero_grad()          # 清零旧梯度\n    loss.backward()                # 反向传播，算梯度\n    optimizer.step()               # 更新参数\n\n    if (epoch + 1) % 10 == 0:\n        print(f\"epoch {epoch+1}, loss={loss.item():.4f}\")\n```\n\n---\n\n## 2. 一个完整训练循环的四个关键对象\n\n工程里，训练循环不是只写一个 `for` 循环，而是由四类对象协作：\n\n### 2.1 模型（model）\n负责把输入变成输出。\n\n```python\nimport torch\nimport torch.nn as nn\n\nclass TinyNet(nn.Module):\n    def __init__(self):\n        super().__init__()\n        self.net = nn.Sequential(\n            nn.Linear(1, 16),\n            nn.ReLU(),\n            nn.Linear(16, 1)\n        )\n\n    def forward(self, x):\n        return self.net(x)\n\nmodel = TinyNet()\nprint(model)\n```\n\n### 2.2 数据加载器（DataLoader）\n负责把数据分批次（batch）喂给模型。\n\n```python\nfrom torch.utils.data import TensorDataset, DataLoader\n\nx = torch.linspace(-3, 3, 200).unsqueeze(1)\ny = 2 * x + 1 + 0.1 * torch.randn_like(x)\n\ndataset = TensorDataset(x, y)\nloader = DataLoader(dataset, batch_size=32, shuffle=True)\n\nfor batch_x, batch_y in loader:\n    print(batch_x.shape, batch_y.shape)\n    break\n```\n\n### 2.3 损失函数（loss function）\n决定“什么叫做错”。回归常用 `MSELoss`，分类常用 `CrossEntropyLoss`。\n\n### 2.4 优化器（optimizer）\n决定“怎样根据梯度改参数”。常见有 `SGD`、`Adam`。\n\n```python\ncriterion = nn.MSELoss()\noptimizer = torch.optim.Adam(model.parameters(), lr=0.01)\n```\n\n---\n\n## 3. 标准训练循环：从单步到 epoch\n\n### 3.1 单步训练函数\n\n工程代码通常会把“一个 batch 的训练”封装成函数。\n\n```python\nimport torch\nimport torch.nn as nn\n\nmodel = nn.Linear(1, 1)\ncriterion = nn.MSELoss()\noptimizer = torch.optim.SGD(model.parameters(), lr=0.01)\n\ndef train_step(batch_x, batch_y):\n    model.train()                  # 进入训练模式\n    y_pred = model(batch_x)        # 前向传播\n    loss = criterion(y_pred, batch_y)\n\n    optimizer.zero_grad()          # 清空梯度\n    loss.backward()                # 反向传播\n    optimizer.step()               # 更新参数\n    return loss.item()\n```\n\n### 3.2 一个 epoch 的训练\n\n```python\nfrom torch.utils.data import TensorDataset, DataLoader\n\nx = torch.linspace(-3, 3, 200).unsqueeze(1)\ny = 2 * x + 1 + 0.1 * torch.randn_like(x)\n\nloader = DataLoader(TensorDataset(x, y), batch_size=32, shuffle=True)\n\ndef train_one_epoch(model, loader, criterion, optimizer):\n    total_loss = 0.0\n    for batch_x, batch_y in loader:\n        loss = train_step(batch_x, batch_y)\n        total_loss += loss\n    return total_loss / len(loader)\n```\n\n### 3.3 多 epoch 训练\n\n```python\nfor epoch in range(20):\n    avg_loss = train_one_epoch(model, loader, criterion, optimizer)\n    print(f\"epoch {epoch+1:02d}, avg_loss={avg_loss:.4f}\")\n```\n\n---\n\n## 4. 工程级训练循环必须加的三件事\n\n### 4.1 验证集（validation set）\n训练时不能只看训练损失，否则容易过拟合（overfitting）。\n\n```python\n@torch.no_grad()\ndef evaluate(model, loader, criterion):\n    model.eval()                   # 进入评估模式\n    total_loss = 0.0\n    for batch_x, batch_y in loader:\n        y_pred = model(batch_x)\n        loss = criterion(y_pred, batch_y)\n        total_loss += loss.item()\n    return total_loss / len(loader)\n```\n\n### 4.2 设备管理（device）\n把模型和数据放到 GPU 或 CPU。\n\n```python\ndevice = \"cuda\" if torch.cuda.is_available() else \"cpu\"\nmodel = model.to(device)\n\nfor batch_x, batch_y in loader:\n    batch_x = batch_x.to(device)\n    batch_y = batch_y.to(device)\n    break\n```\n\n### 4.3 保存最佳模型（checkpoint）\n\n```python\nbest_val_loss = float(\"inf\")\n\nfor epoch in range(20):\n    train_loss = train_one_epoch(model, loader, criterion, optimizer)\n    val_loss = evaluate(model, loader, criterion)\n\n    if val_loss < best_val_loss:\n        best_val_loss = val_loss\n        torch.save(model.state_dict(), \"best_model.pt\")\n\n    print(f\"epoch {epoch+1:02d}, train={train_loss:.4f}, val={val_loss:.4f}\")\n```\n\n---\n\n## 5. 把训练循环写成工程模板\n\n下面是一个更接近真实项目的训练循环结构：\n\n```python\nimport torch\nimport torch.nn as nn\nfrom torch.utils.data import TensorDataset, DataLoader\n\n# 1. 准备数据\nx = torch.linspace(-3, 3, 400).unsqueeze(1)\ny = 2 * x + 1 + 0.1 * torch.randn_like(x)\n\nn_train = 320\ntrain_loader = DataLoader(TensorDataset(x[:n_train], y[:n_train]), batch_size=32, shuffle=True)\nval_loader = DataLoader(TensorDataset(x[n_train:], y[n_train:]), batch_size=32)\n\n# 2. 模型、损失、优化器\ndevice = \"cuda\" if torch.cuda.is_available() else \"cpu\"\nmodel = nn.Sequential(nn.Linear(1, 16), nn.ReLU(), nn.Linear(16, 1)).to(device)\ncriterion = nn.MSELoss()\noptimizer = torch.optim.Adam(model.parameters(), lr=0.01)\n\n# 3. 单步训练\ndef train_step(batch_x, batch_y):\n    model.train()\n    batch_x, batch_y = batch_x.to(device), batch_y.to(device)\n    y_pred = model(batch_x)\n    loss = criterion(y_pred, batch_y)\n    optimizer.zero_grad()\n    loss.backward()\n    optimizer.step()\n    return loss.item()\n\n# 4. 评估\n@torch.no_grad()\ndef evaluate(loader):\n    model.eval()\n    total = 0.0\n    for batch_x, batch_y in loader:\n        batch_x, batch_y = batch_x.to(device), batch_y.to(device)\n        total += criterion(model(batch_x), batch_y).item()\n    return total / len(loader)\n\n# 5. 训练循环\nbest_val = float(\"inf\")\nfor epoch in range(50):\n    train_loss = 0.0\n    for batch_x, batch_y in train_loader:\n        train_loss += train_step(batch_x, batch_y)\n    train_loss /= len(train_loader)\n    val_loss = evaluate(val_loader)\n\n    if val_loss < best_val:\n        best_val = val_loss\n        torch.save(model.state_dict(), \"best_model.pt\")\n\n    if (epoch + 1) % 5 == 0:\n        print(f\"epoch {epoch+1:02d}, train={train_loss:.4f}, val={val_loss:.4f}\")\n```\n\n这个模板已经包含：数据分批、训练/评估切换、设备管理、验证、保存最佳模型。\n\n---\n\n## 动手练习\n\n**任务：训练一个“线性回归小模型”，并画出训练损失曲线。**\n\n要求：\n\n1. 生成 300 个样本：`x` 在 `[-2, 2]` 之间均匀采样，`y = 3x - 0.5 + 噪声`。\n2. 用 `nn.Linear(1, 1)` 作为模型。\n3. 用 `MSELoss` 和 `SGD` 或 `Adam` 训练 50 个 epoch。\n4. 每 5 个 epoch 记录一次训练损失。\n5. 用 `matplotlib` 画出 loss 随 epoch 变化的曲线。\n6. 最后打印模型学到的权重和偏置，观察是否接近 3 和 -0.5。\n\n提示：\n\n```python\nimport matplotlib.pyplot as plt\nlosses = []\n# 在训练循环中 append loss\nplt.plot(losses)\nplt.xlabel(\"epoch\")\nplt.ylabel(\"loss\")\nplt.title(\"Training Loss\")\nplt.show()\n```\n\n## ai.nn.overfit_debug\n\n## 一句话直觉\n\n**过拟合（overfitting）** 就像学生死记硬背了练习册答案，考试一换题就崩；**调试（debug）过拟合**，就是学会判断模型“背题”还是“真懂”，并用手段让它真正学到规律。\n\n---\n\n## 1. 什么是过拟合？先看一个最小例子\n\n**过拟合**：模型在训练集上表现很好，但在没见过的数据（验证集/测试集）上表现很差。\n\n直觉：模型把训练数据里的“噪声”也当成了规律。\n\n```python\n# 用多项式拟合带噪声的正弦曲线，直观看到过拟合\nimport numpy as np\nimport matplotlib.pyplot as plt\nfrom sklearn.pipeline import make_pipeline\nfrom sklearn.preprocessing import PolynomialFeatures\nfrom sklearn.linear_model import LinearRegression\n\nrng = np.random.RandomState(0)\nX = np.sort(rng.rand(30, 1) * 6, axis=0)\ny = np.sin(X).ravel() + rng.normal(0, 0.25, X.shape[0])\n\nX_test = np.linspace(0, 6, 200)[:, None]\ny_true = np.sin(X_test).ravel()\n\nfor degree, color in [(1, 'blue'), (3, 'green'), (15, 'red')]:\n    model = make_pipeline(PolynomialFeatures(degree), LinearRegression())\n    model.fit(X, y)\n    y_pred = model.predict(X_test)\n    plt.plot(X_test, y_true, 'k--', label='真实曲线')\n    plt.plot(X_test, y_pred, color=color, label=f'degree={degree}')\n    plt.scatter(X, y, s=15, c='gray')\n    plt.legend(); plt.title('多项式次数与过拟合'); plt.show()\n```\n\n**结论**：degree=15 时训练点几乎全穿过，但曲线剧烈震荡——这就是过拟合。\n\n---\n\n## 2. 怎么判断过拟合？看训练/验证两条曲线\n\n关键指标是 **训练损失（training loss）** 与 **验证损失（validation loss）** 的差距。\n\n- 训练损失低、验证损失高 → 过拟合\n- 两者都高 → 欠拟合（underfitting）\n- 两者都低且接近 → 好模型\n\n```python\n# 手动划分训练/验证集，观察两条 loss 曲线\nimport torch\nimport torch.nn as nn\nfrom torch.utils.data import TensorDataset, DataLoader\n\ntorch.manual_seed(0)\nN = 200\nX = torch.randn(N, 1)\ny = 3 * X + 1 + 0.5 * torch.randn(N, 1)  # 线性关系 + 噪声\n\n# 用小样本训练，更容易过拟合\nX_train, y_train = X[:20], y[:20]\nX_val, y_val = X[20:], y[20:]\n\ntrain_loader = DataLoader(TensorDataset(X_train, y_train), batch_size=5, shuffle=True)\n\nmodel = nn.Sequential(nn.Linear(1, 128), nn.ReLU(), nn.Linear(128, 1))\nopt = torch.optim.Adam(model.parameters(), lr=1e-2)\nloss_fn = nn.MSELoss()\n\nfor epoch in range(200):\n    model.train()\n    for xb, yb in train_loader:\n        opt.zero_grad()\n        loss = loss_fn(model(xb), yb)\n        loss.backward(); opt.step()\n    model.eval()\n    with torch.no_grad():\n        train_loss = loss_fn(model(X_train), y_train).item()\n        val_loss = loss_fn(model(X_val), y_val).item()\n    if epoch % 40 == 0:\n        print(f'epoch {epoch:3d} | train {train_loss:.3f} | val {val_loss:.3f}')\n```\n\n**结论**：训练损失一路下降，验证损失却先降后升，就说明已经进入过拟合区。\n\n---\n\n## 3. 常用“过拟合调试”手段\n\n按优先级推荐：\n\n1. **增加数据**或 **数据增强（data augmentation）**\n2. **降低模型复杂度**（层数、参数量）\n3. **正则化（regularization）**：L2 权重衰减\n4. **Dropout**：训练时随机丢弃神经元\n5. **早停（early stopping）**：验证损失不再下降就停止\n\n```python\n# 加入权重衰减 + Dropout + 早停，观察验证损失\nmodel = nn.Sequential(\n    nn.Linear(1, 128), nn.ReLU(), nn.Dropout(0.3),\n    nn.Linear(128, 128), nn.ReLU(), nn.Dropout(0.3),\n    nn.Linear(128, 1)\n)\nopt = torch.optim.Adam(model.parameters(), lr=1e-2, weight_decay=1e-3)\n\nbest_val, patience, wait = float('inf'), 20, 0\nfor epoch in range(300):\n    model.train()\n    for xb, yb in train_loader:\n        opt.zero_grad()\n        loss = loss_fn(model(xb), yb)\n        loss.backward(); opt.step()\n    model.eval()\n    with torch.no_grad():\n        val_loss = loss_fn(model(X_val), y_val).item()\n    if val_loss < best_val:\n        best_val, wait = val_loss, 0\n    else:\n        wait += 1\n        if wait >= patience:\n            print(f'早停于 epoch {epoch}, best_val={best_val:.3f}')\n            break\n```\n\n**结论**：正则化和早停能显著缩小训练—验证差距。\n\n---\n\n## 4. 系统化调试流程\n\n遇到过拟合，按这个清单走：\n\n1. **先画曲线**：train loss vs val loss 随 epoch 的变化\n2. **确认划分正确**：验证集不能混入训练集（数据泄漏）\n3. **逐步调整**：先加正则，再考虑降复杂度/加数据\n4. **固定随机种子**，保证对比公平\n5. **一次只改一个变量**，记录每次结果\n\n```python\n# 简单记录函数，方便对比不同配置的 train/val loss\ndef evaluate(model, X_tr, y_tr, X_va, y_va):\n    model.eval()\n    with torch.no_grad():\n        tr = loss_fn(model(X_tr), y_tr).item()\n        va = loss_fn(model(X_va), y_va).item()\n    return {'train': round(tr, 3), 'val': round(va, 3), 'gap': round(va - tr, 3)}\n\nprint(evaluate(model, X_train, y_train, X_val, y_val))\n```\n\n**结论**：把“调参”变成“对照实验”，过拟合调试就不再靠运气。\n\n---\n\n## 5. 一句话总结\n\n**过拟合调试 = 用验证集当“照妖镜”，看清模型是在学规律还是在背答案；然后用数据、正则、简化、早停把它拉回正轨。**\n",
+  "quiz": [
+    {
+      "kp": "ai.nn.training_loop",
+      "type": "single_choice",
+      "question": "在神经网络训练循环中，通常需要在每个 batch 上依次执行若干步骤。下列顺序中最合理的是？",
+      "options": [
+        "清零梯度 → 前向传播 → 计算损失 → 反向传播 → 更新参数",
+        "前向传播 → 计算损失 → 清零梯度 → 反向传播 → 更新参数",
+        "前向传播 → 反向传播 → 计算损失 → 清零梯度 → 更新参数",
+        "计算损失 → 前向传播 → 反向传播 → 清零梯度 → 更新参数"
+      ],
+      "answer": 0,
+      "explanation": "标准训练循环应先清零上一轮累积的梯度，再做前向传播得到输出和损失，然后反向传播计算梯度，最后用优化器更新参数。",
+      "error_tag": "训练步骤顺序错误",
+      "variant_group": "training_loop_order"
+    },
+    {
+      "kp": "ai.nn.training_loop",
+      "type": "single_choice",
+      "question": "如果训练循环中忘记在每个 batch 开始时清零梯度，最可能发生什么？",
+      "options": [
+        "梯度会被累加到上一轮的值上，导致参数更新方向异常",
+        "模型参数不会发生任何更新",
+        "前向传播的输出会变成全零",
+        "损失函数无法计算"
+      ],
+      "answer": 0,
+      "explanation": "许多框架默认会累积梯度，若不清零，当前 batch 的梯度会与之前 batch 的梯度相加，导致更新量偏大或方向错误。",
+      "error_tag": "遗漏梯度清零",
+      "variant_group": "zero_grad"
+    },
+    {
+      "kp": "ai.nn.training_loop",
+      "type": "single_choice",
+      "question": "训练循环中，通常如何计算一个 epoch 的平均训练损失？",
+      "options": [
+        "累加每个 batch 的损失，最后除以 batch 数量",
+        "直接取最后一个 batch 的损失",
+        "取所有 batch 损失的最大值",
+        "取第一个 batch 的损失"
+      ],
+      "answer": 0,
+      "explanation": "为了反映整个 epoch 的训练情况，通常把每个 batch 的损失累加后除以 batch 数（或按样本数加权平均）。",
+      "error_tag": "epoch损失统计错误",
+      "variant_group": "epoch_loss"
+    },
+    {
+      "kp": "ai.nn.training_loop",
+      "type": "single_choice",
+      "question": "关于训练循环中的验证阶段，下列做法最合理的是？",
+      "options": [
+        "切换到 eval 模式并在 torch.no_grad() 上下文中前向传播",
+        "保持 train 模式并执行反向传播",
+        "保持 train 模式但不计算损失",
+        "切换到 eval 模式并调用 optimizer.step()"
+      ],
+      "answer": 0,
+      "explanation": "验证阶段不需要梯度，应使用 eval() 切换模式，并在 no_grad() 下前向传播，以节省显存并保证 Dropout/BatchNorm 行为正确。",
+      "error_tag": "验证阶段实现错误",
+      "variant_group": "validation_loop"
+    },
+    {
+      "kp": "ai.nn.training_loop",
+      "type": "single_choice",
+      "question": "在训练循环中，为什么要使用 torch.no_grad() 包裹验证阶段的前向传播？",
+      "options": [
+        "避免构建计算图，减少显存占用并加速计算",
+        "强制模型参数变为不可训练",
+        "自动把模型切换到 eval 模式",
+        "让损失函数返回 Python 浮点数"
+      ],
+      "answer": 0,
+      "explanation": "no_grad() 会关闭自动求导，不保存中间激活，从而降低显存占用并提高推理速度；它不会切换 train/eval 模式。",
+      "error_tag": "no_grad作用理解错误",
+      "variant_group": "no_grad"
+    },
+    {
+      "kp": "ai.nn.training_loop",
+      "type": "single_choice",
+      "question": "某训练循环在每个 batch 后都调用 scheduler.step()。如果使用的是基于 epoch 的学习率调度器，这可能导致什么？",
+      "options": [
+        "学习率下降过快，训练可能过早收敛或效果变差",
+        "学习率完全不变",
+        "优化器无法更新参数",
+        "损失函数变成负数"
+      ],
+      "answer": 0,
+      "explanation": "基于 epoch 的调度器通常每个 epoch 调一次 step()；若每个 batch 都调用，学习率会按 batch 数加速衰减。",
+      "error_tag": "学习率调度调用频率错误",
+      "variant_group": "scheduler_step"
+    },
+    {
+      "kp": "ai.nn.training_loop",
+      "type": "single_choice",
+      "question": "在训练循环中，如果忘记把模型移动到与数据相同的设备（如 GPU），最可能出现的现象是？",
+      "options": [
+        "前向传播时报设备不匹配的错误",
+        "模型自动把数据搬到 CPU",
+        "损失函数自动忽略设备差异",
+        "优化器会自动处理设备问题"
+      ],
+      "answer": 0,
+      "explanation": "模型和输入数据必须在同一设备上，否则前向传播会因张量设备不一致而报错；框架不会自动搬运。",
+      "error_tag": "设备不匹配",
+      "variant_group": "device_placement"
+    },
+    {
+      "kp": "ai.nn.training_loop",
+      "type": "single_choice",
+      "question": "在训练循环中，通常把模型设置为训练模式后，Dropout 层会如何表现？",
+      "options": [
+        "以一定概率随机丢弃神经元输出",
+        "完全关闭，等价于恒等映射",
+        "把所有输出乘以固定系数",
+        "只在第一个 batch 生效"
+      ],
+      "answer": 0,
+      "explanation": "训练模式下 Dropout 会按概率随机置零部分神经元输出，起到正则化作用；eval 模式下才会关闭。",
+      "error_tag": "Dropout行为理解错误",
+      "variant_group": "dropout_behavior"
+    },
+    {
+      "kp": "ai.nn.training_loop",
+      "type": "single_choice",
+      "question": "某训练循环在反向传播前调用了 loss.backward() 之后又调用了一次 loss.backward()。最可能的结果是？",
+      "options": [
+        "梯度被累加，可能导致更新量异常",
+        "第二次调用会被框架自动忽略",
+        "损失值会翻倍",
+        "优化器会报错并停止训练"
+      ],
+      "answer": 0,
+      "explanation": "默认情况下梯度会累积，连续两次 backward 会把梯度相加；除非显式清零或设置 retain_graph 等，否则会造成更新异常。",
+      "error_tag": "重复反向传播",
+      "variant_group": "backward_accumulation"
+    },
+    {
+      "kp": "ai.nn.training_loop",
+      "type": "single_choice",
+      "question": "关于训练循环中 batch 大小与学习率的关系，下列说法最合理的是？",
+      "options": [
+        "增大 batch 大小通常可以适当增大学习率，但需要实验调整",
+        "batch 大小与学习率完全无关",
+        "batch 越大，学习率必须越小",
+        "学习率只由优化器类型决定"
+      ],
+      "answer": 0,
+      "explanation": "较大 batch 提供的梯度估计更稳定，实践中常配合较大的学习率，但最佳值需通过实验确定，并非硬性规则。",
+      "error_tag": "batch与学习率关系误解",
+      "variant_group": "batch_lr"
+    },
+    {
+      "kp": "ai.nn.training_loop",
+      "type": "single_choice",
+      "question": "在训练循环中，通常将模型保存为检查点的最佳时机是？",
+      "options": [
+        "在若干 epoch 结束后，按验证指标保存较优模型",
+        "在每个 batch 的反向传播过程中",
+        "在每次清零梯度之前",
+        "在第一次前向传播之后立即保存"
+      ],
+      "answer": 0,
+      "explanation": "检查点通常在 epoch 级别根据验证指标保存，以保留验证性能较好的参数；在 batch 内频繁保存既不必要也效率低。",
+      "error_tag": "检查点保存时机错误",
+      "variant_group": "checkpoint"
+    },
+    {
+      "kp": "ai.nn.training_loop",
+      "type": "single_choice",
+      "question": "某训练循环中，损失值持续变为 NaN。下列排查方向中最不合理的是？",
+      "options": [
+        "检查 DataLoader 是否返回了正确形状和范围的数据",
+        "检查学习率是否过大导致发散",
+        "检查损失函数是否与任务匹配",
+        "检查是否在每个 batch 前清零了梯度"
+      ],
+      "answer": 3,
+      "explanation": "忘记清零梯度通常导致梯度累积，但不直接导致 NaN；数据异常、学习率过大、损失函数不匹配才是常见原因。",
+      "error_tag": "NaN排查方向错误",
+      "variant_group": "nan_debug"
+    },
+    {
+      "kp": "ai.nn.training_loop",
+      "type": "single_choice",
+      "question": "在训练循环中，调用反向传播的主要目的是什么？",
+      "options": [
+        "根据损失计算各参数的梯度",
+        "直接修改参数值",
+        "重新初始化模型权重",
+        "把数据加载到 GPU 上"
+      ],
+      "answer": 0,
+      "explanation": "反向传播利用链式法则从损失出发计算每个可学习参数的梯度，为后续优化器更新参数做准备。",
+      "error_tag": "混淆反向传播作用",
+      "variant_group": "backward_purpose"
+    },
+    {
+      "kp": "ai.nn.training_loop",
+      "type": "single_choice",
+      "question": "关于优化器在训练循环中的角色，下列说法正确的是？",
+      "options": [
+        "优化器根据梯度更新模型参数",
+        "优化器负责计算损失函数",
+        "优化器负责前向传播",
+        "优化器负责加载训练数据"
+      ],
+      "answer": 0,
+      "explanation": "优化器接收反向传播得到的梯度，并按特定规则（如 SGD、Adam）更新参数；损失计算、前向传播和数据加载由其他部分组成。",
+      "error_tag": "混淆优化器职责",
+      "variant_group": "optimizer_role"
+    },
+    {
+      "kp": "ai.nn.training_loop",
+      "type": "single_choice",
+      "question": "在训练循环中，通常会在什么时候调用 model.train()？",
+      "options": [
+        "在每个 epoch 的训练开始前",
+        "在每个 batch 的反向传播之后",
+        "在每次参数更新之后",
+        "在验证集评估结束后"
+      ],
+      "answer": 0,
+      "explanation": "model.train() 用于将模型切换为训练模式，通常在每个 epoch 的训练开始前调用一次；验证/测试前会切换为 eval() 模式。",
+      "error_tag": "train/eval模式切换时机错误",
+      "variant_group": "train_eval_mode"
+    },
+    {
+      "kp": "ai.nn.training_loop",
+      "type": "single_choice",
+      "question": "某训练循环在每个 batch 中都调用了 model.eval()，然后进行前向传播和反向传播。这可能带来什么问题？",
+      "options": [
+        "Dropout 和 BatchNorm 等层会按推理模式运行，导致训练行为异常",
+        "模型参数会被冻结，无法更新",
+        "损失函数会变成常数",
+        "优化器会拒绝更新参数"
+      ],
+      "answer": 0,
+      "explanation": "eval() 会关闭 Dropout 并使用 BatchNorm 的运行时统计量，这不符合训练需求，会导致训练效果变差。",
+      "error_tag": "训练时误用eval模式",
+      "variant_group": "train_eval_mode"
+    },
+    {
+      "kp": "ai.nn.training_loop",
+      "type": "single_choice",
+      "question": "在训练循环中，通常如何使用 DataLoader？",
+      "options": [
+        "每个 epoch 遍历一次 DataLoader，每次产出一个 batch",
+        "只在整个训练开始时遍历一次 DataLoader",
+        "在每个 batch 内重新创建 DataLoader",
+        "只在验证阶段使用 DataLoader，训练阶段手动取数据"
+      ],
+      "answer": 0,
+      "explanation": "DataLoader 是可迭代对象，通常在每个 epoch 外层循环中重新遍历，每次迭代产出一个 batch 的数据和标签。",
+      "error_tag": "DataLoader使用方式错误",
+      "variant_group": "dataloader_iteration"
+    },
+    {
+      "kp": "ai.nn.training_loop",
+      "type": "single_choice",
+      "question": "训练循环中，损失值通常通过什么方式获得？",
+      "options": [
+        "调用损失函数，传入模型输出和目标标签",
+        "直接读取优化器内部的 loss 属性",
+        "通过反向传播的返回值获得",
+        "从 DataLoader 中自动返回"
+      ],
+      "answer": 0,
+      "explanation": "损失值由损失函数（如 CrossEntropyLoss、MSELoss）根据模型输出和目标标签计算得到，而不是从优化器或反向传播中直接返回。",
+      "error_tag": "损失获取方式错误",
+      "variant_group": "loss_computation"
+    },
+    {
+      "kp": "ai.nn.training_loop",
+      "type": "single_choice",
+      "question": "在典型的训练循环中，optimizer.step() 应该放在什么位置？",
+      "options": [
+        "反向传播之后，用于根据梯度更新参数",
+        "前向传播之前，用于初始化参数",
+        "计算损失之前，用于清零梯度",
+        "每个 epoch 结束后，用于保存模型"
+      ],
+      "answer": 0,
+      "explanation": "optimizer.step() 在反向传播计算出梯度后调用，执行一次参数更新；清零梯度、前向传播和损失计算都在它之前。",
+      "error_tag": "优化器更新时机错误",
+      "variant_group": "optimizer_step"
+    },
+    {
+      "kp": "ai.nn.training_loop",
+      "type": "single_choice",
+      "question": "如果训练循环中只调用了反向传播，却从未调用 optimizer.step()，会发生什么？",
+      "options": [
+        "梯度被计算出来，但模型参数不会更新",
+        "模型参数会更新，但梯度不会被计算",
+        "损失会不断下降",
+        "优化器会自动更新参数"
+      ],
+      "answer": 0,
+      "explanation": "反向传播只负责计算梯度，真正修改参数需要优化器的 step()；缺少 step() 时参数保持不变。",
+      "error_tag": "遗漏参数更新",
+      "variant_group": "optimizer_step"
+    },
+    {
+      "kp": "ai.nn.overfit_debug",
+      "type": "single_choice",
+      "question": "在训练一个多层感知机做手写数字分类时，你发现训练集准确率持续上升到 99.8%，而验证集准确率在 92% 左右就不再提升并开始轻微下降。下列哪种描述最准确地概括了当前现象？",
+      "options": [
+        "模型发生了欠拟合，需要增加模型容量",
+        "模型发生了过拟合，训练集表现明显优于验证集",
+        "数据预处理出错，导致验证集分布完全错误",
+        "学习率过低，模型还未收敛到最优解"
+      ],
+      "answer": 1,
+      "explanation": "训练集远好于验证集、验证集指标不再提升甚至下降，是典型的过拟合特征。欠拟合应对应训练集本身表现也差；学习率过低通常表现为训练和验证都还在缓慢上升，不会出现明显差距。",
+      "error_tag": "概念混淆",
+      "variant_group": "过拟合的识别"
+    },
+    {
+      "kp": "ai.nn.overfit_debug",
+      "type": "single_choice",
+      "question": "某神经网络训练曲线显示：训练损失和验证损失都很高，且两者几乎同步平缓下降但距离很低的值还很远。最合理的判断是？",
+      "options": [
+        "过拟合，应立即增加 Dropout",
+        "欠拟合，模型容量或训练充分度不足",
+        "过拟合，应减少训练轮数",
+        "数据泄漏，验证集被污染"
+      ],
+      "answer": 1,
+      "explanation": "训练与验证损失都高且接近，说明模型连训练数据都没学好，属于欠拟合。过拟合的典型表现是训练损失很低而验证损失高，两者有明显差距。",
+      "error_tag": "概念混淆",
+      "variant_group": "欠拟合的识别"
+    },
+    {
+      "kp": "ai.nn.overfit_debug",
+      "type": "single_choice",
+      "question": "在对比实验中发现：训练集误差远小于验证集误差，但两者都在下降。要缓解这一问题，下列哪一项做法方向最正确？",
+      "options": [
+        "增大模型容量，让训练集误差进一步降低",
+        "增加正则化（如权重衰减、Dropout）或增加训练数据",
+        "提高学习率，使训练更激进",
+        "去掉验证集，直接用测试集调参"
+      ],
+      "answer": 1,
+      "explanation": "这是过拟合的信号，应通过正则化或增加数据来缩小泛化差距。增大容量、提高学习率会加剧过拟合；用测试集调参会丧失评估的客观性。",
+      "error_tag": "概念混淆",
+      "variant_group": "过拟合的应对"
+    },
+    {
+      "kp": "ai.nn.overfit_debug",
+      "type": "multi_choice",
+      "question": "下列哪些做法通常有助于缓解神经网络过拟合？（多选）",
+      "options": [
+        "增加训练数据或使用数据增强",
+        "加入 L2 权重衰减",
+        "使用 Dropout",
+        "无限增大网络参数量并延长训练轮数",
+        "在验证指标不再改善时进行早停"
+      ],
+      "answer": [
+        0,
+        1,
+        2,
+        4
+      ],
+      "explanation": "增加数据/增强、权重衰减、Dropout、早停都是常见正则化手段。单纯增大参数量并延长训练只会让模型更容易记住训练数据，加重过拟合。",
+      "error_tag": "记忆缺失",
+      "variant_group": "过拟合的应对"
+    },
+    {
+      "kp": "ai.nn.overfit_debug",
+      "type": "multi_choice",
+      "question": "关于训练集、验证集与测试集的划分与使用，下列说法正确的有？（多选）",
+      "options": [
+        "测试集应在最终评估时才使用，不参与调参",
+        "验证集用于选择超参数和早停",
+        "为避免浪费数据，可以用测试集反复挑选最佳模型",
+        "划分前应保证同一类样本在三个集合中的分布合理",
+        "数据预处理中的统计量应只在训练集上拟合"
+      ],
+      "answer": [
+        0,
+        1,
+        3,
+        4
+      ],
+      "explanation": "测试集是最终泛化评估的独立来源，反复用它调参会造成信息泄漏与过拟合测试集。验证集用于调参与早停；划分要保证分布合理；预处理统计量只在训练集拟合以避免泄漏。",
+      "error_tag": "边界错误",
+      "variant_group": "验证集划分影响"
+    },
+    {
+      "kp": "ai.nn.overfit_debug",
+      "type": "multi_choice",
+      "question": "你在排查一个「训练表现很好但线上表现差」的模型。下列哪些原因值得怀疑？（多选）",
+      "options": [
+        "训练数据与线上数据分布不一致",
+        "特征构造时无意中使用了未来信息（时间泄漏）",
+        "验证集与测试集划分存在泄漏导致评估偏乐观",
+        "使用了 ReLU 作为激活函数",
+        "训练样本存在明显不足或标注噪声较大"
+      ],
+      "answer": [
+        0,
+        1,
+        2,
+        4
+      ],
+      "explanation": "分布偏移、时间泄漏、评估泄漏、样本不足或标注噪声都可能导致「线下好线上差」。ReLU 只是普通激活函数，与这种泛化差距无直接因果关系。",
+      "error_tag": "概念混淆",
+      "variant_group": "数据泄漏"
+    },
+    {
+      "kp": "ai.nn.overfit_debug",
+      "type": "fill_blank",
+      "question": "在神经网络训练中，随着训练轮数增加，训练损失持续下降但验证损失先下降后上升，这种训练集与验证集之间的表现差距随轮数扩大的现象称为______。",
+      "options": [],
+      "answer": [
+        "过拟合",
+        "overfitting",
+        "Overfit",
+        "过拟合现象"
+      ],
+      "explanation": "验证损失先降后升、训练验证差距扩大是过拟合的典型表现。过拟合指模型过度拟合训练数据中的噪声与细节，导致泛化能力下降。",
+      "error_tag": "记忆缺失",
+      "variant_group": "过拟合的识别"
+    },
+    {
+      "kp": "ai.nn.overfit_debug",
+      "type": "fill_blank",
+      "question": "为防止过拟合，监控验证集指标并在其不再改善时提前终止训练，这种技术叫______。",
+      "options": [],
+      "answer": [
+        "早停",
+        "early stopping",
+        "Early Stop",
+        "early stop",
+        "提前停止"
+      ],
+      "explanation": "早停通过验证集指标判断泛化是否还在改善，在过拟合发生前停止训练，是简单而有效的正则化手段。",
+      "error_tag": "记忆缺失",
+      "variant_group": "早停"
+    },
+    {
+      "kp": "ai.nn.overfit_debug",
+      "type": "code_reading",
+      "question": "阅读下列训练代码片段：\n\nfor epoch in range(100):\n    model.train()\n    for x, y in train_loader:\n        pred = model(x)\n        loss = criterion(pred, y)\n        loss.backward()\n        optimizer.step()\n        optimizer.zero_grad()\n    val_loss = evaluate(model, val_loader)\n    if val_loss < best_val:\n        best_val = val_loss\n        best_state = model.state_dict()\n\n该代码在过拟合调试中的关键作用是什么？请简要说明它如何帮助缓解过拟合。",
+      "options": [],
+      "answer": "这段代码记录验证损失并保留验证损失最低时的模型状态，是一种基于验证集的模型选择/早停机制。它避免使用在训练后期已经过拟合的模型参数，从而提升泛化能力。注意 evaluate 时应把模型切换到评估模式（如 model.eval()）以关闭 Dropout/BatchNorm 的训练行为。",
+      "explanation": "判断依据是『比较验证损失并保存最优状态』，这是早停/模型选择的实现。评估阶段应切换 eval 模式，否则 Dropout、BatchNorm 的行为与推理不一致，会导致验证损失不可靠。",
+      "error_tag": "边界错误",
+      "variant_group": "早停"
+    },
+    {
+      "kp": "ai.nn.overfit_debug",
+      "type": "code_reading",
+      "question": "阅读下列片段：\n\nscaler = StandardScaler()\nX = scaler.fit_transform(X_all)\nX_train, X_val, y_train, y_val = train_test_split(X, y, test_size=0.2)\n\n请问在过拟合/泄漏排查角度，这段代码存在什么问题？应该如何修改？",
+      "options": [],
+      "answer": "问题在于先用整个数据集（含将来的验证样本）拟合了 scaler，属于数据泄漏，会让验证评估偏乐观。应当先划分训练集与验证集，只在训练集上调用 fit（或 fit_transform），再用同一 scaler 对验证集调用 transform。",
+      "explanation": "标准化参数（均值、方差）被验证样本影响，等价于训练过程看到了验证信息，是典型的预处理泄漏。正确的顺序是先划分再拟合预处理参数，并只对训练集 fit。",
+      "error_tag": "边界错误",
+      "variant_group": "数据泄漏"
+    },
+    {
+      "kp": "ai.nn.overfit_debug",
+      "type": "scenario",
+      "question": "场景：你训练的推荐模型在离线验证集上 AUC 很高，但上线后点击率明显低于预期。排查发现离线评估时，用于构造特征的行为日志包含了一部分预测时刻之后才产生的记录。请说明这是什么问题，以及你会如何在特征与评估流程上修复它。",
+      "options": [],
+      "answer": null,
+      "explanation": "核心是时间泄漏：特征包含了预测时刻之后的信息，导致离线指标虚高。修复需按时间顺序划分训练/验证集，保证特征只使用预测时刻之前可获得的数据，并为特征记录时间戳做一致性校验。",
+      "error_tag": "概念混淆",
+      "variant_group": "数据泄漏",
+      "required_keywords": [
+        "指标",
+        "泄漏",
+        "一致性"
+      ]
+    },
+    {
+      "kp": "ai.nn.overfit_debug",
+      "type": "scenario",
+      "question": "场景：一个图像分类模型在训练集上达到 99% 准确率，验证集只有 85%，而数据总量只有约 2000 张。团队尝试把网络加深后训练集准确率更高，但验证集反而更低。请给出两到三条合理的改进方向并说明理由。",
+      "options": [],
+      "answer": null,
+      "explanation": "这是小样本下的过拟合问题，加深网络会进一步增大容量从而更严重。改进方向包括：引入数据增强扩充有效样本、加入权重衰减或 Dropout 等正则化、使用早停，以及用小数据下的交叉验证获取更稳定评估。",
+      "error_tag": "概念混淆",
+      "variant_group": "过拟合的应对",
+      "required_keywords": [
+        "过拟合",
+        "数据增强",
+        "正则化",
+        "Dropout",
+        "早停"
+      ]
+    },
+    {
+      "kp": "ai.nn.overfit_debug",
+      "type": "single_choice",
+      "question": "下列关于正则化的说法，哪一项是正确的？",
+      "options": [
+        "L2 正则化会让部分权重精确变成 0，从而得到稀疏解",
+        "L1 正则化倾向于产生稀疏权重，可用于特征选择",
+        "权重衰减只能在输出层使用，不能用于隐藏层",
+        "正则化会增大训练损失，因此一定降低验证集表现"
+      ],
+      "answer": 1,
+      "explanation": "L1 的等值线在坐标轴上有尖点，优化时更容易把部分权重压到 0，产生稀疏解；L2 只是把权重整体压小而不易变为精确 0。权重衰减可作用于所有层；适当正则化通常改善泛化而非降低验证表现。",
+      "error_tag": "概念混淆",
+      "variant_group": "正则化机制"
+    },
+    {
+      "kp": "ai.nn.overfit_debug",
+      "type": "single_choice",
+      "question": "在训练时启用 Dropout 后，你观察到训练集的准确率下降了一些，但验证集准确率反而上升。对这个现象最合理的解释是？",
+      "options": [
+        "Dropout 引入了随机噪声并起到集成/正则作用，抑制了过拟合",
+        "Dropout 降低了模型参数量，所以训练变慢",
+        "Dropout 在验证阶段也必须保持开启才能生效",
+        "训练准确率下降说明 Dropout 一定用错了"
+      ],
+      "answer": 0,
+      "explanation": "Dropout 训练时随机丢弃神经元，起到类似多模型集成的正则效果，通常略微降低训练表现、提升泛化。验证阶段应关闭 Dropout（或在评估模式下使用），否则预测会不稳定。",
+      "error_tag": "概念混淆",
+      "variant_group": "Dropout 行为"
+    },
+    {
+      "kp": "ai.nn.overfit_debug",
+      "type": "single_choice",
+      "question": "某模型在训练集上 100% 准确率，但换一个随机划分的验证集后表现波动很大。除去模型本身原因，下面哪项最可能是造成这种波动的直接原因？",
+      "options": [
+        "验证集样本量太小，评估结果方差大",
+        "使用了 ReLU 激活函数",
+        "优化器选择了 SGD 而非 Adam",
+        "网络层数过多"
+      ],
+      "answer": 0,
+      "explanation": "验证集太小会导致评估指标的随机性变大，划分子集不同就会看到显著波动。激活函数、优化器、层数可能影响性能，但不是导致「换划分就大幅波动」的直接原因。",
+      "error_tag": "边界错误",
+      "variant_group": "验证集划分影响"
+    },
+    {
+      "kp": "ai.nn.overfit_debug",
+      "type": "single_choice",
+      "question": "关于早停（early stopping），下列说法正确的是？",
+      "options": [
+        "应在训练损失刚开始下降时就停止，以防过拟合",
+        "应监控验证集指标，在其不再改善（或开始变差）时停止训练",
+        "早停能替代所有其他正则化手段",
+        "早停必须配合把学习率设为 0 才能生效"
+      ],
+      "answer": 1,
+      "explanation": "早停的核心是依据验证集指标（而非训练损失）判断泛化是否还在改善。训练损失通常仍在下降，用它做停止依据会阻止模型学到有效特征；早停也不能替代所有正则化。",
+      "error_tag": "概念混淆",
+      "variant_group": "早停"
+    },
+    {
+      "kp": "ai.nn.overfit_debug",
+      "type": "single_choice",
+      "question": "在数据量很小的情况下，下列哪种做法最有助于获得对模型泛化能力更可靠的估计？",
+      "options": [
+        "只用一次固定的划分并反复调参",
+        "使用 k 折交叉验证，报告各折的均值与方差",
+        "只在训练集上评估，因为验证集数据太少",
+        "把验证集并入训练集，让模型学到更多样本"
+      ],
+      "answer": 1,
+      "explanation": "小数据下单次划分方差大，k 折交叉验证通过多折平均降低估计方差，并提供波动信息。把验证集并入训练集就失去了独立评估；只在训练集评估会严重高估性能。",
+      "error_tag": "概念混淆",
+      "variant_group": "验证集划分影响"
+    },
+    {
+      "kp": "ai.nn.overfit_debug",
+      "type": "single_choice",
+      "question": "下面哪种现象最可能提示你发生了数据泄漏（leakage）？",
+      "options": [
+        "验证集准确率略低于训练集准确率",
+        "验证集准确率异常高，甚至高于训练集准确率",
+        "训练损失随轮数缓慢下降",
+        "不同随机种子下结果有轻微波动"
+      ],
+      "answer": 1,
+      "explanation": "验证集表现异常好甚至高于训练集，往往是因为在预处理/特征构造时用到了验证集信息，或训练数据中混入了验证样本。训练略好于验证是正常的泛化差距；随机种子造成小幅波动也属正常。",
+      "error_tag": "边界错误",
+      "variant_group": "数据泄漏"
+    },
+    {
+      "kp": "ai.nn.overfit_debug",
+      "type": "single_choice",
+      "question": "进行图像分类时，你在归一化时先对整个数据集（含验证集）计算均值和标准差，然后再划分训练/验证集。这会带来什么问题？",
+      "options": [
+        "没有影响，归一化是常规操作",
+        "会把验证集的统计信息泄漏进训练流程，使验证结果偏乐观",
+        "会使训练完全无法收敛",
+        "会使 BatchNorm 层失效"
+      ],
+      "answer": 1,
+      "explanation": "用包含验证集的整体统计量做预处理，等价于让训练过程「看到」了验证数据的信息，属于数据泄漏。正确做法是仅在训练集上拟合归一化参数，然后应用到验证集/测试集。",
+      "error_tag": "边界错误",
+      "variant_group": "数据泄漏"
+    },
+    {
+      "kp": "ai.nn.overfit_debug",
+      "type": "single_choice",
+      "question": "关于权重衰减（weight decay）与 L2 正则化，下列描述正确的是？",
+      "options": [
+        "两者在所有优化器下完全等价，可无差别替换",
+        "在某些自适应优化器（如 Adam）中，标准权重衰减与 L2 项并不严格等价",
+        "权重衰减会增大权重范数，从而提升模型容量",
+        "权重衰减只能用于线性模型，不能用于神经网络"
+      ],
+      "answer": 1,
+      "explanation": "在 SGD 下 L2 项与权重衰减等价，但在自适应优化器中两者行为不同（这也是提出解耦权重衰减的动机）。权重衰减是缩小权重范数以限制容量，而不是增大。",
+      "error_tag": "概念混淆",
+      "variant_group": "正则化机制"
+    }
+  ]
+}

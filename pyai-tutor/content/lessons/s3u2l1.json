@@ -1,0 +1,609 @@
+{
+  "id": "s3u2l1",
+  "title": "s3u2l1",
+  "kps": [
+    "py.thread.thread_basic",
+    "py.thread.lock"
+  ],
+  "theory": "## py.thread.thread_basic\n\n# 线程基础（Thread Basics）：让程序同时做几件事\n\n> **一句话直觉**：线程（Thread）是操作系统调度的最小单位，它让一个程序里“同时”跑多段代码——就像一个人可以一边煮饭一边切菜，而不是先切完再煮。\n\n---\n\n## 1. 为什么需要线程？\n\n想象你要下载 10 张图片，如果一张一张下，必须等第 1 张完成才能开始第 2 张。但网络请求大部分时间在**等待**（I/O 阻塞）。\n\n- **单线程（single-thread）**：串行等待，总时间 = 所有等待之和。\n- **多线程（multithreading）**：等待时切到另一个线程，总时间 ≈ 最长的一个任务。\n\n线程的价值主要在两处：\n1. **I/O 密集（I/O-bound）**：网络、文件、数据库——线程能显著提速。\n2. **保持界面响应**：主线程处理 UI，后台线程干活，窗口不会“卡死”。\n\n> ⚠️ 注意：因为 **GIL（Global Interpreter Lock，全局解释器锁）** 的存在，纯 Python 代码的 **CPU 密集（CPU-bound）** 任务用线程几乎不会加速，这种场景应使用 `multiprocessing`。\n\n---\n\n## 2. 最小的线程：`threading.Thread`\n\nPython 标准库用 `threading` 模块提供线程。启动线程只需 3 步：定义函数 → 创建 `Thread` 对象 → `.start()`。\n\n```python\nimport threading\nimport time\n\ndef worker(name):\n    print(f\"[{name}] 开始\")\n    time.sleep(1)          # 模拟 I/O：这里会释放 GIL，其他线程可运行\n    print(f\"[{name}] 结束\")\n\n# 创建两个线程\nt1 = threading.Thread(target=worker, args=(\"A\",))\nt2 = threading.Thread(target=worker, args=(\"B\",))\n\nt1.start()  # 启动后立即返回，主线程继续往下走\nt2.start()\n\nprint(\"主线程：已启动完毕\")\nt1.join()   # 阻塞主线程，直到 t1 完成\nt2.join()\nprint(\"主线程：全部线程结束\")\n```\n\n**关键细节**：\n- `.start()` **不会** 等待函数跑完，它只是“把活派出去”。真正的等待是 `.join()`。\n- 如果不调用 `.join()`，主线程可能在子线程还在跑时就退出，进程结束，子线程被杀。\n\n---\n\n## 3. 用 `Lock` 保护共享数据\n\n多个线程访问**同一份可写数据**时，会出现**竞态条件（race condition）**：因为 `x += 1` 不是原子操作，实际是「读 → 加 → 写」三步，可能被中途打断。\n\n解决办法：用 `Lock`（互斥锁）把这一段包起来，同一时刻只允许一个线程进入。\n\n```python\nimport threading\n\ncounter = 0\nlock = threading.Lock()\n\ndef increment(n):\n    global counter\n    for _ in range(n):\n        with lock:              # 进入临界区（critical section）\n            counter += 1        # 只有持锁线程能执行这三步\n\nthreads = [threading.Thread(target=increment, args=(100_000,)) for _ in range(4)]\nfor t in threads: t.start()\nfor t in threads: t.join()\n\nprint(\"预期:\", 400_000, \"实际:\", counter)   # 有锁 → 稳定输出 400000\n```\n\n把 `with lock:` 去掉、多跑几次，你就能观察到 counter 小于 400000 的“丢更新”现象——这是最直观的竞态演示。\n\n---\n\n## 4. 用 `ThreadPoolExecutor` 优雅地管理线程\n\n手动 `start()` / `join()` 适合少量线程。任务一多，就该用线程池（thread pool）：复用线程、自动排队、返回 Future 拿结果。\n\n```python\nfrom concurrent.futures import ThreadPoolExecutor\nimport time\n\ndef fetch(url):\n    time.sleep(0.5)             # 模拟网络请求\n    return f\"OK:{url}\"\n\nurls = [f\"http://site/{i}\" for i in range(8)]\n\n# 最多同时 4 个线程干活\nwith ThreadPoolExecutor(max_workers=4) as pool:\n    results = list(pool.map(fetch, urls))   # 按输入顺序返回结果\n\nprint(results)\n```\n\n`ThreadPoolExecutor` 是工程实践中绝大多数「I/O 并发」场景的首选——比手搓 `Thread` 更安全、更简洁。\n\n---\n\n## 5. 什么时候**不要**用线程？\n\n| 场景 | 推荐方案 |\n|---|---|\n| 网络 / 文件 / 数据库 I/O 并发 | **线程** 或 `asyncio` |\n| 纯 Python 的 CPU 密集计算 | **`multiprocessing`**（绕开 GIL） |\n| 成千上万的长连接 | **`asyncio`**（协程更轻） |\n| 简单并行跑几个函数 | `ThreadPoolExecutor` / `ProcessPoolExecutor` |\n\n记住一句话：**线程解决“等待”，进程解决“算力”。**\n\n```python\nimport threading\nimport time\nfrom concurrent.futures import ThreadPoolExecutor\n\n# --- 1. 最基础的线程 ---\ndef worker(name: str, delay: float) -> None:\n    print(f\"[{name}] 开始\")\n    time.sleep(delay)              # 模拟 I/O，sleep 会释放 GIL\n    print(f\"[{name}] 结束\")\n\nthreads = [threading.Thread(target=worker, args=(f\"T{i}\", 0.5)) for i in range(3)]\nfor t in threads: t.start()        # 启动，不阻塞\nfor t in threads: t.join()         # 等待全部结束\n\n# --- 2. 用 Lock 保护共享计数器 ---\ncounter = 0\nlock = threading.Lock()\n\ndef safe_add(n: int) -> None:\n    global counter\n    for _ in range(n):\n        with lock:\n            counter += 1\n\nworkers = [threading.Thread(target=safe_add, args=(50_000,)) for _ in range(4)]\nfor t in workers: t.start()\nfor t in workers: t.join()\nassert counter == 200_000, f\"期望 200000，实际 {counter}\"\nprint(\"Lock 生效，counter =\", counter)\n\n# --- 3. 用 ThreadPoolExecutor 管理并发 ---\ndef fetch(url: str) -> str:\n    time.sleep(0.3)\n    return f\"OK:{url}\"\n\nwith ThreadPoolExecutor(max_workers=4) as pool:\n    results = list(pool.map(fetch, [f\"url{i}\" for i in range(6)]))\nprint(\"池化结果:\", results)\n```\n\n## py.thread.lock\n\n# py.thread.lock：让多线程不再“撞车”\n\n> **一句话直觉**：当多个线程同时改同一个数据时，结果会随机出错；`Lock`（锁）就是那把“同一时刻只允许一个人进房间”的钥匙。\n\n前置：无。你只需要会写普通的 Python 函数与 `for` 循环即可。\n\n---\n\n## 0. 开场：为什么需要锁？\n\nCPU 执行 `x = x + 1` 并不是“一步完成”，它至少分三步：\n\n1. 读 `x` 的当前值；\n2. 计算 `x + 1`；\n3. 写回 `x`。\n\n如果两个线程交替执行这三步，就可能发生 **竞态条件（race condition）**：两个线程都读到了旧值，各自加 1，最终只加了 1 次。下面这段代码你会看到“丢失更新”。\n\n```python\n# demo_race.py —— 不加锁，结果通常小于 200000\nimport threading\n\ncounter = 0\n\ndef worker():\n    global counter\n    for _ in range(100_000):\n        counter += 1   # 危险：读-改-写不是原子操作\n\nts = [threading.Thread(target=worker) for _ in range(2)]\nfor t in ts: t.start()\nfor t in ts: t.join()\n\nprint(\"期望 200000，实际 =\", counter)   # 每次运行结果几乎都不同\n```\n\n**结论**：只要多线程共享可变状态，并且存在“读-改-写”模式，就必须考虑同步（synchronization）。`Lock` 是最基础的同步原语（synchronization primitive）。\n\n---\n\n## 1. Lock 是什么：一个布尔开关 + 两个动作\n\n`threading.Lock` 是一个互斥锁（mutex，mutual exclusion lock）。它只有两种状态：**已锁（locked）** 和 **未锁（unlocked）**，对应两个动作：\n\n- `acquire()`：尝试上锁。如果已被别人锁住，就**阻塞等待**，直到对方 `release()`。\n- `release()`：解锁，把锁让给下一个等待者。\n\n最关键的一点：**`acquire` 与 `release` 之间的代码，同一时刻只会有一个线程在执行**，这段区域叫 **临界区（critical section）**。\n\n```python\nimport threading\n\nlock = threading.Lock()\n\nlock.acquire()\ntry:\n    print(\"临界区：只有我能进来\")\nfinally:\n    lock.release()   # 必须释放，否则其他线程永远卡住\n```\n\n`try/finally` 是为了保证即使临界区里抛异常，锁也能被释放。\n\n---\n\n## 2. 推荐写法：`with lock:` 上下文管理器\n\n每次都写 `try/finally` 很啰嗦，`Lock` 支持上下文管理器（context manager）协议，等价且更安全：\n\n```python\nimport threading\n\nlock = threading.Lock()\n\nwith lock:                      # 进入时自动 acquire()\n    print(\"临界区\")\n                                # 退出时自动 release()，异常也不会漏掉\n```\n\n**工程建议**：除非有特殊原因（例如需要 `acquire(timeout=...)` 或 `acquire(blocking=False)`），都优先用 `with lock:`。\n\n---\n\n## 3. 修复竞态：给计数器加锁\n\n把第 0 节的 `counter += 1` 包进临界区：\n\n```python\nimport threading\n\ncounter = 0\nlock = threading.Lock()\n\ndef worker():\n    global counter\n    for _ in range(100_000):\n        with lock:              # 同一时刻只有一个线程能执行下面一行\n            counter += 1\n\nts = [threading.Thread(target=worker) for _ in range(2)]\nfor t in ts: t.start()\nfor t in ts: t.join()\n\nprint(\"结果 =\", counter)        # 稳定输出 200000\n```\n\n**核心思想**：锁保护的**不是**某一行代码，而是“共享状态的不变量（invariant）”。只要一个不变量被多个步骤破坏再重建，整个过程都要放进临界区。\n\n---\n\n## 4. 进阶要点：死锁、超时、可重入\n\n### 4.1 死锁（deadlock）\n\n如果两个线程以**不同顺序**获取两把锁，就可能互相等待：\n\n```python\nlock_a.acquire()\nlock_b.acquire()   # 线程 A 拿 a 等 b\n# 同时线程 B 拿 b 等 a  → 死锁\n```\n\n**防死锁口诀**：所有线程都按同一种**固定顺序**获取多把锁；能不用多锁就别用多锁。\n\n### 4.2 带超时的获取：`acquire(timeout=...)`\n\n```python\nif lock.acquire(timeout=0.5):\n    try:\n        ...\n    finally:\n        lock.release()\nelse:\n    print(\"等太久，先做别的事\")\n```\n\n### 4.3 `RLock`：同一线程可重复进入\n\n普通 `Lock` 被同一线程再次 `acquire` 会**自锁死**。`threading.RLock`（可重入锁，reentrant lock）允许同一线程多次进入，必须一一对应地 `release` 相同次数才能放开。\n\n```python\nimport threading\nrlock = threading.RLock()\nwith rlock:\n    with rlock:      # 普通 Lock 会死锁，RLock 不会\n        print(\"嵌套安全\")\n```\n\n**何时用 RLock？** 当一个已加锁的方法内部又调用另一个已加锁的方法时。**能用普通 Lock 就用普通 Lock**，RLock 会掩盖设计问题。\n\n---\n\n## 5. 心智模型：锁 = 用并发性能换正确性\n\n- **加锁的代价**：加锁区域会串行化，削弱并发的收益。\n- **加锁的目标**：保证共享状态的一致性。**先正确，再快**。\n- **能用别的手段就避免共享**：用 `queue.Queue`、`concurrent.futures`、不可变数据、线程本地存储（`threading.local`）等，很多时候比手动加锁更简单、更不容易出错。\n- **锁是最小可用的同步原语**，理解它之后，`Event`、`Semaphore`、`Condition` 都是它的推广。\n\n---\n\n## 6. 动手练习（本地完成，约 20~30 分钟）\n\n**任务**：写一个 `safe_account.py`，实现一个线程安全的“银行账户”：\n\n1. 账户有 `balance`（初始 1000）和 `deposit(amount)` / `withdraw(amount)` 两个方法。\n2. 用 `threading.Lock` 保证任意时刻只有一条线程能修改 `balance`。\n3. 启动 **10 个线程**，每个线程**随机存取 1000 次**（金额 1~10），总存取次数 10000 次。\n4. 全部 `join` 后打印最终余额，并额外记录：“存款总额 - 取款总额 应该等于 最终余额 - 初始余额”。\n5. **对照实验**：把 `with lock:` 去掉再跑一次，观察最终余额每次是否都不一致。\n\n**验收标准**：\n- 加锁版本“存款-取款 = 余额变化”恒成立；\n- 不加锁版本会经常不等；\n- 代码能连续运行 10 次不崩。\n\n**挑战（选做）**：把 `Lock` 换成一个“双锁版本”（存款用 `lock_a`，取款用 `lock_b`），看看是否会出现死锁，并解释原因。\n\n```python\n# safe_counter.py —— Lock 最小可运行示例\n# 运行环境：Python 3.9+\n\nimport threading\n\n# 1) 共享状态 + 一把锁\ncounter = 0\nlock = threading.Lock()\n\nITER = 100_000\nTHREADS = 4\n\n\ndef worker():\n    global counter\n    for _ in range(ITER):\n        # 2) 临界区：acquire/release 由 with 自动完成\n        with lock:\n            counter += 1\n\n\nif __name__ == \"__main__\":\n    # 3) 启动多线程\n    threads = [threading.Thread(target=worker) for _ in range(THREADS)]\n    for t in threads:\n        t.start()\n    for t in threads:\n        t.join()\n\n    expected = ITER * THREADS\n    print(f\"期望 = {expected}, 实际 = {counter}\")\n    assert counter == expected, \"加锁后结果必须稳定\"\n\n    # 4) 对照：不加锁会丢失更新\n    counter = 0\n    def worker_unsafe():\n        global counter\n        for _ in range(ITER):\n            counter += 1\n\n    threads = [threading.Thread(target=worker_unsafe) for _ in range(THREADS)]\n    for t in threads:\n        t.start()\n    for t in threads:\n        t.join()\n    print(f\"不加锁：期望 = {expected}, 实际 = {counter}（通常偏小，且每次都不同）\")\n```\n",
+  "quiz": [
+    {
+      "kp": "py.thread.thread_basic",
+      "type": "single_choice",
+      "question": "在 Python 中，下面哪种方式可以创建一个新的线程来执行函数 task？",
+      "options": [
+        "import threading; t = threading.Thread(target=task); t.start()",
+        "import threading; t = threading.Thread(target=task); t.run()",
+        "import threading; t = threading.Thread(target=task); t.join()",
+        "import threading; threading.Thread(target=task)"
+      ],
+      "answer": 0,
+      "explanation": "创建 Thread 对象后需要调用 start() 才会在新线程中执行 target。直接调用 run() 只是在当前线程同步执行；join() 是等待线程结束；只创建对象不启动不会运行。",
+      "error_tag": "线程启动方式混淆",
+      "variant_group": "thread_creation"
+    },
+    {
+      "kp": "py.thread.thread_basic",
+      "type": "single_choice",
+      "question": "执行下面代码，程序最可能输出什么？\n\nimport threading\n\ndef work():\n    print(\"worker\")\n\nt = threading.Thread(target=work)\nt.start()\nprint(\"main\")",
+      "options": [
+        "一定先输出 worker，再输出 main",
+        "一定先输出 main，再输出 worker",
+        "worker 和 main 的先后顺序不确定",
+        "只输出 main，worker 不会执行"
+      ],
+      "answer": 2,
+      "explanation": "start() 后新线程与主线程并发执行，调度顺序由操作系统决定，因此两条打印的先后顺序不确定。",
+      "error_tag": "并发执行顺序误解",
+      "variant_group": "thread_execution_order"
+    },
+    {
+      "kp": "py.thread.thread_basic",
+      "type": "single_choice",
+      "question": "下面哪种情况最适合使用多线程？",
+      "options": [
+        "需要大量 CPU 密集型计算来加速",
+        "需要同时等待多个网络请求返回",
+        "需要保证数据绝对不被并发修改",
+        "需要让程序只用一个线程运行"
+      ],
+      "answer": 1,
+      "explanation": "多线程适合 I/O 密集型任务，如网络请求、文件读写。CPU 密集型受 GIL 影响通常更适合多进程；线程安全需要同步机制保证。",
+      "error_tag": "线程适用场景误解",
+      "variant_group": "thread_use_case"
+    },
+    {
+      "kp": "py.thread.thread_basic",
+      "type": "single_choice",
+      "question": "在 CPython 中，由于全局解释器锁（GIL）的存在，多线程对下面哪类任务通常提升不明显？",
+      "options": [
+        "网络爬虫等待响应",
+        "文件读写等待磁盘",
+        "纯 Python 的数值计算",
+        "等待用户输入"
+      ],
+      "answer": 2,
+      "explanation": "GIL 使得同一时刻只有一个线程执行 Python 字节码，因此纯 Python 的 CPU 密集型计算难以通过多线程获得并行加速。",
+      "error_tag": "GIL 影响理解错误",
+      "variant_group": "thread_gil"
+    },
+    {
+      "kp": "py.thread.thread_basic",
+      "type": "single_choice",
+      "question": "下面代码中，主线程会等待子线程结束吗？\n\nimport threading\nimport time\n\ndef work():\n    time.sleep(2)\n    print(\"done\")\n\nt = threading.Thread(target=work, daemon=True)\nt.start()\nprint(\"main exit\")",
+      "options": [
+        "会，主线程一定等到 done 输出后才退出",
+        "不会，主线程退出时守护线程被强制结束，可能看不到 done",
+        "会，因为 start() 会自动 join",
+        "不会，因为子线程根本没有运行"
+      ],
+      "answer": 1,
+      "explanation": "daemon 线程不会阻止主线程退出，主线程打印后立即结束，守护线程可能来不及输出 done。",
+      "error_tag": "守护线程生命周期错误",
+      "variant_group": "thread_daemon"
+    },
+    {
+      "kp": "py.thread.thread_basic",
+      "type": "single_choice",
+      "question": "关于线程安全，下面说法正确的是？",
+      "options": [
+        "多个线程同时修改共享变量一定不会出问题",
+        "多个线程同时修改共享变量可能产生竞态条件",
+        "只要使用多线程就自动线程安全",
+        "线程安全只与函数返回值有关"
+      ],
+      "answer": 1,
+      "explanation": "多个线程并发读写共享数据可能导致竞态条件，需要锁等同步机制保证线程安全。",
+      "error_tag": "线程安全概念错误",
+      "variant_group": "thread_safety"
+    },
+    {
+      "kp": "py.thread.thread_basic",
+      "type": "single_choice",
+      "question": "下面代码中，使用 Lock 的主要目的是什么？\n\nimport threading\n\nlock = threading.Lock()\ncount = 0\n\ndef add():\n    global count\n    with lock:\n        count += 1",
+      "options": [
+        "提高 count += 1 的执行速度",
+        "保证同一时刻只有一个线程执行 count += 1",
+        "让 count 变成线程局部变量",
+        "自动启动多个线程"
+      ],
+      "answer": 1,
+      "explanation": "Lock 用于互斥访问临界区，保证同一时刻只有一个线程执行受保护的代码，避免竞态条件。它不会自动启动线程，也不改变变量作用域。",
+      "error_tag": "锁的作用误解",
+      "variant_group": "thread_lock"
+    },
+    {
+      "kp": "py.thread.thread_basic",
+      "type": "single_choice",
+      "question": "下面哪种方式创建线程时使用了关键字参数？\n\nimport threading\n\ndef work(a, b=1):\n    print(a, b)",
+      "options": [
+        "threading.Thread(target=work, args=(1,), kwargs={\"b\": 2}).start()",
+        "threading.Thread(target=work, args={\"a\": 1, \"b\": 2}).start()",
+        "threading.Thread(target=work, kwargs=(1, 2)).start()",
+        "threading.Thread(target=work(1, b=2)).start()"
+      ],
+      "answer": 0,
+      "explanation": "args 必须是元组，kwargs 必须是字典。选项 B 把字典当 args；C 把元组当 kwargs；D 直接调用函数并传入返回值作为 target。",
+      "error_tag": "线程参数类型错误",
+      "variant_group": "thread_args"
+    },
+    {
+      "kp": "py.thread.thread_basic",
+      "type": "single_choice",
+      "question": "关于线程对象的 name 属性，下列说法正确的是？",
+      "options": [
+        "name 是只读的，不能修改",
+        "可以在创建 Thread 时通过 name 参数指定，也可以后续修改",
+        "name 必须是唯一的整数",
+        "name 决定线程的优先级"
+      ],
+      "answer": 1,
+      "explanation": "Thread 支持 name 参数设置线程名，也可以后续通过属性修改。线程名不要求唯一，也不决定优先级。",
+      "error_tag": "线程属性误解",
+      "variant_group": "thread_introspection"
+    },
+    {
+      "kp": "py.thread.thread_basic",
+      "type": "single_choice",
+      "question": "下面代码中，is_alive() 的返回值最可能是？\n\nimport threading\nimport time\n\ndef work():\n    time.sleep(1)\n\nt = threading.Thread(target=work)\nt.start()\nprint(t.is_alive())\nt.join()\nprint(t.is_alive())",
+      "options": [
+        "False 然后 True",
+        "True 然后 False",
+        "True 然后 True",
+        "False 然后 False"
+      ],
+      "answer": 1,
+      "explanation": "start() 后线程正在运行，is_alive() 返回 True；join() 后线程已结束，is_alive() 返回 False。",
+      "error_tag": "线程状态判断错误",
+      "variant_group": "thread_introspection"
+    },
+    {
+      "kp": "py.thread.thread_basic",
+      "type": "single_choice",
+      "question": "下面哪种做法有助于避免多个线程同时写同一个文件导致内容错乱？",
+      "options": [
+        "让每个线程使用不同的 Thread 对象名",
+        "使用 Lock 保护写入文件的代码块",
+        "把 daemon 设为 True",
+        "增加线程的 name 长度"
+      ],
+      "answer": 1,
+      "explanation": "文件写入是共享资源，需用锁互斥访问。线程名、daemon 属性与互斥无关。",
+      "error_tag": "同步机制选择错误",
+      "variant_group": "thread_safety"
+    },
+    {
+      "kp": "py.thread.thread_basic",
+      "type": "single_choice",
+      "question": "下面关于线程的说法，哪一项是错误的？",
+      "options": [
+        "线程可以在同一进程内共享内存",
+        "线程的创建和切换开销通常小于进程",
+        "多个线程可以并行执行 Python 字节码而不受任何限制",
+        "线程之间通信通常比进程之间更方便"
+      ],
+      "answer": 2,
+      "explanation": "在 CPython 中由于 GIL，多个线程不能真正并行执行 Python 字节码，因此 C 项错误。其余关于线程共享内存、开销和通信的说法基本正确。",
+      "error_tag": "GIL 与并行概念错误",
+      "variant_group": "thread_gil"
+    },
+    {
+      "kp": "py.thread.thread_basic",
+      "type": "single_choice",
+      "question": "下列关于线程 join() 方法的说法，哪一项是正确的？",
+      "options": [
+        "调用 join() 会立即终止目标线程",
+        "调用 join() 会阻塞当前线程，直到目标线程结束",
+        "调用 join() 会让目标线程进入休眠状态",
+        "调用 join() 会启动目标线程"
+      ],
+      "answer": 1,
+      "explanation": "join() 的作用是等待目标线程执行完毕，调用者会被阻塞。它不会终止、休眠或启动线程。",
+      "error_tag": "join 语义误解",
+      "variant_group": "thread_join"
+    },
+    {
+      "kp": "py.thread.thread_basic",
+      "type": "single_choice",
+      "question": "下面代码中 t.join() 的作用是什么？\n\nimport threading\n\ndef work():\n    print(\"working\")\n\nt = threading.Thread(target=work)\nt.start()\nt.join()\nprint(\"done\")",
+      "options": [
+        "保证 done 一定在 working 之前输出",
+        "保证 working 一定在 done 之前输出",
+        "使 work 函数执行两次",
+        "阻止 work 函数执行"
+      ],
+      "answer": 1,
+      "explanation": "t.join() 会等待 t 执行结束，因此 work 中的打印一定先于 join 之后的 print(\"done\")。",
+      "error_tag": "join 顺序理解错误",
+      "variant_group": "thread_join"
+    },
+    {
+      "kp": "py.thread.thread_basic",
+      "type": "single_choice",
+      "question": "关于 threading.Thread 的 daemon 属性，下列说法正确的是？",
+      "options": [
+        "daemon 线程会阻止主程序退出",
+        "daemon 线程在主程序退出时会被强制结束",
+        "daemon 线程必须手动 join 才能结束",
+        "daemon 属性只能在 start() 之后设置"
+      ],
+      "answer": 1,
+      "explanation": "守护线程不会阻止解释器退出，主线程结束时守护线程会被直接结束。daemon 需要在 start() 之前设置。",
+      "error_tag": "守护线程概念错误",
+      "variant_group": "thread_daemon"
+    },
+    {
+      "kp": "py.thread.thread_basic",
+      "type": "single_choice",
+      "question": "下面代码中，setDaemon(True) 的位置有什么问题？\n\nimport threading\n\ndef work():\n    pass\n\nt = threading.Thread(target=work)\nt.start()\nt.setDaemon(True)",
+      "options": [
+        "没有问题，可以正常运行",
+        "setDaemon 必须在 start() 之前调用",
+        "setDaemon 只能用于主线程",
+        "setDaemon 的参数必须是字符串"
+      ],
+      "answer": 1,
+      "explanation": "daemon 状态必须在线程启动前设置，start() 之后再调用 setDaemon 会抛出 RuntimeError。",
+      "error_tag": "daemon 设置时机错误",
+      "variant_group": "thread_daemon"
+    },
+    {
+      "kp": "py.thread.thread_basic",
+      "type": "single_choice",
+      "question": "下面哪种写法可以给线程函数传递参数？\n\nimport threading\n\ndef work(name, count):\n    print(name, count)",
+      "options": [
+        "threading.Thread(target=work, args=(\"A\", 3)).start()",
+        "threading.Thread(target=work(\"A\", 3)).start()",
+        "threading.Thread(target=work, args={\"A\", 3}).start()",
+        "threading.Thread(target=work, kwargs=(\"A\", 3)).start()"
+      ],
+      "answer": 0,
+      "explanation": "位置参数通过 args 以元组形式传入；kwargs 用于关键字参数；直接在 target 位置调用函数会先执行函数并把返回值当作 target。",
+      "error_tag": "线程参数传递错误",
+      "variant_group": "thread_args"
+    },
+    {
+      "kp": "py.thread.thread_basic",
+      "type": "single_choice",
+      "question": "下面代码执行时会发生什么？\n\nimport threading\n\ndef work():\n    print(\"run\")\n\nt = threading.Thread(target=work)\nt.run()\nt.start()",
+      "options": [
+        "run 只输出一次",
+        "run 输出两次，且两次都在新线程中执行",
+        "第一次 run 在主线程中同步执行，第二次在新线程中执行",
+        "程序会直接报错"
+      ],
+      "answer": 2,
+      "explanation": "run() 只是普通方法调用，会在当前线程同步执行；随后 start() 再启动一个新线程执行 target，因此 run 会输出两次，但只有第二次在新线程中。",
+      "error_tag": "run 与 start 混淆",
+      "variant_group": "thread_start_run"
+    },
+    {
+      "kp": "py.thread.thread_basic",
+      "type": "single_choice",
+      "question": "一个 Thread 对象调用了 start() 之后，再次调用 start() 会发生什么？",
+      "options": [
+        "会再启动一个新线程",
+        "会抛出 RuntimeError",
+        "会重新执行一次 run() 但不开新线程",
+        "没有任何影响，静默忽略"
+      ],
+      "answer": 1,
+      "explanation": "同一个 Thread 对象只能启动一次，重复调用 start() 会抛出 RuntimeError。",
+      "error_tag": "线程重复启动误解",
+      "variant_group": "thread_start_run"
+    },
+    {
+      "kp": "py.thread.thread_basic",
+      "type": "single_choice",
+      "question": "关于 threading.current_thread()，下列说法正确的是？",
+      "options": [
+        "它返回当前正在执行的线程对象",
+        "它返回主线程对象，无论在哪里调用",
+        "它返回一个布尔值表示是否在主线程",
+        "它返回当前线程的名字字符串"
+      ],
+      "answer": 0,
+      "explanation": "current_thread() 返回调用处所在的线程对象；线程名字通过 Thread 对象的 name 属性获取。",
+      "error_tag": "线程 API 语义误解",
+      "variant_group": "thread_introspection"
+    },
+    {
+      "kp": "py.thread.lock",
+      "type": "single_choice",
+      "question": "在多线程程序中，多个线程同时对一个共享变量执行 `count += 1`，即使使用了 GIL，结果仍可能出错。最恰当的解释是：",
+      "options": [
+        "GIL 只保证字节码指令级别的互斥，`count += 1` 是读取-计算-写回多步操作，线程可能在中途被切换",
+        "GIL 会阻止所有线程并发执行，因此结果不可能出错",
+        "`+=` 在 Python 中是原子操作，出错只可能因为内存不足",
+        "只有多进程才会出现竞争，多线程不会"
+      ],
+      "answer": 0,
+      "explanation": "GIL 只保证同一时刻只有一个线程执行字节码，但 `count += 1` 由读、加、写多条字节码组成，线程可能在这些步骤之间被切换，导致更新丢失，因此仍需锁保护。",
+      "error_tag": "概念混淆",
+      "variant_group": "为何需要锁"
+    },
+    {
+      "kp": "py.thread.lock",
+      "type": "single_choice",
+      "question": "关于 `threading.Lock`，下列说法正确的是：",
+      "options": [
+        "同一线程可以多次 acquire 同一个 Lock 而不会阻塞",
+        "Lock 是可重入的，重复 acquire 只会增加计数",
+        "未经 acquire 就调用 release 会抛出 RuntimeError",
+        "Lock 可以在不同进程之间共享"
+      ],
+      "answer": 2,
+      "explanation": "`threading.Lock` 是普通互斥锁，不是可重入锁（可重入的是 `threading.RLock`）。对未持有的锁调用 release 会抛出 RuntimeError；同一线程重复 acquire 同一把 Lock 会自己把自己阻塞。",
+      "error_tag": "概念混淆",
+      "variant_group": "Lock 基本语义"
+    },
+    {
+      "kp": "py.thread.lock",
+      "type": "single_choice",
+      "question": "关于锁的「可见性/内存」语义在 CPython 多线程中的表现，下列描述最准确的是：",
+      "options": [
+        "线程各自持有私有变量副本，锁用于同步这些副本",
+        "锁主要保证临界区互斥，从而避免交错更新的问题；变量的最新值通常由共享对象自然可见",
+        "必须调用锁的 flush 方法才能看到别的线程写入的值",
+        "锁会改变 GIL 的行为"
+      ],
+      "answer": 1,
+      "explanation": "在 CPython 中对象位于共享内存，锁的核心作用是保证临界区互斥，避免读-改-写交错；不像某些平台需要额外的内存屏障语义。",
+      "error_tag": "概念混淆",
+      "variant_group": "锁基本语义"
+    },
+    {
+      "kp": "py.thread.lock",
+      "type": "multi_choice",
+      "question": "关于 `threading.Lock`，下列哪些说法是正确的？（多选）",
+      "options": [
+        "它是一把互斥锁，用于保护临界区",
+        "它可以作为上下文管理器用于 with 语句",
+        "它是可重入的，同一线程可多次 acquire",
+        "未持有时 release 会抛出 RuntimeError"
+      ],
+      "answer": [
+        0,
+        1,
+        3
+      ],
+      "explanation": "Lock 是普通互斥锁、支持 with，未持有时 release 会抛 RuntimeError；它不可重入，因此第二项说法错误。",
+      "error_tag": "概念混淆",
+      "variant_group": "Lock 基本语义"
+    },
+    {
+      "kp": "py.thread.lock",
+      "type": "multi_choice",
+      "question": "下列哪些措施有助于降低或避免多线程中的死锁风险？（多选）",
+      "options": [
+        "为多个锁规定统一的获取顺序",
+        "使用 acquire(timeout=...) 并处理超时",
+        "在持锁期间调用另一个可能长时间阻塞的操作",
+        "使用 try/finally 或 with 确保锁被释放"
+      ],
+      "answer": [
+        0,
+        1,
+        3
+      ],
+      "explanation": "统一顺序、超时获取、确保释放都能降低死锁风险；在持锁期间调用可能长时间阻塞的操作反而容易诱发死锁。",
+      "error_tag": "边界错误",
+      "variant_group": "死锁"
+    },
+    {
+      "kp": "py.thread.lock",
+      "type": "multi_choice",
+      "question": "关于「临界区」的设计，下列说法正确的有哪些？（多选）",
+      "options": [
+        "临界区应只包含访问共享可变状态的必要操作",
+        "为了安全，应把尽可能多的代码放进临界区",
+        "在临界区内执行耗时 IO 会拖慢其他线程",
+        "把无关计算移出临界区通常能改善并发性能"
+      ],
+      "answer": [
+        0,
+        2,
+        3
+      ],
+      "explanation": "临界区应尽可能小以缩短串行化时间；把大量无关代码或耗时 IO 放入临界区会降低并发效率。",
+      "error_tag": "概念混淆",
+      "variant_group": "临界区粒度"
+    },
+    {
+      "kp": "py.thread.lock",
+      "type": "fill_blank",
+      "question": "请补全代码，使 increment 函数在被多个线程并发调用时能安全地更新共享计数：\n\nimport threading\n\ncount = 0\nlock = threading.Lock()\n\ndef increment():\n    global count\n    with ______:\n        count += 1\n",
+      "options": [],
+      "answer": [
+        "lock",
+        "lock "
+      ],
+      "explanation": "with 后应跟锁对象 lock，进入临界区自动获取，退出自动释放，保证 `count += 1` 的读-改-写不被其他线程交错。",
+      "error_tag": "记忆缺失",
+      "variant_group": "with 语句与锁"
+    },
+    {
+      "kp": "py.thread.lock",
+      "type": "fill_blank",
+      "question": "若要非阻塞地尝试获取锁，应在 acquire 中传入参数 ______（写出该关键字的赋值形式，例如 xxx=yyy）。",
+      "options": [],
+      "answer": [
+        "blocking=False",
+        "blocking=false",
+        "blocking = False"
+      ],
+      "explanation": "acquire(blocking=False) 表示锁不可用时立即返回 False，而不是等待。",
+      "error_tag": "记忆缺失",
+      "variant_group": "acquire 参数"
+    },
+    {
+      "kp": "py.thread.lock",
+      "type": "fill_blank",
+      "question": "Python 标准库 threading 中，普通互斥锁的类名是 ______；可重入锁的类名是 ______。（按顺序填写，用中文逗号或空格分隔均可）",
+      "options": [],
+      "answer": [
+        "Lock RLock",
+        "Lock,RLock",
+        "Lock、RLock",
+        "Lock RLock "
+      ],
+      "explanation": "`threading.Lock` 是普通互斥锁，`threading.RLock` 是可重入锁，后者允许同一线程重复获取。",
+      "error_tag": "记忆缺失",
+      "variant_group": "Lock 基本语义"
+    },
+    {
+      "kp": "py.thread.lock",
+      "type": "code_reading",
+      "question": "阅读代码并回答问题：\n\nimport threading\n\nlock = threading.Lock()\nlock.acquire()\nprint(lock.locked())\nlock.release()\nprint(lock.locked())\n\n问：两次 print 的输出分别是什么？",
+      "options": [],
+      "answer": "第一次输出 True，第二次输出 False。",
+      "explanation": "`locked()` 反映锁当前是否被持有：acquire 后为 True，release 后为 False。",
+      "error_tag": "概念混淆",
+      "variant_group": "Lock 状态查询"
+    },
+    {
+      "kp": "py.thread.lock",
+      "type": "code_reading",
+      "question": "阅读代码并回答问题：\n\nimport threading\n\nlock = threading.Lock()\nacquired = lock.acquire(blocking=False)\nsecond = lock.acquire(blocking=False)\nprint(acquired, second)\n\n问：该程序的输出是什么？为什么？",
+      "options": [],
+      "answer": "输出为：True False。因为第一次非阻塞获取成功返回 True 并持有了锁；锁已被持有，第二次非阻塞获取立即返回 False。",
+      "explanation": "非阻塞 acquire 在锁不可用时不会等待，直接返回 False，因此同一线程也无法再次获取已被自己持有的普通 Lock。",
+      "error_tag": "边界错误",
+      "variant_group": "acquire 参数"
+    },
+    {
+      "kp": "py.thread.lock",
+      "type": "scenario",
+      "question": "工程场景：某服务用一个全局锁保护共享的统计字典。压测时发现吞吐量很低，CPU 未跑满。你用采样工具看到大量线程阻塞在同一把锁上，且持锁代码里包含一次远程 HTTP 调用。请说明问题原因并给出改进方向。",
+      "options": [],
+      "answer": [],
+      "explanation": "持锁期间执行耗时的网络 IO 把不必要的操作串行化，导致其他线程长时间等待锁，吞吐下降。应把远程调用移出临界区，只把必要的共享状态更新放在锁内，从而缩小临界区、提高并发度。",
+      "error_tag": "边界错误",
+      "variant_group": "临界区粒度",
+      "required_keywords": [
+        "并发",
+        "锁"
+      ]
+    },
+    {
+      "kp": "py.thread.lock",
+      "type": "single_choice",
+      "question": "相比于手动 `acquire()` / `release()`，使用 `with lock:` 的主要好处是：",
+      "options": [
+        "能自动让代码运行得更快",
+        "能保证进入临界区时不会被其他线程看到",
+        "即使临界区内发生异常也能确保锁被释放",
+        "能自动完成线程之间的数据同步传递"
+      ],
+      "answer": 2,
+      "explanation": "`with lock:` 使用上下文管理器，在块退出时（包括异常路径）自动调用 release，避免因异常导致锁长期不释放而出现死锁。",
+      "error_tag": "边界错误",
+      "variant_group": "with 语句与锁"
+    },
+    {
+      "kp": "py.thread.lock",
+      "type": "single_choice",
+      "question": "以下代码最可能出现什么结果？\n\nimport threading\n\nlock = threading.Lock()\n\nwith lock:\n    with lock:\n        print(\"in\")\n",
+      "options": [
+        "打印一次 \"in\"，正常结束",
+        "抛出 RuntimeError",
+        "程序永久阻塞（死锁）",
+        "打印两次 \"in\""
+      ],
+      "answer": 2,
+      "explanation": "普通 Lock 不可重入，外层 with 已持有该锁，内层再次 acquire 会阻塞当前线程，而锁又不会被释放，于是死锁。",
+      "error_tag": "边界错误",
+      "variant_group": "可重入与死锁"
+    },
+    {
+      "kp": "py.thread.lock",
+      "type": "single_choice",
+      "question": "下列关于 `lock.acquire(blocking=False)` 的描述，正确的是：",
+      "options": [
+        "无论锁是否可用，都会一直等待直到拿到锁",
+        "锁可用时返回 True 并获取锁，不可用时立即返回 False",
+        "锁不可用时抛出异常",
+        "该参数只对 RLock 有效，对 Lock 无效"
+      ],
+      "answer": 1,
+      "explanation": "非阻塞获取：锁空闲则获取并返回 True，否则立即返回 False，不会等待也不会抛异常。",
+      "error_tag": "概念混淆",
+      "variant_group": "acquire 参数"
+    },
+    {
+      "kp": "py.thread.lock",
+      "type": "single_choice",
+      "question": "在持有锁的临界区中调用了可能长时间阻塞的操作（例如等待另一个锁或网络 IO），最直接的后果是：",
+      "options": [
+        "其他线程仍然可以无视该锁进入临界区",
+        "锁会被 Python 自动释放",
+        "会显著降低并发效率，其他线程可能长时间被阻塞",
+        "会触发 GIL 自动解除限制"
+      ],
+      "answer": 2,
+      "explanation": "临界区应尽量短。若在持锁期间阻塞，其他需要该锁的线程会被长时间挂起，严重时导致死锁或性能雪崩。",
+      "error_tag": "边界错误",
+      "variant_group": "临界区粒度"
+    },
+    {
+      "kp": "py.thread.lock",
+      "type": "single_choice",
+      "question": "关于死锁的四个必要条件之一「循环等待」，下列说法正确的是：",
+      "options": [
+        "只要有两个以上的锁就必然死锁",
+        "多个线程以不同顺序获取多把锁，可能形成环路从而互相等待",
+        "循环等待只存在于多进程",
+        "使用 with 语句可以完全消除循环等待"
+      ],
+      "answer": 1,
+      "explanation": "当线程 A 持锁1等锁2、线程 B 持锁2等锁1时形成循环等待。统一加锁顺序、使用超时或尝试性获取可打破该条件。",
+      "error_tag": "概念混淆",
+      "variant_group": "死锁"
+    },
+    {
+      "kp": "py.thread.lock",
+      "type": "single_choice",
+      "question": "以下哪种做法最有助于避免多个线程因获取多把锁而死锁？",
+      "options": [
+        "在所有线程中按相同顺序获取这些锁",
+        "把锁的粒度尽可能放大，用一个锁包住所有操作",
+        "尽量使用 blocking=False 并忽略返回值",
+        "把锁对象设为全局变量以加快访问"
+      ],
+      "answer": 0,
+      "explanation": "统一加锁顺序可以消除循环等待条件，是最常用的死锁预防手段。",
+      "error_tag": "记忆缺失",
+      "variant_group": "死锁"
+    },
+    {
+      "kp": "py.thread.lock",
+      "type": "single_choice",
+      "question": "关于 `threading.RLock`，下列说法正确的是：",
+      "options": [
+        "它和 Lock 完全等价，只是性能更好",
+        "它记录持有线程与递归次数，同一线程可重复获取，需相同次数释放",
+        "它不支持 with 语句",
+        "它必须由不同线程来释放"
+      ],
+      "answer": 1,
+      "explanation": "RLock 是可重入锁，内部记录持有者和递归计数，同一线程可多次 acquire，每次 release 递减计数，计数归零才真正释放。",
+      "error_tag": "概念混淆",
+      "variant_group": "可重入与死锁"
+    },
+    {
+      "kp": "py.thread.lock",
+      "type": "single_choice",
+      "question": "以下关于锁与性能的说法，最合理的是：",
+      "options": [
+        "锁的开销可以忽略，可以任意频繁使用",
+        "锁越多越细，程序一定越安全",
+        "锁会带来获取/释放开销并可能造成阻塞，应在正确性前提下尽量缩小临界区",
+        "单线程程序中加锁是完全没有意义的"
+      ],
+      "answer": 2,
+      "explanation": "锁保障正确性但引入开销和竞争，设计时应保证正确性同时让临界区尽可能短，减少串行化范围。",
+      "error_tag": "概念混淆",
+      "variant_group": "临界区粒度"
+    }
+  ]
+}

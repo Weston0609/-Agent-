@@ -1,0 +1,624 @@
+{
+  "id": "s7u3l2",
+  "title": "s7u3l2",
+  "kps": [
+    "agent.pattern.reflexion",
+    "agent.pattern.self_consistency"
+  ],
+  "theory": "## agent.pattern.reflexion\n\n# Agent 设计模式之反思（Reflexion）：让智能体学会“复盘”\n\n> **一句话直觉**：Reflexion（反思）就是让 AI 智能体（Agent）在完成任务失败后，像人类一样先“复盘”错在哪、下次怎么改，把反思结果存进记忆，再重试一次——从而不靠重新训练模型，也能持续提升表现。\n\n本讲面向零基础到工程级，循序渐进地拆解反思模式。\n\n---\n\n## 一、为什么需要反思？从“一问一答”到“自我改进”\n\n传统的 LLM（Large Language Model，大语言模型）调用是**单次映射**：输入问题 → 输出答案。它有三类典型失败：\n\n1. **一次性犯错**：多步推理中第一步算错，后面全错。\n2. **不会从错误中学习**：同一个错误下次还会犯。\n3. **缺少外部信号**：模型不知道自己对不对，因为它没有“打分器”。\n\n**反思模式**的核心思路是引入一个**闭环（loop）**：执行 → 评估 → 反思 → 再执行。关键是新增两块东西：\n\n- **评估器（Evaluator）**：判断本轮结果好还是坏（可以是单元测试、规则、另一个 LLM 打分）。\n- **反思记忆（Reflection Memory）**：把“为什么失败、下次怎么改”写成自然语言，存起来，在下一轮拼进提示词（Prompt）。\n\n这就是论文 *Reflexion: Language Agents with Verbal Reinforcement Learning* (Shinn et al., 2023) 的核心。它不是用梯度更新参数，而是用**语言作为强化信号**。\n\n---\n\n## 二、反思模式的四步循环（核心骨架）\n\n用伪代码描述反思循环：\n\n```\nreflections = []              # 反思记忆\nfor attempt in range(MAX):\n    result = actor(task, reflections)      # 1. 执行\n    ok, feedback = evaluator(result)       # 2. 评估\n    if ok:\n        return result                      # 成功即返回\n    reflection = reflector(task, result, feedback)  # 3. 反思\n    reflections.append(reflection)         # 4. 存入记忆\nreturn best_so_far\n```\n\n四个角色对应四个可替换的组件：\n\n| 角色 | 职责 | 工程常见实现 |\n|------|------|--------------|\n| Actor（执行者） | 根据任务和反思生成输出 | LLM + Prompt |\n| Evaluator（评估者） | 判断对错并给出反馈 | 单元测试 / 规则 / LLM 裁判 |\n| Reflector（反思者） | 生成结构化反思文本 | LLM + 反思模板 |\n| Memory（记忆） | 累积反思，避免重蹈覆辙 | 列表 / 向量库 |\n\n下面用最朴素的方式实现这四步（后续小节会分别加强）。\n\n```python\n# reflexion_skeleton.py\n# 用可插入的“伪 LLM”演示反思循环的骨架，便于理解流程\n\nfrom typing import Callable, List, Tuple\n\n# 1. Actor：把任务和之前的反思拼进 prompt，产生答案\ndef actor(task: str, reflections: List[str]) -> str:\n    memory = \"\\n\".join(f\"- {r}\" for r in reflections) or \"（暂无反思）\"\n    return f\"[答案] task={task} | 已参考反思：{memory}\"\n\n# 2. Evaluator：返回 (是否通过, 反馈)\ndef evaluator(answer: str) -> Tuple[bool, str]:\n    ok = \"正确\" in answer  # 玩具规则：必须包含“正确”\n    return ok, \"需要包含关键字『正确』\" if not ok else \"通过\"\n\n# 3. Reflector：根据失败反馈生成反思文本\ndef reflector(task: str, answer: str, feedback: str) -> str:\n    return f\"任务『{task}』失败原因：{feedback}；下次需修正。\"\n\ndef reflexion_loop(task: str, max_attempts: int = 3) -> str:\n    reflections: List[str] = []\n    for i in range(1, max_attempts + 1):\n        ans = actor(task, reflections)\n        ok, fb = evaluator(ans)\n        print(f\"Attempt {i}: ok={ok}, feedback={fb}\")\n        if ok:\n            return ans\n        reflections.append(reflector(task, ans, fb))  # 4. 累积反思\n    return \"达到最大尝试次数\"\n\nif __name__ == \"__main__\":\n    print(reflexion_loop(\"写出一个单词\"))\n```\n\n运行后你会看到反思被逐轮“喂回”给 Actor，这就是反思模式的本质。\n\n---\n\n## 三、评估器（Evaluator）：反思是否有效，全靠它\n\n反思循环的质量取决于**评估信号**是否可靠。评估器分三类：\n\n1. **客观评估**：单元测试、编译通过、Schema 校验、数学公式代入验证。**最可靠**。\n2. **规则/启发式**：字数、关键字、正则。**便宜但不精确**。\n3. **LLM 裁判（LLM-as-a-Judge）**：用另一个 LLM 打分或判对错。**通用但会漂移**。\n\n工程建议：**能客观就客观**。反思循环天然适配代码、SQL、数学题这类**有可执行验证**的任务。\n\n下面用 Python 的 `exec` 做一个真实的“运行单元测试”评估器：\n\n```python\n# evaluator_exec.py\n# 用真实执行来评估 LLM 生成的代码，是最可靠的评估方式\n\ndef code_evaluator(generated_func_src: str, test_cases):\n    \"\"\"\n    generated_func_src: 一段定义函数的源码字符串，如 'def add(a,b): return a+b'\n    test_cases: [(args, expected), ...]\n    返回 (是否全部通过, 反馈文本)\n    \"\"\"\n    ns = {}  # 命名空间\n    try:\n        exec(generated_func_src, ns)\n    except Exception as e:\n        return False, f\"代码无法编译/执行：{e!r}\"\n\n    func_names = [n for n in ns if callable(ns[n]) and not n.startswith(\"__\")]\n    if not func_names:\n        return False, \"源码里没有定义任何函数\"\n    fn = ns[func_names[0]]\n\n    errors = []\n    for args, expected in test_cases:\n        try:\n            got = fn(*args)\n        except Exception as e:\n            errors.append(f\"调用 {fn.__name__}{args} 抛异常：{e!r}\")\n            continue\n        if got != expected:\n            errors.append(f\"{fn.__name__}{args} 期望 {expected}，实得 {got}\")\n    return (len(errors) == 0), (\"全部通过\" if not errors else \"; \".join(errors))\n\nif __name__ == \"__main__\":\n    src = \"def add(a, b):\\n    return a + b\\n\"\n    print(code_evaluator(src, [((1, 2), 3), ((0, 0), 0)]))\n    bad = \"def add(a, b):\\n    return a - b\\n\"\n    print(code_evaluator(bad, [((1, 2), 3)]))\n```\n\n这类评估器把“是否正确”变成机器可判定的信号，反思就有了“靶心”。\n\n---\n\n## 四、反思记忆（Reflection Memory）：让经验可累积\n\n反思文本必须**结构化且可复用**。否则每次反思一堆废话，下一轮 prompt 里塞满无关信息，反而拖累模型。\n\n一个实用的模板：\n\n```\n<失败原因>\n<具体反例（哪一步错）>\n<改进策略（可操作的动作）>\n```\n\n同时要**去重/压缩**，避免反思越滚越长。简单做法：\n\n- 只保留最近 K 条反思；\n- 或让 LLM 把历史反思“摘要成一份 checklist”。\n\n```python\n# memory.py\n# 反思记忆：去重 + 限长，避免 prompt 无限膨胀\n\nfrom collections import OrderedDict\nfrom typing import Iterable, List\n\nclass ReflectionMemory:\n    def __init__(self, capacity: int = 5):\n        self.capacity = capacity\n        self._items: \"OrderedDict[str, None]\" = OrderedDict()\n\n    def add(self, reflection: str) -> None:\n        r = reflection.strip()\n        if not r:\n            return\n        # 已存在则移到最新\n        self._items.pop(r, None)\n        self._items[r] = None\n        # 超出容量淘汰最旧\n        while len(self._items) > self.capacity:\n            self._items.popitem(last=False)\n\n    def extend(self, refs: Iterable[str]) -> None:\n        for r in refs:\n            self.add(r)\n\n    def as_prompt_block(self) -> str:\n        if not self._items:\n            return \"（暂无历史反思）\"\n        return \"\\n\".join(f\"- {r}\" for r in self._items.keys())\n\nif __name__ == \"__main__\":\n    mem = ReflectionMemory(capacity=3)\n    mem.extend([\"r1\", \"r2\", \"r3\", \"r4\", \"r2\"])\n    print(mem.as_prompt_block())\n```\n\n注意 `OrderedDict.popitem(last=False)` 的用法：弹出最旧一条，这是 LRU（Least Recently Used，最近最少使用）风格的淘汰策略。\n\n---\n\n## 五、工程化要点与陷阱\n\n把反思模式真正上线，需要关注以下工程问题：\n\n1. **评估器优先选客观信号**。LLM 裁判会“幻觉”，尤其是打分类评分。\n2. **反思要短、要具体、要可操作**。避免出现“下次更努力”这种废话。\n3. **设置重试上限**。`max_attempts` 防止死循环 + 烧钱。\n4. **记录轨迹（trace）**。每一轮的 actor 输出、评估反馈、反思都要落日志，便于调试与 ablation（消融实验）。\n5. **反思 ≠ 重试**。纯重试只是换一次随机性；反思必须让下一轮 prompt 里出现**新信息**。\n6. **反思可以跨任务共享**。同一类任务的反思可以放进向量库（vector store），做跨会话的“经验复用”。\n7. **提示注入风险**：如果反思文本由外部/不可信输入构造，可能被注入恶意指令，需要清洗。\n\n下面这个例子把“有反思”与“无反思”做对比，直观展示增益：\n\n```python\n# ab_test_reflexion.py\n# 对比：无反思 vs 有反思 在同一个“需要给函数加上类型注解”的任务上的表现\n\nfrom typing import List\n\n# 玩具 Actor：无反思时永远给出同一个错误答案\ndef actor(task: str, reflections: List[str]) -> str:\n    if not reflections:\n        return \"def add(a, b): return a + b\"  # 缺类型注解\n    if \"类型注解\" in \" \".join(reflections):\n        return \"def add(a: int, b: int) -> int: return a + b\"\n    return \"def add(a, b): return a + b\"\n\n# Evaluator：检查是否含有 '->' 注解\ndef evaluator(code: str):\n    ok = \"->\" in code and \":\" in code\n    return ok, (\"通过\" if ok else \"缺少类型注解（Type Hints）\")\n\ndef reflector(task, code, feedback):\n    return f\"上一次输出缺少：{feedback}\"\n\ndef run(use_reflection: bool):\n    reflections: List[str] = []\n    for i in range(3):\n        code = actor(\"给 add 函数加类型注解\", reflections)\n        ok, fb = evaluator(code)\n        if ok:\n            return i + 1, code\n        if use_reflection:\n            reflections.append(reflector(\"task\", code, fb))\n    return -1, \"未成功\"\n\nif __name__ == \"__main__\":\n    print(\"无反思:\", run(False))\n    print(\"有反思:\", run(True))\n```\n\n运行后会看到：无反思的 Actor 一直给同一个错误答案；有反思的 Actor 在拿到反思后作出了修正。\n\n---\n\n## 收束\n\nReflexion 的本质：**用语言承载强化信号 + 用记忆改变下一轮 prompt**。它把“训练模型去变好”转换成“训练提示去变好”，工程成本低、可解释性强，是目前 Agent 循环里最常用的模式之一。理解了 Actor / Evaluator / Reflector / Memory 四件套 + 循环终止条件，你就能把任何 LLM 任务改造成具备自我改进能力的智能体。\n\n```python\n# reflexion_demo.py\n# 完整可运行的最小 Reflexion 演示：任务 = 写一个通过所有测试用例的 add 函数\n# 运行：python reflexion_demo.py\n\nfrom typing import Callable, List, Tuple\n\nTEST_CASES = [((1, 2), 3), ((0, 0), 0), ((-1, 1), 0)]\n\n# --- 1. Actor：可被反思“纠正”的伪 LLM ---\ndef actor(reflections: List[str]) -> str:\n    joined = \" \".join(reflections)\n    if \"减法\" in joined:\n        # 已经知道上次用了减法，这次改成加法\n        return \"def add(a, b):\\n    return a + b\\n\"\n    # 第一轮：故意写错（用减法）\n    return \"def add(a, b):\\n    return a - b\\n\"\n\n# --- 2. Evaluator：真实执行 + 断言 ---\ndef evaluator(src: str) -> Tuple[bool, str]:\n    ns = {}\n    try:\n        exec(src, ns)\n    except Exception as e:\n        return False, f\"执行异常：{e!r}\"\n    fn = ns.get(\"add\")\n    if not callable(fn):\n        return False, \"未定义 add 函数\"\n    details = []\n    for args, expected in TEST_CASES:\n        try:\n            got = fn(*args)\n        except Exception as e:\n            details.append(f\"add{args} 抛异常 {e!r}\")\n            continue\n        if got != expected:\n            details.append(f\"add{args} 期望 {expected} 实得 {got}\")\n    return (not details), (\"通过\" if not details else \"; \".join(details))\n\n# --- 3. Reflector：把反馈转成“可操作反思” ---\ndef reflector(src: str, feedback: str) -> str:\n    if \"期望 3 实得 -1\" in feedback or \"减法\" in src:\n        return \"上次用减法实现 add，应改用加法。\"\n    return f\"上次失败：{feedback}\"\n\n# --- 4. 主循环 ---\ndef reflexion_loop(max_attempts: int = 3) -> str:\n    reflections: List[str] = []\n    for i in range(1, max_attempts + 1):\n        src = actor(reflections)\n        ok, fb = evaluator(src)\n        print(f\"[Attempt {i}] ok={ok} feedback={fb}\")\n        if ok:\n            print(\"最终代码：\\n\" + src)\n            return src\n        reflections.append(reflector(src, fb))\n    print(\"达到最大尝试次数，未通过。\")\n    return \"\"\n\nif __name__ == \"__main__\":\n    reflexion_loop()\n\n# 预期输出：\n# [Attempt 1] ok=False feedback=add(1, 2) 期望 3 实得 -1; ...\n# [Attempt 2] ok=True feedback=通过\n# 最终代码：\n# def add(a, b):\n#     return a + b\n```\n\n## agent.pattern.self_consistency\n\n# agent.pattern.self_consistency：让 Agent 自己投票，答案更稳\n\n> **一句话直觉**：同一个问题让模型独立答多次，再取“多数票”，通常比只答一次更可靠——这就是自一致性（self-consistency）。\n\n---\n\n## 1. 为什么需要自一致性？\n\n大语言模型（LLM, Large Language Model）的输出带有随机性（randomness）。同一个问题问两次，可能得到不同答案。如果其中一次答错了，单次结果就不可信。\n\n自一致性（self-consistency）的核心思想是：**不要相信一次采样，而是采样多条推理路径，用投票选出最一致的答案**。它源于一个简单观察：复杂推理题中，正确答案往往会被多条不同推理路径同时得到，而错误答案通常各自为政。\n\n**关键结论**：自一致性 = 多次独立采样 + 答案聚合（通常取众数）。\n\n```python\n# 直觉演示：同一个问题问 5 次，统计答案分布\nanswers = [\"42\", \"42\", \"41\", \"42\", \"43\"]\nfrom collections import Counter\n\n# 众数（mode）就是出现次数最多的答案\ntally = Counter(answers)\nprint(\"票数统计:\", tally)\nprint(\"最终答案:\", tally.most_common(1)[0][0])  # 输出 42\n```\n\n---\n\n## 2. 最小实现：从一次调用到多次投票\n\n一个可复用的自一致性函数需要三部分：\n\n1. **采样器（sampler）**：给出一次回答；\n2. **聚合器（aggregator）**：把多个回答归并成最终答案；\n3. **主流程**：并行或串行调用 N 次，然后聚合。\n\n下面先写一个不依赖任何大模型 API 的纯逻辑版本，方便理解。\n\n**关键结论**：把“模型”抽象成一个函数，自一致性就是“调用 N 次 + 统计”。\n\n```python\nfrom collections import Counter\nfrom typing import Callable\n\ndef self_consistency(\n    question: str,\n    sampler: Callable[[str], str],  # 采样一次，返回答案字符串\n    n: int = 5,                     # 采样次数\n) -> str:\n    \"\"\"采样 n 次，返回出现次数最多的那个答案。\"\"\"\n    answers = [sampler(question) for _ in range(n)]\n    return Counter(answers).most_common(1)[0][0]\n\n# 一个假“模型”：60% 概率答对，40% 概率答错\nimport random\nrandom.seed(0)\n\ndef fake_model(q: str) -> str:\n    return \"42\" if random.random() < 0.6 else random.choice([\"41\", \"43\"])\n\nprint(self_consistency(\"6*7=?\", fake_model, n=9))  # 大概率输出 42\n```\n\n---\n\n## 3. 工程进阶：归一化与并行\n\n真实场景里，答案表面不同但语义相同。例如 `\"42\"`、`\" 42 \"`、`\"答案是42\"` 应该视为同一票。因此聚合前要做**归一化（normalization）**。\n\n另外，采样是 I/O 密集任务，用线程池（thread pool）并行能把 N 次调用压缩到接近一次的时间。\n\n**关键结论**：工程化的自一致性 = 归一化 + 并行采样 + 稳健投票。\n\n```python\nimport re\nimport random\nfrom collections import Counter\nfrom concurrent.futures import ThreadPoolExecutor\nfrom typing import Callable\n\ndef normalize(text: str) -> str:\n    \"\"\"抽取文本中的数字/小写字母，用于把语义相同的答案归为一票。\"\"\"\n    text = text.strip().lower()\n    m = re.search(r\"-?\\d+\", text)   # 简单场景：只取数字\n    return m.group(0) if m else text\n\ndef self_consistency_v2(\n    question: str,\n    sampler: Callable[[str], str],\n    n: int = 8,\n    workers: int = 4,\n) -> tuple[str, Counter]:\n    \"\"\"并行采样 n 次，归一化后投票；返回最终答案和完整票数。\"\"\"\n    with ThreadPoolExecutor(max_workers=workers) as pool:\n        raw = list(pool.map(lambda _: sampler(question), range(n)))\n    votes = Counter(normalize(a) for a in raw)\n    return votes.most_common(1)[0][0], votes\n\nrandom.seed(1)\ndef noisy_model(q: str) -> str:\n    return random.choice([\"The answer is 42\", \" 42 \", \"42!\", \"41\", \"43\"])\n\nanswer, votes = self_consistency_v2(\"6*7=?\", noisy_model, n=20, workers=8)\nprint(\"最终答案:\", answer)\nprint(\"票数分布:\", votes)\n```\n\n---\n\n## 4. 何时有效、何时失效\n\n自一致性不是银弹，它有明确的适用边界。\n\n**适用**：\n- 有**唯一正确答案**的任务：数学题、选择题、事实问答、代码输出。\n- 单次采样有随机性，但正确路径“更常被走到”。\n\n**失效**：\n- **开放式生成**（写诗、头脑风暴）：没有客观众数。\n- **极高错误偏置**：如果模型 95% 都答错，投票也救不回来。\n- **成本敏感**：N 次采样 = N 倍 token 成本，需要权衡。\n\n**关键结论**：自一致性适用于“答案可枚举、正确率不为零”的任务。\n\n```python\n# 反例：开放式任务没有众数\nopen_answers = [\"写一首诗\", \"编个故事\", \"画幅画\", \"写一首诗\"]\n# 众数是“写一首诗”，但这只是重复，不是“正确答案”\n```\n\n---\n\n## 5. 与 Agent 的关系\n\n在 Agent（智能体）系统中，自一致性常用于：\n\n- **工具调用**：让 Agent 多次规划同一个子任务，投票选出最常被选中的工具/参数；\n- **最终答案**：多轮 ReAct（Reason + Act）产生多个答案，投票决定交付哪个；\n- **异常兜底**：当单次结果置信度低时，自动开启多采样复核。\n\n它是**最便宜、最容易落地的可靠性增强手段**之一：不需要训练，不需要改模型，只需要包装一层循环。\n\n**关键结论**：自一致性是 Agent 可靠性的“第一道保险”，实现成本极低。\n\n```python\n# Agent 场景示意：多次规划，投票选工具\nplans = [\"search\", \"search\", \"calculator\", \"search\", \"calculator\"]\nfrom collections import Counter\nchosen = Counter(plans).most_common(1)[0][0]\nprint(\"Agent 选择工具:\", chosen)  # search\n```\n\n---\n\n## 动手练习\n\n写一个 `majority_vote` 函数，输入一个字符串列表，返回出现次数最多的字符串。要求：\n\n1. 使用 `collections.Counter` 统计；\n2. 若出现平票，返回**按字母序最小**的那个（提示：先排序再 `most_common`）；\n3. 写 3 个测试用例覆盖：普通多数、平票、全部相同。\n\n然后把它接上你刚才写的 `self_consistency_v2`，用 `n=10` 跑一遍，观察票数分布。\n\n```python\n# 参考模板\ndef majority_vote(answers: list[str]) -> str:\n    # TODO: 你的实现\n    ...\n\nassert majority_vote([\"a\", \"a\", \"b\"]) == \"a\"\nassert majority_vote([\"b\", \"a\"]) == \"a\"      # 平票取字母序最小\nassert majority_vote([\"x\", \"x\", \"x\"]) == \"x\"\nprint(\"全部通过\")\n```\n\n```python\nimport re\nimport random\nfrom collections import Counter\nfrom concurrent.futures import ThreadPoolExecutor\nfrom typing import Callable\n\ndef normalize(text: str) -> str:\n    \"\"\"归一化：抽取数字或小写字母，把语义相同的答案归为一票。\"\"\"\n    text = text.strip().lower()\n    m = re.search(r\"-?\\d+\", text)\n    return m.group(0) if m else text\n\ndef self_consistency(\n    question: str,\n    sampler: Callable[[str], str],\n    n: int = 8,\n    workers: int = 4,\n) -> tuple[str, Counter]:\n    \"\"\"并行采样 n 次，归一化后投票；返回最终答案和完整票数。\"\"\"\n    with ThreadPoolExecutor(max_workers=workers) as pool:\n        raw = list(pool.map(lambda _: sampler(question), range(n)))\n    votes = Counter(normalize(a) for a in raw)\n    return votes.most_common(1)[0][0], votes\n\n# 一个模拟模型：大多数时候答对，偶尔答错\nrandom.seed(42)\ndef noisy_model(q: str) -> str:\n    return random.choice([\"The answer is 42\", \" 42 \", \"42!\", \"41\", \"43\"])\n\nif __name__ == \"__main__\":\n    answer, votes = self_consistency(\"6*7=?\", noisy_model, n=20, workers=8)\n    print(\"最终答案:\", answer)\n    print(\"票数分布:\", votes)\n```\n",
+  "quiz": [
+    {
+      "kp": "agent.pattern.reflexion",
+      "type": "single_choice",
+      "question": "在反思型智能体模式中，最核心的循环特征是什么？",
+      "options": [
+        "只执行一次任务并返回结果",
+        "执行任务后对结果进行自我评估，并根据评估修正后续行为",
+        "只依赖外部工具调用，不需要模型推理",
+        "将所有决策完全交给用户人工判断"
+      ],
+      "answer": 1,
+      "explanation": "反思模式的关键是“行动—评估—修正”的迭代循环，通过自我反馈提升后续输出质量。",
+      "error_tag": "概念混淆",
+      "variant_group": "reflexion_core"
+    },
+    {
+      "kp": "agent.pattern.reflexion",
+      "type": "single_choice",
+      "question": "某智能体第一次生成的答案不完整，系统让它先检查自己的答案，再根据检查结果重新回答。这种设计最接近下列哪种模式？",
+      "options": [
+        "单次提示",
+        "反思",
+        "随机采样",
+        "纯规则匹配"
+      ],
+      "answer": 1,
+      "explanation": "先自我检查、再根据检查结果重新生成，是反思模式的典型流程。",
+      "error_tag": "模式识别错误",
+      "variant_group": "reflexion_core"
+    },
+    {
+      "kp": "agent.pattern.reflexion",
+      "type": "single_choice",
+      "question": "关于反思模式中的“记忆”，下列说法最准确的是？",
+      "options": [
+        "记忆必须永久存储在硬盘上才有效",
+        "记忆可以保存此前尝试和反思，供后续轮次参考",
+        "记忆会替代所有模型推理",
+        "记忆只能保存数字，不能保存文本"
+      ],
+      "answer": 1,
+      "explanation": "在反思模式中，记忆通常用于保存历史尝试与反思，使后续轮次能参考过去经验。",
+      "error_tag": "记忆机制误解",
+      "variant_group": "reflexion_memory"
+    },
+    {
+      "kp": "agent.pattern.reflexion",
+      "type": "single_choice",
+      "question": "下列哪种场景最适合使用反思模式？",
+      "options": [
+        "只需要返回当前时间的简单查询",
+        "需要多步推理且答案质量可通过反馈逐步提升的任务",
+        "只需要做一次乘法运算",
+        "只需要读取一个固定常量"
+      ],
+      "answer": 1,
+      "explanation": "反思模式适合需要多步推理、能够根据反馈逐步改进的任务，而不是极简单的一次性查询。",
+      "error_tag": "适用场景误判",
+      "variant_group": "reflexion_apply"
+    },
+    {
+      "kp": "agent.pattern.reflexion",
+      "type": "single_choice",
+      "question": "在反思模式中，如果评估器过于宽松，最可能带来什么后果？",
+      "options": [
+        "智能体更早停止，可能错过明显可改进的错误",
+        "智能体一定会无限循环",
+        "模型参数会翻倍",
+        "用户输入会被改写"
+      ],
+      "answer": 0,
+      "explanation": "评估过于宽松会让本应继续修正的情况被判定为通过，导致过早停止并保留错误。",
+      "error_tag": "评估偏差",
+      "variant_group": "reflexion_apply"
+    },
+    {
+      "kp": "agent.pattern.reflexion",
+      "type": "single_choice",
+      "question": "反思模式中，将“上一轮错误原因”与“下一轮任务提示”结合时，最需要注意什么？",
+      "options": [
+        "反思内容越长越好，不需要筛选",
+        "反思内容应简洁、具体，并聚焦可执行的改进点",
+        "必须把完整历史逐字全部拼进去，不能摘要",
+        "反思内容必须使用另一种编程语言"
+      ],
+      "answer": 1,
+      "explanation": "反思内容如果冗长或模糊，会浪费上下文并干扰模型；简洁具体的改进点更有帮助。",
+      "error_tag": "提示构造不当",
+      "variant_group": "reflexion_prompt"
+    },
+    {
+      "kp": "agent.pattern.reflexion",
+      "type": "single_choice",
+      "question": "某系统让模型先写代码，再运行测试，若测试失败则根据失败信息让模型修改代码并重试。这属于哪种思想？",
+      "options": [
+        "纯随机生成",
+        "反思",
+        "一次性编译",
+        "静态类型检查"
+      ],
+      "answer": 1,
+      "explanation": "根据测试失败信息进行修改并重试，是反思模式在代码生成中的典型体现。",
+      "error_tag": "模式识别错误",
+      "variant_group": "reflexion_prompt"
+    },
+    {
+      "kp": "agent.pattern.reflexion",
+      "type": "single_choice",
+      "question": "关于反思模式中“多轮”与“单轮”的区别，下列说法正确的是？",
+      "options": [
+        "多轮反思一定比单轮差",
+        "多轮反思允许模型根据反馈迭代改进，但也会增加开销",
+        "单轮模式一定包含反思步骤",
+        "多轮反思不需要任何输入"
+      ],
+      "answer": 1,
+      "explanation": "多轮反思通过迭代反馈可能提升质量，但也带来更多计算与调用成本。",
+      "error_tag": "对比理解错误",
+      "variant_group": "reflexion_compare"
+    },
+    {
+      "kp": "agent.pattern.reflexion",
+      "type": "single_choice",
+      "question": "在反思模式中，下列哪一项最能作为“终止条件”？",
+      "options": [
+        "模型随机输出一个数字",
+        "评估器判定结果已满足要求，或达到最大轮数",
+        "用户关闭显示器",
+        "程序开始运行"
+      ],
+      "answer": 1,
+      "explanation": "常见终止条件包括评估通过或达到预设最大轮数，以避免无休止反思。",
+      "error_tag": "终止条件混淆",
+      "variant_group": "reflexion_compare"
+    },
+    {
+      "kp": "agent.pattern.reflexion",
+      "type": "single_choice",
+      "question": "反思模式中，如果直接把上一轮的错误答案原样再次输入而不加任何反思，最可能的结果是？",
+      "options": [
+        "模型必然自动修正所有错误",
+        "模型可能重复相同错误，因为没有获得新的改进信息",
+        "系统会自动切换成另一个模型",
+        "用户输入会被自动清空"
+      ],
+      "answer": 1,
+      "explanation": "没有反思信号时，重复输入相同内容很难带来改进，容易重复原有错误。",
+      "error_tag": "反馈缺失后果",
+      "variant_group": "reflexion_feedback"
+    },
+    {
+      "kp": "agent.pattern.reflexion",
+      "type": "single_choice",
+      "question": "在反思模式中，外部工具（如测试框架或搜索接口）常扮演什么角色？",
+      "options": [
+        "替代模型进行所有推理",
+        "为评估或反思提供客观信号",
+        "自动修改用户需求",
+        "保证模型不需要任何输入"
+      ],
+      "answer": 1,
+      "explanation": "外部工具能提供测试结果、检索信息等客观信号，帮助评估器生成更可靠的反思。",
+      "error_tag": "工具作用误解",
+      "variant_group": "reflexion_feedback"
+    },
+    {
+      "kp": "agent.pattern.reflexion",
+      "type": "single_choice",
+      "question": "下列哪一项最符合反思模式中“试错学习”的思想？",
+      "options": [
+        "一次失败后永远放弃",
+        "从失败中提取原因，并在下一次尝试中调整策略",
+        "忽略失败，继续随机尝试",
+        "把所有失败原因都归咎于用户"
+      ],
+      "answer": 1,
+      "explanation": "试错学习强调从失败中提炼可复用经验，并在后续尝试中改进策略。",
+      "error_tag": "学习机制误解",
+      "variant_group": "reflexion_learning"
+    },
+    {
+      "kp": "agent.pattern.reflexion",
+      "type": "single_choice",
+      "question": "关于反思模式中的“自我评估”，下列说法正确的是？",
+      "options": [
+        "自我评估只能由人工完成",
+        "自我评估的结果可以用于指导下一轮尝试",
+        "自我评估必须返回布尔值 True 或 False",
+        "自我评估会直接修改原始用户输入"
+      ],
+      "answer": 1,
+      "explanation": "自我评估的目的是产生可操作的反馈，用于改进后续轮次，而不是直接修改用户输入。",
+      "error_tag": "功能误解",
+      "variant_group": "reflexion_eval"
+    },
+    {
+      "kp": "agent.pattern.reflexion",
+      "type": "single_choice",
+      "question": "下列哪一项最不适合作为反思模式中“反思”步骤的输出？",
+      "options": [
+        "指出上一轮答案中的逻辑漏洞",
+        "给出下一轮应重点改进的方向",
+        "记录本轮尝试中缺失的关键信息",
+        "直接返回一个完全无关的随机字符串"
+      ],
+      "answer": 3,
+      "explanation": "反思步骤应产生与任务相关的诊断信息，随机字符串没有反思价值。",
+      "error_tag": "输出合理性判断错误",
+      "variant_group": "reflexion_eval"
+    },
+    {
+      "kp": "agent.pattern.reflexion",
+      "type": "single_choice",
+      "question": "反思模式与普通“一次生成”模式相比，主要增加了什么成本？",
+      "options": [
+        "必须使用 GPU 训练模型",
+        "需要额外的模型调用或计算轮次",
+        "必须连接互联网",
+        "必须使用数据库"
+      ],
+      "answer": 1,
+      "explanation": "反思通常需要多轮生成、评估或修正，因此会增加调用次数或计算开销。",
+      "error_tag": "成本理解偏差",
+      "variant_group": "reflexion_tradeoff"
+    },
+    {
+      "kp": "agent.pattern.reflexion",
+      "type": "single_choice",
+      "question": "在反思模式中，如果每一轮都不加限制地反复自我修正，最可能出现什么问题？",
+      "options": [
+        "模型一定会自动变聪明",
+        "可能陷入无限循环或过度修正",
+        "用户输入会被自动删除",
+        "系统会跳过所有评估步骤"
+      ],
+      "answer": 1,
+      "explanation": "缺少终止条件时，反复反思可能导致循环或过度修正，因此通常需要最大轮数等限制。",
+      "error_tag": "边界条件忽略",
+      "variant_group": "reflexion_tradeoff"
+    },
+    {
+      "kp": "agent.pattern.reflexion",
+      "type": "single_choice",
+      "question": "反思模式中，将上一轮的错误总结成文字并拼接到下一轮提示中，主要作用是什么？",
+      "options": [
+        "增加模型参数数量",
+        "把历史反思作为上下文，帮助模型避免重复错误",
+        "替代所有外部工具调用",
+        "保证输出一定完全正确"
+      ],
+      "answer": 1,
+      "explanation": "把反思写入后续上下文，可以让模型在下一轮生成时参考此前教训，减少重复错误。",
+      "error_tag": "机制误解",
+      "variant_group": "reflexion_context"
+    },
+    {
+      "kp": "agent.pattern.reflexion",
+      "type": "single_choice",
+      "question": "下列哪段伪代码最符合反思模式的基本结构？",
+      "options": [
+        "result = model(prompt); return result",
+        "while 未达到最大轮数: 生成结果; 评估结果; 若通过则结束; 否则生成反思并加入下一轮输入",
+        "for i in range(10): print(i)",
+        "if user_input == '': raise ValueError"
+      ],
+      "answer": 1,
+      "explanation": "反思模式的基本结构包含生成、评估、条件终止以及将反思反馈到下一轮。",
+      "error_tag": "结构识别错误",
+      "variant_group": "reflexion_context"
+    },
+    {
+      "kp": "agent.pattern.reflexion",
+      "type": "single_choice",
+      "question": "在反思模式中，评估器（evaluator）的主要职责是什么？",
+      "options": [
+        "生成最终用户界面",
+        "判断上一轮输出是否满足要求，并提供反馈信号",
+        "替代所有业务逻辑",
+        "永久保存用户密码"
+      ],
+      "answer": 1,
+      "explanation": "评估器用于判断当前输出质量并产生反馈，是反思循环能否继续或终止的关键。",
+      "error_tag": "组件职责混淆",
+      "variant_group": "reflexion_components"
+    },
+    {
+      "kp": "agent.pattern.reflexion",
+      "type": "single_choice",
+      "question": "如果一个反思型智能体在连续多轮后仍然无法通过评估，比较合理的做法是？",
+      "options": [
+        "永远继续，不设任何上限",
+        "达到预设最大轮数后返回当前最佳结果或报告失败",
+        "直接删除用户问题",
+        "忽略评估结果并继续调用"
+      ],
+      "answer": 1,
+      "explanation": "为避免无限循环，应设置最大轮数，并在达到上限后返回当前最佳结果或明确失败。",
+      "error_tag": "终止策略错误",
+      "variant_group": "reflexion_components"
+    },
+    {
+      "kp": "agent.pattern.self_consistency",
+      "type": "single_choice",
+      "question": "在智能体设计中，self-consistency（自洽性）模式的核心思想是什么？",
+      "options": [
+        "让智能体只执行一次推理，以减少计算成本",
+        "让智能体对同一问题多次独立推理，再对结果进行聚合或投票",
+        "让智能体在每次推理时都使用相同的随机种子以保证一致性",
+        "让智能体将任务拆分成多个子任务并顺序执行"
+      ],
+      "answer": 1,
+      "explanation": "self-consistency 的核心是多次独立采样推理路径，然后通过多数投票等方式聚合结果，以提高答案的可靠性。选项 A 与自洽性相反；选项 C 虽然看似一致，但自洽性恰恰依赖多样化采样而非固定种子；选项 D 描述的是任务分解模式。",
+      "error_tag": "概念混淆",
+      "variant_group": "self_consistency_core_concept"
+    },
+    {
+      "kp": "agent.pattern.self_consistency",
+      "type": "single_choice",
+      "question": "下列关于 self-consistency 与单次链式推理（chain-of-thought）的比较，哪一项最准确？",
+      "options": [
+        "self-consistency 总是比单次推理更快，因为可以并行",
+        "self-consistency 通过多路径采样降低了单次推理中因随机性导致的错误，但计算开销更大",
+        "self-consistency 不需要任何推理过程，直接输出答案",
+        "self-consistency 只能用于数学题，不能用于其他领域"
+      ],
+      "answer": 1,
+      "explanation": "self-consistency 通过多路径采样和聚合提高了鲁棒性，但需要多次推理，计算成本高于单次链式推理。A 错误，因为更多推理通常更慢；C 错误，因为它仍然依赖推理过程；D 错误，因为该方法可迁移到多种需要推理的任务。",
+      "error_tag": "概念混淆",
+      "variant_group": "self_consistency_vs_single_path"
+    },
+    {
+      "kp": "agent.pattern.self_consistency",
+      "type": "multi_choice",
+      "question": "以下哪些场景适合采用 self-consistency 模式？（多选）",
+      "options": [
+        "需要从多个候选答案中选出最一致答案的逻辑推理题",
+        "对同一段代码进行多次独立审查，汇总发现的缺陷",
+        "要求实时响应且计算预算极低的简单查询",
+        "需要高可靠性的数学计算题",
+        "生成一段没有标准答案的创意故事"
+      ],
+      "answer": [
+        0,
+        1,
+        3
+      ],
+      "explanation": "self-consistency 适合有可聚合答案且对可靠性要求高的任务，如逻辑推理、数学计算和多次独立审查。实时低预算场景不适合，因为多路径采样开销大；无标准答案的创意生成也难以投票。",
+      "error_tag": "场景误用",
+      "variant_group": "self_consistency_suitable_tasks"
+    },
+    {
+      "kp": "agent.pattern.self_consistency",
+      "type": "multi_choice",
+      "question": "在 self-consistency 中，聚合多条推理路径的结果时，以下哪些策略是合理的？（多选）",
+      "options": [
+        "对最终答案进行多数投票",
+        "根据每条路径的置信度进行加权投票",
+        "随机选择其中一条路径的答案",
+        "先对答案进行归一化或等价性判断，再投票",
+        "直接拼接所有路径的答案作为最终输出"
+      ],
+      "answer": [
+        0,
+        1,
+        3
+      ],
+      "explanation": "多数投票、加权投票以及先归一化再投票都是合理的聚合策略。随机选择忽略了聚合的意义；直接拼接所有答案通常不是有效的最终输出。",
+      "error_tag": "概念混淆",
+      "variant_group": "self_consistency_aggregation_strategies"
+    },
+    {
+      "kp": "agent.pattern.self_consistency",
+      "type": "fill_blank",
+      "question": "在 self-consistency 模式中，智能体对同一问题生成多条推理路径，然后通过________（填写一种常见聚合方法）来选择最终答案。",
+      "options": [],
+      "answer": [
+        "多数投票",
+        "投票",
+        "majority vote",
+        "majority voting"
+      ],
+      "explanation": "最常见的聚合方法是多数投票（majority vote），即选择出现次数最多的答案。",
+      "error_tag": "记忆缺失",
+      "variant_group": "self_consistency_aggregation_method"
+    },
+    {
+      "kp": "agent.pattern.self_consistency",
+      "type": "fill_blank",
+      "question": "self-consistency 与单次链式推理的主要区别在于：前者会对同一问题生成________条推理路径，以降低单次随机错误的影响。",
+      "options": [],
+      "answer": [
+        "多",
+        "多于一",
+        ">=2",
+        "若干",
+        "multiple",
+        "several"
+      ],
+      "explanation": "self-consistency 通过生成多条（多于一）推理路径并聚合结果来提高可靠性。",
+      "error_tag": "记忆缺失",
+      "variant_group": "self_consistency_multiple_paths"
+    },
+    {
+      "kp": "agent.pattern.self_consistency",
+      "type": "fill_blank",
+      "question": "在实现 self-consistency 时，为了产生多样化的推理路径，通常需要提高解码的________参数，而不是使用贪婪解码。",
+      "options": [],
+      "answer": [
+        "温度",
+        "temperature",
+        "随机性",
+        "采样温度"
+      ],
+      "explanation": "提高温度（temperature）可以增加采样的随机性，从而产生多样化的推理路径。贪婪解码会消除这种多样性。",
+      "error_tag": "记忆缺失",
+      "variant_group": "self_consistency_decoding_params"
+    },
+    {
+      "kp": "agent.pattern.self_consistency",
+      "type": "code_reading",
+      "question": "阅读以下伪代码：\n\npaths = []\nfor i in range(5):\n    answer = agent.solve(question, temperature=0.8)\n    paths.append(answer)\nfinal = most_common(paths)\nreturn final\n\n这段代码体现了哪种智能体模式？其关键步骤是什么？",
+      "options": [],
+      "answer": "体现了 self-consistency（自洽性）模式。关键步骤是：对同一问题多次独立采样（temperature=0.8 引入随机性），然后用 most_common 进行多数投票聚合，得到最终答案。",
+      "explanation": "代码通过循环多次调用 solve 并改变温度来生成多条路径，再用 most_common 聚合，这正是 self-consistency 的典型实现。",
+      "error_tag": "概念混淆",
+      "variant_group": "self_consistency_code_recognition"
+    },
+    {
+      "kp": "agent.pattern.self_consistency",
+      "type": "code_reading",
+      "question": "阅读以下伪代码：\n\nanswers = agent.solve(question, n=1, temperature=0.0)\nreturn answers[0]\n\n这段代码是否体现了 self-consistency？为什么？",
+      "options": [],
+      "answer": "没有体现 self-consistency。因为它只生成了一条路径（n=1），且 temperature=0.0 表示贪婪解码，没有多样性和聚合过程，只是单次确定性推理。",
+      "explanation": "self-consistency 需要多条独立采样路径并进行聚合。该代码只采样一次且温度为 0，不具备多样性和投票机制。",
+      "error_tag": "概念混淆",
+      "variant_group": "self_consistency_code_recognition"
+    },
+    {
+      "kp": "agent.pattern.self_consistency",
+      "type": "code_reading",
+      "question": "阅读以下伪代码：\n\nresults = [agent.solve(q, temperature=0.7) for _ in range(3)]\ncounts = {}\nfor r in results:\n    counts[r] = counts.get(r, 0) + 1\nbest = max(counts, key=counts.get)\nreturn best\n\n如果 results = ['B', 'A', 'B']，返回什么？这体现了什么聚合策略？",
+      "options": [],
+      "answer": "返回 'B'。这体现了多数投票（majority vote）聚合策略，选择出现次数最多的答案。",
+      "explanation": "results 中 'B' 出现 2 次，'A' 出现 1 次，max 根据计数选择 'B'。这是 self-consistency 中常用的多数投票聚合。",
+      "error_tag": "边界错误",
+      "variant_group": "self_consistency_majority_vote"
+    },
+    {
+      "kp": "agent.pattern.self_consistency",
+      "type": "scenario",
+      "question": "某团队正在开发一个数学解题智能体，发现单次链式推理偶尔会因随机性给出错误答案。他们希望在不改变模型的情况下提高答案的可靠性。请说明他们会如何应用 self-consistency 模式，以及需要注意哪些关键点。",
+      "options": [],
+      "answer": null,
+      "explanation": "应用 self-consistency 时，团队应对同一问题多次独立采样生成多条推理路径，通过多数投票等聚合策略选择最终答案。关键点包括：保证采样多样性（如提高温度）、选择合适的采样次数、设计聚合策略，并权衡增加的计算成本。",
+      "error_tag": "场景误用",
+      "variant_group": "self_consistency_application_scenario",
+      "required_keywords": [
+        "self-consistency",
+        "多次独立采样",
+        "多数投票",
+        "聚合策略",
+        "采样多样性"
+      ]
+    },
+    {
+      "kp": "agent.pattern.self_consistency",
+      "type": "scenario",
+      "question": "某智能体在自洽性模式下对同一问题采样了 10 条路径，但最终投票结果仍然错误。经分析发现所有 10 条路径都犯了同一个逻辑错误。请分析可能的原因，并给出改进方向。",
+      "options": [],
+      "answer": null,
+      "explanation": "所有路径犯同一错误说明可能存在系统性偏差或采样多样性不足。改进方向包括：调整采样策略（如提高温度、使用不同提示词或角色设定）、检查提示词是否引导了错误方向，以及评估模型本身的能力是否不足以解决该问题。",
+      "error_tag": "概念混淆",
+      "variant_group": "self_consistency_failure_analysis",
+      "required_keywords": [
+        "系统性偏差",
+        "采样多样性",
+        "采样策略",
+        "温度",
+        "提示词"
+      ]
+    },
+    {
+      "kp": "agent.pattern.self_consistency",
+      "type": "single_choice",
+      "question": "在一个 self-consistency 流程中，智能体对同一问题生成了 5 条推理路径，最终答案分别为：A、A、B、A、C。若采用多数投票聚合，最终答案是什么？",
+      "options": [
+        "A",
+        "B",
+        "C",
+        "无法确定，需要重新生成"
+      ],
+      "answer": 0,
+      "explanation": "多数投票选择出现次数最多的答案。A 出现 3 次，B 和 C 各 1 次，因此最终答案为 A。",
+      "error_tag": "边界错误",
+      "variant_group": "self_consistency_majority_vote"
+    },
+    {
+      "kp": "agent.pattern.self_consistency",
+      "type": "single_choice",
+      "question": "关于 self-consistency 中「独立采样」的含义，下列理解正确的是？",
+      "options": [
+        "多次采样必须使用完全相同的提示词和相同的随机种子",
+        "多次采样应使用相同提示词但允许解码过程引入随机性，从而产生不同推理路径",
+        "每次采样都必须人工修改提示词以引入多样性",
+        "独立采样意味着每次采样不能使用相同的模型"
+      ],
+      "answer": 1,
+      "explanation": "独立采样指在相同输入下通过解码随机性（如温度采样）生成多条不同推理路径。固定随机种子会消除多样性，人工修改提示词或更换模型则不是标准做法。",
+      "error_tag": "概念混淆",
+      "variant_group": "self_consistency_sampling"
+    },
+    {
+      "kp": "agent.pattern.self_consistency",
+      "type": "single_choice",
+      "question": "在 self-consistency 中，通常对什么进行聚合或投票？",
+      "options": [
+        "每条推理路径的中间步骤",
+        "每条推理路径的最终答案",
+        "每条推理路径对应的模型参数",
+        "每条推理路径的提示词长度"
+      ],
+      "answer": 1,
+      "explanation": "self-consistency 通常在最终答案层面进行聚合，如多数投票。中间步骤可能不同，参数和提示词长度不是聚合对象。",
+      "error_tag": "概念混淆",
+      "variant_group": "self_consistency_aggregation_target"
+    },
+    {
+      "kp": "agent.pattern.self_consistency",
+      "type": "single_choice",
+      "question": "以下哪种任务最适合使用 self-consistency 模式来提升可靠性？",
+      "options": [
+        "将一段文本从英文翻译成中文，只要求一种标准译法",
+        "求解一道有唯一数值答案的数学应用题",
+        "根据用户输入生成一首自由格式的诗歌",
+        "对一张图片进行物体分类，且模型只输出一个标签"
+      ],
+      "answer": 1,
+      "explanation": "self-consistency 适合有可比较、可聚合的最终答案的任务，如有唯一数值答案的数学题。自由格式诗歌没有统一答案，难以投票；翻译和分类通常需要单一确定性输出，也不适合多路径投票。",
+      "error_tag": "场景误用",
+      "variant_group": "self_consistency_suitable_tasks"
+    },
+    {
+      "kp": "agent.pattern.self_consistency",
+      "type": "single_choice",
+      "question": "如果 self-consistency 中所有采样路径都得到完全相同的错误答案，最可能的原因是什么？",
+      "options": [
+        "采样次数太少，导致没有覆盖到正确答案",
+        "模型对这个问题有系统性偏差，且采样多样性不足",
+        "多数投票算法本身有缺陷，无法处理相同答案",
+        "self-consistency 模式不适用于任何任务"
+      ],
+      "answer": 1,
+      "explanation": "当所有路径都给出相同错误答案时，通常说明模型存在系统性偏差，或者采样多样性不足（如温度过低），导致错误被一致地重复。增加采样多样性或次数可能缓解，但根本原因在于偏差和多样性。",
+      "error_tag": "概念混淆",
+      "variant_group": "self_consistency_failure_modes"
+    },
+    {
+      "kp": "agent.pattern.self_consistency",
+      "type": "single_choice",
+      "question": "在实现 self-consistency 时，通常需要调整哪个解码参数来增加推理路径的多样性？",
+      "options": [
+        "降低 top-k 的值到 1",
+        "提高温度（temperature）或使用核采样（top-p）",
+        "将最大生成长度设置为 1",
+        "关闭所有随机性，使用贪婪解码"
+      ],
+      "answer": 1,
+      "explanation": "提高温度或使用核采样可以增加输出的随机性，从而产生多样化的推理路径。贪婪解码和 top-k=1 都会降低多样性；最大生成长度与多样性无关。",
+      "error_tag": "记忆缺失",
+      "variant_group": "self_consistency_decoding_params"
+    },
+    {
+      "kp": "agent.pattern.self_consistency",
+      "type": "multi_choice",
+      "question": "在设计 self-consistency 流程时，以下哪些因素会影响最终聚合结果的可靠性？（多选）",
+      "options": [
+        "采样路径的数量",
+        "单条路径推理的质量",
+        "聚合策略（如多数投票、加权投票）",
+        "模型的参数量大小",
+        "采样时引入的多样性程度"
+      ],
+      "answer": [
+        0,
+        1,
+        2,
+        4
+      ],
+      "explanation": "采样数量、单条路径质量、聚合策略和多样性程度都会直接影响自洽性结果的可靠性。模型参数量虽然可能间接影响能力，但不是 self-consistency 流程设计中的直接决定因素，因此不作为必选项。",
+      "error_tag": "概念混淆",
+      "variant_group": "self_consistency_design_factors"
+    },
+    {
+      "kp": "agent.pattern.self_consistency",
+      "type": "multi_choice",
+      "question": "关于 self-consistency 的局限性，以下说法正确的有哪些？（多选）",
+      "options": [
+        "计算成本随采样次数线性增长",
+        "对于没有唯一正确答案的开放式生成任务，投票聚合效果有限",
+        "它完全消除了模型的所有错误",
+        "如果所有采样路径共享同一系统性偏差，投票也无法纠正",
+        "它通常需要能够比较或聚合最终答案的机制"
+      ],
+      "answer": [
+        0,
+        1,
+        3,
+        4
+      ],
+      "explanation": "self-consistency 的计算成本随采样次数增加；开放式任务难以投票；系统性偏差无法通过投票消除；需要可聚合的答案机制。它并不能消除所有错误，因此 C 错误。",
+      "error_tag": "概念混淆",
+      "variant_group": "self_consistency_limitations"
+    }
+  ]
+}

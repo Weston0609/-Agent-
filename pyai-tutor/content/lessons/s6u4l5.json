@@ -1,0 +1,260 @@
+{
+  "id": "s6u4l5",
+  "title": "s6u4l5",
+  "kps": [
+    "ai.embed.clip",
+    "ai.embed.multimodal"
+  ],
+  "theory": "## ai.embed.clip\n\n# CLIP：把图片和文字放进同一个向量空间\n\n> **一句话直觉**：CLIP 训练了两个编码器，一个读图一个读字，硬把「一张猫的照片」和「一只猫」这两句话压到向量空间里同一个点上。于是「用文字搜图片」就退化成了「算两个向量的余弦相似度」。\n\n## 1. 它解决的是什么问题\n\n传统图像检索要么靠人工打标签（贵、覆盖不全），要么靠图片的视觉特征（只能以图搜图）。CLIP 的思路是：**如果我能把图和文映射到同一个空间，那么任何跨模态的匹配都变成一个向量距离问题**。\n\n架构其实很朴素——两个独立的编码器加一个对比学习目标：\n\n```\n图片 ──► 图像编码器（ViT 或 ResNet）──► 图像向量 ─┐\n                                                  ├─► 归一化后算余弦相似度\n文本 ──► 文本编码器（Transformer）  ──► 文本向量 ─┘\n```\n\n训练数据是 4 亿个「图片-配文」对。一个 batch 里取 N 个对，做两件事：让第 i 张图和它自己的配文相似度最高（正样本），和另外 N−1 条配文相似度最低（负样本）。这个目标叫 InfoNCE，本质是**在 batch 内做对比分类**。\n\n关键结论：CLIP 学到的是**对齐（alignment）**，不是**生成**。它不能描述图片内容，只能判断「这段文字有多贴合这张图」。\n\n## 2. 用起来是什么样\n\n```python\nimport torch\nimport clip                      # openai/CLIP\nfrom PIL import Image\n\ndevice = \"cuda\" if torch.cuda.is_available() else \"cpu\"\nmodel, preprocess = clip.load(\"ViT-B/32\", device=device)\n\nimage = preprocess(Image.open(\"cat.jpg\")).unsqueeze(0).to(device)\ntexts = clip.tokenize([\"一只猫\", \"一辆汽车\", \"一片森林\"]).to(device)\n\nwith torch.no_grad():\n    img_feat = model.encode_image(image)\n    txt_feat = model.encode_text(texts)\n\n# 必须先归一化，再算相似度\nimg_feat = img_feat / img_feat.norm(dim=-1, keepdim=True)\ntxt_feat = txt_feat / txt_feat.norm(dim=-1, keepdim=True)\n\nsim = (img_feat @ txt_feat.T).squeeze(0)\nprint(sim.softmax(dim=-1))       # 三类的相对匹配度\n```\n\n两个容易忘的点：\n\n1. **一定要归一化**。CLIP 的相似度定义在单位球面上，忘了归一化得到的是「长度 × 夹角」，结果没有可比性。\n2. **相似度是相对的**。`0.28` 这个绝对值本身没意义，要看它在一组候选里的排名或 softmax 后的占比。\n\n## 3. 工程上怎么用才不踩坑\n\n**离线算向量、在线只做检索。** 图片编码一次存进向量库，查询时只编码文本——否则每次搜索都要重新跑一遍 ViT，延迟和算力都扛不住。\n\n```python\n# 离线：入库时算好\nfor img_id, path in image_paths.items():\n    vec = encode_image(path)              # (512,)\n    store.upsert(img_id, vec, meta={\"path\": path})\n\n# 在线：只编码查询文本\nq = encode_text(\"雪山上的日出\")\nhits = store.search(q, top_k=20)\n```\n\n**注意 CLIP 的短板**，它会影响你的产品决策：\n\n- **不擅长细粒度计数**：「三只猫」和「两只猫」的向量几乎分不开。\n- **不擅长空间关系**：「猫在桌上」和「桌在猫上」区别很小。\n- **不擅长读图里的字**：OCR 类需求要接专门的模型。\n- **中文效果明显弱于英文**：原版 CLIP 的文本编码器以英文为主，中文场景建议用 Chinese-CLIP、AltCLIP 或多语言版本。\n\n## 4. 什么时候不用 CLIP\n\n如果任务只要「以图搜图」，那用纯视觉模型（DINOv2 之类）往往比 CLIP 更准；如果任务是「给图片生成描述」，那要用 VLM（BLIP、Qwen-VL），CLIP 做不到。CLIP 的定位是**跨模态对齐与召回**，它擅长从海量图里粗筛出一小批候选，再由更贵的模型精排。\n\n## 小结\n\nCLIP 的价值不在于模型多复杂，而在于它把「图文匹配」标准化成了一个向量检索问题。记住三件事：双塔编码、必须归一化、相似度只有相对意义。\n\n## ai.embed.multimodal\n\n# 多模态嵌入：把图、文、音放进同一个空间\n\n> **一句话直觉**：单模态嵌入只回答「两段文字像不像」；多模态嵌入回答「这句话和这张图像不像」。它让检索系统不再被模态割裂——一个查询框可以同时搜文本、图片、音频。\n\n## 1. 三种对齐策略\n\n多模态嵌入不是一种模型，而是一类思路。工程上按对齐强度分三档：\n\n| 策略 | 做法 | 优点 | 代价 |\n| --- | --- | --- | --- |\n| 共享空间（CLIP 式） | 各模态独立编码，投影到同一维度 | 检索快，可分别建索引 | 对齐粒度粗 |\n| 融合编码（VLM 式） | 图文拼一起过一个大模型 | 理解细，能处理复杂关系 | 每对都要跑一次大模型，无法预建索引 |\n| 适配层（Adapter） | 冻结主干，只训一个投影层 | 训练便宜，可增量加模态 | 上限受主干限制 |\n\n实际系统里常见组合：**用共享空间做召回，用融合编码做精排**。\n\n## 2. 跨模态检索的完整链路\n\n```python\n# ① 入库：每个模态各自编码，统一写进同一个向量集合\nstore.upsert(f\"img:{i}\", image_vec, meta={\"modality\": \"image\", \"uri\": path})\nstore.upsert(f\"txt:{j}\", text_vec,  meta={\"modality\": \"text\",  \"uri\": doc_id})\n\n# ② 检索：查询是什么模态就用哪个编码器\nquery_vec = encode_text(q) if isinstance(q, str) else encode_image(q)\nhits = store.search(query_vec, top_k=50)\n\n# ③ 可选：用模态过滤做业务约束\nhits = [h for h in hits if h.meta[\"modality\"] in allowed]\n```\n\n注意第 ③ 步——**不同模态的向量必须在同一个坐标系里**。如果你用 A 模型编码图片、用 B 模型编码文本，那算出来的相似度是纯噪声。这是多模态检索最常见的线上事故。\n\n## 3. 维度与归一化必须统一\n\n一个真实的对账清单：\n\n- **维度一致**：CLIP ViT-B/32 是 512 维，ViT-L/14 是 768 维，混用会直接矩阵乘法报错。\n- **归一化一致**：全库向量都 L2 归一化，查询向量也必须归一化；混着用会让长向量天然占优。\n- **模型版本锁定**：向量里要记 `model_version`，换模型等于换坐标系，必须全量重建索引。\n\n```python\ndef embed_image(path: str) -> dict:\n    vec = _model.encode_image(_preprocess(Image.open(path)))\n    vec = vec / vec.norm(dim=-1, keepdim=True)\n    return {\"vector\": vec.cpu().numpy().tolist(), \"model\": MODEL_TAG}\n```\n\n`model` 字段看着多余，等你要灰度换模型时它就是救命的：老向量继续用老模型查，新数据用新模型写，互不污染。\n\n## 4. 多模态检索的评估\n\n单模态检索看 recall@k 就够了，多模态要多看一层**跨模态召回率**：\n\n```python\n# 用「图-文对」当测试集：以文搜图，命中的图是否就是配对的那张\nhits = search_by_text(caption, top_k=10)\nrecall = sum(1 for h in hits if h.id == paired_image_id) / len(pairs)\n```\n\n如果单模态 recall 高但跨模态 recall 低，说明两个编码器没对齐——通常是模型不是同一族，或者某一侧没做归一化。\n\n## 5. 常见误区\n\n- **把不同模型的向量混在一个索引里**：检索结果看似有值，实则随机。\n- **用余弦相似度的绝对值设阈值**：不同模型分布差异极大，阈值必须按模型标定。\n- **忘了元数据过滤**：生产库里往往要「只在某个租户/某个时间段的图里搜」，纯向量检索做不到，要配合元数据过滤。\n- **每张图都实时编码**：入库时算一次、落库持久化，别在查询路径上跑 ViT。\n\n## 小结\n\n多模态嵌入的核心不是「用了哪个模型」，而是**坐标系纪律**：同一索引里必须同模型、同维度、同归一化、同版本。守住这四条，跨模态检索才是一个可靠的工程组件而不是玄学。\n",
+  "quiz": [
+    {
+      "kp": "ai.embed.clip",
+      "type": "single_choice",
+      "question": "CLIP 的训练目标（InfoNCE）本质是在做什么？",
+      "options": [
+        "让模型学会给图片生成文字描述",
+        "在一个 batch 内做对比分类：让配对的图文相似度最高、非配对的更低",
+        "让图像编码器输出和文本编码器完全相同的中间层特征",
+        "用分类标签训练一个图像分类器"
+      ],
+      "answer": 1,
+      "explanation": "InfoNCE 把 batch 内的 N 个图文对当成 N 类分类问题，正样本是配对项，负样本是其余 N−1 项。",
+      "error_tag": "原理不清",
+      "variant_group": "clip_infonce"
+    },
+    {
+      "kp": "ai.embed.clip",
+      "type": "single_choice",
+      "question": "计算 CLIP 图文相似度前必须做什么处理？",
+      "options": [
+        "把向量转成 float64",
+        "对两个向量做 L2 归一化",
+        "对向量做 PCA 降维",
+        "把文本向量乘以图片向量的模长"
+      ],
+      "answer": 1,
+      "explanation": "CLIP 的相似度定义在单位球面上；不归一化得到的是「长度 × 夹角」，结果没有可比性。",
+      "error_tag": "工程实践缺失",
+      "variant_group": "clip_normalize"
+    },
+    {
+      "kp": "ai.embed.clip",
+      "type": "single_choice",
+      "question": "以下哪个任务最不适合交给 CLIP？",
+      "options": [
+        "从一万张商品图中找出与「红色连衣裙」最接近的 20 张",
+        "判断一张图更像「海边」还是「雪山」",
+        "精确数出图中猫的数量是否为 3 只",
+        "给图片库按语义打粗粒度标签"
+      ],
+      "answer": 2,
+      "explanation": "CLIP 对细粒度计数不敏感，「三只猫」和「两只猫」的向量几乎分不开。",
+      "error_tag": "边界错误",
+      "variant_group": "clip_limitation"
+    },
+    {
+      "kp": "ai.embed.clip",
+      "type": "single_choice",
+      "question": "生产环境用 CLIP 做以文搜图，正确的做法是？",
+      "options": [
+        "每次查询时把库里所有图片重新编码一遍再比较",
+        "入库时离线编码并持久化向量，在线只编码查询文本",
+        "只在在线服务里编码图片，文本用哈希代替",
+        "把图片和文本都用同一个图像编码器处理"
+      ],
+      "answer": 1,
+      "explanation": "ViT 编码很贵，必须在入库时算一次；查询路径只跑文本编码器。",
+      "error_tag": "工程实践缺失",
+      "variant_group": "clip_offline_index"
+    },
+    {
+      "kp": "ai.embed.clip",
+      "type": "single_choice",
+      "question": "为什么说 CLIP 的相似度「只有相对意义」？",
+      "options": [
+        "因为相似度会随 batch 大小变化",
+        "因为绝对分值没有统一标定，需要看它在候选集中的排名或 softmax 占比",
+        "因为 CLIP 每次调用返回随机数",
+        "因为余弦相似度不能比较大小"
+      ],
+      "answer": 1,
+      "explanation": "0.28 这个数本身说明不了「像」还是「不像」，要看相对排名或同批候选的占比。",
+      "error_tag": "概念混淆",
+      "variant_group": "clip_relative_score"
+    },
+    {
+      "kp": "ai.embed.clip",
+      "type": "multi_choice",
+      "question": "关于 CLIP 的能力边界，以下说法正确的有哪些？（多选）",
+      "options": [
+        "它能判断文字与图片的匹配程度，但不能生成图片描述",
+        "它对空间关系（猫在桌上 vs 桌在猫上）区分能力较弱",
+        "它擅长读图中的文字（OCR）",
+        "原版 CLIP 的中文效果明显弱于英文",
+        "它对细粒度计数的分辨能力较弱"
+      ],
+      "answer": [0, 1, 3, 4],
+      "explanation": "CLIP 做对齐不做生成；空间关系、计数、中文都是弱项；读图文字要靠 OCR/文档理解模型。",
+      "error_tag": "概念混淆",
+      "variant_group": "clip_boundary"
+    },
+    {
+      "kp": "ai.embed.clip",
+      "type": "fill_blank",
+      "question": "CLIP 由两个编码器组成：图像编码器（常用 ______ 结构）和文本编码器（Transformer）。",
+      "options": [],
+      "answer": ["ViT", "vit", "Vision Transformer"],
+      "explanation": "OpenAI 发布的 CLIP 图像侧用的是 ViT（也提供过 ResNet 变体）。",
+      "error_tag": "记忆缺失",
+      "variant_group": "clip_vit"
+    },
+    {
+      "kp": "ai.embed.clip",
+      "type": "fill_blank",
+      "question": "衡量两个 CLIP 向量相似度时最常用的度量是 ______ 相似度（英文）。",
+      "options": [],
+      "answer": ["cosine", "余弦"],
+      "explanation": "归一化后点积等价于余弦相似度，是向量检索的默认度量。",
+      "error_tag": "记忆缺失",
+      "variant_group": "clip_metric"
+    },
+    {
+      "kp": "ai.embed.clip",
+      "type": "code_reading",
+      "question": "阅读以下代码，指出它的问题：\n\nimg_feat = model.encode_image(image)\ntxt_feat = model.encode_text(texts)\nsim = (img_feat @ txt_feat.T).squeeze(0)\nprint(sim)",
+      "options": [],
+      "answer": "少了 L2 归一化。CLIP 的相似度定义在单位球面上，直接点积得到的是「向量模长 × 夹角」，模长大的样本会天然占优，导致排序失真。应该在点积前分别做 feat = feat / feat.norm(dim=-1, keepdim=True)。",
+      "explanation": "归一化是多模态检索最常见的遗漏点，会让相似度比较失去意义。",
+      "error_tag": "边界错误",
+      "variant_group": "clip_missing_norm"
+    },
+    {
+      "kp": "ai.embed.clip",
+      "type": "scenario",
+      "question": "你要给一个电商 App 做「拍照搜同款」功能，用户上传一张图，系统要返回相似商品。请描述你会如何设计召回与精排，以及 CLIP 在这条链路里适合放在哪一步、为什么。",
+      "options": [],
+      "answer": null,
+      "explanation": "考查系统设计：CLIP 适合做粗召回（快、可预建索引），精排交给更强的视觉模型或 VLM；还要考虑离线编码、向量库、元数据过滤与阈值标定。",
+      "error_tag": "场景分析不足",
+      "variant_group": "clip_product_search",
+      "required_keywords": ["召回", "精排", "离线", "向量库", "索引", "归一化"]
+    },
+    {
+      "kp": "ai.embed.multimodal",
+      "type": "single_choice",
+      "question": "多模态检索最常见的线上事故是什么？",
+      "options": [
+        "向量维度太大导致存储不够",
+        "用不同模型编码不同模态，导致向量不在同一坐标系里，相似度是噪声",
+        "查询文本太长",
+        "向量库不支持删除操作"
+      ],
+      "answer": 1,
+      "explanation": "不同模型的向量空间互不对齐，混在一个索引里检索结果等于随机。",
+      "error_tag": "工程实践缺失",
+      "variant_group": "multimodal_same_space"
+    },
+    {
+      "kp": "ai.embed.multimodal",
+      "type": "single_choice",
+      "question": "「共享空间（CLIP 式）」与「融合编码（VLM 式）」的核心差别是？",
+      "options": [
+        "前者只能用英文",
+        "前者各模态独立编码可预建索引、速度快但对齐粗；后者每对都过一个大模型、理解细但无法预建索引",
+        "后者不需要训练",
+        "前者只能处理图片"
+      ],
+      "answer": 1,
+      "explanation": "独立编码可以离线建索引做召回；融合编码表达能力强但每对都要推理，适合做精排。",
+      "error_tag": "概念混淆",
+      "variant_group": "multimodal_two_stage"
+    },
+    {
+      "kp": "ai.embed.multimodal",
+      "type": "single_choice",
+      "question": "在向量记录里额外存 `model_version` 字段的主要作用是？",
+      "options": [
+        "节省存储空间",
+        "换模型时能区分新旧向量，避免两个坐标系的数据混在一个索引里",
+        "提升检索速度",
+        "让向量维度自动对齐"
+      ],
+      "answer": 1,
+      "explanation": "换模型等于换坐标系，必须全量重建；有版本字段才能灰度切换、避免污染。",
+      "error_tag": "工程实践缺失",
+      "variant_group": "multimodal_model_version"
+    },
+    {
+      "kp": "ai.embed.multimodal",
+      "type": "single_choice",
+      "question": "如果单模态 recall@10 很高，但跨模态 recall@10 很低，最可能的原因是？",
+      "options": [
+        "向量库容量不足",
+        "两个编码器没有对齐（不是同一族模型，或某一侧没归一化）",
+        "top_k 设得太大",
+        "元数据过滤太严格"
+      ],
+      "answer": 1,
+      "explanation": "各自模态内部能搜准，说明编码器本身可用；跨模态不准就是两个空间没对齐。",
+      "error_tag": "诊断能力缺失",
+      "variant_group": "multimodal_misalign"
+    },
+    {
+      "kp": "ai.embed.multimodal",
+      "type": "multi_choice",
+      "question": "把多种模态放进同一个向量索引，必须保证哪些一致？（多选）",
+      "options": [
+        "向量维度一致",
+        "归一化方式一致",
+        "编码模型族一致",
+        "模型的训练日期一致",
+        "向量里记录的 model 版本可控"
+      ],
+      "answer": [0, 1, 2, 4],
+      "explanation": "维度、归一化、模型族、版本是坐标系一致性的四个必要条件；训练日期本身不要求相同。",
+      "error_tag": "概念混淆",
+      "variant_group": "multimodal_consistency"
+    },
+    {
+      "kp": "ai.embed.multimodal",
+      "type": "fill_blank",
+      "question": "在多模态检索里，先用便宜的独立编码做粗筛、再用贵的融合模型重排，这种两段式结构通常称为「召回 + ______」。",
+      "options": [],
+      "answer": ["精排", "rerank", "Rerank"],
+      "explanation": "召回保覆盖、精排保准确，是多模态检索的标准架构。",
+      "error_tag": "记忆缺失",
+      "variant_group": "multimodal_recall_rerank"
+    },
+    {
+      "kp": "ai.embed.multimodal",
+      "type": "fill_blank",
+      "question": "冻结预训练主干、只训练一个把某模态映射到共享空间的薄层，这种做法叫 ______ 层（英文）。",
+      "options": [],
+      "answer": ["adapter", "Adapter", "适配"],
+      "explanation": "Adapter 训练便宜，可以在不改主干的前提下增量接入新模态。",
+      "error_tag": "记忆缺失",
+      "variant_group": "multimodal_adapter"
+    },
+    {
+      "kp": "ai.embed.multimodal",
+      "type": "code_reading",
+      "question": "以下入库代码有两个隐患，请指出：\n\nfor i, path in enumerate(image_paths):\n    store.upsert(f\"img:{i}\", encode_with_model_a(path))\nfor j, text in enumerate(captions):\n    store.upsert(f\"txt:{j}\", encode_with_model_b(text))",
+      "options": [],
+      "answer": "第一，图片用 model_a、文本用 model_b 编码，两个模型的向量空间不对齐，跨模态检索的相似度是噪声。第二，没有记录 model 版本，将来换模型时无法区分新旧向量，只能全量重建索引。正确做法是同一模型族编码两个模态，并在记录里带上 model 字段。",
+      "explanation": "同一索引必须同坐标系，并且要能追溯向量由哪个模型产生。",
+      "error_tag": "工程实践缺失",
+      "variant_group": "multimodal_mixed_models"
+    },
+    {
+      "kp": "ai.embed.multimodal",
+      "type": "scenario",
+      "question": "公司要把商品图文、用户评价文本、客服录音三类数据统一成一个可检索的知识库，要求「用一句话能同时搜到相关的图、文和录音片段」。请说明你会怎么选模型、怎么设计索引、以及上线后怎么验证它真的能用。",
+      "options": [],
+      "answer": null,
+      "explanation": "考查多模态系统设计：选同一族可对齐的编码器（或统一转文本）、统一维度与归一化、离线编码入库、元数据过滤、用图-文配对测试集验证跨模态召回率。",
+      "error_tag": "场景分析不足",
+      "variant_group": "multimodal_kb_design",
+      "required_keywords": ["统一", "编码", "维度", "归一化", "离线", "召回率", "元数据"]
+    }
+  ]
+}

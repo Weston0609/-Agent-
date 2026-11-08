@@ -1,0 +1,634 @@
+{
+  "id": "s2u4l3",
+  "title": "s2u4l3",
+  "kps": [
+    "py.typehint.literal",
+    "py.typehint.overload"
+  ],
+  "theory": "## py.typehint.literal\n\n# 类型提示之 Literal：让「只能是这几个值」变成类型系统的一部分\n\n> 一句话直觉：`Literal` 把「这个参数只能是 `'r'`、`'w'` 这几个固定值之一」这种口头约定，写进类型注解里，让类型检查器在编码阶段就替你拦下拼写错误、非法取值。\n\n---\n\n## 一、为什么需要 Literal？从「字符串常量」的痛点说起\n\n在 Python 里，我们经常写这样的函数：\n\n```python\ndef open_helper(file: str, mode: str) -> str:\n    ...\n```\n\n调用方可以传 `'r'`、`'w'`、`'rb'`……但也可以随手传 `'typo'`、`'READ'`、`''`，函数内部才发现问题——**错误被推迟到运行时**。\n\n即便你用最朴素的类型注解 `mode: str`，类型检查器（type checker，如 mypy、pyright）也只会告诉你「你传了一个字符串，没问题」，它**无法知道**你只允许某几个特定的字符串。\n\n`typing.Literal` 就是为解决这个问题而设计的：它让「字面量值本身」成为一种类型（literal type，字面量类型）。\n\n---\n\n## 二、基本语法：Literal[...] 怎么用\n\n`Literal` 是 `typing` 模块中的一个特殊类型构造器（special typing form）。写法如下（Python 3.8 起可用）：\n\n```python\nfrom typing import Literal\n\n# Mode 只能取 'r'、'rb'、'w'、'wb' 四个值之一\ntype Mode = Literal['r', 'rb', 'w', 'wb']\n\ndef open_helper(file: str, mode: Mode) -> str:\n    return f\"open {file} with {mode}\"\n\nopen_helper('/some/path', 'r')   # OK，通过类型检查\nopen_helper('/other/path', 'typo')  # 类型检查器报错\n```\n\n要点：\n\n1. `Literal[...]` 至少要有一个参数，参数必须是**字面量值**（literal value，如字符串、整数、布尔值、`None`、枚举值等）。\n2. `Literal` 不能被继承，也不能被实例化。\n3. 运行时不做任何检查，它只是给类型检查器看的。\n\n一个经典的例子是「函数返回值是某个固定的字面量」：\n\n```python\nfrom typing import Any, Literal\n\ndef validate_simple(data: Any) -> Literal[True]:\n    # 这个函数永远返回 True\n    return True\n```\n\n---\n\n## 三、进阶细节：去重、顺序与嵌套\n\n`Literal` 对象在比较时有一些有意思的规定（Python 3.9.1 起）：\n\n```python\nfrom typing import Literal\n\n# 冗余参数会被自动跳过\nassert Literal[1, 2, 1] == Literal[1, 2]\n\n# 比较时不关心参数顺序\nassert Literal[1, 2] == Literal[2, 1]\n\n# 嵌套的 Literal 会被展开（flatten）\nassert Literal[Literal[1, 2], 3] == Literal[1, 2, 3]\n\n# 但通过 type alias 引用的 Literal 不会被展开\n# type A = Literal[1, 2]\n# assert Literal[A, 3] != Literal[1, 2, 3]\n```\n\n还有一个容易踩的坑：`Literal` 在运行时做相等比较时，若某个参数**不可哈希**（unhashable），会抛出 `TypeError`。例如不能在 `Literal` 里放 list。\n\n---\n\n## 四、Literal 与枚举、与字符串常量的关系\n\n你可能会问：那我直接定义一个 `Enum`，或者用字符串常量不就行了？\n\n- **字符串常量**：没有类型约束，仍能被传入任意字符串。\n- **Enum**：可以，但对「简单的一组字符串/整数」有点重；类型检查器对 `Literal` 的推断通常更直接。\n- **Literal**：轻量，适合「工具函数的选择参数」「API 的固定取值」「配置中的模式开关」等场景。\n\n例如一个「返回一个固定 SQL 模板」的函数：\n\n```python\nfrom typing import Literal\n\ntype SqlTemplate = Literal['select_all', 'select_by_id', 'count']\n\ndef build_sql(template: SqlTemplate) -> str:\n    if template == 'select_all':\n        return 'SELECT * FROM t'\n    if template == 'select_by_id':\n        return 'SELECT * FROM t WHERE id = ?'\n    return 'SELECT COUNT(*) FROM t'\n```\n\n类型检查器还能做**穷尽性检查**（exhaustiveness）：如果你用 `match` 处理 `int | str` 这样的联合类型，遇到底部类型 `Never`（在旧版本中对应 `NoReturn`）时会知道已经覆盖所有情况。`Literal` 配合联合类型，也能让这种检查更精确。\n\n---\n\n## 五、和 Final、ClassVar 的区别（避免混淆）\n\n这三个常常被一起提及，但目标不同：\n\n| 构造器 | 作用 |\n| --- | --- |\n| `Literal[...]` | 值是**某几个固定字面量**之一 |\n| `Final` | 名字**不可被重新赋值** |\n| `ClassVar` | 标注为**类变量**，不应在实例上赋值 |\n\n例如：\n\n```python\nfrom typing import Final, Literal\n\nMAX_SIZE: Final = 9000\n# MAX_SIZE += 1  # 类型检查器报错\n\nLevel = Literal['debug', 'info', 'warning', 'error']\n```\n\n`Literal` 描述「能取哪些值」，`Final` 描述「能不能改」。二者可以叠加使用。\n\n---\n\n## 六、运行时行为：Literal 不做检查\n\n最常见误解：以为 `Literal['r']` 会在运行时抛异常。**不会**。Python 运行时只把它当作一个普通的泛型（generic）对象，不做值校验。它的价值 100% 来源于类型检查器。\n\n```python\nfrom typing import Literal\n\nmode: Literal['r'] = 'typo'  # 运行时不报错，但类型检查器会报错\n```\n\n所以在生产代码里，若要真正做运行时校验，还是要另外写 `if mode not in {'r', 'w'}` 之类的判断。\n\n```python\nfrom typing import Literal\n\ntype Mode = Literal['r', 'rb', 'w', 'wb']\n\ndef open_helper(file: str, mode: Mode) -> str:\n    \"\"\"根据文件路径和模式返回一句描述。\"\"\"\n    return f\"open {file!r} with mode {mode!r}\"\n\n# 合法的调用\nprint(open_helper('/tmp/a.txt', 'r'))\nprint(open_helper('/tmp/a.txt', 'rb'))\n\n# 下面这行如果被类型检查器（mypy/pyright）扫描，会报类型错误：\n# open_helper('/tmp/a.txt', 'typo')\n\n# 演示 Literal 的去重与顺序无关\nfrom typing import Literal as L\nassert L[1, 2, 1] == L[1, 2]\nassert L['a', 'b'] == L['b', 'a']\nassert L[L[1, 2], 3] == L[1, 2, 3]\nprint('Literal 等价性演示通过')\n```\n\n## py.typehint.overload\n\n# py.typehint.overload：让一个函数拥有多个\"签名\"\n\n> **一句话直觉**：当一个函数根据参数类型的不同返回不同类型时，`@overload`（重载）让类型检查器（type checker）也能\"看懂\"这些分支，从而给调用者精确的类型提示——而不是一个含糊的 `Union`。\n\n前置知识：本讲假设你会写基础的 Python 函数和类型注解（type hint），例如 `def f(x: int) -> str:`。这是本课的起点。\n\n---\n\n## 1. 为什么需要 overload：一个真实的困惑\n\n考虑这样一个函数：它既可以接受整数返回整数，也可以接受字符串返回字符串。\n\n```python\ndef double(x):\n    return x + x\n```\n\n如果只写 `def double(x: int | str) -> int | str:`，类型检查器只知道\"输入 int 或 str，输出 int 或 str\"，但**不知道对应关系**。调用 `double(3)` 得到的结果类型是 `int | str`，你还得再判断一次。\n\n`@overload` 解决的就是这个\"输入-输出对应关系\"的表达问题。它本身**不改变运行时行为**，只是在类型层面告诉检查器（如 mypy、pyright、IDE 的 Pylance）：\"这个函数有这些签名，请根据调用时实参类型选择对应的返回类型。\"\n\n> 关键事实：Python 运行时（runtime）**不强制**类型注解。`@overload` 装饰的函数体在运行时永远不会被调用，它只是给静态工具看的\"声明\"。\n\n---\n\n## 2. overload 的基本写法：三段式结构\n\n使用 `@overload` 有一个严格的三段式规则：\n\n1. 写若干个用 `@overload` 装饰的**存根（stub）**——只有签名和 `...`，没有函数体逻辑。\n2. 最后写一个**真正的实现（implementation）**——不带 `@overload`，包含实际逻辑。\n3. 实现体的签名要\"兼容\"所有存根（通常用最宽的类型或 `Any`）。\n\n```python\nfrom typing import overload\n\n@overload\ndef double(x: int) -> int: ...\n\n@overload\ndef double(x: str) -> str: ...\n\ndef double(x: int | str) -> int | str:  # 真正的实现\n    return x + x\n```\n\n运行结果：`double(3)` 的类型是 `int`，`double(\"ab\")` 的类型是 `str`。运行时行为完全不变——就是 `x + x`。\n\n**注意**：实现函数**必须**紧跟在所有 `@overload` 存根之后，中间不能插入其它代码，否则类型检查器会报错。\n\n---\n\n## 3. 用 `@overload` 表达\"按字面量分发\"\n\n`@overload` 最实用的场景之一，是根据**字面量参数（Literal）**返回不同类型。比如一个 API 客户端：\n\n```python\nfrom typing import overload, Literal\n\n@overload\ndef fetch(url: str, *, as_json: Literal[True]) -> dict: ...\n\n@overload\ndef fetch(url: str, *, as_json: Literal[False] = False) -> str: ...\n\ndef fetch(url: str, *, as_json: bool = False) -> dict | str:\n    return {\"ok\": True} if as_json else \"raw text\"\n```\n\n调用 `fetch(\"x\", as_json=True)` 被推断为 `dict`；`fetch(\"x\")` 被推断为 `str`。这样调用者不必写 `isinstance` 判断，IDE 补全也能精确工作。\n\n**要点**：`Literal[True]` 与 `Literal[False]` 让重载在\"布尔开关\"这类 API 上非常好用。\n\n---\n\n## 4. 类内部的重载：`__init__` 与方法\n\n`@overload` 也可以用在类里，典型场景是构造函数根据参数不同而返回不同形态的对象。例如一个 `Vector`：\n\n```python\nfrom typing import overload\n\nclass Point:\n    @overload\n    def __init__(self, x: int, y: int) -> None: ...\n    @overload\n    def __init__(self, pair: tuple[int, int]) -> None: ...\n    def __init__(self, *args) -> None:\n        if len(args) == 2:\n            self.x, self.y = args\n        else:\n            self.x, self.y = args[0]\n```\n\n**重要限制**：`@overload` 只能用于**方法/函数**，不能用于普通属性。类属性类型分发要用 `TypeVar` 或 `Generic`。\n\n另外注意：`@overload` 装饰的方法**不能在运行时被 `getattr` 找到**——它被装饰器替换成了占位对象（`typing.overload` 返回一个 `_overload_dummy`），所以不要试图在运行时反射它。\n\n---\n\n## 5. 工程实践：什么时候用、什么时候别用\n\n**该用 `@overload` 的场景**\n\n- 函数根据参数类型/字面量返回不同类型，且这个对应关系对调用者很重要。\n- 你正在为一个库（library）写公共 API，想让用户获得精确的类型提示。\n- 你在包装 C 扩展、数据库驱动、或 `Path` 这类\"多态输入\"的接口。\n\n**不要滥用的场景**\n\n- 只是想让签名\"看起来完善\"——如果所有分支返回同一类型，直接写一个注解即可。\n- 只在函数内部使用、没有外部调用者的私有工具函数——收益很低。\n- 如果分支逻辑非常复杂，重载会变成\"类型魔法\"，可读性下降。此时考虑把函数拆成多个小函数。\n\n**调试小贴士**：用 mypy 验证你的重载是否被正确识别：\n\n```bash\npip install mypy\nmypy your_file.py\n```\n\n如果实现体签名与存根不兼容，mypy 会报 `Overloaded function signatures 1 and 2 overlap with incompatible return types`。\n\n**最后一个容易忽略的点**：`@overload` 函数在运行时如果被直接调用，会抛 `NotImplementedError`。所以真实实现必须是**不带 `@overload`** 的那个。也就是说，\"三段式\"里最后一段**必须存在**，并且被真正调用。\n\n---\n\n## 动手练习\n\n写一个 `parse_value` 函数，满足以下要求：\n\n1. 当参数是 `int` 时，返回 `int`。\n2. 当参数是 `str` 且形如数字时，返回 `float`。\n3. 当参数是 `list[int]` 时，返回 `int`（求和）。\n4. 当参数是 `list[str]` 时，返回 `str`（拼接）。\n\n用三个 `@overload` 存根 + 一个真实实现完成。然后：\n\n- 用 `mypy file.py` 检查通过。\n- 在 IDE（VS Code + Pylance，或 PyCharm）中把鼠标悬停在 `parse_value(3)` 上，确认显示返回类型是 `int`。\n- 在悬停 `parse_value([\"a\", \"b\"])` 时确认显示 `str`。\n\n**加分题**：如果参数是 `bool` 呢？提示——`bool` 是 `int` 的子类，思考 `@overload` 的匹配顺序（从上到下，先匹配先赢）。\n\n```python\n\"\"\"\npy.typehint.overload 最小可运行示例。\n注意：类型信息由 mypy / pyright / IDE 静态读取；\n运行时行为与不带 @overload 的普通函数完全一致。\n\"\"\"\nfrom typing import overload, Literal\n\n\n# ---------- 示例 1：按参数类型分发 ----------\n@overload\ndef double(x: int) -> int: ...\n\n@overload\ndef double(x: str) -> str: ...\n\ndef double(x: int | str) -> int | str:\n    # 这是真正被调用的实现体（不带 @overload）\n    return x + x\n\n\n# ---------- 示例 2：按字面量开关分发 ----------\n@overload\ndef fetch(url: str, *, as_json: Literal[True]) -> dict: ...\n\n@overload\ndef fetch(url: str, *, as_json: Literal[False] = False) -> str: ...\n\ndef fetch(url: str, *, as_json: bool = False) -> dict | str:\n    return {\"ok\": True, \"url\": url} if as_json else f\"raw text from {url}\"\n\n\nif __name__ == \"__main__\":\n    print(double(3))            # 运行时 -> 6\n    print(double(\"ab\"))         # 运行时 -> abab\n    print(fetch(\"https://x\"))   # 运行时 -> raw text from https://x\n    print(fetch(\"https://x\", as_json=True))  # 运行时 -> {'ok': True, 'url': 'https://x'}\n```\n",
+  "quiz": [
+    {
+      "kp": "py.typehint.literal",
+      "type": "single_choice",
+      "question": "在类型注解中，`Literal` 的主要用途是什么？",
+      "options": [
+        "限定变量只能取某几个具体的字面量值",
+        "限定变量必须是字符串类型",
+        "声明变量是运行时不可修改的常量",
+        "把一个类型转换成它的字面量表示形式"
+      ],
+      "answer": 0,
+      "explanation": "Literal 用来把类型收窄为具体的字面量取值集合，而不是改变可变性或做类型转换。",
+      "error_tag": "概念混淆",
+      "variant_group": "literal_purpose"
+    },
+    {
+      "kp": "py.typehint.literal",
+      "type": "single_choice",
+      "question": "下面哪个注解表示参数只能接受字符串 \"r\"、\"w\" 或 \"a\"？",
+      "options": [
+        "mode: str",
+        "mode: Literal[\"r\", \"w\", \"a\"]",
+        "mode: list[\"r\", \"w\", \"a\"]",
+        "mode: Union[\"r\", \"w\", \"a\"]"
+      ],
+      "answer": 1,
+      "explanation": "Literal 接受一组字面量作为合法取值；Union 里的字符串是类型而非取值集合，list[...] 表示列表类型。",
+      "error_tag": "Literal与Union混淆",
+      "variant_group": "literal_basic_syntax"
+    },
+    {
+      "kp": "py.typehint.literal",
+      "type": "single_choice",
+      "question": "以下哪个注解表示“一个字符串列表，列表元素只能是 \"x\" 或 \"y\"”？",
+      "options": [
+        "list[Literal[\"x\", \"y\"]]",
+        "Literal[list[\"x\", \"y\"]]",
+        "list[str]",
+        "Literal[\"x\", \"y\"]"
+      ],
+      "answer": 0,
+      "explanation": "把 Literal 放在元素位置可以约束每个元素的取值；Literal[list[...]] 则非法。",
+      "error_tag": "嵌套位置错误",
+      "variant_group": "literal_nested"
+    },
+    {
+      "kp": "py.typehint.literal",
+      "type": "single_choice",
+      "question": "某个函数用 `Optional[Literal[\"on\", \"off\"]]` 作为参数注解，允许的输入是？",
+      "options": [
+        "\"on\"、\"off\" 或 None",
+        "只有 \"on\" 和 \"off\"",
+        "任意字符串或 None",
+        "任意类型"
+      ],
+      "answer": 0,
+      "explanation": "Optional 表示再额外允许 None，因此合法取值为 \"on\"、\"off\" 和 None。",
+      "error_tag": "Optional与Literal组合误解",
+      "variant_group": "literal_optional"
+    },
+    {
+      "kp": "py.typehint.literal",
+      "type": "single_choice",
+      "question": "在类型检查中，以下哪种赋值最可能被报告为错误？",
+      "options": [
+        "x: Literal[1, 2] = 1",
+        "x: Literal[1, 2] = 2",
+        "x: Literal[1, 2] = 3",
+        "x: int = 1"
+      ],
+      "answer": 2,
+      "explanation": "3 不在 Literal[1, 2] 的取值集合中，因此该赋值不符合类型注解。",
+      "error_tag": "字面量越界赋值",
+      "variant_group": "literal_assign"
+    },
+    {
+      "kp": "py.typehint.literal",
+      "type": "single_choice",
+      "question": "关于 `Literal` 与 `Enum` 的对比，下列说法正确的是？",
+      "options": [
+        "两者完全等价，可以互相替代",
+        "Literal 用字面量值表达固定取值集合，Enum 用枚举成员表达，且枚举是运行时对象",
+        "Enum 只能用于类型注解，Literal 只能在运行时使用",
+        "Literal 的成员在运行时是枚举实例"
+      ],
+      "answer": 1,
+      "explanation": "Literal 是纯类型层面的取值集合，Enum 会创建真实的运行时枚举对象，二者用途和形态不同。",
+      "error_tag": "Literal与Enum混淆",
+      "variant_group": "literal_vs_enum"
+    },
+    {
+      "kp": "py.typehint.literal",
+      "type": "single_choice",
+      "question": "`Literal[1, \"1\"]` 与 `Literal[1]` 相比，区别是？",
+      "options": [
+        "前者同时接受整数 1 和字符串 \"1\"",
+        "前者会把 \"1\" 转成 1，因此与后者等价",
+        "前者非法，因为 Literal 不允许混合类型",
+        "前者等价于 Union[int, str]"
+      ],
+      "answer": 0,
+      "explanation": "Literal 可以混合多种字面量类型；每个取值单独匹配，不会做类型转换。",
+      "error_tag": "混合字面量误解",
+      "variant_group": "literal_mixed"
+    },
+    {
+      "kp": "py.typehint.literal",
+      "type": "single_choice",
+      "question": "以下哪个注解描述的是“字典，键只能是 \"a\" 或 \"b\"，值为 int”？",
+      "options": [
+        "dict[Literal[\"a\", \"b\"], int]",
+        "Literal[dict[\"a\", \"b\"], int]",
+        "dict[str, Literal[\"a\", \"b\"]]",
+        "Literal[dict[str, int]]"
+      ],
+      "answer": 0,
+      "explanation": "字面量约束放在键的位置即可；放到值位置或外面都不能表达键的取值范围。",
+      "error_tag": "泛型参数位置错误",
+      "variant_group": "literal_in_generic"
+    },
+    {
+      "kp": "py.typehint.literal",
+      "type": "single_choice",
+      "question": "关于 `Literal` 的“子类型”判断：`Literal[1]` 与 `Literal[1, 2]` 的关系是？",
+      "options": [
+        "Literal[1] 是 Literal[1, 2] 的子类型",
+        "Literal[1, 2] 是 Literal[1] 的子类型",
+        "两者相等",
+        "两者没有子类型关系"
+      ],
+      "answer": 0,
+      "explanation": "取值范围更小的字面量类型是范围更大的字面量类型的子类型。",
+      "error_tag": "子类型集合方向错误",
+      "variant_group": "literal_range_subtype"
+    },
+    {
+      "kp": "py.typehint.literal",
+      "type": "single_choice",
+      "question": "若变量注解为 `Literal[\"GET\", \"POST\"]`，下面哪段代码的类型检查最可能通过？",
+      "options": [
+        "method = \"GET\"",
+        "method = \"PUT\"",
+        "method = \"get\"",
+        "method = \"\""
+      ],
+      "answer": 0,
+      "explanation": "只有精确匹配 \"GET\" 或 \"POST\" 的字面量才符合注解，大小写和拼写都敏感。",
+      "error_tag": "字面量大小写忽略",
+      "variant_group": "literal_case_sensitive"
+    },
+    {
+      "kp": "py.typehint.literal",
+      "type": "single_choice",
+      "question": "在类型注解里 `Literal[True]` 与 `Literal[1]` 的关系，正确的是？",
+      "options": [
+        "两者可以互换使用",
+        "类型层面它们不相等，因为 True 和 1 是不同类型的字面量",
+        "运行时 True 会被当作 1 从而等价",
+        "Literal[True] 会自动转换为 Literal[1]"
+      ],
+      "answer": 1,
+      "explanation": "虽然有 True == 1 的运行时相等性，但类型检查中 True 与 1 属于不同的字面量类型。",
+      "error_tag": "运行时相等与类型等价混淆",
+      "variant_group": "literal_bool_int_equality"
+    },
+    {
+      "kp": "py.typehint.literal",
+      "type": "single_choice",
+      "question": "关于 `Literal` 是否可以包含 `None`，下列说法正确的是？",
+      "options": [
+        "可以，直接写成 Literal[None]",
+        "不可以，必须用 Optional",
+        "不可以，None 不是合法注解",
+        "可以，但只能在 Python 3.10 之后"
+      ],
+      "answer": 0,
+      "explanation": "None 也是字面量，可写入 Literal；在需要允许 None 时也可与 Optional 组合使用。",
+      "error_tag": "None字面量误解",
+      "variant_group": "literal_none"
+    },
+    {
+      "kp": "py.typehint.literal",
+      "type": "single_choice",
+      "question": "代码 `def f(x: Literal[1, 2]) -> None: ...`，静态类型检查器对调用 `f(3)` 的行为是？",
+      "options": [
+        "不会报错，因为 3 也是 int",
+        "会报错，因为 3 不在字面量取值集合中",
+        "只有运行时才报错",
+        "会报错，因为 Literal 不能用于函数参数"
+      ],
+      "answer": 1,
+      "explanation": "Literal[1, 2] 只接受 1 和 2；3 虽然同属 int，但不在允许的字面量集合内。",
+      "error_tag": "忽略字面量集合",
+      "variant_group": "literal_subset_check"
+    },
+    {
+      "kp": "py.typehint.literal",
+      "type": "single_choice",
+      "question": "关于 `Literal[True]` 与 `bool` 的关系，下列说法正确的是？",
+      "options": [
+        "两者完全等价",
+        "Literal[True] 是 bool 的子类型，仅接受 True",
+        "Literal[True] 等价于 Literal[1]",
+        "Literal[True] 在运行时会把值强制转为 True"
+      ],
+      "answer": 1,
+      "explanation": "Literal[True] 是 bool 的收窄子类型，只允许 True；类型层面 True 与 1 不等价。",
+      "error_tag": "字面量与类型关系误解",
+      "variant_group": "literal_bool_int"
+    },
+    {
+      "kp": "py.typehint.literal",
+      "type": "single_choice",
+      "question": "`Literal[\"a\"]` 与 `str` 的关系是？",
+      "options": [
+        "Literal[\"a\"] 是 str 的子类型",
+        "str 是 Literal[\"a\"] 的子类型",
+        "两者互不相干",
+        "Literal[\"a\"] 会在运行时变成 str 的子类"
+      ],
+      "answer": 0,
+      "explanation": "字面量类型是它对应基础类型的子类型，因此 Literal[\"a\"] 可赋给 str，反之不行。",
+      "error_tag": "子类型方向错误",
+      "variant_group": "literal_subtyping"
+    },
+    {
+      "kp": "py.typehint.literal",
+      "type": "single_choice",
+      "question": "以下哪个写法在类型注解中合法？",
+      "options": [
+        "Literal[1, \"a\", True, None]",
+        "Literal[int]",
+        "Literal[list[int]]",
+        "Literal[1 + 1]"
+      ],
+      "answer": 0,
+      "explanation": "Literal 的参数必须是字面量值；不能使用类型、容器类型或表达式。",
+      "error_tag": "Literal参数非法",
+      "variant_group": "literal_legal_args"
+    },
+    {
+      "kp": "py.typehint.literal",
+      "type": "single_choice",
+      "question": "在 Python 3.8 及以上版本，从哪个模块导入 `Literal` 是标准做法？",
+      "options": [
+        "import Literal",
+        "from typing import Literal",
+        "from collections.abc import Literal",
+        "from typing_extensions import Literal 是唯一方式"
+      ],
+      "answer": 1,
+      "explanation": "自 Python 3.8 起 Literal 位于标准库 typing 中。",
+      "error_tag": "导入路径错误",
+      "variant_group": "literal_import"
+    },
+    {
+      "kp": "py.typehint.literal",
+      "type": "single_choice",
+      "question": "`def open_file(mode: Literal[\"r\", \"w\"]) -> None: ...`，调用 `open_file(\"rb\")` 在类型检查时？",
+      "options": [
+        "合法，因为 \"rb\" 是 str",
+        "不合法，因为 \"rb\" 不在允许的字面量中",
+        "合法，因为 Literal 只在运行时生效",
+        "不合法，因为 Literal 不接受字符串"
+      ],
+      "answer": 1,
+      "explanation": "Literal 限制的是取值集合，\"rb\" 不在其中，因此类型检查会报告错误。",
+      "error_tag": "字面量集合忽略",
+      "variant_group": "literal_call_check"
+    },
+    {
+      "kp": "py.typehint.literal",
+      "type": "single_choice",
+      "question": "下面哪一项最能说明 `bool` 注解与 `Literal[True]` 注解的差异？",
+      "options": [
+        "bool 同时允许 True 和 False，Literal[True] 只允许 True",
+        "bool 只允许 True，Literal[True] 允许 True 和 False",
+        "两者都只允许 True",
+        "两者都允许 True 和 False"
+      ],
+      "answer": 0,
+      "explanation": "基础类型 bool 覆盖两个取值；字面量类型 Literal[True] 把范围收窄为单个取值。",
+      "error_tag": "收窄含义不清",
+      "variant_group": "literal_narrowing"
+    },
+    {
+      "kp": "py.typehint.literal",
+      "type": "single_choice",
+      "question": "关于 `Literal` 的运行时代码，正确的是？",
+      "options": [
+        "Literal[\"a\", \"b\"] 在运行时会创建一个枚举类",
+        "Literal[\"a\", \"b\"] 在运行时不会强制校验传入值",
+        "Literal 会在运行时对实参自动转换类型",
+        "Literal 要求所有取值必须可哈希，否则运行时抛异常"
+      ],
+      "answer": 1,
+      "explanation": "类型注解默认不影响运行时行为，Literal 主要供静态检查器使用，不会自动校验或转换。",
+      "error_tag": "运行时语义误解",
+      "variant_group": "literal_runtime"
+    },
+    {
+      "kp": "py.typehint.overload",
+      "type": "single_choice",
+      "question": "在 Python 中，若一个函数根据传入参数的类型不同而返回不同类型的结果（例如传入 int 返回 int，传入 str 返回 str），为了让静态类型检查器理解这种关系，应该使用下列哪种机制？",
+      "options": [
+        "使用 @overload 装饰器声明多个重载签名，再编写一个实际实现",
+        "在函数内部使用 isinstance 判断后直接 return，无需额外声明",
+        "使用 @staticmethod 装饰器",
+        "使用 @property 装饰器"
+      ],
+      "answer": 0,
+      "explanation": "@overload 用于为同一个函数声明多个类型签名，帮助类型检查器（如 mypy）根据实参类型推导返回类型；仅有 isinstance 分支无法让静态检查器推导出精确的返回类型。",
+      "error_tag": "概念混淆",
+      "variant_group": "overload_基本用途"
+    },
+    {
+      "kp": "py.typehint.overload",
+      "type": "single_choice",
+      "question": "使用 @overload 装饰器时，下列说法正确的是？",
+      "options": [
+        "@overload 装饰的函数可以有完整函数体，且会被优先调用",
+        "@overload 装饰的签名函数体通常用 ... 或 pass 占位，真正被调用的是最后一个不带 @overload 的实现",
+        "所有用 @overload 声明的签名都必须有相同的参数个数",
+        "@overload 只能用于类方法，不能用于模块级函数"
+      ],
+      "answer": 1,
+      "explanation": "被 @overload 装饰的函数只是类型签名，运行时会被后面的实现覆盖，因此其函数体通常写 ... 或 pass；真正被调用的是最后一个未加 @overload 的实现。",
+      "error_tag": "概念混淆",
+      "variant_group": "overload_实现规则"
+    },
+    {
+      "kp": "py.typehint.overload",
+      "type": "single_choice",
+      "question": "关于 @overload 与默认参数，下列说法正确的是？",
+      "options": [
+        "重载签名中必须为所有参数都提供默认值",
+        "重载签名中不应给参数提供默认值，默认值只应出现在实现函数中",
+        "实现函数不能有默认参数",
+        "默认参数会自动被类型检查器忽略"
+      ],
+      "answer": 1,
+      "explanation": "@overload 签名表示的是调用约定，不应写默认值（默认值属于实现细节）；实现函数才提供实际默认值。",
+      "error_tag": "边界错误",
+      "variant_group": "overload_默认参数"
+    },
+    {
+      "kp": "py.typehint.overload",
+      "type": "single_choice",
+      "question": "在类中给方法使用 @overload 时，通常还需要在方法前加上哪个装饰器（当它是实例方法时）？",
+      "options": [
+        "@classmethod",
+        "@staticmethod",
+        "无需额外装饰器，普通实例方法即可",
+        "@property"
+      ],
+      "answer": 2,
+      "explanation": "实例方法直接定义即可，@overload 叠加在方法上；若为类方法/静态方法，则应相应配合 @classmethod / @staticmethod，但本题问的是普通实例方法，故选无需额外装饰器。",
+      "error_tag": "概念混淆",
+      "variant_group": "overload_类中方法"
+    },
+    {
+      "kp": "py.typehint.overload",
+      "type": "multi_choice",
+      "question": "以下关于 @overload 的说法，哪些是正确的？（多选）",
+      "options": [
+        "@overload 只对静态类型检查器有意义，运行时不做分派",
+        "被 @overload 装饰的函数体通常写成 ... 或 pass",
+        "最后一个不带 @overload 的实现会在运行时生效",
+        "重载签名可以任意定义，不要求与实现兼容",
+        "类型检查器按声明顺序选择匹配的签名"
+      ],
+      "answer": [
+        0,
+        1,
+        2,
+        4
+      ],
+      "explanation": "选项 D 错误：重载签名必须与实现兼容；其余说法均符合 @overload 的规则。",
+      "error_tag": "概念混淆",
+      "variant_group": "overload_综合规则"
+    },
+    {
+      "kp": "py.typehint.overload",
+      "type": "multi_choice",
+      "question": "下面哪些情况适合使用 @overload 来表达？（多选）",
+      "options": [
+        "函数接受 int 或 str，返回相应类型",
+        "函数在传入 None 时返回 None，传入 int 时返回 int",
+        "函数根据传入布尔值 True/False 返回完全相同的类型",
+        "函数在传入 list 时返回 list，传入 tuple 时返回 tuple",
+        "函数根据运行时的随机数决定返回值类型"
+      ],
+      "answer": [
+        0,
+        1,
+        3
+      ],
+      "explanation": "A、B、D 都是类型与返回类型联动的典型重载场景；C 无需重载；E 依赖运行时随机值，静态类型无法表达。",
+      "error_tag": "概念混淆",
+      "variant_group": "overload_适用范围"
+    },
+    {
+      "kp": "py.typehint.overload",
+      "type": "multi_choice",
+      "question": "使用 @overload 时，下列哪些做法可能导致类型检查错误或运行异常？（多选）",
+      "options": [
+        "只写了 @overload 签名，没有写不带 @overload 的实现",
+        "把更宽泛的签名写在更具体的签名之前",
+        "在重载签名中给参数提供了默认值",
+        "在实现函数中使用了与签名一致的参数名",
+        "在重载签名中使用与实现不兼容的参数种类（如仅关键字与位置参数冲突）"
+      ],
+      "answer": [
+        0,
+        1,
+        2,
+        4
+      ],
+      "explanation": "A 缺少实现；B 顺序问题；C 签名中不应有默认值；E 参数种类不兼容会报错。D 是正确做法。",
+      "error_tag": "边界错误",
+      "variant_group": "overload_常见错误"
+    },
+    {
+      "kp": "py.typehint.overload",
+      "type": "fill_blank",
+      "question": "在使用 @overload 时，被装饰的签名函数体通常写成三个点占位符，即 ______（填一个 Python 表达式）。",
+      "options": [],
+      "answer": [
+        "...",
+        "Ellipsis",
+        "pass"
+      ],
+      "explanation": "被 @overload 装饰的函数体只需占位，常见写法是 ... 或 pass。",
+      "error_tag": "记忆缺失",
+      "variant_group": "overload_实现规则"
+    },
+    {
+      "kp": "py.typehint.overload",
+      "type": "fill_blank",
+      "question": "若要把「传入 int 返回 int，传入 str 返回 str」的类型关系用类型变量表达，通常会写成 T = TypeVar('T', ______, ______)，请补全两个约束类型（小写，用英文逗号分隔）。",
+      "options": [],
+      "answer": [
+        "int, str",
+        "int,str"
+      ],
+      "explanation": "TypeVar 可以接受约束类型列表，例如 TypeVar('T', int, str)，表示 T 只能是 int 或 str。",
+      "error_tag": "记忆缺失",
+      "variant_group": "overload_与TypeVar"
+    },
+    {
+      "kp": "py.typehint.overload",
+      "type": "code_reading",
+      "question": "阅读以下代码：\n\nfrom typing import overload\n\n@overload\ndef f(x: int) -> int: ...\n\n@overload\ndef f(x: str) -> str: ...\n\ndef f(x):\n    return x\n\nprint(f(1), f('a'))\n\n问：输出是什么？为什么？",
+      "options": [],
+      "answer": "输出为 `1 a`。因为只有最后一个不带 @overload 的实现函数会在运行时生效，前面的 @overload 签名仅对静态类型检查器可见，运行时被覆盖，因此调用的是 return x 的实现。",
+      "explanation": "@overload 不参与运行时逻辑，运行时只保留最后的实现函数，故输出原始参数。",
+      "error_tag": "概念混淆",
+      "variant_group": "overload_运行时行为"
+    },
+    {
+      "kp": "py.typehint.overload",
+      "type": "code_reading",
+      "question": "阅读以下代码（静态类型检查视角）：\n\nfrom typing import overload\n\n@overload\ndef g(x: object) -> object: ...\n\n@overload\ndef g(x: int) -> int: ...\n\ndef g(x):\n    return x\n\n问：类型检查器对 g(1) 的返回类型推断可能是？为什么这样写不推荐？",
+      "options": [],
+      "answer": "类型检查器很可能匹配到第一个签名 g(x: object) -> object，因此推断 g(1) 返回 object，而不是 int。因为签名按声明顺序匹配，宽泛签名在前会「截胡」后面的具体签名，使得 g(x: int) -> int 形同虚设。",
+      "explanation": "类型检查器自上而下匹配签名，宽泛签名应放在更具体签名之后，否则具体重载不会被选用。",
+      "error_tag": "边界错误",
+      "variant_group": "overload_签名选择顺序"
+    },
+    {
+      "kp": "py.typehint.overload",
+      "type": "scenario",
+      "question": "工程场景：你正在编写一个工具函数 parse，它接受一个参数：当传入 int 时返回 int，传入 str 时返回 str，并在内部用 isinstance 分支处理。团队使用 mypy 做静态检查，发现调用处的返回类型总被推断为宽泛类型，无法精确。请问你会如何改造这个函数，使类型检查器能正确推断返回类型？请说明理由。",
+      "options": [],
+      "answer": null,
+      "explanation": "通过为 parse 添加多个 @overload 签名，并保留一个不带 @overload 的实现函数，类型检查器就能根据实参类型匹配对应签名，从而推断精确的返回类型。",
+      "error_tag": "概念混淆",
+      "variant_group": "overload_工程改造",
+      "required_keywords": [
+        "overload",
+        "类型签名",
+        "类型推断",
+        "isinstance",
+        "mypy"
+      ]
+    },
+    {
+      "kp": "py.typehint.overload",
+      "type": "single_choice",
+      "question": "关于 @overload 签名与实现之间的参数兼容性，下列说法正确的是？",
+      "options": [
+        "各重载签名可以任意定义，不必与实际实现兼容",
+        "各重载签名应当与实现的参数名和参数种类保持兼容，否则类型检查器会报错",
+        "只要返回值类型一致，参数可以完全不同",
+        "实现函数必须使用与所有重载签名完全相同的参数名，否则运行时会崩溃"
+      ],
+      "answer": 1,
+      "explanation": "重载签名需要与实现的参数结构兼容（参数名、位置/关键字种类等），否则 mypy 等检查器会报错；但实现本身是运行时唯一执行体，参数名不一致并不导致运行时崩溃。",
+      "error_tag": "边界错误",
+      "variant_group": "overload_实现兼容性"
+    },
+    {
+      "kp": "py.typehint.overload",
+      "type": "scenario",
+      "question": "工程场景：某同事给一个函数写了三个 @overload 签名，但没有写最后一个不带 @overload 的实现函数，运行测试时调用该函数却拿不到预期结果。请解释原因，并给出修复方案。",
+      "options": [],
+      "answer": null,
+      "explanation": "所有 @overload 装饰的函数体都是占位符，运行时没有真正的实现体，因此调用不会得到预期结果。修复方法是补上最后一个不带 @overload 的实现函数，并保证其参数与各重载签名兼容。",
+      "error_tag": "记忆缺失",
+      "variant_group": "overload_常见错误",
+      "required_keywords": [
+        "@overload",
+        "实现函数",
+        "占位符",
+        "重载签名",
+        "参数兼容"
+      ]
+    },
+    {
+      "kp": "py.typehint.overload",
+      "type": "single_choice",
+      "question": "如果一个函数希望「传入 int 返回 int，传入 str 返回 str」，最合适的写法是？",
+      "options": [
+        "使用 TypeVar 约束返回类型与参数类型一致，例如 T = TypeVar('T', int, str)",
+        "把所有重载签名写成返回 Any",
+        "使用 @overload 并让每个签名都返回 object",
+        "使用 Optional 包裹返回值"
+      ],
+      "answer": 0,
+      "explanation": "这种「输入类型与输出类型联动」的场景用 TypeVar（受限类型变量）最合适；@overload 也常用于此类场景，但选项中首选用 TypeVar 表达类型一致性，是更贴合题意的答案。",
+      "error_tag": "概念混淆",
+      "variant_group": "overload_与TypeVar"
+    },
+    {
+      "kp": "py.typehint.overload",
+      "type": "single_choice",
+      "question": "以下代码中，@overload 写法的正确顺序是？",
+      "options": [
+        "实现函数写在最前面，@overload 签名写在后面",
+        "@overload 签名写在前面，最后一个不带 @overload 的实现写在最后",
+        "@overload 签名和实现函数必须写在两个不同的模块中",
+        "@overload 签名必须全部写在文件末尾"
+      ],
+      "answer": 1,
+      "explanation": "运行时只有最后一个非 @overload 的实现会被保留，所以必须先写重载签名再写实现。",
+      "error_tag": "记忆缺失",
+      "variant_group": "overload_实现规则"
+    },
+    {
+      "kp": "py.typehint.overload",
+      "type": "single_choice",
+      "question": "关于 @overload 在运行时的行为，下列说法正确的是？",
+      "options": [
+        "@overload 会在运行时检查参数类型并自动分派到对应签名",
+        "@overload 在运行时不做任何类型分派，它只是给静态类型检查器的信息",
+        "@overload 会在运行时抛出 TypeError",
+        "@overload 会修改函数的字节码以实现重载"
+      ],
+      "answer": 1,
+      "explanation": "@overload 只对静态类型检查器有意义，运行时被装饰的签名会被后续实现覆盖，语言本身不做运行时类型分派。",
+      "error_tag": "概念混淆",
+      "variant_group": "overload_运行时行为"
+    },
+    {
+      "kp": "py.typehint.overload",
+      "type": "single_choice",
+      "question": "若忘记给最后一个实现函数去掉 @overload 装饰，会发生什么？",
+      "options": [
+        "程序会在导入时报 SyntaxError",
+        "所有带 @overload 的函数体都是占位符，运行时调用可能不会得到预期结果或报错",
+        "类型检查器会自动补上实现",
+        "程序正常运行，类型检查器自动选择最后一个签名作为实现"
+      ],
+      "answer": 1,
+      "explanation": "若实现也被 @overload 装饰，运行时就没有真正执行的函数体，调用时会得到占位实现的结果或报错，且类型检查器可能报「缺少实现」之类的错误。",
+      "error_tag": "边界错误",
+      "variant_group": "overload_常见错误"
+    },
+    {
+      "kp": "py.typehint.overload",
+      "type": "single_choice",
+      "question": "下列哪个场景最不适合用 @overload 解决？",
+      "options": [
+        "函数根据第一个参数是 int 还是 str 返回不同类型",
+        "函数在不同参数个数下行为不同（如一个参数或两个参数）",
+        "函数需要根据参数值（如值为 0 或 1）返回类型不同的结果，且值不是字面量类型",
+        "函数在传入 bytes 时返回 bytes，传入 bytearray 时返回 bytearray"
+      ],
+      "answer": 2,
+      "explanation": "@overload 基于类型而非运行时的值分派；若区分依据是具体数值（且不是 Literal 字面量类型），静态重载无法表达。",
+      "error_tag": "概念混淆",
+      "variant_group": "overload_适用范围"
+    },
+    {
+      "kp": "py.typehint.overload",
+      "type": "single_choice",
+      "question": "使用 @overload 时，类型检查器如何选择匹配的签名？",
+      "options": [
+        "随机选择一个签名",
+        "按声明顺序，从上到下找到第一个与实参类型兼容的签名",
+        "总是选择参数最多的签名",
+        "总是选择返回值类型最宽泛的签名"
+      ],
+      "answer": 1,
+      "explanation": "类型检查器按声明顺序匹配签名，因此更具体、更特化的签名应放在前面。",
+      "error_tag": "记忆缺失",
+      "variant_group": "overload_签名选择顺序"
+    },
+    {
+      "kp": "py.typehint.overload",
+      "type": "single_choice",
+      "question": "把更宽泛的签名写在更具体的签名之前，可能出现什么问题？",
+      "options": [
+        "程序运行时崩溃",
+        "类型检查器可能总是匹配到宽泛签名，导致具体签名永远不被选用",
+        "Python 解释器会拒绝导入",
+        "@overload 会自动重排签名顺序"
+      ],
+      "answer": 1,
+      "explanation": "按顺序匹配的机制下，宽泛签名若在前，会「截胡」所有调用，导致更具体的重载形同虚设。",
+      "error_tag": "边界错误",
+      "variant_group": "overload_签名选择顺序"
+    }
+  ]
+}

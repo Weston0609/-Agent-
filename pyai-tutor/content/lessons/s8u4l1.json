@@ -1,0 +1,628 @@
+{
+  "id": "s8u4l1",
+  "title": "s8u4l1",
+  "kps": [
+    "arch.cloud.k8s",
+    "arch.cloud.gpu_scheduling"
+  ],
+  "theory": "## arch.cloud.k8s\n\n# Kubernetes 入门：从零到工程级\n\n> **一句话直觉**：Kubernetes（简称 K8s）就像你训练好模型之后，负责把模型“放进盒子、贴上标签、分发到不同机器、随时扩容、坏了自己重启”的自动化集装箱调度系统——它让 AI 服务在生产环境里跑得稳、扩得快。\n\n前置说明：本讲假定你会写 Python、训练过简单模型（哪怕只是 `y = wx + b`），但**完全没接触过容器和云原生**。学完后你能读懂一份 K8s 配置文件，并在本地用 `kind`/`minikube` 把一个小模型服务跑起来。\n\n---\n\n## 一、为什么需要 Kubernetes：从“跑脚本”到“跑服务”\n\n你本地训练完模型，用 `flask` 或 `FastAPI` 起一个接口，`python app.py` 就跑起来了。但生产环境马上会遇到三个问题：\n\n1. **进程挂了没人管**——机器重启、内存溢出、代码 bug，服务就死了。\n2. **流量涨了要扩机器**——双十一来了，1 台机器扛不住，要 10 台；大促结束又要缩回去。\n3. **多台机器怎么调度**——10 个服务、20 台机器，谁部署在哪、端口怎么分配、怎么升级不停机？\n\nKubernetes 把“机器”抽象成**集群（Cluster）**，把“服务”抽象成**Pod**，然后帮你自动完成调度、重启、扩容、滚动升级。\n\n**核心对象（第一次出现附英文）**：\n\n- **Cluster（集群）**：一组机器的集合，分控制面（Control Plane）和工作节点（Worker Node）。\n- **Pod**：K8s 最小调度单元，通常包含一个容器（Container），是容器的“外壳”。\n- **Deployment（部署）**：描述“我要 3 个 Pod 副本（Replica）跑这个镜像”，负责滚动升级、回滚。\n- **Service（服务）**：给一组 Pod 提供一个稳定的虚拟 IP 和 DNS 名，做负载均衡。\n- **Namespace（命名空间）**：逻辑隔离，团队/环境（dev、prod）各一个。\n\n---\n\n## 二、用一个 YAML 描述你的模型服务\n\nK8s 的所有对象都用 **YAML（YAML Ain't Markup Language）** 声明。你只写“期望状态（Desired State）”，K8s 负责让它成真——这叫**声明式 API（Declarative API）**。\n\n下面是一个最小可用的 Deployment，把一个假想的模型服务跑 2 个副本：\n\n```yaml\n# model-deploy.yaml\napiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: model-server\nspec:\n  replicas: 2                # 期望 2 个副本\n  selector:\n    matchLabels:\n      app: model-server\n  template:                  # Pod 模板\n    metadata:\n      labels:\n        app: model-server\n    spec:\n      containers:\n      - name: server\n        image: myrepo/model-server:1.0   # 你的模型镜像\n        ports:\n        - containerPort: 8000\n```\n\n配套一个 Service，让外界能访问：\n\n```yaml\napiVersion: v1\nkind: Service\nmetadata:\n  name: model-service\nspec:\n  selector:\n    app: model-server        # 选中上面 Deployment 的 Pod\n  ports:\n  - port: 80\n    targetPort: 8000\n  type: ClusterIP             # 集群内部 IP；外网用 LoadBalancer/NodePort\n```\n\n用 `kubectl apply -f model-deploy.yaml` 提交，K8s 就开始干活了。\n\n---\n\n## 三、自愈与扩缩容：K8s 帮你干的两件大事\n\n**自愈（Self-healing）**：Pod 挂了，ReplicaSet（Deployment 背后的控制器）发现“实际副本数 < 期望副本数”，立刻起一个新的。你杀掉一个 Pod，几秒后又会自动补齐。\n\n**水平扩缩容（HPA, Horizontal Pod Autoscaler）**：根据 CPU/GPU 或自定义指标自动调整 `replicas`。比如：\n\n```yaml\napiVersion: autoscaling/v2\nkind: HorizontalPodAutoscaler\nmetadata:\n  name: model-hpa\nspec:\n  scaleTargetRef:\n    apiVersion: apps/v1\n    kind: Deployment\n    name: model-server\n  minReplicas: 2\n  maxReplicas: 10\n  metrics:\n  - type: Resource\n    resource:\n      name: cpu\n      target:\n        type: Utilization\n        averageUtilization: 70   # CPU 平均超 70% 就扩容\n```\n\n---\n\n## 四、在本地跑一个 K8s：kind 与 kubectl\n\n没有云账号无所谓，本地也能玩。推荐 **kind（Kubernetes in Docker）**，用 Docker 起一个单节点集群：\n\n```bash\n# 安装（macOS 示例，Linux/Windows 类似）\nbrew install kind kubectl docker\n\n# 创建一个集群\nkind create cluster --name demo\n\n# 查看节点\nkubectl get nodes\n```\n\n然后写一个真正能跑的 Python 示例：我写一个最小的 Flask 服务，模拟“模型推理”，打成镜像，部署到 kind 里，验证能自愈。\n\n**`app.py`**（模拟模型服务）：\n\n```python\n# app.py\nfrom flask import Flask, jsonify\nimport os\n\napp = Flask(__name__)\n\n@app.route(\"/predict\")\ndef predict():\n    # 真实场景这里会加载 PyTorch 模型做推理\n    return jsonify({\"prediction\": 0.87, \"pod\": os.environ.get(\"HOSTNAME\", \"unknown\")})\n\nif __name__ == \"__main__\":\n    app.run(host=\"0.0.0.0\", port=8000)\n```\n\n**`Dockerfile`**：\n\n```dockerfile\nFROM python:3.11-slim\nWORKDIR /app\nCOPY app.py .\nRUN pip install flask\nCMD [\"python\", \"app.py\"]\n```\n\n**构建并加载到 kind**：\n\n```bash\n# 构建镜像（注意镜像名带标签）\ndocker build -t model-server:1.0 .\n\n# 把镜像直接塞进 kind 集群（本地开发很方便）\nkind load docker-image model-server:1.0 --name demo\n\n# 部署（把上面 yaml 中的 image 换成 model-server:1.0，且去掉 imagePullPolicy 或设 IfNotPresent）\nkubectl apply -f model-deploy.yaml\nkubectl apply -f service.yaml\n\n# 查看状态\nkubectl get pods\nkubectl get svc\n```\n\n到这里你就完成了一次“训练完模型 → 容器化 → 部署到 K8s → 自愈扩容”的闭环。\n\n---\n\n## 五、工程级视角：生产环境的几个必知点\n\n1. **健康检查（Probe）**：`livenessProbe` 判断容器是否要重启，`readinessProbe` 判断是否能接流量。模型服务启动慢，`readinessProbe` 尤其关键。\n2. **资源配额（Resource Requests/Limits）**：不写 request，调度器不知道给你留多少资源；不写 limit，一个 Pod 可能把节点打爆。GPU 场景要用 `nvidia.com/gpu`。\n3. **配置与密钥（ConfigMap / Secret）**：模型路径、超参放 ConfigMap，API Key、数据库密码放 Secret，不要硬编码进镜像。\n4. **持久化存储（PV/PVC）**：模型权重、日志需要挂载卷；大模型建议直接挂对象存储。\n5. **滚动更新与回滚（Rolling Update / Rollback）**：`kubectl rollout status` 看进度，`kubectl rollout undo` 一键回滚出事的版本。\n6. **可观测性（Observability）**：日志（`kubectl logs`）、指标（Prometheus）、链路（OpenTelemetry）三件套。\n\n> 一句话总结：**K8s = 声明式 + 控制器循环（Control Loop）**。你写期望状态，它不断对比实际状态并修正。理解这个循环，就理解了 K8s 的一切。\n\n## arch.cloud.gpu_scheduling\n\n# GPU 调度（GPU Scheduling）入门：从零理解云计算里的“抢显卡”艺术\n\n> **一句话直觉**：GPU 调度就是让多个程序（任务）公平、高效、不打架地共用同一块或多块 GPU，就像餐厅领位员把有限座位分给不同客人，既要坐满，又不能让谁等太久。\n\n---\n\n## 1. 为什么需要 GPU 调度？\n\n在云计算（Cloud Computing）和 AI 训练中，GPU（Graphics Processing Unit，图形处理器）非常贵、非常少。如果让每个任务独占一块 GPU，很多任务其实用不满，造成浪费；如果随便抢，就会互相干扰甚至崩溃。\n\n**GPU 调度要解决三个核心问题：**\n\n1. **隔离（Isolation）**：任务之间不能互相踩内存、抢算力到死锁。\n2. **利用率（Utilization）**：尽量让 GPU 一直在干活。\n3. **公平与优先级（Fairness & Priority）**：重要任务先跑，小任务别饿死。\n\n下面用 Python 模拟一个最朴素的调度器，先建立直觉。\n\n```python\n# 极简 GPU 调度器：按显存需求排队，能放就放\nclass SimpleGPUScheduler:\n    def __init__(self, total_memory_gb):\n        self.total = total_memory_gb\n        self.used = 0\n        self.running = []\n\n    def submit(self, task):\n        name, need = task['name'], task['memory_gb']\n        if self.used + need <= self.total:\n            self.used += need\n            self.running.append(name)\n            print(f\"[启动] {name} 占用 {need}GB，当前 {self.used}/{self.total}GB\")\n            return True\n        print(f\"[等待] {name} 需要 {need}GB，显存不足\")\n        return False\n\n    def finish(self, name):\n        for t in self.running:\n            if t == name:\n                self.running.remove(name)\n                # 这里简化：假设任务释放固定 4GB\n                self.used -= 4\n                print(f\"[完成] {name}，释放后 {self.used}/{self.total}GB\")\n                return\n\ns = SimpleGPUScheduler(8)\ns.submit({'name': '训练A', 'memory_gb': 4})\ns.submit({'name': '推理B', 'memory_gb': 3})\ns.submit({'name': '训练C', 'memory_gb': 4})\ns.finish('训练A')\ns.submit({'name': '训练C', 'memory_gb': 4})\n```\n\n---\n\n## 2. 调度的三个层次：节点、GPU、进程\n\nGPU 调度不是只看“哪块卡空着”，而是分层的：\n\n- **节点级（Node-level）**：Kubernetes（容器编排系统）决定把 Pod（最小部署单元）放到哪台机器。\n- **GPU 级（Device-level）**：一台机器有多块 GPU，选哪块？\n- **进程级（Process-level）**：一块 GPU 被多个进程共享时，怎么分时间片或显存？\n\n**关键结论**：越往下层，越依赖硬件和驱动能力，比如 NVIDIA MPS（Multi-Process Service，多进程服务）允许多进程共享一块 GPU 的算力。\n\n```python\n# 模拟节点级 + GPU 级调度：先选节点，再选 GPU\nnodes = {\n    'node-1': [{'id': 0, 'free_mem': 8}, {'id': 1, 'free_mem': 8}],\n    'node-2': [{'id': 0, 'free_mem': 16}],\n}\n\ndef schedule(task_mem):\n    # 节点级：找有空闲 GPU 的节点\n    for node, gpus in nodes.items():\n        for gpu in gpus:\n            if gpu['free_mem'] >= task_mem:\n                gpu['free_mem'] -= task_mem\n                print(f\"任务({task_mem}GB) -> {node} / GPU-{gpu['id']}\")\n                return\n    print(f\"任务({task_mem}GB) 无法调度：资源不足\")\n\nschedule(6)\nschedule(6)\nschedule(10)\nprint(nodes)\n```\n\n---\n\n## 3. 常见调度策略：先来先服务、最短作业优先、公平共享\n\n没有一种策略适合所有场景。云计算里常组合使用：\n\n- **FIFO（First In First Out，先来先服务）**：简单，但大任务会堵住后面小任务。\n- **SJF（Shortest Job First，最短作业优先）**：平均等待时间短，但长任务可能饿死。\n- **Fair Sharing（公平共享）**：每个用户/团队轮流用，适合多租户。\n- **Bin Packing（装箱）**：把任务尽量塞满 GPU，提高利用率。\n\n**关键结论**：生产系统通常用“优先级 + 公平份额 + 抢占（Preemption）”组合。\n\n```python\nimport heapq\n\n# 用优先队列模拟：数值越小优先级越高\n# 任务格式：(优先级, 任务名, 需要显存)\ntasks = [(3, '大训练', 8), (1, '紧急推理', 2), (2, '小实验', 1)]\nheapq.heapify(tasks)\n\ngpu_mem = 8\nwhile tasks:\n    prio, name, need = heapq.heappop(tasks)\n    if need <= gpu_mem:\n        gpu_mem -= need\n        print(f\"调度 {name} (优先级{prio}, {need}GB)，剩余 {gpu_mem}GB\")\n    else:\n        print(f\"跳过 {name}：显存不足\")\n```\n\n---\n\n## 4. 隔离与共享：MIG、MPS、时间片\n\n多任务共用 GPU 时，硬件和驱动提供了不同隔离级别：\n\n- **MIG（Multi-Instance GPU，多实例 GPU）**：把一块 A100/H100 物理切成多个小 GPU，显存和算力硬隔离。\n- **MPS（Multi-Process Service）**：多个进程共享同一块 GPU 的算力，适合小任务并行。\n- **时间片（Time-slicing）**：CUDA（Compute Unified Device Architecture，统一计算设备架构）上下文切换，简单但可能互相干扰。\n\n**关键结论**：要强隔离选 MIG，要高利用率选 MPS 或时间片，但要接受干扰风险。\n\n```python\n# 模拟 MIG 硬隔离：每块物理 GPU 切成固定份额\nclass MIGGPU:\n    def __init__(self, total_mem, instances):\n        self.slices = [total_mem // instances] * instances\n        self.free = self.slices.copy()\n\n    def alloc(self, idx, mem):\n        if self.free[idx] >= mem:\n            self.free[idx] -= mem\n            print(f\"MIG 实例 {idx} 分配 {mem}GB，剩余 {self.free[idx]}GB\")\n        else:\n            print(f\"MIG 实例 {idx} 不足，需要 {mem}GB，剩余 {self.free[idx]}GB\")\n\ng = MIGGPU(40, 4)  # 40GB 切成 4 份，每份 10GB\ng.alloc(0, 8)\ng.alloc(0, 8)\ng.alloc(1, 5)\n```\n\n---\n\n## 5. 工程级视角：Kubernetes + GPU Operator\n\n真实云环境里，GPU 调度通常由 Kubernetes 生态完成：\n\n- **Device Plugin（设备插件）**：把 GPU 注册成 `nvidia.com/gpu` 资源。\n- **GPU Operator**：自动安装驱动、容器运行时、监控。\n- **调度器扩展**：支持拓扑感知（Topology-aware）、NUMA（Non-Uniform Memory Access，非统一内存访问）亲和。\n\n**关键结论**：你写的 YAML 里一句 `resources.limits: nvidia.com/gpu: 1`，背后是整套调度链路。\n\n```python\n# 模拟 K8s 资源声明：Pod 申请 1 块 GPU\npod = {\n    'name': 'train-job',\n    'resources': {'limits': {'nvidia.com/gpu': 1}},\n}\nnode_gpus = 2\nif pod['resources']['limits']['nvidia.com/gpu'] <= node_gpus:\n    print(f\"Pod {pod['name']} 可调度：节点有 {node_gpus} 块 GPU\")\nelse:\n    print(f\"Pod {pod['name']} 不可调度：GPU 不足\")\n```\n\n---\n\n## 动手练习\n\n**任务**：实现一个支持“优先级 + 显存”的 GPU 调度模拟器。\n\n要求：\n1. 定义 `Task` 类，包含 `name`、`priority`（越小越优先）、`memory_gb`。\n2. 实现 `schedule(tasks, total_memory_gb)` 函数，按优先级排序，能放就放，放不下就跳过并记录。\n3. 输出：每个任务的调度结果、最终剩余显存、被跳过的任务列表。\n4. 测试数据：\n   - 任务：`大训练(prio=3, 8GB)`、`紧急推理(prio=1, 2GB)`、`小实验(prio=2, 1GB)`、`中训练(prio=2, 4GB)`\n   - GPU 总显存：8GB\n5. 加分：支持任务完成后释放显存，再尝试调度被跳过的任务。\n\n```python\nimport heapq\n\nclass Task:\n    def __init__(self, name, priority, memory_gb):\n        self.name = name\n        self.priority = priority\n        self.memory_gb = memory_gb\n\n    def __repr__(self):\n        return f\"Task({self.name}, prio={self.priority}, mem={self.memory_gb}GB)\"\n\ndef schedule(tasks, total_memory_gb):\n    # 按优先级建堆（priority 越小越优先）\n    heap = [(t.priority, t.name, t.memory_gb) for t in tasks]\n    heapq.heapify(heap)\n\n    free = total_memory_gb\n    running = []\n    skipped = []\n\n    while heap:\n        prio, name, need = heapq.heappop(heap)\n        if need <= free:\n            free -= need\n            running.append((name, need))\n            print(f\"[调度] {name} (prio={prio}, {need}GB)，剩余 {free}GB\")\n        else:\n            skipped.append((name, need))\n            print(f\"[跳过] {name} (prio={prio}, {need}GB)，显存不足\")\n\n    return running, skipped, free\n\nif __name__ == '__main__':\n    tasks = [\n        Task('大训练', 3, 8),\n        Task('紧急推理', 1, 2),\n        Task('小实验', 2, 1),\n        Task('中训练', 2, 4),\n    ]\n    running, skipped, free = schedule(tasks, 8)\n    print('\\n最终运行:', running)\n    print('被跳过:', skipped)\n    print('剩余显存:', free, 'GB')\n```\n",
+  "quiz": [
+    {
+      "kp": "arch.cloud.k8s",
+      "type": "single_choice",
+      "question": "在讨论容器编排时，Kubernetes 最常见的定位是什么？",
+      "options": [
+        "容器镜像的构建工具，用于把源码打成镜像",
+        "容器编排平台，用于调度、扩缩和管理容器化应用",
+        "虚拟机管理程序，用于在一台物理机上运行多个操作系统",
+        "服务网格数据面，用于拦截所有 Pod 之间的网络流量"
+      ],
+      "answer": 1,
+      "explanation": "Kubernetes 是容器编排平台，负责调度、自愈、扩缩和服务发现等；镜像构建通常由 Docker/Buildah 等完成，虚拟机由 Hypervisor 管理，服务网格数据面是 Envoy 等代理的职责。",
+      "error_tag": "概念混淆",
+      "variant_group": "k8s_定位"
+    },
+    {
+      "kp": "arch.cloud.k8s",
+      "type": "single_choice",
+      "question": "某团队希望部署一个无状态 Web 服务，并要求滚动更新和自动重启失败的实例。下列哪种 Kubernetes 对象最直接满足该需求？",
+      "options": [
+        "Pod",
+        "Deployment",
+        "ConfigMap",
+        "Namespace"
+      ],
+      "answer": 1,
+      "explanation": "Deployment 管理 ReplicaSet，支持滚动更新、回滚和自愈；裸 Pod 不会自动重建，ConfigMap 用于配置注入，Namespace 用于资源隔离。",
+      "error_tag": "对象职责混淆",
+      "variant_group": "k8s_工作负载对象"
+    },
+    {
+      "kp": "arch.cloud.k8s",
+      "type": "single_choice",
+      "question": "下列关于 Kubernetes Service 类型中 NodePort 的描述，哪一项正确？",
+      "options": [
+        "它在每个节点上开放一个端口，外部可通过任意节点 IP 加该端口访问服务",
+        "它只为集群内部提供访问，外部无法访问",
+        "它自动申请云厂商的负载均衡器",
+        "它只能用于七层 HTTP 流量"
+      ],
+      "answer": 0,
+      "explanation": "NodePort 在每个节点上开放同一个端口并转发到后端 Pod；ClusterIP 仅集群内可达，LoadBalancer 通常申请云负载均衡器，七层路由由 Ingress 负责。",
+      "error_tag": "服务类型混淆",
+      "variant_group": "k8s_服务发现与暴露"
+    },
+    {
+      "kp": "arch.cloud.k8s",
+      "type": "single_choice",
+      "question": "某 Pod 处于 Pending 状态，通过 kubectl describe 看到事件提示“0/3 nodes are available: 3 Insufficient cpu”。最可能的原因是什么？",
+      "options": [
+        "镜像拉取失败",
+        "容器启动命令错误",
+        "集群中没有节点能满足该 Pod 的 CPU 资源请求",
+        "Service 没有正确配置 selector"
+      ],
+      "answer": 2,
+      "explanation": "调度器找不到满足 requests 的节点时，Pod 会一直 Pending；镜像拉取失败通常表现为 ImagePullBackOff，命令错误表现为 CrashLoopBackOff，Service selector 不影响调度。",
+      "error_tag": "调度与资源问题",
+      "variant_group": "k8s_调度与资源"
+    },
+    {
+      "kp": "arch.cloud.k8s",
+      "type": "single_choice",
+      "question": "在 Pod 的容器中定义 resources.requests.cpu 与 resources.limits.cpu 的主要区别是什么？",
+      "options": [
+        "requests 用于调度决策，limits 用于运行时限制容器可用的 CPU 上限",
+        "requests 用于运行时限制，limits 用于调度决策",
+        "两者完全等价，只是写法不同",
+        "requests 只能用于内存，limits 只能用于 CPU"
+      ],
+      "answer": 0,
+      "explanation": "requests 决定调度器在节点上预留多少资源，limits 决定容器运行时能使用的上限；两者可以分别设置，内存超限通常会导致 OOMKilled。",
+      "error_tag": "资源模型理解错误",
+      "variant_group": "k8s_调度与资源"
+    },
+    {
+      "kp": "arch.cloud.k8s",
+      "type": "single_choice",
+      "question": "某 Deployment 的 Pod 反复重启，状态显示 CrashLoopBackOff。下列排查步骤中，最应该优先做的是？",
+      "options": [
+        "直接删除 Deployment 并重新创建",
+        "查看该 Pod 的日志和 describe 事件，定位容器退出原因",
+        "修改 Service 的 selector",
+        "扩容节点数量"
+      ],
+      "answer": 1,
+      "explanation": "CrashLoopBackOff 表示容器启动后退出又被反复重启，应先通过 kubectl logs 与 kubectl describe 查看退出码和事件；删除重建通常不能解决根因。",
+      "error_tag": "排障方法不当",
+      "variant_group": "k8s_故障排查"
+    },
+    {
+      "kp": "arch.cloud.k8s",
+      "type": "single_choice",
+      "question": "某 Pod 状态为 ImagePullBackOff。下列哪一项最不可能是导致该状态的原因？",
+      "options": [
+        "镜像名称或标签拼写错误",
+        "私有镜像仓库缺少 imagePullSecret",
+        "节点无法访问镜像仓库网络",
+        "Pod 的 CPU requests 设置过高"
+      ],
+      "answer": 3,
+      "explanation": "ImagePullBackOff 与镜像拉取相关：名称、凭证、网络等都可能导致；CPU requests 过高会导致 Pending，而不是拉取失败。",
+      "error_tag": "故障原因混淆",
+      "variant_group": "k8s_故障排查"
+    },
+    {
+      "kp": "arch.cloud.k8s",
+      "type": "single_choice",
+      "question": "某团队希望根据 CPU 使用率自动调整 Deployment 的副本数。下列哪种对象最合适？",
+      "options": [
+        "VerticalPodAutoscaler",
+        "HorizontalPodAutoscaler",
+        "ClusterAutoscaler",
+        "PodDisruptionBudget"
+      ],
+      "answer": 1,
+      "explanation": "HPA 根据指标（如 CPU 利用率）调整副本数量；VPA 调整单 Pod 的资源请求，ClusterAutoscaler 调整节点数量，PDB 用于限制自愿中断时的可用副本数。",
+      "error_tag": "扩缩容机制混淆",
+      "variant_group": "k8s_弹性伸缩"
+    },
+    {
+      "kp": "arch.cloud.k8s",
+      "type": "single_choice",
+      "question": "下列关于 Kubernetes 中 Namespace 的描述，哪一项正确？",
+      "options": [
+        "Namespace 提供一种在集群内对资源进行逻辑隔离和分组的方式",
+        "Namespace 可以隔离网络流量，禁止跨 Namespace 通信",
+        "Namespace 能为其中的 Pod 提供独立的 CPU 和内存配额，无需 ResourceQuota",
+        "Namespace 只能由集群管理员创建，普通用户无法使用"
+      ],
+      "answer": 0,
+      "explanation": "Namespace 是逻辑隔离与分组手段，默认不限制跨 Namespace 通信，也不会自动限制资源；资源配额需通过 ResourceQuota/LimitRange 显式设置。",
+      "error_tag": "隔离机制误解",
+      "variant_group": "k8s_命名空间与隔离"
+    },
+    {
+      "kp": "arch.cloud.k8s",
+      "type": "single_choice",
+      "question": "某团队希望限制某个 Namespace 中所有 Pod 能使用的 CPU 和内存总量。下列哪种对象最合适？",
+      "options": [
+        "NetworkPolicy",
+        "ResourceQuota",
+        "PodSecurityPolicy",
+        "ServiceAccount"
+      ],
+      "answer": 1,
+      "explanation": "ResourceQuota 可对 Namespace 内的资源总量（如 requests.cpu、limits.memory）或对象数量进行限制；NetworkPolicy 控制网络，PodSecurityPolicy/Pod Security Admission 控制安全上下文，ServiceAccount 用于身份。",
+      "error_tag": "配额机制混淆",
+      "variant_group": "k8s_命名空间与隔离"
+    },
+    {
+      "kp": "arch.cloud.k8s",
+      "type": "single_choice",
+      "question": "某团队希望默认拒绝某个 Namespace 内 Pod 的出站流量，只允许访问特定的数据库 Pod。下列哪种对象可以实现？",
+      "options": [
+        "Ingress",
+        "NetworkPolicy",
+        "Service",
+        "ConfigMap"
+      ],
+      "answer": 1,
+      "explanation": "NetworkPolicy 定义 Pod 级别的入站/出站规则，可实现默认拒绝并按标签放行；Ingress 是七层入站路由，Service 是负载均衡抽象，ConfigMap 用于配置。",
+      "error_tag": "网络策略概念混淆",
+      "variant_group": "k8s_网络策略"
+    },
+    {
+      "kp": "arch.cloud.k8s",
+      "type": "single_choice",
+      "question": "某 Pod 需要使用 PersistentVolumeClaim 挂载持久化存储。下列哪一项描述了 PVC 与 PV 的正确关系？",
+      "options": [
+        "PVC 是存储资源的声明，PV 是实际存储资源，二者通过绑定关联",
+        "PVC 是节点上的本地磁盘，PV 是云上的对象存储",
+        "PVC 只能由管理员手动创建，PV 由应用自动创建",
+        "PVC 和 PV 是同一个概念的不同叫法"
+      ],
+      "answer": 0,
+      "explanation": "PVC 表达用户对存储的需求（容量、访问模式），PV 是集群中实际可用的存储资源，二者通过 StorageClass 动态供给或静态绑定关联；Pod 通过 PVC 使用存储。",
+      "error_tag": "存储模型混淆",
+      "variant_group": "k8s_存储"
+    },
+    {
+      "kp": "arch.cloud.k8s",
+      "type": "single_choice",
+      "question": "以下哪个 Kubernetes 对象最适合表示“每个节点上都必须运行一份”的日志采集代理？",
+      "options": [
+        "Deployment",
+        "StatefulSet",
+        "DaemonSet",
+        "Job"
+      ],
+      "answer": 2,
+      "explanation": "DaemonSet 保证每个（符合条件的）节点上运行一个 Pod 副本，常用于日志、监控、网络插件等节点级代理；Deployment 副本数按期望值分布，StatefulSet 用于有状态应用，Job 用于一次性任务。",
+      "error_tag": "工作负载选型错误",
+      "variant_group": "k8s_工作负载对象"
+    },
+    {
+      "kp": "arch.cloud.k8s",
+      "type": "single_choice",
+      "question": "某有状态数据库要求每个副本拥有稳定的网络标识和独立的持久化存储。下列哪种工作负载最合适？",
+      "options": [
+        "Deployment",
+        "StatefulSet",
+        "DaemonSet",
+        "CronJob"
+      ],
+      "answer": 1,
+      "explanation": "StatefulSet 为每个 Pod 提供稳定的序号、稳定的网络标识和独立的 PVC；Deployment 的 Pod 名称和存储不保证稳定，DaemonSet 面向节点级守护进程，CronJob 面向定时任务。",
+      "error_tag": "工作负载选型错误",
+      "variant_group": "k8s_工作负载对象"
+    },
+    {
+      "kp": "arch.cloud.k8s",
+      "type": "single_choice",
+      "question": "下列关于 Pod 的说法，哪一项是正确的？",
+      "options": [
+        "Pod 是 Kubernetes 中最小的可调度单元，可包含一个或多个共享网络命名空间的容器",
+        "Pod 中的多个容器默认各自拥有独立的 IP 地址，需要 Service 才能互通",
+        "Pod 一旦创建就不可被删除，只能通过重启来更新",
+        "Pod 必须由 Deployment 创建，不能单独创建"
+      ],
+      "answer": 0,
+      "explanation": "Pod 是最小调度单元，同一 Pod 内多个容器共享网络命名空间（同一 IP、可通过 localhost 互访）和存储卷；Pod 可以单独创建（如 kubectl run），删除后由控制器决定是否重建。",
+      "error_tag": "概念误解",
+      "variant_group": "k8s_Pod基础"
+    },
+    {
+      "kp": "arch.cloud.k8s",
+      "type": "single_choice",
+      "question": "在同一个 Pod 中运行两个容器，它们互相访问对方监听的端口时，通常应该使用什么地址？",
+      "options": [
+        "对方的 Pod IP",
+        "localhost 或 127.0.0.1",
+        "Service 的 ClusterIP",
+        "节点的 NodePort"
+      ],
+      "answer": 1,
+      "explanation": "同一 Pod 内多个容器共享网络命名空间，因此可以直接通过 localhost 访问彼此端口；Pod IP 也是同一个，但从容器内部通常直接用 localhost 最直观。",
+      "error_tag": "网络模型误解",
+      "variant_group": "k8s_Pod基础"
+    },
+    {
+      "kp": "arch.cloud.k8s",
+      "type": "single_choice",
+      "question": "某应用需要把配置文件以文件形式挂载到容器内，并希望在配置变更时无需重新构建镜像。下列哪种做法最合适？",
+      "options": [
+        "把配置硬编码进容器镜像的 ENTRYPOINT",
+        "使用 ConfigMap 挂载为卷或环境变量",
+        "使用 Secret 存储普通文本配置",
+        "把配置写入节点上的 /etc/hosts"
+      ],
+      "answer": 1,
+      "explanation": "ConfigMap 用于存储非敏感配置，可以以卷或环境变量方式注入；Secret 适合敏感数据；硬编码和修改节点文件都不利于可移植与变更管理。",
+      "error_tag": "配置管理混淆",
+      "variant_group": "k8s_配置与密钥"
+    },
+    {
+      "kp": "arch.cloud.k8s",
+      "type": "single_choice",
+      "question": "下列哪一项最适合使用 Secret 而不是 ConfigMap 来保存？",
+      "options": [
+        "应用的日志级别",
+        "数据库连接的用户名和密码",
+        "前端的静态页面路径",
+        "服务的监听端口号"
+      ],
+      "answer": 1,
+      "explanation": "Secret 用于保存密码、令牌、密钥等敏感信息，默认以 base64 编码存储并可配合加密；其他选项属于普通配置，可用 ConfigMap。",
+      "error_tag": "敏感信息处理不当",
+      "variant_group": "k8s_配置与密钥"
+    },
+    {
+      "kp": "arch.cloud.k8s",
+      "type": "single_choice",
+      "question": "某服务后端有 3 个 Pod 副本，前端需要以稳定地址访问它们。下列哪种对象能提供稳定的虚拟 IP 并在后端 Pod 之间做负载均衡？",
+      "options": [
+        "Ingress",
+        "Service",
+        "PersistentVolume",
+        "HorizontalPodAutoscaler"
+      ],
+      "answer": 1,
+      "explanation": "Service 为一组 Pod 提供稳定的 ClusterIP/域名并做四层负载均衡；Ingress 提供七层 HTTP 路由（通常仍需 Service 作为后端），PV 是存储资源，HPA 负责扩缩。",
+      "error_tag": "服务暴露方式混淆",
+      "variant_group": "k8s_服务发现与暴露"
+    },
+    {
+      "kp": "arch.cloud.k8s",
+      "type": "single_choice",
+      "question": "某团队希望通过一个域名和路径规则把外部 HTTP 流量路由到不同的后端 Service。下列哪种对象最合适？",
+      "options": [
+        "ClusterIP Service",
+        "NodePort Service",
+        "Ingress",
+        "NetworkPolicy"
+      ],
+      "answer": 2,
+      "explanation": "Ingress 定义基于主机名和路径的七层路由规则；ClusterIP 仅集群内可达，NodePort 在节点端口暴露四层服务，NetworkPolicy 用于 Pod 间访问控制。",
+      "error_tag": "服务暴露方式混淆",
+      "variant_group": "k8s_服务发现与暴露"
+    },
+    {
+      "kp": "arch.cloud.gpu_scheduling",
+      "type": "single_choice",
+      "question": "在 GPU 集群调度中，某训练任务请求 4 张 GPU，但集群中每个节点只有 2 张 GPU，且调度器不支持跨节点组合分配（gang scheduling 之外的处理）。最可能导致的结果是什么？",
+      "options": [
+        "任务被拆分到两个节点上，各用 2 张 GPU，正常启动",
+        "任务一直处于 pending 状态，无法获得满足条件的资源",
+        "任务自动降级为使用 2 张 GPU 运行",
+        "调度器会自动扩容节点以满足请求"
+      ],
+      "answer": 1,
+      "explanation": "当调度器要求任务的所有资源在单一节点上满足（如 GPU 亲和/拓扑约束），而任何单节点都无法提供 4 张 GPU 时，任务无法被放置，会持续 pending。除非有 gang scheduling 或跨节点组合机制，否则不会自动拆分或降级。",
+      "error_tag": "概念混淆",
+      "variant_group": "gpu_scheduling_resource_fit"
+    },
+    {
+      "kp": "arch.cloud.gpu_scheduling",
+      "type": "single_choice",
+      "question": "关于 GPU 调度中的「拓扑感知（topology-aware）」，下列描述最准确的是？",
+      "options": [
+        "它只关心 GPU 的数量，不关心 GPU 之间的连接方式",
+        "它关注 GPU 之间以及 GPU 与 CPU/NIC 之间的连接带宽与延迟，以决定放置位置",
+        "它要求所有任务必须使用全部 GPU",
+        "它只在任务运行结束后才生效"
+      ],
+      "answer": 1,
+      "explanation": "拓扑感知调度关注 GPU 间（如 NVLink/NVSwitch）以及 GPU 与 CPU、网卡之间的连接关系，目标是让通信密集的任务获得高带宽、低延迟的放置。它并不只是数量匹配。",
+      "error_tag": "概念混淆",
+      "variant_group": "gpu_scheduling_topology"
+    },
+    {
+      "kp": "arch.cloud.gpu_scheduling",
+      "type": "single_choice",
+      "question": "在 GPU 调度中，下列哪项通常不属于调度器需要掌握的节点信息？",
+      "options": [
+        "节点上 GPU 的数量与型号",
+        "GPU 的当前使用率与显存占用",
+        "节点上运行的 Python 进程的源代码内容",
+        "节点与节点之间的网络带宽"
+      ],
+      "answer": 2,
+      "explanation": "调度器需要硬件资源、使用状态、网络拓扑等信息来决策，但不需要也不应获取用户进程的源代码内容。",
+      "error_tag": "概念混淆",
+      "variant_group": "gpu_scheduling_节点信息"
+    },
+    {
+      "kp": "arch.cloud.gpu_scheduling",
+      "type": "single_choice",
+      "question": "关于「GPU 亲和性（affinity）」调度，下列描述正确的是？",
+      "options": [
+        "亲和性表示任务必须使用 GPU，不能使用 CPU",
+        "亲和性表示任务对 GPU 的放置位置有偏好或约束，例如尽量使用同一节点或同一 NUMA 域",
+        "亲和性表示任务只能使用一张 GPU",
+        "亲和性只在任务失败后生效"
+      ],
+      "answer": 1,
+      "explanation": "GPU 亲和性是对放置位置的偏好/约束，如尽量同节点、同 NUMA、同 NVLink 域，以提升性能。它与任务是否使用 CPU 无关。",
+      "error_tag": "概念混淆",
+      "variant_group": "gpu_scheduling_亲和性"
+    },
+    {
+      "kp": "arch.cloud.gpu_scheduling",
+      "type": "multi_choice",
+      "question": "在设计一个 GPU 调度策略时，下列哪些因素通常需要被考虑？（多选）",
+      "options": [
+        "任务请求的 GPU 数量与型号",
+        "GPU 之间的互联拓扑（如 NVLink）",
+        "任务的优先级与抢占策略",
+        "任务作者的姓名",
+        "集群的公平性与配额"
+      ],
+      "answer": [
+        0,
+        1,
+        2,
+        4
+      ],
+      "explanation": "调度需要考虑资源请求、拓扑、优先级/抢占、公平性与配额等。任务作者姓名与调度决策无关。",
+      "error_tag": "记忆缺失",
+      "variant_group": "gpu_scheduling_考虑因素"
+    },
+    {
+      "kp": "arch.cloud.gpu_scheduling",
+      "type": "multi_choice",
+      "question": "下列哪些做法有助于缓解 GPU 集群中的资源碎片问题？（多选）",
+      "options": [
+        "采用装箱（bin-packing）策略，把任务集中到尽量少的节点",
+        "引入 gang scheduling 保证整组任务原子分配",
+        "允许 GPU 共享与细粒度切分",
+        "让所有任务随机分配到任意节点，不做整理",
+        "支持资源回收与重调度"
+      ],
+      "answer": [
+        0,
+        1,
+        2,
+        4
+      ],
+      "explanation": "装箱减少分散、gang scheduling 保证整组可获得、共享与切分提高利用率、回收与重调度整理资源，都有助于缓解碎片。随机分配通常加剧碎片。",
+      "error_tag": "概念混淆",
+      "variant_group": "gpu_scheduling_碎片缓解"
+    },
+    {
+      "kp": "arch.cloud.gpu_scheduling",
+      "type": "multi_choice",
+      "question": "关于 GPU 调度中的抢占，下列说法正确的有？（多选）",
+      "options": [
+        "抢占可以释放资源给更高优先级的任务",
+        "抢占一定不会影响被抢占任务的进度",
+        "被抢占任务通常需要保存检查点或重新排队",
+        "抢占策略需要考虑公平性和饥饿问题"
+      ],
+      "answer": [
+        0,
+        2,
+        3
+      ],
+      "explanation": "抢占用于让高优先级任务获得资源；被抢占任务通常需要检查点或重新排队，因此会影响进度；设计时需考虑公平与饥饿。选项 B 说「一定不会影响」是错误的。",
+      "error_tag": "概念混淆",
+      "variant_group": "gpu_scheduling_抢占"
+    },
+    {
+      "kp": "arch.cloud.gpu_scheduling",
+      "type": "multi_choice",
+      "question": "在多租户 GPU 集群中，下列哪些机制常用于实现公平性？（多选）",
+      "options": [
+        "按团队设置 GPU 配额",
+        "使用加权公平队列或份额制",
+        "允许任意用户无限占用所有 GPU",
+        "对长时间占用不释放的任务进行限制或回收"
+      ],
+      "answer": [
+        0,
+        1,
+        3
+      ],
+      "explanation": "配额、加权公平、对长期占用进行限制都有助于公平。允许任意用户无限占用会破坏公平性，不是公平机制。",
+      "error_tag": "概念混淆",
+      "variant_group": "gpu_scheduling_公平性"
+    },
+    {
+      "kp": "arch.cloud.gpu_scheduling",
+      "type": "fill_blank",
+      "question": "在 GPU 调度中，当一组相互依赖的任务必须同时获得资源才能启动，否则会互相等待造成死锁，这种调度方式称为______调度。",
+      "options": [],
+      "answer": [
+        "gang scheduling",
+        "gang",
+        "成组调度",
+        "帮派调度"
+      ],
+      "explanation": "gang scheduling（成组调度）保证一组任务原子性地获得资源，全部启动或都不启动，避免部分启动导致的死锁。",
+      "error_tag": "记忆缺失",
+      "variant_group": "gpu_scheduling_gang_scheduling"
+    },
+    {
+      "kp": "arch.cloud.gpu_scheduling",
+      "type": "fill_blank",
+      "question": "调度器把新任务优先放到当前 GPU 使用率最低的节点，这种策略的目标是______。",
+      "options": [],
+      "answer": [
+        "负载均衡",
+        "load balancing",
+        "均衡负载",
+        "平衡负载"
+      ],
+      "explanation": "优先选择空闲节点是为了让各节点负载尽量均衡，属于负载均衡策略。",
+      "error_tag": "概念混淆",
+      "variant_group": "gpu_scheduling_负载均衡"
+    },
+    {
+      "kp": "arch.cloud.gpu_scheduling",
+      "type": "code_reading",
+      "question": "某调度伪代码：\n```\nif task.gpu_request <= node.free_gpu:\n    place(task, node)\nelse:\n    pending(task)\n```\n如果集群每个节点只有 2 张 GPU，而某任务请求 4 张 GPU，问该任务最终会处于什么状态？为什么？",
+      "options": [],
+      "answer": "任务会一直处于 pending 状态。因为对每个节点都有 task.gpu_request(4) > node.free_gpu(最多2)，条件始终不成立，place 不会执行，只能 pending。",
+      "explanation": "该伪代码只在单节点内检查是否满足请求，没有任何跨节点组合逻辑，所以请求量超过单节点容量时永远无法被放置。",
+      "error_tag": "边界错误",
+      "variant_group": "gpu_scheduling_resource_fit"
+    },
+    {
+      "kp": "arch.cloud.gpu_scheduling",
+      "type": "scenario",
+      "question": "你的团队在一个共享 GPU 集群上运行分布式训练。最近发现：许多任务排队很久，但集群 GPU 利用率并不高；同时有些大任务因为总是等不到足够连续 GPU 而长期 pending。请分析可能原因，并给出至少两条改进调度策略的建议。",
+      "options": [],
+      "answer": null,
+      "explanation": "排队久但利用率低通常说明资源碎片严重：空闲 GPU 分散，无法满足需要同节点/连续 GPU 的大任务。改进方向包括：采用 gang scheduling 保证整组原子分配；使用装箱策略减少分散；引入 GPU 共享/切分提高利用率；设置配额与抢占保证公平并回收长期占用资源；考虑拓扑感知放置。",
+      "error_tag": "概念混淆",
+      "variant_group": "gpu_scheduling_综合场景",
+      "required_keywords": [
+        "资源碎片",
+        "gang scheduling",
+        "装箱策略",
+        "GPU 共享",
+        "拓扑感知"
+      ]
+    },
+    {
+      "kp": "arch.cloud.gpu_scheduling",
+      "type": "single_choice",
+      "question": "某调度器采用「best-effort」策略分配 GPU。下列哪一项最符合该策略的特征？",
+      "options": [
+        "严格保证每个任务都能在指定时间内获得 GPU",
+        "优先把 GPU 分配给优先级最高的大任务",
+        "任务可能被抢占或延迟，资源分配不作强保证",
+        "只允许一个任务使用所有 GPU"
+      ],
+      "answer": 2,
+      "explanation": "best-effort 意味着调度器尽力分配资源，但不提供硬性保证，任务可能被抢占、排队或延迟。这与强保证（如预留、配额）相对。",
+      "error_tag": "概念混淆",
+      "variant_group": "gpu_scheduling_策略语义"
+    },
+    {
+      "kp": "arch.cloud.gpu_scheduling",
+      "type": "single_choice",
+      "question": "关于「GPU 共享」的调度方式，下列说法正确的是？",
+      "options": [
+        "一块物理 GPU 在任何情况下都不能被多个进程同时使用",
+        "GPU 共享只能通过时间片轮转实现，不能做显存隔离",
+        "GPU 共享可以通过时间分片或显存/计算切分实现，调度器需要跟踪实际使用量",
+        "GPU 共享会使任务无法使用 CUDA"
+      ],
+      "answer": 2,
+      "explanation": "GPU 共享可实现方式包括时间分片（如 MPS、时间片轮转）和资源切分（如 MIG、显存配额）。调度器需要跟踪每块 GPU 的实际使用情况才能正确共享。",
+      "error_tag": "概念混淆",
+      "variant_group": "gpu_scheduling_共享"
+    },
+    {
+      "kp": "arch.cloud.gpu_scheduling",
+      "type": "single_choice",
+      "question": "在支持抢占的 GPU 调度中，一个低优先级任务正在运行，此时高优先级任务到达且资源不足。最合理的调度行为是？",
+      "options": [
+        "永远不抢占，高优先级任务一直等待",
+        "可以抢占低优先级任务，释放 GPU 后分配给高优先级任务",
+        "直接杀死所有低优先级任务，无论资源是否够用",
+        "把高优先级任务也排到队尾"
+      ],
+      "answer": 1,
+      "explanation": "抢占式调度允许高优先级任务抢占低优先级任务的资源。合理做法是仅抢占足够满足高优先级任务的资源，而非无差别杀死所有低优先级任务。",
+      "error_tag": "边界错误",
+      "variant_group": "gpu_scheduling_抢占"
+    },
+    {
+      "kp": "arch.cloud.gpu_scheduling",
+      "type": "single_choice",
+      "question": "「gang scheduling」（成组调度）在 GPU 集群中的主要目的是？",
+      "options": [
+        "让每个任务单独运行以节省显存",
+        "保证一组相互依赖的任务要么全部同时启动，要么都不启动，避免死锁和资源浪费",
+        "只调度 CPU 任务，不调度 GPU 任务",
+        "让任务按到达顺序串行执行"
+      ],
+      "answer": 1,
+      "explanation": "在分布式训练中，多个 worker 需要同时启动才能通信。gang scheduling 保证整组任务原子性地获得资源，避免部分启动导致互相等待而死锁。",
+      "error_tag": "概念混淆",
+      "variant_group": "gpu_scheduling_gang_scheduling"
+    },
+    {
+      "kp": "arch.cloud.gpu_scheduling",
+      "type": "single_choice",
+      "question": "某集群中节点 A 的 GPU 使用率为 90%，节点 B 为 10%。调度器把新任务优先放到节点 B。这最可能体现了哪种调度目标？",
+      "options": [
+        "最大化单节点利用率",
+        "负载均衡",
+        "最小化任务数量",
+        "固定绑定到节点 A"
+      ],
+      "answer": 1,
+      "explanation": "把新任务优先放到空闲节点是为了均衡各节点负载，避免热点节点过载，属于负载均衡策略。",
+      "error_tag": "概念混淆",
+      "variant_group": "gpu_scheduling_负载均衡"
+    },
+    {
+      "kp": "arch.cloud.gpu_scheduling",
+      "type": "single_choice",
+      "question": "关于 GPU 调度中的「配额（quota）」，下列理解正确的是？",
+      "options": [
+        "配额表示任务必须使用的 GPU 数量",
+        "配额是对某用户/团队可占用 GPU 总量的上限限制",
+        "配额一旦设置就不能修改",
+        "配额只对 CPU 有效，对 GPU 无效"
+      ],
+      "answer": 1,
+      "explanation": "配额是资源占用的上限约束，用于多租户场景中限制某用户或团队最多能占用的 GPU 数量，与任务实际请求量是不同概念。",
+      "error_tag": "概念混淆",
+      "variant_group": "gpu_scheduling_配额"
+    },
+    {
+      "kp": "arch.cloud.gpu_scheduling",
+      "type": "single_choice",
+      "question": "在某 GPU 调度系统中，任务声明需要 1 张 GPU，但实际运行时显存占用很低。调度器若按「声明量」而非「实际使用量」计费/统计，最可能出现什么问题？",
+      "options": [
+        "没有任何影响",
+        "导致 GPU 利用率统计偏高，其他任务难以共享空闲显存",
+        "导致任务无法启动",
+        "导致 GPU 数量变多"
+      ],
+      "answer": 1,
+      "explanation": "按声明量统计会高估实际占用，导致显存未被充分利用，其他任务可能因配额或可用量判断而被拒绝，降低整体利用率。区分声明量与实际使用量是共享调度的关键。",
+      "error_tag": "边界错误",
+      "variant_group": "gpu_scheduling_声明量与实际使用量"
+    },
+    {
+      "kp": "arch.cloud.gpu_scheduling",
+      "type": "single_choice",
+      "question": "下列哪一项最可能是 GPU 调度中「资源碎片（fragmentation）」的表现？",
+      "options": [
+        "集群中有 8 张空闲 GPU，但分散在 8 个节点上，无法满足一个需要 8 张同节点 GPU 的任务",
+        "集群中所有 GPU 都被一个任务占用",
+        "某节点没有安装 GPU 驱动",
+        "任务使用了比请求更多的 CPU"
+      ],
+      "answer": 0,
+      "explanation": "资源碎片指空闲资源被分散在多个位置，单个位置都无法满足需要连续/同机资源的任务，导致总空闲量足够但无法分配。",
+      "error_tag": "概念混淆",
+      "variant_group": "gpu_scheduling_碎片"
+    }
+  ]
+}

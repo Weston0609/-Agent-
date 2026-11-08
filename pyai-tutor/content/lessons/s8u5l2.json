@@ -1,0 +1,615 @@
+{
+  "id": "s8u5l2",
+  "title": "s8u5l2",
+  "kps": [
+    "arch.sys.agent_platform",
+    "arch.sys.eval_platform"
+  ],
+  "theory": "## arch.sys.agent_platform\n\n# Agent 平台（Agent Platform）：从零到工程级\n\n> **一句话直觉**：Agent 平台就是把“会思考的 LLM（大语言模型）+ 会动手的工具 + 会协作的流程”打包成一个可部署、可扩展、可观测的服务系统——它让 AI 从“聊天框”走进“真实业务”。\n\n---\n\n## 0. 学习地图\n\n本节 40 分钟，按 5 个小节循序渐进：\n\n1. **什么是 Agent（智能体）** —— 从“会说话”到“会做事”\n2. **Agent 的解剖结构** —— LLM + 工具 + 记忆 + 规划\n3. **单 Agent 最小可运行实现** —— 一个能查天气、做算术的 Agent\n4. **从单 Agent 到 Agent 平台** —— 注册中心、运行时、可观测性\n5. **工程化关键：类型、协议与安全边界** —— 让平台可维护、可防错\n\n最后配一个本地可完成的动手练习。\n\n---\n\n## 1. 什么是 Agent？\n\n**Agent（智能体）** 是一个能感知环境、做决策、并调用工具去改变环境的程序。和普通函数不同：\n\n- 普通函数：输入 → 固定输出。\n- Agent：输入 → **思考 → 选工具 → 执行 → 观察结果 → 再思考** → 输出。\n\n这个循环叫 **Agent Loop（智能体循环）**，也叫 **ReAct（Reason + Act，推理+行动）**。\n\n```python\n# 01_agent_loop.py\n# 用最朴素的方式演示 Agent Loop 的骨架（无需真实 LLM）\n\ndef fake_llm(prompt: str) -> str:\n    \"\"\"模拟一个 LLM：看到 'weather' 就决定用天气工具。\"\"\"\n    if \"weather\" in prompt.lower():\n        return \"TOOL:get_weather(Beijing)\"\n    return \"ANSWER: 我不知道。\"\n\ndef get_weather(city: str) -> str:\n    \"\"\"一个普通工具（Tool）：查询天气。\"\"\"\n    return f\"{city} 今天晴，25°C\"\n\nTOOLS = {\"get_weather\": get_weather}\n\ndef run_agent(user_input: str) -> str:\n    \"\"\"Agent Loop：最多迭代 3 次。\"\"\"\n    scratchpad = user_input\n    for _ in range(3):\n        decision = fake_llm(scratchpad)\n        if decision.startswith(\"TOOL:\"):\n            call = decision[len(\"TOOL:\"):]\n            name = call.split(\"(\")[0]\n            arg = call.split(\"(\")[1].rstrip(\")\")\n            observation = TOOLS[name](arg)   # 执行工具\n            scratchpad += f\"\\n观察：{observation}\"\n        else:\n            return decision[len(\"ANSWER:\"):].strip()\n    return \"达到最大迭代次数\"\n\nprint(run_agent(\"Beijing weather?\"))\n```\n\n**结论**：Agent 的本质就是“LLM 决策 + 工具执行 + 循环反馈”。\n\n---\n\n## 2. Agent 的四大解剖件\n\n一个工程级 Agent 通常由四部分组成：\n\n| 组件 | 英文 | 作用 |\n|---|---|---|\n| 大脑 | LLM | 决策、理解、生成 |\n| 手脚 | Tool / Function | 真实世界里做事 |\n| 记忆 | Memory | 短期（对话）、长期（向量库） |\n| 规划 | Planner | 拆任务、定步骤 |\n\n我们用一个带 **类型注解（type hint）** 的 `Tool` 数据类来统一描述“手脚”：\n\n```python\n# 02_tool_spec.py\nfrom dataclasses import dataclass\nfrom typing import Callable, Any\n\n@dataclass\nclass ToolSpec:\n    \"\"\"描述一个工具：名字、说明、参数类型、实现函数。\"\"\"\n    name: str\n    description: str            # 给 LLM 看的自然语言说明\n    input_schema: dict          # JSON Schema，约束参数\n    func: Callable[..., Any]\n\n    def invoke(self, **kwargs) -> Any:\n        return self.func(**kwargs)\n\ndef add(a: float, b: float) -> float:\n    return a + b\n\nadd_tool = ToolSpec(\n    name=\"add\",\n    description=\"计算两个数之和\",\n    input_schema={\n        \"type\": \"object\",\n        \"properties\": {\"a\": {\"type\": \"number\"}, \"b\": {\"type\": \"number\"}},\n        \"required\": [\"a\", \"b\"],\n    },\n    func=add,\n)\n\nprint(add_tool.invoke(a=1.5, b=2.5))   # 4.0\n```\n\n**结论**：工具的元信息（名字 + 说明 + Schema）是 Agent 平台能“自动选择工具”的基础。\n\n---\n\n## 3. 单 Agent 最小可运行实现\n\n现在把前面两部分拼起来：一个能**查天气、做算术**的小 Agent。为了不依赖外部 API，我们用规则模拟 LLM 决策；理解后你可以换成真实 LLM。\n\n```python\n# 03_mini_agent.py\nimport re\nfrom typing import Any\n\n# ---------- 工具 ----------\ndef get_weather(city: str) -> str:\n    return f\"{city} 今天晴，25°C\"\n\ndef add(a: float, b: float) -> float:\n    return a + b\n\nTOOLS = {\"get_weather\": get_weather, \"add\": add}\n\n# ---------- 模拟 LLM ----------\ndef decide(query: str) -> str:\n    \"\"\"返回 'tool:<name>|<json-ish args>' 或 'final:<text>'。\"\"\"\n    if \"weather\" in query.lower():\n        city = re.search(r\"in\\s+(\\w+)\", query)\n        return f\"tool:get_weather|{city.group(1) if city else 'Beijing'}\"\n    m = re.search(r\"(\\d+)\\s*\\+\\s*(\\d+)\", query)\n    if m:\n        return f\"tool:add|{m.group(1)},{m.group(2)}\"\n    return \"final:我可以帮你查天气或做加法。\"\n\ndef execute(command: str) -> Any:\n    if command.startswith(\"tool:\"):\n        name, args = command[len(\"tool:\"):].split(\"|\")\n        if name == \"get_weather\":\n            return TOOLS[name](args)\n        if name == \"add\":\n            a, b = args.split(\",\")\n            return TOOLS[name](float(a), float(b))\n    return None\n\ndef agent(query: str) -> str:\n    scratchpad = query\n    for _ in range(3):\n        cmd = decide(scratchpad)\n        if cmd.startswith(\"final:\"):\n            return cmd[len(\"final:\"):]\n        obs = execute(cmd)\n        scratchpad += f\"\\n观察：{obs}\"\n    return \"超时\"\n\nprint(agent(\"weather in Shanghai\"))   # Shanghai 今天晴，25°C\nprint(agent(\"3 + 4\"))                 # 观察：7.0  → 最终会走 final?\n```\n\n**结论**：一个 Agent 最少只需要 **工具表 + 决策函数 + 循环**。\n\n---\n\n## 4. 从单 Agent 到 Agent 平台\n\n单机脚本只能玩；要上生产，就要 **Agent Platform（智能体平台）**。平台化的核心是三件事：\n\n1. **注册中心（Registry）**：统一登记所有 Agent 和 Tool。\n2. **运行时（Runtime）**：执行 Agent Loop，管理超时、重试、并发。\n3. **可观测性（Observability）**：记录每一步的输入输出，方便调试和审计。\n\n下面是最小“平台”的样子：\n\n```python\n# 04_platform.py\nfrom typing import Callable, Any\nimport time, logging\n\nlogging.basicConfig(level=logging.INFO, format=\"%(asctime)s [%(levelname)s] %(message)s\")\n\nclass AgentPlatform:\n    \"\"\"极简 Agent 平台：支持注册 Agent 并调用，附带日志。\"\"\"\n    def __init__(self):\n        self._agents: dict[str, Callable[[str], str]] = {}\n\n    def register(self, name: str):\n        def deco(fn: Callable[[str], str]):\n            self._agents[name] = fn\n            logging.info(f\"注册 Agent: {name}\")\n            return fn\n        return deco\n\n    def run(self, name: str, query: str) -> str:\n        if name not in self._agents:\n            raise KeyError(f\"Agent 不存在: {name}\")\n        start = time.time()\n        try:\n            result = self._agents[name](query)\n            logging.info(f\"Agent={name} 耗时={time.time()-start:.3f}s\")\n            return result\n        except Exception as e:\n            logging.error(f\"Agent={name} 失败: {e}\")\n            raise\n\nplatform = AgentPlatform()\n\n@platform.register(\"mini\")\ndef mini_agent(query: str) -> str:\n    return f\"echo: {query}\"\n\nprint(platform.run(\"mini\", \"hello platform\"))\n```\n\n**结论**：平台的价值 = **统一注册 + 受控运行 + 可观测日志**。\n\n---\n\n## 5. 工程化关键：类型、协议与安全\n\n上生产最容易出问题的三点：\n\n- **参数类型对不上**：LLM 给工具的参数是字符串，工具却要 int。→ 用类型注解 + 校验。\n- **调用越权**：LLM 编出工具名 `delete_all`。→ 只能在注册表中查找，白名单机制。\n- **不返回**：函数报错、死循环。→ 用 `Never` / `NoReturn` 标注不可返回路径，并设置最大迭代次数。\n\n```python\n# 05_safe_tool.py\nfrom typing import Callable, Never, Any\n\ndef _abort(msg: str) -> Never:\n    \"\"\"永远不返回；用于标注非法路径。\"\"\"\n    raise ValueError(msg)\n\nREGISTRY: dict[str, Callable[..., Any]] = {}\n\ndef register(name: str):\n    def deco(fn):\n        REGISTRY[name] = fn\n        return fn\n    return deco\n\n@register(\"mul\")\ndef mul(a: int, b: int) -> int:\n    return a * b\n\ndef safe_invoke(name: str, **kwargs) -> Any:\n    if name not in REGISTRY:\n        _abort(f\"工具未注册: {name}\")   # 白名单\n    fn = REGISTRY[name]\n    # 简单类型校验\n    for k, v in kwargs.items():\n        expected = fn.__annotations__.get(k)\n        if expected is int and not isinstance(v, int):\n            _abort(f\"参数 {k} 期望 int，得到 {type(v).__name__}\")\n    return fn(**kwargs)\n\nprint(safe_invoke(\"mul\", a=2, b=3))          # 6\n# safe_invoke(\"delete_all\")                    # 抛 ValueError\n# safe_invoke(\"mul\", a=\"2\", b=3)               # 抛 ValueError\n```\n\n**结论**：类型注解和 `Never` 让“非法路径”在运行前就能被静态检查器抓出来，平台更稳。\n\n---\n\n## 6. 动手练习\n\n**任务**：实现一个名为 `calc_agent` 的 Agent，注册到 `AgentPlatform`，让它支持：\n\n1. 工具 `add`、`mul`（已注册过，可复用）。\n2. 用户输入形如 `\"3 + 4\"` 或 `\"3 * 4\"`，Agent 自动选择对应工具并返回数值结果。\n3. 通过 `platform.run(\"calc\", \"3 * 4\")` 调用，输出 `12`。\n4. 要求：工具未注册、参数非法时抛出 `ValueError`，不要崩溃整个平台。\n\n**提示**：\n- 用正则 `re.findall(r\"\\d+\", text)` 提取数字。\n- 用运算符 `+` / `*` 决定调用哪个工具。\n- 用第 5 节的 `safe_invoke` 做安全调用。\n\n完成后，你可以再把 `decide` 换成真实的 LLM 调用（如 OpenAI/Claude/本地模型），这个 `calc_agent` 只改一个函数就能跑起来——这正是 Agent 平台的可扩展性。\n\n## arch.sys.eval_platform\n\n# 评估平台（Evaluation Platform）：从零到工程级\n\n> **一句话直觉**：评估平台就是给 AI 系统当\"裁判\"的自动化流水线——它用统一的规则、可复现的流程，对模型、提示词、检索策略等任何会变化的部件打分，让你能从\"我觉得好像变好了\"进化到\"数据证明变好了 3.2%\"。\n\n---\n\n## 0. 为什么零基础也要先学评估平台？\n\nAI 工程和普通软件工程最大的差别是：**输出是概率性的**。同一段提示词（prompt）跑两次结果可能不同。如果没有评估平台（evaluation platform），团队会陷入三种常见困境：\n\n1. **回归无感知**：改了一行系统提示（system prompt），线上效果悄悄变差。\n2. **优化靠玄学**：A/B 两个方案选哪个，全凭\"感觉\"。\n3. **无法协作**：每个人用自己的小脚本跑几个例子，结论互不可比。\n\n评估平台把这些零散动作**标准化、自动化、可追踪**。本节课按四个层次递进：数据 → 指标 → 平台 → 工程化。\n\n---\n\n## 1. 第一层：数据集（Dataset）是最小可复用的评估单元\n\n评估平台的地基不是模型，而是**数据**。一条评估样本（sample / case）通常包含：\n\n- `input`：喂给系统的输入（提示词、用户问题等）\n- `expected`：期望输出（参考答案、期望标签）\n- `metadata`：可选标签（难度、领域、来源），方便切片分析\n\n关键结论：**评估数据集必须是版本化的、不可变的**，否则你今天的分数和昨天的分数无法比较。\n\n```python\n# eval_dataset.py —— 用最朴素的结构定义一份版本化数据集\nfrom dataclasses import dataclass, field\nfrom typing import Any\n\n@dataclass(frozen=True)  # frozen=True 保证样本不可变\nclass EvalSample:\n    id: str                 # 样本唯一标识，回归分析时按 id 对比\n    input: str              # 系统输入\n    expected: Any           # 期望输出（字符串、标签、JSON 都行）\n    metadata: dict = field(default_factory=dict)  # 领域/难度等切片维度\n\n# 一份最小数据集，附带版本号\nDATASET_VERSION = \"2024-06-01.v1\"\n\ndataset = [\n    EvalSample(\"q1\", \"法国的首都是？\", \"巴黎\", {\"domain\": \"geo\"}),\n    EvalSample(\"q2\", \"2+2 等于几？\", \"4\", {\"domain\": \"math\"}),\n    EvalSample(\"q3\", \"水的化学式？\", \"H2O\", {\"domain\": \"chem\"}),\n]\n\n# 关键工程习惯：数据集一旦发布就不能就地修改，只增新版本\nprint(f\"dataset {DATASET_VERSION}: {len(dataset)} cases\")\n```\n\n---\n\n## 2. 第二层：指标（Metric）是可插拔的打分器\n\n指标就是\"给一条样本打多少分\"的函数。工程上务必把指标抽象成**统一接口**，这样平台才能用同一套流水线跑不同指标。\n\n常见指标分三类：\n\n| 类型 | 例子 | 适用场景 |\n|---|---|---|\n| 精确/规则型 | 完全匹配、包含匹配 | 有标准答案 |\n| 语义型 | BLEU、ROUGE、Embedding 相似度 | 文本生成 |\n| 评判型 | 模型打分（LLM-as-a-Judge）| 主观质量、复杂任务 |\n\n关键结论：**指标必须返回结构化结果，而不是布尔值**，因为后续要做聚合、切片、对比。\n\n```python\n# metrics.py —— 把指标抽象成可插拔的 Callable\nfrom typing import Callable, Protocol\nfrom dataclasses import dataclass\n\n@dataclass\nclass MetricResult:\n    score: float        # 归一化到 [0, 1]，方便跨指标聚合\n    passed: bool        # 是否达标，便于统计通过率\n    reason: str = \"\"    # 失败原因，便于人工复核\n\nclass Metric(Protocol):\n    name: str\n    def __call__(self, sample_input: str, prediction: str, expected) -> MetricResult: ...\n\n# 指标 1：精确匹配\ndef exact_match(_, prediction: str, expected) -> MetricResult:\n    ok = prediction.strip() == str(expected).strip()\n    return MetricResult(score=1.0 if ok else 0.0, passed=ok,\n                        reason=\"\" if ok else f\"got={prediction!r} want={expected!r}\")\n\n# 指标 2：关键词包含（对生成式回答更宽容）\ndef contains_keyword(_, prediction: str, expected) -> MetricResult:\n    ok = str(expected).strip() in prediction\n    return MetricResult(score=1.0 if ok else 0.0, passed=ok,\n                        reason=\"\" if ok else \"keyword missing\")\n\n# 指标 3：长度惩罚（示例：不要冗长）\ndef not_too_long(_, prediction: str, expected) -> MetricResult:\n    ok = len(prediction) <= 100\n    return MetricResult(score=1.0 if ok else 0.0, passed=ok,\n                        reason=\"\" if ok else \"too long\")\n\nMETRICS = [exact_match, contains_keyword, not_too_long]\n```\n\n---\n\n## 3. 第三层：Runner（运行器）——把数据 × 指标 × 被测系统组装起来\n\n这是评估平台的核心：**驱动被测系统（System Under Test, SUT）跑完整个数据集，收集每条样本 × 每个指标的得分**。\n\n关键结论：**Runner 必须可复现**。要做到这点：\n- 固定随机种子（seed）\n- 记录被测系统的版本、数据集版本、指标版本\n- 失败样本要被保存下来，便于排查\n\n```python\n# runner.py —— 一个最小可用的评估 Runner\nfrom dataclasses import asdict\nimport json\n\n\ndef run_eval(dataset, sut_fn, metrics, run_meta):\n    \"\"\"sut_fn: 被测系统函数，输入 str 输出 str\n       metrics: 指标列表\n       run_meta: 记录本次评估的上下文（模型名、版本等）\n    \"\"\"\n    records = []\n    for sample in dataset:\n        prediction = sut_fn(sample.input)\n        for metric in metrics:\n            result = metric(sample.input, prediction, sample.expected)\n            records.append({\n                \"sample_id\": sample.id,\n                \"metric\": metric.__name__,\n                \"score\": result.score,\n                \"passed\": result.passed,\n                \"reason\": result.reason,\n                \"prediction\": prediction,\n                \"expected\": sample.expected,\n                **run_meta,\n            })\n    return records\n\n\n# 被测系统：先用一个假模型做演示\n def fake_model(prompt: str) -> str:\n     answers = {\n         \"法国的首都是？\": \"巴黎是法国的首都\",\n         \"2+2 等于几？\": \"4\",\n         \"水的化学式？\": \"不知道\",\n     }\n     return answers.get(prompt, \"\")\n\n\nif __name__ == \"__main__\":\n    records = run_eval(\n        dataset,\n        sut_fn=fake_model,\n        metrics=METRICS,\n        run_meta={\"model\": \"fake-1.0\", \"dataset_version\": DATASET_VERSION},\n    )\n    print(json.dumps(records[:3], ensure_ascii=False, indent=2))\n```\n\n---\n\n## 4. 第四层：聚合与回归对比——平台的\"回答能力\"\n\n收集到原始记录后，评估平台要回答两个问题：\n\n1. **本次跑分怎样？** → 按指标聚合，按 metadata 切片。\n2. **这次改动有没有让结果变差？** → 与基线（baseline）逐样本对比，找出**回归样本（regressions）**。\n\n关键结论：**只看平均分是不够的**。平均分可能掩盖某类样本的严重退化。工程上一定要输出：\n- 总体均分\n- 每个指标的通过率\n- 每个切片（domain / difficulty）的通过率\n- 每条样本相对基线的分数变化\n\n```python\n# aggregate.py —— 聚合 + 相对基线找回归\nfrom collections import defaultdict\n\n\ndef aggregate(records):\n    \"\"\"按指标聚合总分和通过率。\"\"\"\n    by_metric = defaultdict(lambda: {\"n\": 0, \"sum\": 0.0, \"pass\": 0})\n    for r in records:\n        m = by_metric[r[\"metric\"]]\n        m[\"n\"] += 1\n        m[\"sum\"] += r[\"score\"]\n        m[\"pass\"] += int(r[\"passed\"])\n    return {\n        name: {\n            \"avg_score\": v[\"sum\"] / v[\"n\"],\n            \"pass_rate\": v[\"pass\"] / v[\"n\"],\n        }\n        for name, v in by_metric.items()\n    }\n\n\ndef diff_against_baseline(current, baseline):\n    \"\"\"逐样本对比，输出回归列表（current < baseline 的样本）。\"\"\"\n    base_map = {(r[\"sample_id\"], r[\"metric\"]): r[\"score\"] for r in baseline}\n    regressions = []\n    for r in current:\n        key = (r[\"sample_id\"], r[\"metric\"])\n        delta = r[\"score\"] - base_map.get(key, 0.0)\n        if delta < 0:\n            regressions.append({\"sample_id\": r[\"sample_id\"],\n                                \"metric\": r[\"metric\"],\n                                \"delta\": delta,\n                                \"reason\": r[\"reason\"]})\n    return regressions\n\n\nif __name__ == \"__main__\":\n    # 假设 baselines 和 current 已由 run_eval 生成\n    pass\n```\n\n---\n\n## 5. 工程级形态：评估平台该长什么样\n\n把上面的四层放到一起，一个生产级评估平台通常具有这些特征（本节只讲架构，不展开实现）：\n\n| 维度 | 零级脚本 | 工程级平台 |\n|---|---|---|\n| 数据集 | 硬编码在 .py | 版本化存储（DB / 对象存储）+ schema 校验 |\n| 指标 | 内联函数 | 注册中心，可按名引用与组合 |\n| 运行 | 本地 `python eval.py` | 异步任务队列，支持并发、重试、超时 |\n| 存储 | print 到屏幕 | 结构化写入（数据库 / 数据仓库） |\n| 对比 | 手动 diff | 自动与基线对比，生成可视化报告 |\n| 复现 | 靠记忆 | 每次运行记录 model / dataset / metric / code commit |\n| 触发 | 手动 | CI 钩子（回归即阻断合并） |\n\n**判断一个评估平台是否合格的三条线**：\n1. 任意一次历史的评估结果，都能**一键复现**。\n2. 任意一次代码/模型变更，都能在**几分钟内**得到回归报告。\n3. 任意一条失败样本，都能**追溯到**它的输入、输出、期望、命中的指标与原因。\n\n做到这三点，评估平台才算从\"脚本\"晋升为\"平台\"。\n\n---\n\n## 6. 常见误区速查（详见 pitfalls 字段）\n\n- 把训练集和评估集混用\n- 只看平均分，不看切片和单样本回归\n- 指标不可复现（比如用了非固定随机种子）\n- 数据集改了却复用旧版本号\n- 只评估\"成功案例\"，忽略失败样本\n\n---\n\n## 7. 动手练习\n\n**任务**：在一个本地目录下，把上面三份代码整合成一个可运行的最小评估平台，并完成一次回归对比。\n\n具体要求：\n\n1. 新建 `my_eval/` 目录，包含 `dataset.py`、`metrics.py`、`runner.py`、`aggregate.py`。\n2. 数据集包含至少 5 条样本，覆盖 2 个领域（例如 `math` 和 `geo`）。\n3. 实现两个指标：`exact_match` 与 `contains_keyword`。\n4. 写一个 `main.py`，运行两次评估：\n   - **基线（baseline）**：用 `fake_model`（故意答错其中一条）\n   - **当前（current）**：用一个稍好的 `fake_model_v2`（把那条改对）\n5. 调用 `diff_against_baseline`，输出：\n   - 每个指标的 `avg_score`、`pass_rate`\n   - 所有回归样本（`delta < 0`）\n6. 把两次运行的 `run_meta` 打印出来，验证 `model` 字段不同、`dataset_version` 相同。\n\n**验收标准**：`python main.py` 能输出对比报告，且报告里能看出\"当前版本在某条样本上优于基线，无回归\"。\n\n**进阶挑战**：把 `dataset_version` 换成两个不同值，观察 `diff_against_baseline` 会给出什么信号，并思考为什么平台层强制要求数据集版本对齐。\n\n```python\nimport json\nfrom dataclasses import dataclass, field, asdict\nfrom typing import Any, Callable, Protocol\nfrom collections import defaultdict\n\n# ---------- 1. 数据集 ----------\nDATASET_VERSION = \"2024-06-01.v1\"\n\n@dataclass(frozen=True)\nclass EvalSample:\n    id: str\n    input: str\n    expected: Any\n    metadata: dict = field(default_factory=dict)\n\ndataset = [\n    EvalSample(\"q1\", \"法国的首都是？\", \"巴黎\", {\"domain\": \"geo\"}),\n    EvalSample(\"q2\", \"2+2 等于几？\", \"4\", {\"domain\": \"math\"}),\n    EvalSample(\"q3\", \"水的化学式？\", \"H2O\", {\"domain\": \"chem\"}),\n    EvalSample(\"q4\", \"3-1 等于几？\", \"2\", {\"domain\": \"math\"}),\n    EvalSample(\"q5\", \"日本的首都是？\", \"东京\", {\"domain\": \"geo\"}),\n]\n\n# ---------- 2. 指标 ----------\n@dataclass\nclass MetricResult:\n    score: float\n    passed: bool\n    reason: str = \"\"\n\nclass Metric(Protocol):\n    name: str\n    def __call__(self, sample_input: str, prediction: str, expected) -> MetricResult: ...\n\ndef exact_match(_, prediction: str, expected) -> MetricResult:\n    ok = prediction.strip() == str(expected).strip()\n    return MetricResult(1.0 if ok else 0.0, ok, \"\" if ok else f\"got={prediction!r}\")\n\ndef contains_keyword(_, prediction: str, expected) -> MetricResult:\n    ok = str(expected).strip() in prediction\n    return MetricResult(1.0 if ok else 0.0, ok, \"\" if ok else \"keyword missing\")\n\nMETRICS = [exact_match, contains_keyword]\n\n# ---------- 3. Runner ----------\ndef run_eval(dataset, sut_fn, metrics, run_meta):\n    records = []\n    for sample in dataset:\n        prediction = sut_fn(sample.input)\n        for metric in metrics:\n            r = metric(sample.input, prediction, sample.expected)\n            records.append({\n                \"sample_id\": sample.id,\n                \"domain\": sample.metadata.get(\"domain\"),\n                \"metric\": metric.__name__,\n                \"score\": r.score,\n                \"passed\": r.passed,\n                \"reason\": r.reason,\n                \"prediction\": prediction,\n                \"expected\": sample.expected,\n                **run_meta,\n            })\n    return records\n\n# ---------- 4. 聚合 & 对比 ----------\ndef aggregate(records):\n    by_metric = defaultdict(lambda: {\"n\": 0, \"sum\": 0.0, \"pass\": 0})\n    for r in records:\n        m = by_metric[r[\"metric\"]]\n        m[\"n\"] += 1\n        m[\"sum\"] += r[\"score\"]\n        m[\"pass\"] += int(r[\"passed\"])\n    return {k: {\"avg_score\": v[\"sum\"]/v[\"n\"], \"pass_rate\": v[\"pass\"]/v[\"n\"]}\n            for k, v in by_metric.items()}\n\ndef diff_against_baseline(current, baseline):\n    base_map = {(r[\"sample_id\"], r[\"metric\"]): r[\"score\"] for r in baseline}\n    regressions = []\n    for r in current:\n        k = (r[\"sample_id\"], r[\"metric\"])\n        delta = r[\"score\"] - base_map.get(k, 0.0)\n        if delta < 0:\n            regressions.append({\"sample_id\": r[\"sample_id\"], \"metric\": r[\"metric\"], \"delta\": delta, \"reason\": r[\"reason\"]})\n    return regressions\n\n# ---------- 5. 两个版本的被测系统 ----------\ndef model_v1(prompt):\n    return {\"法国的首都是？\": \"巴黎\", \"2+2 等于几？\": \"4\", \"水的化学式？\": \"不知道\",\n            \"3-1 等于几？\": \"2\", \"日本的首都是？\": \"东京\"}.get(prompt, \"\")\n\ndef model_v2(prompt):\n    return {\"法国的首都是？\": \"巴黎\", \"2+2 等于几？\": \"4\", \"水的化学式？\": \"H2O\",\n            \"3-1 等于几？\": \"2\", \"日本的首都是？\": \"东京\"}.get(prompt, \"\")\n\nif __name__ == \"__main__\":\n    base_meta = {\"model\": \"v1\", \"dataset_version\": DATASET_VERSION}\n    cur_meta  = {\"model\": \"v2\", \"dataset_version\": DATASET_VERSION}\n    base = run_eval(dataset, model_v1, METRICS, base_meta)\n    cur  = run_eval(dataset, model_v2, METRICS, cur_meta)\n\n    print(\"== baseline aggregate ==\")\n    print(json.dumps(aggregate(base), ensure_ascii=False, indent=2))\n    print(\"== current aggregate ==\")\n    print(json.dumps(aggregate(cur), ensure_ascii=False, indent=2))\n    print(\"== regressions ==\")\n    print(json.dumps(diff_against_baseline(cur, base), ensure_ascii=False, indent=2))\n```\n",
+  "quiz": [
+    {
+      "kp": "arch.sys.agent_platform",
+      "type": "single_choice",
+      "question": "在设计一个智能体平台时，若需要在同一进程中隔离不同用户的智能体执行环境，同时避免容器化带来的启动开销，下列哪种方案最合适？",
+      "options": [
+        "为每个用户启动独立操作系统虚拟机",
+        "使用 Python 的 subprocess 为每个用户启动独立解释器进程",
+        "在单个解释器中为每个用户创建独立线程并共享全局变量",
+        "使用模块级全局字典按用户 ID 存储所有状态"
+      ],
+      "answer": 1,
+      "explanation": "子进程可提供进程级隔离且启动成本低于虚拟机；线程共享全局状态无法隔离；模块级全局字典完全不隔离；虚拟机开销最大。",
+      "error_tag": "隔离机制选择错误",
+      "variant_group": "agent_platform_isolation"
+    },
+    {
+      "kp": "arch.sys.agent_platform",
+      "type": "single_choice",
+      "question": "某智能体平台需要让智能体在调用工具时能够被中途取消并释放已占用的资源。下列哪种设计最能满足这一需求？",
+      "options": [
+        "让工具函数在后台线程中运行并忽略取消信号",
+        "使用 async/await 配合可取消的 asyncio.Task 与 try/finally 清理",
+        "把所有工具调用包装成同步阻塞调用",
+        "将取消请求写入日志文件供事后分析"
+      ],
+      "answer": 1,
+      "explanation": "异步任务可被取消，try/finally 能保证资源释放；同步阻塞无法及时取消；忽略信号或仅记日志都不满足释放资源的要求。",
+      "error_tag": "取消与资源清理机制混淆",
+      "variant_group": "agent_platform_cancellation"
+    },
+    {
+      "kp": "arch.sys.agent_platform",
+      "type": "single_choice",
+      "question": "某平台需要支持插件式扩展工具，且插件可能来自不同开发者。下列哪种做法最有助于减少命名冲突？",
+      "options": [
+        "所有工具使用相同的全局命名空间",
+        "按插件来源或命名空间前缀注册工具名",
+        "要求所有工具名必须为单字符",
+        "禁止插件注册工具"
+      ],
+      "answer": 1,
+      "explanation": "命名空间前缀可避免冲突；全局命名空间易冲突；单字符限制不现实；禁止注册失去扩展性。",
+      "error_tag": "命名空间设计不当",
+      "variant_group": "agent_platform_namespace"
+    },
+    {
+      "kp": "arch.sys.agent_platform",
+      "type": "single_choice",
+      "question": "平台需要在调用模型前估算提示词的 token 数量，以避免超出模型上限。下列哪种做法最合理？",
+      "options": [
+        "按字符数除以 2 粗略估算并直接发送",
+        "使用与目标模型对应的 tokenizer 进行精确计数",
+        "不估算，等模型返回错误再处理",
+        "把提示词截断到固定 100 字符"
+      ],
+      "answer": 1,
+      "explanation": "不同模型 tokenizer 不同，精确计数最可靠；粗略估算和事后处理都可能导致失败；固定截断会丢失信息。",
+      "error_tag": "token 计数方式不当",
+      "variant_group": "agent_platform_token"
+    },
+    {
+      "kp": "arch.sys.agent_platform",
+      "type": "single_choice",
+      "question": "智能体平台需要支持人工审核某些敏感操作。下列哪种设计最合适？",
+      "options": [
+        "在工具执行前插入审批检查点，暂停并等待外部审批结果",
+        "让智能体自行决定是否跳过审核",
+        "把审核逻辑写死在每个工具内部",
+        "仅在日志中记录敏感操作"
+      ],
+      "answer": 0,
+      "explanation": "执行前检查点可强制暂停等待审批；自行决定或仅记日志无法阻止操作；写死在每个工具内部难以维护。",
+      "error_tag": "人工介入机制设计错误",
+      "variant_group": "agent_platform_human_in_loop"
+    },
+    {
+      "kp": "arch.sys.agent_platform",
+      "type": "single_choice",
+      "question": "平台需要统计每个工具调用的成功率，以便发现不稳定工具。下列哪种指标设计最直接？",
+      "options": [
+        "只统计总调用次数",
+        "分别统计成功次数与失败次数并计算成功率",
+        "只统计平均耗时",
+        "只统计最大耗时"
+      ],
+      "answer": 1,
+      "explanation": "成功率需要成功与失败两个计数；总次数或耗时指标无法直接反映成功率。",
+      "error_tag": "指标定义不完整",
+      "variant_group": "agent_platform_metrics"
+    },
+    {
+      "kp": "arch.sys.agent_platform",
+      "type": "single_choice",
+      "question": "智能体平台在调用外部 API 时可能遇到网络超时。下列哪种重试策略最合理？",
+      "options": [
+        "立即无限重试直到成功",
+        "使用指数退避并设置最大重试次数",
+        "每次重试间隔固定 1 毫秒",
+        "超时后直接丢弃请求不重试"
+      ],
+      "answer": 1,
+      "explanation": "指数退避+最大次数可平衡可靠性与资源消耗；无限重试、过短间隔或完全不重试都不合适。",
+      "error_tag": "重试策略设计不当",
+      "variant_group": "agent_platform_retry"
+    },
+    {
+      "kp": "arch.sys.agent_platform",
+      "type": "single_choice",
+      "question": "平台需要让智能体在多步任务中记住用户之前提到的偏好。下列哪种做法最合适？",
+      "options": [
+        "在每个提示词中重新询问用户偏好",
+        "将偏好提取为结构化记忆并注入后续提示词",
+        "忽略偏好，每次重新开始",
+        "把偏好写在服务器环境变量中"
+      ],
+      "answer": 1,
+      "explanation": "结构化记忆可在多步任务中复用；重复询问体验差；忽略偏好不满足需求；环境变量不适合存用户偏好。",
+      "error_tag": "记忆设计不当",
+      "variant_group": "agent_platform_memory"
+    },
+    {
+      "kp": "arch.sys.agent_platform",
+      "type": "single_choice",
+      "question": "某平台需要支持多种模型供应商，且各供应商的 API 参数不同。下列哪种设计最有利于后续扩展？",
+      "options": [
+        "在业务代码中到处写 if provider == 'A' 的分支",
+        "定义统一的模型接口，各供应商实现适配器",
+        "只支持一家供应商",
+        "把供应商参数硬编码在提示词中"
+      ],
+      "answer": 1,
+      "explanation": "统一接口+适配器符合开闭原则；到处分支难以维护；单一供应商不满足需求；硬编码提示词不可扩展。",
+      "error_tag": "扩展性设计不足",
+      "variant_group": "agent_platform_adapter"
+    },
+    {
+      "kp": "arch.sys.agent_platform",
+      "type": "single_choice",
+      "question": "平台需要防止智能体在工具调用中泄露系统提示词中的敏感信息。下列哪种防护最直接？",
+      "options": [
+        "在输出返回给用户前进行敏感信息过滤与脱敏",
+        "要求模型不要泄露",
+        "把系统提示词写得更长",
+        "禁止智能体调用任何工具"
+      ],
+      "answer": 0,
+      "explanation": "输出侧过滤可实际拦截泄露；仅靠模型自觉不可靠；加长提示词或禁用工具都不解决泄露问题。",
+      "error_tag": "数据泄露防护缺失",
+      "variant_group": "agent_platform_security"
+    },
+    {
+      "kp": "arch.sys.agent_platform",
+      "type": "single_choice",
+      "question": "平台需要为每次智能体运行生成唯一标识，以便追踪日志和调用链。下列哪种做法最合适？",
+      "options": [
+        "使用全局递增整数但多进程下可能重复",
+        "使用 UUID 作为运行标识并贯穿日志与调用",
+        "使用时间戳到秒级作为唯一标识",
+        "使用随机 0-9 的一位数"
+      ],
+      "answer": 1,
+      "explanation": "UUID 在分布式下碰撞概率极低；全局递增在并发下易重复；秒级时间戳会冲突；一位数随机空间太小。",
+      "error_tag": "标识生成方案不当",
+      "variant_group": "agent_platform_tracing"
+    },
+    {
+      "kp": "arch.sys.agent_platform",
+      "type": "single_choice",
+      "question": "智能体平台需要支持任务在失败后从最近一个成功步骤继续，而不是从头开始。下列哪种设计最合适？",
+      "options": [
+        "每次失败都重新初始化全部状态",
+        "将中间状态持久化为检查点，并从最近检查点恢复",
+        "只在内存中保存当前步骤编号",
+        "失败后直接返回错误给用户"
+      ],
+      "answer": 1,
+      "explanation": "检查点持久化可支持断点续跑；重新初始化或仅内存保存无法恢复；直接返回错误不满足需求。",
+      "error_tag": "恢复机制设计错误",
+      "variant_group": "agent_platform_checkpoint"
+    },
+    {
+      "kp": "arch.sys.agent_platform",
+      "type": "single_choice",
+      "question": "智能体平台需要记录每个工具调用的输入、输出和耗时，以便回放和审计。下列哪种做法最符合关注点分离原则？",
+      "options": [
+        "在每个工具函数内部手动编写日志代码",
+        "通过装饰器统一包装工具调用并记录元数据",
+        "仅在平台入口处记录一次整体请求",
+        "要求工具开发者自行保证日志格式一致"
+      ],
+      "answer": 1,
+      "explanation": "装饰器可集中处理横切关注点，避免重复代码；入口级记录粒度不足；手工或依赖开发者自觉难以保证一致性。",
+      "error_tag": "横切关注点处理不当",
+      "variant_group": "agent_platform_observability"
+    },
+    {
+      "kp": "arch.sys.agent_platform",
+      "type": "single_choice",
+      "question": "某平台允许第三方注册工具，但担心某个工具抛出未捕获异常导致整个智能体循环崩溃。下列哪种防护最直接有效？",
+      "options": [
+        "要求所有工具返回字符串而不抛异常",
+        "在调度层用 try/except 捕获工具异常并转为错误结果返回给智能体",
+        "为每个工具单独部署一个物理服务器",
+        "禁止第三方注册工具"
+      ],
+      "answer": 1,
+      "explanation": "在调用边界捕获异常可防止单个工具失败扩散；禁止注册或要求返回字符串限制了能力；物理隔离成本过高且不解决异常传播。",
+      "error_tag": "异常边界设计错误",
+      "variant_group": "agent_platform_error_boundary"
+    },
+    {
+      "kp": "arch.sys.agent_platform",
+      "type": "single_choice",
+      "question": "智能体平台需要支持多轮对话，且每轮都要把历史消息发送给模型。当对话很长时，token 消耗急剧上升。下列哪种策略最合理？",
+      "options": [
+        "无限保留全部历史消息",
+        "对历史消息做摘要压缩并保留最近若干轮原文",
+        "每轮随机丢弃一半历史消息",
+        "将历史消息存入数据库但从不读取"
+      ],
+      "answer": 1,
+      "explanation": "摘要+最近窗口是常见上下文管理策略；无限保留浪费 token；随机丢弃会丢失关键信息；只存不读没有意义。",
+      "error_tag": "上下文管理策略不当",
+      "variant_group": "agent_platform_context"
+    },
+    {
+      "kp": "arch.sys.agent_platform",
+      "type": "single_choice",
+      "question": "在设计智能体的规划-执行循环时，如果模型返回的 JSON 动作格式不合法，下列哪种处理最稳健？",
+      "options": [
+        "直接崩溃并终止整个平台",
+        "忽略该轮响应继续下一轮",
+        "解析失败时回退到文本解析或向模型发送纠错提示",
+        "把非法 JSON 当作合法动作执行"
+      ],
+      "answer": 2,
+      "explanation": "回退解析或纠错提示可提高鲁棒性；崩溃、忽略或强行执行都会导致错误行为。",
+      "error_tag": "输出解析容错不足",
+      "variant_group": "agent_platform_parsing"
+    },
+    {
+      "kp": "arch.sys.agent_platform",
+      "type": "single_choice",
+      "question": "平台需要限制每个智能体每分钟最多调用 10 次外部搜索工具，以防止滥用。下列哪种实现方式最合适？",
+      "options": [
+        "在工具函数内部用 time.sleep 随机延迟",
+        "使用令牌桶或滑动窗口计数器进行限流",
+        "在文档中建议用户不要频繁调用",
+        "每次调用前询问用户是否继续"
+      ],
+      "answer": 1,
+      "explanation": "令牌桶/滑动窗口是标准限流算法；随机延迟不能保证上限；文档建议和询问用户都不是技术强制手段。",
+      "error_tag": "限流机制选择错误",
+      "variant_group": "agent_platform_rate_limit"
+    },
+    {
+      "kp": "arch.sys.agent_platform",
+      "type": "single_choice",
+      "question": "某智能体平台允许工具调用其他工具，形成嵌套调用。若不加限制，可能产生无限递归。下列哪种防护最有效？",
+      "options": [
+        "增加服务器内存",
+        "为调用链设置最大深度并检测循环调用",
+        "要求工具作者自行避免递归",
+        "把所有工具改为同步执行"
+      ],
+      "answer": 1,
+      "explanation": "深度限制+循环检测可直接防止无限递归；内存、作者自觉、同步执行都不能从根本上阻止递归。",
+      "error_tag": "递归防护缺失",
+      "variant_group": "agent_platform_recursion"
+    },
+    {
+      "kp": "arch.sys.agent_platform",
+      "type": "single_choice",
+      "question": "平台需要让多个智能体并发处理不同任务，但共享一个有限的数据库连接池。下列哪种并发模型最合适？",
+      "options": [
+        "为每个智能体创建一个新的数据库连接池",
+        "使用 asyncio 信号量控制并发获取连接的数量",
+        "禁用并发，改为串行处理",
+        "让智能体直接操作数据库文件"
+      ],
+      "answer": 1,
+      "explanation": "信号量可限制并发访问共享资源；每个智能体独立连接池会耗尽数据库连接；串行降低吞吐；直接操作文件破坏一致性。",
+      "error_tag": "并发资源共享设计错误",
+      "variant_group": "agent_platform_concurrency"
+    },
+    {
+      "kp": "arch.sys.agent_platform",
+      "type": "single_choice",
+      "question": "智能体平台需要把内部状态（如当前步骤、已收集变量）持久化，以便进程重启后恢复。下列哪种方案最合适？",
+      "options": [
+        "仅保存在内存中的全局字典",
+        "序列化到 JSON 文件或数据库中并附带版本号",
+        "打印到标准输出由运维手动抄写",
+        "保存在线程局部变量中"
+      ],
+      "answer": 1,
+      "explanation": "序列化持久化可跨进程恢复；内存、线程局部变量随进程消失；标准输出不是可靠的持久化机制。",
+      "error_tag": "持久化方案选择错误",
+      "variant_group": "agent_platform_persistence"
+    },
+    {
+      "kp": "arch.sys.eval_platform",
+      "type": "single_choice",
+      "question": "在设计一个软件系统评测平台时，需要支持不同评测任务的接入。以下关于评测平台核心职责的描述，哪一项最准确？",
+      "options": [
+        "评测平台主要负责编译源代码，编译成功后即视为评测通过",
+        "评测平台负责调度评测任务、运行被测对象、采集结果并判定得分",
+        "评测平台只负责存储评测结果，运行与调度由人工完成",
+        "评测平台的核心是生成测试数据，运行与判定由被测系统自行完成"
+      ],
+      "answer": 1,
+      "explanation": "评测平台的核心职责包括任务调度、运行隔离、结果采集与判定。编译只是其中一个可选环节，存储和测试数据生成都不是平台的全部职责，因此B最准确。",
+      "error_tag": "概念混淆",
+      "variant_group": "评测平台职责"
+    },
+    {
+      "kp": "arch.sys.eval_platform",
+      "type": "single_choice",
+      "question": "评测平台在运行用户提交的代码时，通常会限制其可用的系统资源（如 CPU 时间、内存）。这样做的主要原因是？",
+      "options": [
+        "为了让代码运行得更快",
+        "为了防止单个任务耗尽资源、影响其他任务或平台稳定性",
+        "为了减少代码的行数",
+        "为了强制用户使用指定的编程语言"
+      ],
+      "answer": 1,
+      "explanation": "资源限制是隔离性的手段，目的是防止某个任务占用过多 CPU 或内存从而拖垮整个平台或影响其他任务。它与运行速度、代码行数、语言选择无关。",
+      "error_tag": "概念混淆",
+      "variant_group": "资源隔离"
+    },
+    {
+      "kp": "arch.sys.eval_platform",
+      "type": "multi_choice",
+      "question": "评测平台在运行被测代码时，下列哪些属于常见的隔离或保护手段？（多选）",
+      "options": [
+        "限制可用的系统调用或网络访问",
+        "为每个任务分配独立的工作目录",
+        "让被测代码以宿主机的最高权限运行",
+        "设置最大运行时间并支持超时终止"
+      ],
+      "answer": [
+        0,
+        1,
+        3
+      ],
+      "explanation": "限制系统调用/网络、独立工作目录、超时终止都是常见的隔离与保护手段。让不可信代码以最高权限运行会放大风险，是错误的。",
+      "error_tag": "概念混淆",
+      "variant_group": "沙箱隔离"
+    },
+    {
+      "kp": "arch.sys.eval_platform",
+      "type": "multi_choice",
+      "question": "下列哪些因素可能导致评测结果不可复现？（多选）",
+      "options": [
+        "任务之间共享可变的全局状态",
+        "运行时环境（如依赖版本）在不同机器上不一致",
+        "为每个任务分配独立的隔离环境",
+        "评测过程中依赖未固定的外部网络资源"
+      ],
+      "answer": [
+        0,
+        1,
+        3
+      ],
+      "explanation": "共享可变状态、环境不一致、依赖未固定的外部网络都会导致结果不可复现。为每个任务分配独立隔离环境恰恰有助于可复现性，不选。",
+      "error_tag": "边界错误",
+      "variant_group": "可复现性"
+    },
+    {
+      "kp": "arch.sys.eval_platform",
+      "type": "fill_blank",
+      "question": "评测平台在运行不可信代码时，为防止其影响宿主环境，通常会采用 ________ 机制来限制其资源访问和系统调用。",
+      "options": [],
+      "answer": [
+        "沙箱",
+        "sandbox",
+        "sandboxing"
+      ],
+      "explanation": "沙箱（sandbox）通过限制资源访问与系统调用来隔离不可信代码，是评测平台常用的安全机制。",
+      "error_tag": "记忆缺失",
+      "variant_group": "沙箱隔离"
+    },
+    {
+      "kp": "arch.sys.eval_platform",
+      "type": "fill_blank",
+      "question": "评测平台为避免任务之间相互干扰，通常会为每个任务分配独立的 ________（例如独立目录或容器），以保证结果的可复现性。",
+      "options": [],
+      "answer": [
+        "运行环境",
+        "环境",
+        "执行环境",
+        "隔离环境"
+      ],
+      "explanation": "为每个任务分配独立的运行环境（隔离环境）是保证任务互不干扰、结果可复现的常见做法。",
+      "error_tag": "记忆缺失",
+      "variant_group": "环境隔离"
+    },
+    {
+      "kp": "arch.sys.eval_platform",
+      "type": "fill_blank",
+      "question": "评测平台对运行时间设置上限，当被测程序超过该上限时会被终止，这种结果通常被称为 ________。",
+      "options": [],
+      "answer": [
+        "超时",
+        "运行超时",
+        "timeout",
+        "TLE"
+      ],
+      "explanation": "超过时间上限被终止的结果通常称为超时（timeout / TLE）。",
+      "error_tag": "记忆缺失",
+      "variant_group": "超时处理"
+    },
+    {
+      "kp": "arch.sys.eval_platform",
+      "type": "code_reading",
+      "question": "某评测平台用如下伪代码判断结果：\n\nexpected = \"42\\n\"\nactual = input_output_of_submission()  # 假设得到 \"42\"\nif actual == expected:\n    verdict = \"AC\"\nelse:\n    verdict = \"WA\"\n\n假设提交程序的输出语义完全正确但末尾没有换行，问：这段判定会把结果判为什么？为什么这可能是一个问题？",
+      "options": [],
+      "answer": "会判为 WA（答案错误）。因为判定使用字符串完全相等比较，把末尾换行也纳入了比较，语义正确但格式略有差异的输出会被误判。实际评测平台通常需要对尾部空白/换行做规范化或使用更宽松的判定规则。",
+      "explanation": "该判定逻辑基于字符串完全相等，属于过严的判定方式。语义正确但末尾缺少换行的输出会被判为 WA，说明判定规则需要考虑格式容差。",
+      "error_tag": "边界错误",
+      "variant_group": "结果判定"
+    },
+    {
+      "kp": "arch.sys.eval_platform",
+      "type": "code_reading",
+      "question": "某评测平台在启动被测程序前执行如下伪代码：\n\nrun_with_limits(\n    code,\n    time_limit=2,\n    memory_limit=256,\n    workdir=make_isolated_dir(),\n    network=False,\n)\n\n请说明这段配置中 time_limit、memory_limit、workdir、network 四个参数各自的作用，以及它们共同服务于什么目标。",
+      "options": [],
+      "answer": "time_limit 限制最大运行时间，memory_limit 限制内存使用，workdir 提供独立隔离的工作目录，network 控制是否允许网络访问。它们共同服务于「隔离和保护」这一目标：防止单个任务耗尽资源、干扰其他任务或影响宿主环境。",
+      "explanation": "这些参数分别从时间、内存、文件系统、网络四个维度对不可信代码进行限制，共同构成沙箱式的资源隔离与保护。",
+      "error_tag": "概念混淆",
+      "variant_group": "资源隔离"
+    },
+    {
+      "kp": "arch.sys.eval_platform",
+      "type": "code_reading",
+      "question": "评测平台中有一段调度伪代码：\n\nfor task in queue:\n    if platform_has_free_slot():\n        dispatch(task)\n    else:\n        wait()\n\n问：这段代码体现了调度与执行之间怎样的关系？如果直接去掉 platform_has_free_slot() 的判断，可能产生什么问题？",
+      "options": [],
+      "answer": "体现了调度层负责判断平台是否有空闲执行资源、再决定是否派发任务的分层关系。去掉空闲判断会导致任务被无限制地并发派发，可能耗尽资源、拖垮平台或使任务相互干扰。",
+      "explanation": "调度与执行分层，调度层通过空闲判断控制并发度。去掉该判断会失去限流，导致资源耗尽和干扰。",
+      "error_tag": "边界错误",
+      "variant_group": "分层设计"
+    },
+    {
+      "kp": "arch.sys.eval_platform",
+      "type": "scenario",
+      "question": "工程场景：你负责搭建一个在线代码评测平台，用户提交的代码完全不可信，且平台需要同时处理大量并发提交。请说明你会如何设计运行环节来保证安全性与稳定性，并给出至少两条具体措施。",
+      "options": [],
+      "answer": "应在隔离环境中运行不可信代码，并施加资源限制。具体措施包括：使用沙箱限制文件系统、网络和系统调用；为每个任务分配独立的工作目录或容器；设置最大运行时间和内存上限并在超限时终止；调度层控制并发度、避免资源耗尽。",
+      "explanation": "场景要求兼顾安全与稳定，核心是隔离与限流：沙箱隔离、独立环境、时间/内存限制、并发控制共同保证平台不被单个或大量任务拖垮。",
+      "error_tag": "概念混淆",
+      "variant_group": "评测平台职责",
+      "required_keywords": [
+        "隔离",
+        "沙箱",
+        "限流",
+        "并发",
+        "内存"
+      ]
+    },
+    {
+      "kp": "arch.sys.eval_platform",
+      "type": "scenario",
+      "question": "工程场景：评测平台上线后，运维发现同一份提交在两次评测中得到了不同的结果（一次通过、一次答案错误）。请分析可能导致这种不可复现现象的原因，并提出改进方向。",
+      "options": [],
+      "answer": "可能原因包括：任务之间共享了可变的全局状态或工作目录、运行环境（依赖版本等）在不同机器上不一致、评测过程依赖未固定的外部网络资源、判定逻辑本身不确定。改进方向：为每个任务分配独立隔离的环境、固定依赖与运行环境、移除对外部网络的依赖或将其固定、让判定规则确定且一致。",
+      "explanation": "不可复现通常源于共享状态、环境不一致、外部依赖不稳定或判定不确定。改进思路是隔离、固定环境、去除不稳定外部依赖并保证判定一致。",
+      "error_tag": "边界错误",
+      "variant_group": "可复现性",
+      "required_keywords": [
+        "共享状态",
+        "环境不一致",
+        "外部依赖",
+        "判定不确定性",
+        "隔离"
+      ]
+    },
+    {
+      "kp": "arch.sys.eval_platform",
+      "type": "single_choice",
+      "question": "评测平台常采用沙箱机制来运行不可信的代码。下列哪一项最能体现沙箱要解决的核心问题？",
+      "options": [
+        "让代码在语法上符合规范",
+        "限制代码对文件系统、网络等外部资源的访问，使其无法影响宿主环境",
+        "自动为代码补充缺失的注释",
+        "把代码翻译成另一种编程语言"
+      ],
+      "answer": 1,
+      "explanation": "沙箱的目标是隔离不可信代码，限制其对文件系统、网络、进程等外部资源的访问，保护宿主环境。语法检查、注释补充、语言翻译都不是沙箱的核心。",
+      "error_tag": "概念混淆",
+      "variant_group": "沙箱隔离"
+    },
+    {
+      "kp": "arch.sys.eval_platform",
+      "type": "single_choice",
+      "question": "评测任务可能出现「运行超时」的情况。下列哪种做法最能体现评测平台对超时的合理处理？",
+      "options": [
+        "无限等待，直到用户程序自行结束",
+        "设置最大运行时间，超时后终止进程并给出相应判定",
+        "超时后直接判定为编译错误",
+        "超时后忽略该次评测，不记录任何结果"
+      ],
+      "answer": 1,
+      "explanation": "合理处理超时是设置时间上限并在超时后强制终止、记录为超时结果。无限等待会导致任务堆积；判定为编译错误混淆了错误类型；忽略结果则丢失信息。",
+      "error_tag": "边界错误",
+      "variant_group": "超时处理"
+    },
+    {
+      "kp": "arch.sys.eval_platform",
+      "type": "single_choice",
+      "question": "评测平台为每个评测任务分配独立的运行环境（如独立的工作目录或容器），最主要的收益是？",
+      "options": [
+        "提高代码执行速度",
+        "避免任务之间相互干扰，保证结果的可复现性",
+        "减少代码本身的 bug",
+        "让评测平台不再需要调度器"
+      ],
+      "answer": 1,
+      "explanation": "独立环境的主要收益是隔离：防止任务间通过文件、进程、环境变量等相互干扰，从而保证结果可复现。它不直接提升速度，也不修复代码 bug，更不会取消调度需求。",
+      "error_tag": "概念混淆",
+      "variant_group": "环境隔离"
+    },
+    {
+      "kp": "arch.sys.eval_platform",
+      "type": "single_choice",
+      "question": "在评测系统中，判定被测程序的输出是否正确时，直接做字符串完全相等比较可能出问题。下列哪种情况最能说明其局限？",
+      "options": [
+        "程序输出为空",
+        "程序输出末尾多了空白字符或换行，但语义完全正确",
+        "程序崩溃",
+        "程序没有输出任何错误信息"
+      ],
+      "answer": 1,
+      "explanation": "完全相等比较对尾部空白、换行等不敏感差异过于严格，可能把语义正确的输出判错。空输出、崩溃、无错误信息并不直接说明相等比较的局限。",
+      "error_tag": "边界错误",
+      "variant_group": "结果判定"
+    },
+    {
+      "kp": "arch.sys.eval_platform",
+      "type": "single_choice",
+      "question": "评测平台中，「调度」与「执行」通常被分成两个阶段。这样分层设计的主要好处是？",
+      "options": [
+        "让代码运行得更快",
+        "使任务排队/优先级策略与具体的运行方式解耦，便于扩展",
+        "减少评测平台需要支持的编程语言数量",
+        "避免使用任何并发机制"
+      ],
+      "answer": 1,
+      "explanation": "分层让调度策略（排队、优先级、并发度）与执行细节（如何启动进程、如何隔离）解耦，便于替换或扩展其中一层。它与运行速度、语言数量、是否并发无必然关系。",
+      "error_tag": "概念混淆",
+      "variant_group": "分层设计"
+    },
+    {
+      "kp": "arch.sys.eval_platform",
+      "type": "single_choice",
+      "question": "评测平台需要对「编译失败」「运行错误」「答案错误」「超时」等结果加以区分。下列哪一项最能说明区分的意义？",
+      "options": [
+        "让平台界面更美观",
+        "帮助提交者准确定位问题并给出有针对性的反馈",
+        "减少平台的代码量",
+        "增加评测任务的数量"
+      ],
+      "answer": 1,
+      "explanation": "区分不同失败类型是为了给出有意义的诊断反馈，帮助提交者定位问题。它不是为了美观、减少代码量或增加任务数量。",
+      "error_tag": "概念混淆",
+      "variant_group": "结果分类"
+    },
+    {
+      "kp": "arch.sys.eval_platform",
+      "type": "multi_choice",
+      "question": "在设计评测平台时，下列哪些做法有助于提升评测的公平性与安全性？（多选）",
+      "options": [
+        "对每个任务限制运行时间和内存使用",
+        "在隔离环境中运行不可信代码",
+        "让所有任务共享同一个可写工作目录",
+        "对评测结果进行一致性的判定逻辑"
+      ],
+      "answer": [
+        0,
+        1,
+        3
+      ],
+      "explanation": "资源限制、隔离运行、一致的判定逻辑都有助于公平与安全。共享可写工作目录会导致任务间互相干扰，破坏公平与安全，因此不选。",
+      "error_tag": "概念混淆",
+      "variant_group": "公平与安全"
+    },
+    {
+      "kp": "arch.sys.eval_platform",
+      "type": "multi_choice",
+      "question": "关于评测平台的「判定」环节，下列说法正确的有哪些？（多选）",
+      "options": [
+        "判定应当基于明确的规则，保证同一输入得到一致结论",
+        "判定只能使用字符串完全相等这一种方式",
+        "判定可以针对不同题目采用容差比较、特殊判定等策略",
+        "判定结果应当与运行结果（如超时、崩溃）区分开"
+      ],
+      "answer": [
+        0,
+        1,
+        3
+      ],
+      "explanation": "判定应当规则明确、一致，并且区分运行错误与答案错误，同时不同题目可采用不同判定策略。『只能用字符串相等』是常见误解，是错误的。",
+      "error_tag": "概念混淆",
+      "variant_group": "结果判定"
+    }
+  ]
+}

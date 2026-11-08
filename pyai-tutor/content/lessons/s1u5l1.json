@@ -1,0 +1,914 @@
+{
+  "id": "s1u5l1",
+  "title": "s1u5l1",
+  "kps": [
+    "py.func.def",
+    "py.func.return",
+    "py.func.scope"
+  ],
+  "theory": "## py.func.def\n\n# Python 函数定义 `def`：从直觉到工程\n\n## 一句话直觉\n\n**`def` 是你给一段逻辑「起名字、定输入、说输出」的工具**——有了它，你才能把代码从「一次性脚本」升级为「可复用、可测试、可组合」的工程模块。\n\n---\n\n## 第 1 节：为什么需要函数？——从重复到抽象\n\n假设你要计算三个不同半径圆的面积：\n\n```python\nr1, r2, r3 = 1.0, 2.0, 3.0\narea1 = 3.14159 * r1 ** 2\narea2 = 3.14159 * r2 ** 2\narea3 = 3.14159 * r3 ** 2\n```\n\n问题很明显：公式重复、π 硬编码、改一处要改三处。函数（function）让我们把「一段逻辑」打包并命名：\n\n```python\ndef circle_area(radius):\n    \"\"\"返回给定半径的圆面积。\"\"\"\n    return 3.14159 * radius ** 2\n\nprint(circle_area(1.0))\nprint(circle_area(2.0))\n```\n\n**关键结论**：函数 = 名字 + 参数（parameter） + 函数体（body） + 返回值（return value）。\n\n---\n\n## 第 2 节：`def` 的语法解剖\n\n一个完整的函数定义包括五个部分：\n\n```python\ndef 函数名(形参1, 形参2=默认值, *args, **kwargs) -> 返回类型标注:\n    \"\"\"文档字符串（docstring）。\"\"\"\n    函数体\n    return 结果\n```\n\n逐项说明：\n\n- **`def`**：关键字，宣告「接下来是函数定义」。\n- **函数名**：遵循 `snake_case`，动词开头（`compute_total`、`parse_json`）。\n- **形参**（parameter）：函数内部使用的占位符。调用时传入的实际值叫实参（argument）。\n- **`return`**：结束函数并把结果交回调用方；没有 `return` 时默认返回 `None`。\n- **类型标注**（type annotation）：`-> int` 只是给人类和类型检查器（type checker）看的，运行时不强制。\n\n```python\ndef greet(name: str, punct: str = \"!\") -> str:\n    \"\"\"生成问候语。punct 有默认值，可不传。\"\"\"\n    return f\"Hello, {name}{punct}\"\n\nprint(greet(\"Ada\"))          # Hello, Ada!\nprint(greet(\"Ada\", \"?\"))    # Hello, Ada?\n```\n\n---\n\n## 第 3 节：参数的四种形态\n\nPython 的参数系统非常灵活，工程里最常用四种：\n\n1. **位置参数**（positional）：按顺序传入。\n2. **关键字参数**（keyword）：按名字传入，顺序无关。\n3. **默认参数**（default）：不传时用默认值。\n4. **可变参数**（`*args` / `**kwargs`）：接收任意数量的位置/关键字参数。\n\n```python\ndef log(level, msg, *tags, sep=\" | \", **extra):\n    \"\"\"level 和 msg 必填；tags 收集多余位置参数；extra 收集多余关键字参数。\"\"\"\n    tag_str = sep.join(tags) if tags else \"-\"\n    extra_str = \", \".join(f\"{k}={v}\" for k, v in extra.items())\n    print(f\"[{level}] {msg} (tags: {tag_str}) {extra_str}\")\n\nlog(\"INFO\", \"started\")\nlog(\"WARN\", \"slow\", \"db\", \"api\", user=\"alice\", retry=3)\n```\n\n**经验法则**：参数顺序应是「必填 → 有默认 → `*args` → `**kwargs`」；调用方尽量用关键字传参提高可读性。\n\n---\n\n## 第 4 节：作用域、返回值、`None` 与及早返回\n\n函数内部定义的变量属于**局部作用域**（local scope），函数外看不到；函数能读全局变量但不该改写（否则易出 bug）。\n\n`return` 不止能带回值，还能提前退出，避免深层嵌套——这叫「及早返回」（early return）：\n\n```python\ndef grade(score: int) -> str:\n    \"\"\"根据分数返回等级；先处理异常情况，再走主逻辑。\"\"\"\n    if not isinstance(score, int):\n        return \"invalid\"\n    if score < 0 or score > 100:\n        return \"invalid\"\n    if score >= 90:\n        return \"A\"\n    if score >= 60:\n        return \"B\"\n    return \"C\"\n\nprint(grade(95), grade(72), grade(-1))\n```\n\n**关键结论**：没有 `return` 的函数返回 `None`，这是 Python 的既定约定，别把它当成「没有返回值」。\n\n---\n\n## 第 5 节：函数是「一等公民」\n\n在 Python 里函数本身也是对象：可以赋给变量、作为参数传入、从函数里返回。这是装饰器（decorator）、回调（callback）、高阶函数（higher-order function）的基础。\n\n```python\ndef apply_twice(fn, x):\n    \"\"\"把 fn 连续应用两次：fn(fn(x))。\"\"\"\n    return fn(fn(x))\n\ndef inc(n):\n    return n + 1\n\nprint(apply_twice(inc, 10))  # 12\nprint(apply_twice(lambda s: s * 2, \"ab\"))  # abababab\n```\n\n到这里你已经能写出工业级别的函数：命名清晰、类型标注齐全、参数灵活、能作为参数传递。\n\n---\n\n## 动手练习\n\n**任务：写一个 `analyze_scores` 函数，报告一组成绩的统计信息。**\n\n要求：\n\n1. 函数签名：`def analyze_scores(*scores: int, pass_line: int = 60) -> dict:`\n2. 返回一个字典，包含以下键：\n   - `count`：成绩个数\n   - `pass_count`：及格数量（`>= pass_line`）\n   - `average`：平均分（保留两位小数）\n   - `highest` / `lowest`：最高/最低分\n3. 若 `scores` 为空，返回 `{\"error\": \"no scores\"}`。\n4. 在文件底部写 3 个测试调用（含空参数、正常参数、自定义 `pass_line`），并把结果 `print` 出来。\n\n参考自测点：\n\n- `analyze_scores()` 是否返回 `{\"error\": \"no scores\"}`？\n- `analyze_scores(90, 80, 55, 70)` 的 `average` 是否为 `73.75`？\n- `analyze_scores(90, 80, pass_line=85)` 的 `pass_count` 是否为 `1`？\n\n完成后，试着给每个函数都加上 `\"\"\"docstring\"\"\"` 并对 `pass_line` 做合法性检查（例如必须为 0~100 的整数）。这就是从「会写函数」到「工程级函数」的最后一步。\n\n```python\ndef analyze_scores(*scores: int, pass_line: int = 60) -> dict:\n    \"\"\"汇总成绩统计。scores 为空时返回错误字典。\"\"\"\n    if not scores:\n        return {\"error\": \"no scores\"}\n    count = len(scores)\n    pass_count = sum(1 for s in scores if s >= pass_line)\n    average = round(sum(scores) / count, 2)\n    return {\n        \"count\": count,\n        \"pass_count\": pass_count,\n        \"average\": average,\n        \"highest\": max(scores),\n        \"lowest\": min(scores),\n    }\n\nprint(analyze_scores())\nprint(analyze_scores(90, 80, 55, 70))\nprint(analyze_scores(90, 80, pass_line=85))\n```\n\n## py.func.return\n\n## 一句话直觉\n\n`return` 是函数把计算结果**交还给调用者**的唯一出口——没有它，函数做完事就“人间蒸发”，有了它，函数才能像积木一样拼接成程序。\n\n---\n\n## 1. 最小模型：函数是一台“投币机”\n\n把函数想象成一台投币机：你投入参数（硬币），它内部运转（执行语句），最后掉出一个结果——那个掉出来的东西就是 `return` 送出的值。\n\n```python\ndef add(a, b):\n    return a + b          # 把 a+b 的结果交还出去\n\nresult = add(3, 5)        # result 接住返回值\nprint(result)             # 8\n```\n\n关键结论：\n- `return` 后面可以跟任意表达式，Python 先求值再返回。\n- 函数体执行到 `return` 就**立即结束**，后面的语句不会再执行。\n\n```python\ndef check(x):\n    if x > 0:\n        return \"正数\"     # 一旦满足，函数到此结束\n    return \"非正数\"       # 只有上面没返回才会走到这里\n```\n\n---\n\n## 2. 没有 return 会怎样？——返回 None\n\n如果函数执行完毕都没有遇到 `return`，Python 自动返回 `None`（空值）。`None` 不是“没有”，而是一个真实存在的对象，表示“没有有意义的值”。\n\n```python\ndef say_hello(name):\n    print(f\"Hello, {name}\")   # 只打印，没有 return\n\nvalue = say_hello(\"Alice\")    # 打印 Hello, Alice\nprint(value)                  # None —— 函数默认的返回值\n```\n\n关键结论：\n- 只做副作用（打印、写文件）的函数可以不写 `return`，但调用者拿到的是 `None`。\n- 不返回值的函数常用于“执行动作”，返回值不为 `None` 的函数常用于“产出数据”。\n\n---\n\n## 3. 一次返回多个值？——其实是元组\n\nPython 允许 `return a, b`，看起来像返回多个值，本质上是返回一个**元组（tuple）**，调用者可以用解包接收。\n\n```python\ndef min_max(nums):\n    return min(nums), max(nums)   # 等价于 return (min(nums), max(nums))\n\nlow, high = min_max([4, 1, 9, 3])  # 解包\nprint(low, high)                   # 1 9\n\npair = min_max([4, 1, 9, 3])\nprint(pair, type(pair))            # (1, 9) <class 'tuple'>\n```\n\n关键结论：\n- `return a, b` 返回的是元组，不是两个独立对象。\n- 调用方可以选择解包，也可以整体接收。\n\n---\n\n## 4. return 终止函数：提前退出的工程价值\n\n`return` 可以出现在函数任意位置，用于**提前退出**（early return），减少嵌套、提升可读性。这是工程代码里最常见的模式之一。\n\n```python\ndef safe_divide(a, b):\n    if b == 0:\n        return None        # 提前退出，避免后面除零\n    return a / b\n\nprint(safe_divide(10, 2))  # 5.0\nprint(safe_divide(10, 0))  # None\n```\n\n关键结论：\n- 用 `return` 做“守卫条件”（guard clause）可以让主逻辑保持平坦。\n- 提前返回不会执行后续代码，因此可以安全地跳过不合法路径。\n\n---\n\n## 5. 返回 self：链式调用与类型注解的工程细节\n\n在面向对象中，方法可以返回 `self`，从而实现**链式调用（method chaining）**。当你要为这种返回值写类型注解时，Python 3.11 引入了 `typing.Self`，表示“返回当前类的实例（子类也适用）”。\n\n```python\nfrom typing import Self\n\nclass Builder:\n    def __init__(self):\n        self.parts = []\n\n    def add(self, part: str) -> Self:   # 返回自身，子类也适用\n        self.parts.append(part)\n        return self\n\n    def build(self) -> str:\n        return \"-\".join(self.parts)\n\nresult = Builder().add(\"a\").add(\"b\").add(\"c\").build()\nprint(result)   # a-b-c\n```\n\n为什么不用类名 `Builder` 而用 `Self`？\n- 如果写 `-> \"Builder\"`，子类调用时类型检查器会认为返回的是 `Builder`，丢掉子类信息。\n- 用 `Self` 则能保留“当前实际类型”，对子类也正确。\n\n但注意：如果方法**永远返回固定类的实例**（不随子类变化），就不该用 `Self`。例如：\n\n```python\nclass Eggs:\n    def returns_eggs(self) -> \"Eggs\":   # 总是 Eggs，不能用 Self\n        return Eggs()\n```\n\n关键结论：\n- 返回 `self` 时，注解用 `Self` 更准确。\n- 返回固定类型实例时，不要用 `Self`。\n- `Self` 在 Python 3.11+ 可用，来自 PEP 673。\n\n---\n\n## 6. 返回值的类型注解与工具函数\n\n给返回值写类型注解（type hint）能帮助编辑器、类型检查器（如 mypy）理解代码。常见写法：\n\n```python\ndef greet(name: str) -> str:\n    return f\"Hi, {name}\"\n\ndef find(nums: list[int], target: int) -> int | None:\n    for i, n in enumerate(nums):\n        if n == target:\n            return i\n    return None\n```\n\n如果你需要在运行时**检查**某个函数的返回值注解，可以用 `typing.get_type_hints()`：\n\n```python\nfrom typing import get_type_hints\n\ndef f(x: int) -> str:\n    return str(x)\n\nprint(get_type_hints(f))   # {'x': <class 'int'>, 'return': <class 'str'>}\n```\n\n关键结论：\n- 返回值注解是文档+工具支持，不影响运行时行为。\n- `get_type_hints` 可以把字符串形式的注解解析成真正的类型对象。\n\n---\n\n## 7. 动手练习\n\n**任务：实现一个“安全整数除法器”，并练习 return 的多种用法。**\n\n在本地新建 `practice_return.py`，完成：\n\n1. 写函数 `safe_div(a: int, b: int) -> float | None`：\n   - 若 `b == 0`，返回 `None`。\n   - 否则返回 `a / b`。\n2. 写函数 `divmod_safe(a: int, b: int) -> tuple[int, int] | None`：\n   - 若 `b == 0`，返回 `None`。\n   - 否则返回 `(a // b, a % b)`（一次 return 返回两个值）。\n3. 写一个类 `Calc`，包含方法 `add(self, x: int) -> Self`，把 x 累加到 `self.total` 并返回 `self`，实现链式调用：\n   - `Calc().add(1).add(2).add(3).total` 应得到 `6`。\n4. 用 `get_type_hints` 打印 `safe_div` 的返回值注解。\n\n示例骨架：\n\n```python\nfrom typing import Self, get_type_hints\n\ndef safe_div(a: int, b: int) -> float | None:\n    ...\n\ndef divmod_safe(a: int, b: int) -> tuple[int, int] | None:\n    ...\n\nclass Calc:\n    def __init__(self):\n        self.total = 0\n    def add(self, x: int) -> Self:\n        ...\n\nif __name__ == \"__main__\":\n    print(safe_div(10, 2))\n    print(safe_div(10, 0))\n    print(divmod_safe(10, 3))\n    print(Calc().add(1).add(2).add(3).total)\n    print(get_type_hints(safe_div))\n```\n\n完成后运行 `python practice_return.py`，确认输出与预期一致。\n\n```python\nfrom typing import Self, get_type_hints\n\n# 1. 基本 return：把结果交还给调用者\ndef add(a, b):\n    return a + b\n\nprint(add(3, 5))  # 8\n\n# 2. 没有 return 默认返回 None\ndef say_hello(name):\n    print(f\"Hello, {name}\")\n\nvalue = say_hello(\"Alice\")\nprint(value)  # None\n\n# 3. return 多个值：本质是元组\ndef min_max(nums):\n    return min(nums), max(nums)\n\nlow, high = min_max([4, 1, 9, 3])\nprint(low, high)  # 1 9\n\n# 4. 提前 return 做守卫条件\ndef safe_div(a: int, b: int) -> float | None:\n    if b == 0:\n        return None\n    return a / b\n\nprint(safe_div(10, 2))  # 5.0\nprint(safe_div(10, 0))  # None\n\n# 5. 返回 self 实现链式调用，注解用 Self\nclass Builder:\n    def __init__(self):\n        self.parts = []\n\n    def add(self, part: str) -> Self:\n        self.parts.append(part)\n        return self\n\n    def build(self) -> str:\n        return \"-\".join(self.parts)\n\nprint(Builder().add(\"a\").add(\"b\").add(\"c\").build())  # a-b-c\n\n# 6. 查看返回值类型注解\nprint(get_type_hints(safe_div))  # {'a': <class 'int'>, 'b': <class 'int'>, 'return': float | None}\n```\n\n## py.func.scope\n\n# Python 函数作用域（Function Scope）\n\n## 一句话直觉\n\n**函数作用域（function scope）** 就是函数内部那块“私有领地”：名字在哪定义，决定了它在哪能被看见、被修改，写错一步就会 出现 `UnboundLocalError` 或“改了变量但外面没变”的诡异现象。理解作用域，是写出可维护代码、避免 Python 中最常见 bug 的起点。\n\n---\n\n## 一、为什么要有作用域\n\n如果所有变量都共享同一片内存空间，那么任意两个函数使用同一个变量名（例如 `i`、`data`、`result`）就会相互污染。作用域（scope）给每个名字划出可见范围，Python 通过 **LEGB 规则** 决定一个名字到底指向谁：\n\n- **L**ocal：当前函数内部\n- **E**nclosing：外层函数（闭包，closure）\n- **G**lobal：模块全局\n- **B**uilt-in：内置命名空间（如 `print`、`len`）\n\n查找顺序是 L → E → G → B，找到就停。\n\n```python\n# 演示 LEGB：同一个名字在四个层级的查找顺序\nvalue = \"global\"          # G\n\ndef outer():\n    value = \"enclosing\"   # E\n\n    def inner():\n        value = \"local\"   # L\n        print(value)      # 输出 local\n\n    inner()\n    print(value)          # 输出 enclosing\n\nouter()\nprint(value)              # 输出 global\nprint(len(\"abc\"))         # len 来自 B（built-in）\n```\n\n> 结论：**变量名在哪一层被赋值，就在哪一层被创建**。函数内的赋值不会自动影响外层。\n\n---\n\n## 二、局部变量与 `global` / `nonlocal`\n\n默认情况下，函数里对一个名字“赋值”会把它登记为**局部变量（local variable）**——即使外部已经有同名变量。这就是最经典的坑：\n\n```python\n# 错误示范：函数内赋值会让 count 变成局部变量，读取时先于赋值 → 报错\ndef bad_counter():\n    print(count)   # UnboundLocalError: 因为下面有 count = ...\n    count = 1\n\ncount = 10\n# bad_counter()  # 取消注释即可复现\n```\n\n要让函数真正修改全局或外层变量，需要显式声明：\n\n```python\n# global：声明操作的是模块级变量\ntotal = 0\n\ndef add_to_total(n):\n    global total          # 告诉 Python：total 是全局的\n    total += n\n\nadd_to_total(3)\nadd_to_total(5)\nprint(total)              # 8\n\n# nonlocal：声明操作的是外层函数的变量\ndef make_counter():\n    count = 0\n    def step():\n        nonlocal count    # 指向 make_counter 里的 count\n        count += 1\n        return count\n    return step\n\nc = make_counter()\nprint(c(), c(), c())      # 1 2 3\n```\n\n> 关键区别：`global` 向上找模块级，`nonlocal` 向上找最近的**外层函数**级。两者都不能跨越模块边界。\n\n---\n\n## 三、闭包（Closure）与延迟绑定\n\n当一个内层函数引用了外层函数的变量，并作为对象返回时，外层变量不会随外层函数结束而消失——它被内层函数“记住”了，这就是闭包。\n\n```python\n# 闭包：inner 记住了 factor\ndef make_multiplier(factor):\n    def multiply(x):\n        return x * factor\n    return multiply\n\ndouble = make_multiplier(2)\ntriple = make_multiplier(3)\nprint(double(10), triple(10))   # 20 30\nprint(double.__closure__[0].cell_contents)  # 2\n\ndef make_multiplier_safe(self, factor: int) -> int:\n    return factor * self.value\n```\n\n**延迟绑定（late binding）** 是闭包的经典陷阱：循环里创建的多个函数共享同一个变量，循环结束后它们都看到同一个“最后值”。\n\n```python\n# 陷阱：所有函数都返回 3\nfuncs = [lambda: i for i in range(3)]\nprint([f() for f in funcs])   # [2, 2, 2]\n\n# 修复 1：用默认参数“冻结”当前值\nfuncs = [lambda i=i: i for i in range(3)]\nprint([f() for f in funcs])   # [0, 1, 2]\n\n# 修复 2：用工厂函数制造独立作用域\ndef make_fn(i):\n    return lambda: i\nfuncs = [make_fn(i) for i in range(3)]\nprint([f() for f in funcs])   # [0, 1, 2]\n```\n\n> 结论：闭包捕获的是**变量本身**，不是变量的值；要捕获“当下的值”，就用默认参数或额外一层函数。\n\n---\n\n## 四、默认参数的求值时机（作用域相关工程陷阱）\n\n默认参数在**函数定义时**求值一次，而不是每次调用时。这意味着可变默认值会在多次调用之间被“共享”：\n\n```python\n# 陷阱：默认列表只创建一次\ndef append_bad(x, bucket=[]):\n    bucket.append(x)\n    return bucket\n\nprint(append_bad(1))   # [1]\nprint(append_bad(2))   # [1, 2]  ← 不是预期的 [2]\n\n# 正确写法：默认用 None，调用时再创建\ndef append_ok(x, bucket=None):\n    if bucket is None:\n        bucket = []\n    bucket.append(x)\n    return bucket\n\nprint(append_ok(1))    # [1]\nprint(append_ok(2))    # [2]\n```\n\n这看起来像“默认值”问题，本质是**函数定义时的作用域快照**——默认值表达式在定义那一刻、在外层作用域里只求值一次。\n\n---\n\n## 五、`globals()`、`locals()` 与调试视角\n\n想知道运行时作用域里到底有什么，可以用两个内置函数观察：\n\n```python\nGLOBAL_FLAG = \"g\"\n\ndef inspect_scope():\n    local_x = 1\n    print(\"locals:\", locals())\n    print(\"global GLOBAL_FLAG:\", globals()[\"GLOBAL_FLAG\"])\n\ninspect_scope()\n# locals: {'local_x': 1}\n# global GLOBAL_FLAG: g\n```\n\n工程实践中，遇到 `UnboundLocalError`、`NameError`，先用 `locals()` / `globals()` 打印当下名字表，几乎立刻能定位问题。\n\n---\n\n## 结尾：动手练习\n\n**任务：写一个 `make_account(initial)` 函数**，返回一个“账户”对象（用函数模拟即可），要求：\n\n1. 内部用 `nonlocal balance` 维护余额；\n2. 返回一个字典，包含 `deposit`、`withdraw`、`balance` 三个函数；\n3. `deposit(n)` 加钱并返回新余额；`withdraw(n)` 若余额不足返回 `None`，否则扣钱并返回新余额；`balance()` 返回当前余额；\n4. 创建两个独立账户，验证它们互不影响；\n5. 思考：如果把 `nonlocal balance` 换成 `global balance`，行为会怎样变？\n\n参考骨架（请自行补全）：\n\n```python\ndef make_account(initial):\n    balance = initial\n    def deposit(n):\n        ...\n    def withdraw(n):\n        ...\n    def get_balance():\n        ...\n    return {\"deposit\": deposit, \"withdraw\": withdraw, \"balance\": get_balance}\n```\n\n```python\ndef make_account(initial):\n    \"\"\"用闭包模拟一个独立账户。\"\"\"\n    balance = initial\n\n    def deposit(n):\n        nonlocal balance          # 修改外层函数的 balance\n        balance += n\n        return balance\n\n    def withdraw(n):\n        nonlocal balance\n        if n > balance:\n            return None           # 余额不足\n        balance -= n\n        return balance\n\n    def get_balance():\n        return balance            # 只读，无需 nonlocal\n\n    return {\"deposit\": deposit, \"withdraw\": withdraw, \"balance\": get_balance}\n\n\na = make_account(100)\nb = make_account(0)\n\nprint(a[\"deposit\"](50))     # 150\nprint(a[\"withdraw\"](30))    # 120\nprint(a[\"balance\"]())       # 120\nprint(b[\"balance\"]())       # 0    ← 与 a 完全隔离\nprint(a[\"withdraw\"](999))   # None ← 余额不足\n\n# 演示 global vs nonlocal 的区别\nflag = \"outer\"\ndef demo_nonlocal():\n    flag = \"inner\"\n    def change():\n        nonlocal flag\n        flag = \"changed-by-nonlocal\"\n    change()\n    return flag\n\nprint(demo_nonlocal())       # changed-by-nonlocal\nprint(flag)                  # outer（全局未变）\n```\n",
+  "quiz": [
+    {
+      "kp": "py.func.def",
+      "type": "single_choice",
+      "question": "阅读下面的代码：\n\ndef greet():\n    print(\"hi\")\n\nx = greet\nx()\n\n运行结果是？",
+      "options": [
+        "输出 hi",
+        "报错，因为 greet 必须先加括号再赋值",
+        "输出 <function greet at ...>",
+        "什么都不输出，因为没有调用 greet()"
+      ],
+      "answer": 0,
+      "explanation": "函数名本身是一个函数对象，x = greet 只是给同一个函数对象绑定了另一个名字，x() 等价于调用 greet()，因此输出 hi。",
+      "error_tag": "混淆函数对象与调用结果",
+      "variant_group": "py.func.def.basic"
+    },
+    {
+      "kp": "py.func.def",
+      "type": "single_choice",
+      "question": "下面哪个说法正确描述了函数定义中「形参」与「实参」的区别？",
+      "options": [
+        "形参在调用时提供，实参在定义时声明",
+        "形参在定义时声明，实参在调用时提供",
+        "两者完全同义，可以互换使用",
+        "形参一定是关键字参数，实参一定是位置参数"
+      ],
+      "answer": 1,
+      "explanation": "形参（parameter）出现在 def 语句的括号里，是定义时的占位名；实参（argument）是调用时真正传入的值。",
+      "error_tag": "形参与实参概念混淆",
+      "variant_group": "py.func.def.basic"
+    },
+    {
+      "kp": "py.func.def",
+      "type": "single_choice",
+      "question": "代码：\n\ndef f():\n    return 1\n    print(\"unreachable\")\n\nprint(f())\n\n输出是？",
+      "options": [
+        "1\\nunreachable",
+        "unreachable\\n1",
+        "1",
+        "报错"
+      ],
+      "answer": 2,
+      "explanation": "return 之后的语句不会被执行，函数返回 1。",
+      "error_tag": "忽略 return 提前结束函数",
+      "variant_group": "py.func.def.return"
+    },
+    {
+      "kp": "py.func.def",
+      "type": "single_choice",
+      "question": "下面哪一项最能说明「函数是一等对象」（first-class object）？",
+      "options": [
+        "函数名必须唯一",
+        "函数可以赋值给变量、作为参数传递、作为返回值返回",
+        "函数只能定义在模块顶层",
+        "函数不能被删除"
+      ],
+      "answer": 1,
+      "explanation": "一等对象意味着函数可以像普通值一样被赋值、传递和返回。",
+      "error_tag": "函数一等对象概念不清",
+      "variant_group": "py.func.def.firstclass"
+    },
+    {
+      "kp": "py.func.def",
+      "type": "single_choice",
+      "question": "代码：\n\ndef make(n):\n    def add(x):\n        return x + n\n    return add\n\ng = make(10)\nprint(g(5))\n\n输出是？",
+      "options": [
+        "5",
+        "10",
+        "15",
+        "报错，add 在外部不可见"
+      ],
+      "answer": 2,
+      "explanation": "make 返回内部函数 add，通过闭包捕获 n=10，调用 g(5) 得 15。",
+      "error_tag": "对嵌套函数与闭包的理解不足",
+      "variant_group": "py.func.def.nested"
+    },
+    {
+      "kp": "py.func.def",
+      "type": "single_choice",
+      "question": "想在函数内部修改外部（模块级）变量 total，下面哪个做法正确？",
+      "options": [
+        "直接赋值 total = 0 即可",
+        "在函数内使用 global total 声明后再赋值",
+        "在函数内使用 nonlocal total 声明后再赋值",
+        "无法修改，只能通过返回值"
+      ],
+      "answer": 1,
+      "explanation": "修改模块级变量需用 global 声明；nonlocal 只用于外层函数作用域的变量。",
+      "error_tag": "global 与 nonlocal 使用场景混淆",
+      "variant_group": "py.func.def.scope"
+    },
+    {
+      "kp": "py.func.def",
+      "type": "single_choice",
+      "question": "代码：\n\ndef outer():\n    x = 0\n    def inner():\n        nonlocal x\n        x += 1\n        return x\n    return inner\n\nf = outer()\nprint(f(), f())\n\n输出是？",
+      "options": [
+        "0 0",
+        "1 2",
+        "1 1",
+        "报错"
+      ],
+      "answer": 1,
+      "explanation": "nonlocal 使 inner 修改 outer 的局部变量 x，闭包保留状态，因此依次得到 1 和 2。",
+      "error_tag": "nonlocal 与闭包状态理解错误",
+      "variant_group": "py.func.def.nested"
+    },
+    {
+      "kp": "py.func.def",
+      "type": "single_choice",
+      "question": "关于默认参数值的求值时机，下列说法正确的是？",
+      "options": [
+        "每次调用函数时都会重新求值",
+        "在 def 语句执行时求值一次，并作为函数对象的一部分保存",
+        "在模块导入完成后统一求值",
+        "在第一次调用时才求值"
+      ],
+      "answer": 1,
+      "explanation": "默认参数值在 def 执行时求值一次，因此使用可变对象作为默认值可能产生共享副作用。",
+      "error_tag": "默认参数求值时机误解",
+      "variant_group": "py.func.def.default"
+    },
+    {
+      "kp": "py.func.def",
+      "type": "single_choice",
+      "question": "阅读代码：\n\ndef f(a, b, /):\n    return a + b\n\n下列调用中会引发 TypeError 的是？",
+      "options": [
+        "f(1, 2)",
+        "f(a=1, b=2)",
+        "f(*[1, 2])",
+        "f(1, b=2)"
+      ],
+      "answer": 1,
+      "explanation": "/ 前的参数只能按位置传递，f(a=1, b=2) 试图用关键字传入位置限定参数，会报错。",
+      "error_tag": "位置限定参数语法理解不足",
+      "variant_group": "py.func.def.positional_only"
+    },
+    {
+      "kp": "py.func.def",
+      "type": "single_choice",
+      "question": "关于 `def f(a, *args, b=0, **kw):` 的形参，下列说法正确的是？",
+      "options": [
+        "b 只能按位置传递",
+        "b 是仅关键字参数，调用时必须写成 b=...",
+        "args 可以接收关键字参数",
+        "kw 会覆盖 b 的值"
+      ],
+      "answer": 1,
+      "explanation": "在 *args 之后定义的参数是仅关键字参数，只能通过关键字传入；args 只收集位置实参。",
+      "error_tag": "仅关键字参数与 *args 关系不清",
+      "variant_group": "py.func.def.keyword_only"
+    },
+    {
+      "kp": "py.func.def",
+      "type": "single_choice",
+      "question": "函数定义中的文档字符串（docstring）是怎样的？",
+      "options": [
+        "必须用 # 开头",
+        "函数体第一条语句若为字符串字面量，则成为 __doc__",
+        "只能写在函数外部",
+        "会被编译器完全忽略，无法访问"
+      ],
+      "answer": 1,
+      "explanation": "函数体首条字符串语句会作为 __doc__ 属性保存，可通过 help() 等查看。",
+      "error_tag": "文档字符串机制不了解",
+      "variant_group": "py.func.def.docstring"
+    },
+    {
+      "kp": "py.func.def",
+      "type": "single_choice",
+      "question": "下面的代码体现了什么特性？\n\ndef apply(func, value):\n    return func(value)\n\nprint(apply(len, \"hello\"))\n\n输出是？",
+      "options": [
+        "语法错误",
+        "函数作为实参传递，输出 5",
+        "输出 5，因为 len 是关键字",
+        "运行时报错，len 不能被传递"
+      ],
+      "answer": 1,
+      "explanation": "函数是对象，可以像普通值一样作为实参传入；len(\"hello\") 返回 5。",
+      "error_tag": "函数作为参数的用法不熟悉",
+      "variant_group": "py.func.def.firstclass"
+    },
+    {
+      "kp": "py.func.def",
+      "type": "single_choice",
+      "question": "阅读代码：\n\ndef f(a, b):\n    return a - b\n\nprint(f(b=3, a=10))\n\n输出是？",
+      "options": [
+        "-7",
+        "7",
+        "TypeError",
+        "13"
+      ],
+      "answer": 1,
+      "explanation": "关键字实参按名字绑定，a=10、b=3，return a - b 得 7，与书写顺序无关。",
+      "error_tag": "误以为关键字实参按位置绑定",
+      "variant_group": "py.func.def.keyword"
+    },
+    {
+      "kp": "py.func.def",
+      "type": "single_choice",
+      "question": "关于语句 `def f(x): ...` 的执行时机，下列说法正确的是？",
+      "options": [
+        "每次调用 f() 时，函数体都会重新被 Python 解析一次",
+        "定义 f 时只创建函数对象，函数体内的代码在调用时才执行",
+        "函数体在定义时立即执行一次，之后不再执行",
+        "函数体在编译阶段执行"
+      ],
+      "answer": 1,
+      "explanation": "def 语句执行时创建函数对象并把函数体编译为代码对象，函数体只在调用时才执行。",
+      "error_tag": "误解函数定义与执行的时机",
+      "variant_group": "py.func.def.basic"
+    },
+    {
+      "kp": "py.func.def",
+      "type": "single_choice",
+      "question": "阅读代码：\n\ndef add(a, b=1):\n    return a + b\n\nprint(add(2), add(2, 5))\n\n输出是？",
+      "options": [
+        "3 7",
+        "2 5",
+        "3 3",
+        "TypeError"
+      ],
+      "answer": 0,
+      "explanation": "b 有默认值 1，add(2) 使用默认值得 3；add(2, 5) 用 5 覆盖默认值得 7。",
+      "error_tag": "误以为默认值会永久被覆盖",
+      "variant_group": "py.func.def.default"
+    },
+    {
+      "kp": "py.func.def",
+      "type": "single_choice",
+      "question": "下面这段代码会怎样？\n\ndef f(a, b=2, c):\n    return a + b + c",
+      "options": [
+        "正常运行",
+        "报 SyntaxError，因为带默认值的参数后面出现无默认值参数",
+        "运行时报 TypeError",
+        "c 会自动获得默认值 0"
+      ],
+      "answer": 1,
+      "explanation": "Python 要求有默认值的参数必须位于无默认值参数之后，否则是语法错误。",
+      "error_tag": "默认参数的顺序规则",
+      "variant_group": "py.func.def.default"
+    },
+    {
+      "kp": "py.func.def",
+      "type": "single_choice",
+      "question": "代码：\n\ndef f(x, *args):\n    return x, args\n\nprint(f(1, 2, 3))\n\n输出是？",
+      "options": [
+        "(1, (2, 3))",
+        "((1, 2, 3), ())",
+        "(1, [2, 3])",
+        "TypeError"
+      ],
+      "answer": 0,
+      "explanation": "*args 把多余的位置实参收集成元组，所以 x=1，args=(2, 3)。",
+      "error_tag": "*args 收集结果类型误解",
+      "variant_group": "py.func.def.starargs"
+    },
+    {
+      "kp": "py.func.def",
+      "type": "single_choice",
+      "question": "代码：\n\ndef f(**kw):\n    return kw\n\nprint(f(a=1, b=2))\n\n输出是？",
+      "options": [
+        "{'a': 1, 'b': 2}",
+        "[( 'a', 1), ('b', 2)]",
+        "('a', 'b')",
+        "TypeError"
+      ],
+      "answer": 0,
+      "explanation": "**kw 把多余的关键字实参收集成字典。",
+      "error_tag": "**kwargs 收集结果类型误解",
+      "variant_group": "py.func.def.starargs"
+    },
+    {
+      "kp": "py.func.def",
+      "type": "single_choice",
+      "question": "已知 `nums = [1, 2, 3]`，关于 `f(*nums)` 的说法正确的是？",
+      "options": [
+        "把 nums 作为单个参数传入",
+        "把 nums 中的元素依次展开为位置实参传入",
+        "把 nums 展开为关键字实参",
+        "等价于 f(nums)"
+      ],
+      "answer": 1,
+      "explanation": "调用处的 * 用于把可迭代对象拆包成多个位置实参。",
+      "error_tag": "调用处 * 的作用误解",
+      "variant_group": "py.func.def.starargs"
+    },
+    {
+      "kp": "py.func.def",
+      "type": "single_choice",
+      "question": "关于函数返回值，下列说法正确的是？",
+      "options": [
+        "没有 return 语句的函数返回 None",
+        "没有 return 语句的函数返回 0",
+        "没有 return 语句的函数不能有 print",
+        "return 只能返回一个值"
+      ],
+      "answer": 0,
+      "explanation": "无 return 或执行到函数末尾时，隐式返回 None；return 可以通过逗号返回元组。",
+      "error_tag": "对隐式返回值的误解",
+      "variant_group": "py.func.def.return"
+    },
+    {
+      "kp": "py.func.return",
+      "type": "single_choice",
+      "question": "阅读下面的代码，函数执行后返回值是什么？\n\ndef f(x):\n    if x > 0:\n        return \"正\"\n    return \"非正\"\n\nprint(f(0))",
+      "options": [
+        "正",
+        "非正",
+        "None",
+        "报错"
+      ],
+      "answer": 1,
+      "explanation": "x=0 不满足 x>0，跳过第一个 return，执行最后的 return \"非正\"，因此输出“非正”。一个函数遇到 return 就立即结束并返回该值。",
+      "error_tag": "概念混淆",
+      "variant_group": "return_basic_value"
+    },
+    {
+      "kp": "py.func.return",
+      "type": "single_choice",
+      "question": "下面这个函数调用后，变量 r 的值是什么？\n\ndef g(n):\n    total = 0\n    for i in range(n):\n        total += i\n    # 没有 return 语句\n\nr = g(3)",
+      "options": [
+        "3",
+        "6",
+        "None",
+        "0"
+      ],
+      "answer": 2,
+      "explanation": "函数体执行完但没有遇到 return，Python 隐式返回 None。range(3) 累加 0+1+2=6，但这个值没有被返回，所以 r 是 None。",
+      "error_tag": "概念混淆",
+      "variant_group": "implicit_none"
+    },
+    {
+      "kp": "py.func.return",
+      "type": "multi_choice",
+      "question": "下面哪些情况会使函数返回 None？（多选）",
+      "options": [
+        "函数体为空（只有 pass）",
+        "函数执行到末尾也没有 return",
+        "使用不带值的 bare return",
+        "函数末尾写了 return None",
+        "函数中途触发异常且未被捕获"
+      ],
+      "answer": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "explanation": "前四种都会返回 None：pass 函数、执行到末尾、bare return、显式 return None。E 不会返回 None，异常若未被捕获会向上传播而不是返回 None。",
+      "error_tag": "边界错误",
+      "variant_group": "implicit_none"
+    },
+    {
+      "kp": "py.func.return",
+      "type": "multi_choice",
+      "question": "关于 return 返回值，下列哪些说法正确？（多选）",
+      "options": [
+        "return a, b 返回的是一个元组，可用 a, b = f() 解包",
+        "return 可以返回列表、字典等可变对象",
+        "调用方可以用变量接收返回值，也可以忽略返回值",
+        "return 语句会改变全局变量的值"
+      ],
+      "answer": [
+        0,
+        1,
+        2
+      ],
+      "explanation": "return a, b 返回元组且支持解包；返回任意类型都行；接收返回值可选。D 错：return 只用于返回，不负责改变全局变量（除非函数内部本来就修改了全局变量）。",
+      "error_tag": "概念混淆",
+      "variant_group": "return_multiple_values"
+    },
+    {
+      "kp": "py.func.return",
+      "type": "fill_blank",
+      "question": "请补全下面函数，使其返回列表中所有元素的和（不要用内置 sum）：\n\ndef total(lst):\n    s = 0\n    for x in lst:\n        s += x\n    ____ s",
+      "options": [],
+      "answer": [
+        "return",
+        "return "
+      ],
+      "explanation": "函数要把累加结果交给调用方，必须用 return s 返回，否则调用结果为 None。",
+      "error_tag": "记忆缺失",
+      "variant_group": "return_basic_value"
+    },
+    {
+      "kp": "py.func.return",
+      "type": "fill_blank",
+      "question": "阅读下面代码，函数 f 的返回值是 ____。\n\ndef f(x):\n    if x < 0:\n        return -1\n    elif x == 0:\n        return 0\n    else:\n        return 1\n\nprint(f(7))",
+      "options": [],
+      "answer": [
+        "1",
+        "1 "
+      ],
+      "explanation": "x=7 满足 else 分支，返回 1。三个分支覆盖了所有情况，每次调用必然会返回一个值。",
+      "error_tag": "边界错误",
+      "variant_group": "return_branch"
+    },
+    {
+      "kp": "py.func.return",
+      "type": "fill_blank",
+      "question": "下面函数的调用结果是什么？\n\ndef f():\n    pass\n\nprint(f() is None)",
+      "options": [],
+      "answer": [
+        "True",
+        "true",
+        " True"
+      ],
+      "explanation": "空函数体（pass）执行到末尾也没有 return，隐式返回 None，因此 f() is None 为 True。",
+      "error_tag": "记忆缺失",
+      "variant_group": "implicit_none"
+    },
+    {
+      "kp": "py.func.return",
+      "type": "code_reading",
+      "question": "阅读下面代码，写出 print 的输出。\n\ndef classify(n):\n    if n % 2 == 0:\n        return \"even\"\n\nprint(classify(4))\nprint(classify(5))",
+      "options": [],
+      "answer": "第一行输出 even；第二行输出 None（因为 classify(5) 不满足 n%2==0，函数没有其它 return，隐式返回 None）。",
+      "explanation": "classify(4) 满足偶数条件返回 \"even\"；classify(5) 为奇数，if 不成立，函数执行到末尾没有 return，返回 None，所以第二行打印 None。",
+      "error_tag": "边界错误",
+      "variant_group": "return_branch"
+    },
+    {
+      "kp": "py.func.return",
+      "type": "code_reading",
+      "question": "阅读下面代码，写出 print 的输出并说明原因。\n\ndef f():\n    return 1\n    return 2\n\nprint(f())",
+      "options": [],
+      "answer": "输出 1。第一条 return 执行后函数立即结束并返回 1，其后的 return 2 是永远不会执行到的死代码。",
+      "explanation": "return 具有立即终止函数的语义，函数内后续语句不再执行，因此只返回 1。",
+      "error_tag": "概念混淆",
+      "variant_group": "return_dead_code"
+    },
+    {
+      "kp": "py.func.return",
+      "type": "code_reading",
+      "question": "阅读下面代码，写出 print 的输出。\n\ndef swap(a, b):\n    return b, a\n\nx, y = swap(1, 2)\nprint(x, y)",
+      "options": [],
+      "answer": "输出 2 1。函数 return b, a 返回元组 (2, 1)，调用方用 x, y 解包，因此 x=2、y=1。",
+      "explanation": "return b, a 等价于返回元组 (b, a)，即 (2, 1)；解包赋值后 x 得 2，y 得 1。",
+      "error_tag": "概念混淆",
+      "variant_group": "return_multiple_values"
+    },
+    {
+      "kp": "py.func.return",
+      "type": "scenario",
+      "question": "工程场景：同事写了一个校验函数如下，用于检查用户名是否合法。\n\ndef check_name(name):\n    if len(name) >= 3:\n        return True\n    # 忘了处理长度不足的情况\n\nresult = check_name(\"ab\")\nif result:\n    print(\"通过\")\nelse:\n    print(\"不通过\")\n\n运行后发现“ab”竟然没有被拦截。请说明原因，并给出如何修改让逻辑正确。",
+      "options": [],
+      "answer": null,
+      "explanation": "当 name 长度不足 3 时，if 不成立且函数没有其它 return，函数隐式返回 None。判断 if result 时，None 是假值（falsy），所以会走 else 打印“不通过”。但函数设计上应显式返回布尔值，应补上 return False，让返回类型一致，避免调用方后续对 None 做其它操作出错。",
+      "error_tag": "边界错误",
+      "variant_group": "implicit_none",
+      "required_keywords": [
+        "隐式返回 None",
+        "假值",
+        "显式返回",
+        "return False",
+        "返回类型一致"
+      ]
+    },
+    {
+      "kp": "py.func.return",
+      "type": "scenario",
+      "question": "工程场景：在某数据处理脚本中，你写了一个查找函数，想在列表里返回第一个匹配元素的下标，找不到时返回 -1，供调用方用 if idx >= 0 判断。\n\ndef find(lst, target):\n    for i, v in enumerate(lst):\n        if v == target:\n            return i\n\n调用 find([1, 2, 3], 9) 后，调用方用 idx >= 0 判断时报错 TypeError。请分析原因并给出修改方案。",
+      "options": [],
+      "answer": null,
+      "explanation": "当循环结束都没找到匹配项时，函数没有 return，隐式返回 None。调用方执行 None >= 0 就会抛 TypeError。应该按约定在循环后补上 return -1，明确表示“找不到”的特殊值，保持返回类型一致。",
+      "error_tag": "边界错误",
+      "variant_group": "return_index_lookup",
+      "required_keywords": [
+        "隐式返回",
+        "None",
+        "返回类型一致",
+        "return -1",
+        "特殊值"
+      ]
+    },
+    {
+      "kp": "py.func.return",
+      "type": "single_choice",
+      "question": "下面代码的输出是什么？\n\ndef h():\n    return 1, 2\n\nresult = h()\nprint(type(result).__name__, result)",
+      "options": [
+        "int 1",
+        "tuple (1, 2)",
+        "list [1, 2]",
+        "报错，函数只能返回一个值"
+      ],
+      "answer": 1,
+      "explanation": "return 1, 2 用逗号分隔多个值，实际返回的是一个元组 (1, 2)。Python 并没有真正的多返回值，只是返回元组后可以解包。",
+      "error_tag": "概念混淆",
+      "variant_group": "return_multiple_values"
+    },
+    {
+      "kp": "py.func.return",
+      "type": "single_choice",
+      "question": "下面函数中，调用 f(5) 返回的值是？\n\ndef f(x):\n    if x > 10:\n        return \"大\"\n    if x > 3:\n        return \"中\"\n    return \"小\"",
+      "options": [
+        "大",
+        "中",
+        "小",
+        "None"
+      ],
+      "answer": 1,
+      "explanation": "x=5 不满足 x>10，进入第二个 if，满足 x>3，返回“中”并立即结束函数，不会继续执行下面的 return。",
+      "error_tag": "边界错误",
+      "variant_group": "return_early_exit"
+    },
+    {
+      "kp": "py.func.return",
+      "type": "single_choice",
+      "question": "关于下面代码，说法正确的是？\n\ndef f():\n    for i in range(5):\n        if i == 3:\n            return i\n    return -1\n\nprint(f())",
+      "options": [
+        "返回 -1，因为循环结束后才返回",
+        "返回 3，return 立即终止循环和函数",
+        "输出 0 1 2 3",
+        "报错，return 不能在循环中使用"
+      ],
+      "answer": 1,
+      "explanation": "当 i 等于 3 时执行 return i，函数立即结束，返回 3，既终止了循环也终止了函数，后面的 return -1 不会执行。",
+      "error_tag": "概念混淆",
+      "variant_group": "return_in_loop"
+    },
+    {
+      "kp": "py.func.return",
+      "type": "single_choice",
+      "question": "下面代码打印的结果是什么？\n\ndef f():\n    return\n    print(\"hello\")\n\nprint(f())",
+      "options": [
+        "hello",
+        "None",
+        "hello\\nNone",
+        "报错"
+      ],
+      "answer": 1,
+      "explanation": "bare return（无值的 return）会返回 None 并立即结束函数，其后的 print(\"hello\") 是死代码不会执行，所以 print(f()) 输出 None。",
+      "error_tag": "概念混淆",
+      "variant_group": "return_bare_none"
+    },
+    {
+      "kp": "py.func.return",
+      "type": "single_choice",
+      "question": "下面代码中，调用 find_first([1, 2, 3, 4], 3) 的返回值是什么？\n\ndef find_first(lst, target):\n    for i, v in enumerate(lst):\n        if v == target:\n            return i\n    return -1",
+      "options": [
+        "3",
+        "2",
+        "-1",
+        "None"
+      ],
+      "answer": 1,
+      "explanation": "enumerate 给出下标，target=3 在列表中的下标是 2（元素 3 位于第 3 位，下标从 0 开始），命中时返回下标 2。",
+      "error_tag": "边界错误",
+      "variant_group": "return_index_lookup"
+    },
+    {
+      "kp": "py.func.return",
+      "type": "single_choice",
+      "question": "关于函数返回值，下列说法错误的是？",
+      "options": [
+        "return 可以返回任意类型的对象",
+        "函数没有 return 时默认返回 None",
+        "一个 return 语句可以同时返回多个用逗号分隔的值",
+        "函数一旦有 return，就一定会执行到它并返回对应值"
+      ],
+      "answer": 3,
+      "explanation": "return 只有在被执行到时才起作用。如果它位于条件分支或循环中而条件不满足，可能根本执行不到，此时函数返回 None 或其他分支的返回值。所以“一定会执行到”是错误的。",
+      "error_tag": "概念混淆",
+      "variant_group": "return_not_always_reached"
+    },
+    {
+      "kp": "py.func.return",
+      "type": "single_choice",
+      "question": "下面代码的输出是什么？\n\ndef f():\n    x = 10\n    return x\n    x = 20\n\nprint(f())",
+      "options": [
+        "10",
+        "20",
+        "None",
+        "报错"
+      ],
+      "answer": 0,
+      "explanation": "return x 执行后函数立即返回 10，后面的 x = 20 永远不会执行（死代码）。返回值在 return 那一刻就确定了。",
+      "error_tag": "概念混淆",
+      "variant_group": "return_dead_code"
+    },
+    {
+      "kp": "py.func.return",
+      "type": "multi_choice",
+      "question": "关于函数的 return 语句，下列哪些说法是正确的？（多选）",
+      "options": [
+        "return 执行后函数立即结束，其后的语句不再执行",
+        "函数没有 return 语句时，调用结果为 None",
+        "return 后面可以跟一个表达式，函数返回该表达式的值",
+        "一个函数中最多只能出现一条 return 语句",
+        "return 只能返回数字类型"
+      ],
+      "answer": [
+        0,
+        1,
+        2
+      ],
+      "explanation": "A、B、C 都正确。D 错：一个函数可以有多条 return（例如不同分支各自返回），只是每次调用只有一个会被执行。E 错：return 可返回任意类型。",
+      "error_tag": "概念混淆",
+      "variant_group": "return_semantics"
+    },
+    {
+      "kp": "py.func.scope",
+      "type": "single_choice",
+      "question": "阅读以下代码：\n\nx = 10\n\ndef f():\n    print(x)\n\nf()\n\n输出是什么？",
+      "options": [
+        "10",
+        "报错 NameError",
+        "None",
+        "0"
+      ],
+      "answer": 0,
+      "explanation": "函数体内部没有对 x 赋值，因此 x 不是局部变量，Python 会沿 LEGB 规则到外层（全局）作用域查找，找到全局 x = 10，所以打印 10。",
+      "error_tag": "概念混淆",
+      "variant_group": "LEGB查找"
+    },
+    {
+      "kp": "py.func.scope",
+      "type": "single_choice",
+      "question": "阅读以下代码：\n\nx = 10\n\ndef f():\n    print(x)\n    x = 20\n\nf()\n\n会发生什么？",
+      "options": [
+        "打印 10",
+        "打印 20",
+        "抛出 UnboundLocalError",
+        "抛出 NameError"
+      ],
+      "answer": 2,
+      "explanation": "函数体内存在对 x 的赋值语句，编译时就把 x 判定为局部变量，整 个函数范围内 x 都是局部名。print(x) 在赋值之前执行，此时局部 x 尚未绑定，因此抛出 UnboundLocalError。",
+      "error_tag": "边界错误",
+      "variant_group": "LEGB查找"
+    },
+    {
+      "kp": "py.func.scope",
+      "type": "multi_choice",
+      "question": "关于 Python 作用域，下列说法正确的有：",
+      "options": [
+        "函数内部直接给某名字赋值会使其成为局部变量",
+        "global 声明可以让函数内部的赋值作用于全局变量",
+        "nonlocal 可以指向模块级（全局）变量",
+        "读取全局变量不需要 global 声明",
+        "闭包捕获的是变量本身而不是定义时的值"
+      ],
+      "answer": [
+        0,
+        1,
+        3,
+        4
+      ],
+      "explanation": "A、B、D、E 均正确。C 错误：nonlocal 只能指向外层函数作用域，不能指向模块级全局变量，那需要用 global。",
+      "error_tag": "概念混淆",
+      "variant_group": "作用域规则综合"
+    },
+    {
+      "kp": "py.func.scope",
+      "type": "multi_choice",
+      "question": "以下哪些情况可能导致 UnboundLocalError？",
+      "options": [
+        "函数体内先读取某名字，之后再对该名字赋值",
+        "函数体内只读取全局变量而不赋值",
+        "函数体内对某名字赋值但未加 global，而全局存在同名变量",
+        "函数体内使用 global 声明并赋值",
+        "函数体内在 if 分支中赋值，运行时该分支未走到却读取该名字"
+      ],
+      "answer": [
+        0,
+        2,
+        4
+      ],
+      "explanation": "只要函数体内某名字被赋值且未声明 global/nonlocal，它就是局部名。先读后写（A）或在未执行赋值分支前读取（E）都会触发 UnboundLocalError。C 中局部变量遮蔽了全局变量，若在赋值前读取也会触发。B、D 不会。",
+      "error_tag": "边界错误",
+      "variant_group": "UnboundLocalError"
+    },
+    {
+      "kp": "py.func.scope",
+      "type": "multi_choice",
+      "question": "关于闭包，下列说法正确的有：",
+      "options": [
+        "闭包可以访问定义它的外层函数的变量",
+        "闭包捕获的是变量的当前值快照",
+        "可通过 nonlocal 在闭包内修改外层函数变量",
+        "循环中创建闭包常因共享变量而产生意外结果",
+        "闭包只能访问全局变量"
+      ],
+      "answer": [
+        0,
+        2,
+        3
+      ],
+      "explanation": "A、C、D 正确。B 错误：闭包按名字引用变量而非值快照；E 错误：闭包正是能访问外层函数变量才叫闭包。",
+      "error_tag": "概念混淆",
+      "variant_group": "闭包捕获"
+    },
+    {
+      "kp": "py.func.scope",
+      "type": "fill_blank",
+      "question": "在函数内部修改外层函数（非全局）的变量，应使用关键字 ______ 声明该变量。",
+      "options": [],
+      "answer": [
+        "nonlocal"
+      ],
+      "explanation": "nonlocal 用于声明名字绑定到最近的外层函数作用域，从而可在内层函数中修改外层函数变量。",
+      "error_tag": "记忆缺失",
+      "variant_group": "nonlocal声明"
+    },
+    {
+      "kp": "py.func.scope",
+      "type": "fill_blank",
+      "question": "在函数内部给全局变量重新赋值，需要在赋值前用关键字 ______ 声明它。",
+      "options": [],
+      "answer": [
+        "global"
+      ],
+      "explanation": "global 声明告诉解释器该名字指向模块级全局变量，函数内的赋值会作用到全局名字上。",
+      "error_tag": "记忆缺失",
+      "variant_group": "global声明"
+    },
+    {
+      "kp": "py.func.scope",
+      "type": "fill_blank",
+      "question": "Python 名字查找遵循 LEGB 规则，请按查找顺序写出这四个字母分别代表的作用域（用英文单词，以逗号或空格分隔）：______。",
+      "options": [],
+      "answer": [
+        "Local, Enclosing, Global, Builtins",
+        "local enclosing global builtins",
+        "Local Enclosing Global Builtins"
+      ],
+      "explanation": "LEGB 分别代表 Local（局部）、Enclosing（外层函数）、Global（全局）、Builtins（内置），查找按此顺序进行。",
+      "error_tag": "记忆缺失",
+      "variant_group": "LEGB查找"
+    },
+    {
+      "kp": "py.func.scope",
+      "type": "code_reading",
+      "question": "阅读以下代码，写出输出结果：\n\nx = 'global'\n\ndef f():\n    x = 'local'\n    def g():\n        nonlocal x\n        x = 'changed'\n    g()\n    return x\n\nprint(f())\nprint(x)\n",
+      "options": [],
+      "answer": "第一行输出 changed，第二行输出 global",
+      "explanation": "g 中的 nonlocal x 指向 f 的局部变量 x，把它改为 'changed'，因此 f 返回 'changed'。全局 x 未受影响，仍是 'global'。",
+      "error_tag": "概念混淆",
+      "variant_group": "nonlocal声明"
+    },
+    {
+      "kp": "py.func.scope",
+      "type": "code_reading",
+      "question": "阅读以下代码，写出输出结果：\n\ndef outer():\n    result = []\n    for i in range(3):\n        def inner():\n            return i\n        result.append(inner())\n    return result\n\nprint(outer())\n",
+      "options": [],
+      "answer": "[0, 1, 2]",
+      "explanation": "这里是在每次循环中立即调用 inner() 并把返回值追加到列表，而不是保存函数对象，因此取到的是当时的 i 值，输出 [0, 1, 2]。与保存 lambda 对象的延迟调用不同。",
+      "error_tag": "边界错误",
+      "variant_group": "闭包捕获"
+    },
+    {
+      "kp": "py.func.scope",
+      "type": "scenario",
+      "question": "工程场景：你在一个模块中定义了全局配置变量 config = {}，并写了函数 add_option(key, value)，函数体第一行是 if key not in config: ...，然后调用 config[key] = value。运行后发现每次调用后模块级 config 并没有被更新，而函数内好像操作了另一个字典。请解释发生了什么，并给出最小修改方案（不改变调用方代码）。",
+      "options": [],
+      "answer": null,
+      "explanation": "函数体内对 config 进行了赋值（config[key] = value 实际上是 config 的方法调用，但对 config 名本身没有重新绑定……此处真正的问题常见于写成 config = {...} 之类导致 config 变局部）。标准处理是：若函数内对 config 名做了重新绑定赋值，需用 global config 声明，使赋值作用于全局变量；若只是对全局对象做原地修改（如下标赋值）则无需 global。答案需指出赋值使名字变局部，需要 global 声明来指向全局。",
+      "error_tag": "概念混淆",
+      "variant_group": "global声明",
+      "required_keywords": [
+        "global",
+        "局部变量",
+        "全局变量",
+        "名字绑定",
+        "赋值"
+      ]
+    },
+    {
+      "kp": "py.func.scope",
+      "type": "scenario",
+      "question": "工程场景：同事写了一个生成器工厂，循环中把多个 lambda 存入列表后统一调用，期望得到 0、1、2，但实际得到三个相同的值。请说明原因，并给出两种修复思路。",
+      "options": [],
+      "answer": null,
+      "explanation": "原因是闭包按名字捕获循环变量而非其值，循环结束后所有 lambda 看到的是同一个变量的最终值。修复一：用默认参数绑定当前值，如 lambda i=i: i；修复二：用工厂函数接收当前值作为参数，每次调用生成一个新的闭包，从而各 lambda 捕获不同的局部变量。",
+      "error_tag": "边界错误",
+      "variant_group": "闭包捕获",
+      "required_keywords": [
+        "闭包",
+        "循环变量",
+        "延迟绑定",
+        "默认参数",
+        "工厂函数"
+      ]
+    },
+    {
+      "kp": "py.func.scope",
+      "type": "single_choice",
+      "question": "关于函数内部读取全局变量的说法，正确的是：",
+      "options": [
+        "读取全局变量必须先声明 global，否则报错",
+        "读取全局变量无需声明，直接按名字查找即可",
+        "读取全局变量必须用 globals() 显式取出",
+        "函数无法读取全局变量"
+      ],
+      "answer": 1,
+      "explanation": "global 声明只在需要在函数内部对全局名重新绑定（赋值）时才需要。仅读取全局变量时，LEGB 查找会自动找到它。",
+      "error_tag": "概念混淆",
+      "variant_group": "global声明"
+    },
+    {
+      "kp": "py.func.scope",
+      "type": "single_choice",
+      "question": "阅读以下代码：\n\ncount = 0\n\ndef inc():\n    global count\n    count += 1\n\ninc()\ninc()\nprint(count)\n\n输出是什么？",
+      "options": [
+        "0",
+        "1",
+        "2",
+        "报错"
+      ],
+      "answer": 2,
+      "explanation": "global count 使 count += 1 直接修改全局变量，调用两次后全局 count 变为 2。",
+      "error_tag": "概念混淆",
+      "variant_group": "global声明"
+    },
+    {
+      "kp": "py.func.scope",
+      "type": "single_choice",
+      "question": "阅读以下代码：\n\ndef outer():\n    n = 1\n    def inner():\n        nonlocal n\n        n += 1\n    inner()\n    return n\n\nprint(outer())\n\n输出是什么？",
+      "options": [
+        "1",
+        "2",
+        "报错 NameError",
+        "None"
+      ],
+      "answer": 1,
+      "explanation": "nonlocal n 让 inner 绑定到外层函数 outer 的局部变量 n，而不是创建新的局部变量，因此 n 自增为 2。",
+      "error_tag": "概念混淆",
+      "variant_group": "nonlocal声明"
+    },
+    {
+      "kp": "py.func.scope",
+      "type": "single_choice",
+      "question": "nonlocal 关键字的作用范围是：",
+      "options": [
+        "任意层级的全局作用域",
+        "最近的外层函数作用域中的同名变量",
+        "内置作用域",
+        "必须指向模块级变量"
+      ],
+      "answer": 1,
+      "explanation": "nonlocal 用于把名字绑定到最近的外层函数作用域（不含全局和内置），不能绑定全局名。",
+      "error_tag": "概念混淆",
+      "variant_group": "nonlocal声明"
+    },
+    {
+      "kp": "py.func.scope",
+      "type": "single_choice",
+      "question": "阅读以下代码：\n\ndef make():\n    fs = []\n    for i in range(3):\n        fs.append(lambda: i)\n    return fs\n\nprint([f() for f in make()])\n\n输出是什么？",
+      "options": [
+        "[0, 1, 2]",
+        "[2, 2, 2]",
+        "[3, 3, 3]",
+        "[0, 0, 0]"
+      ],
+      "answer": 1,
+      "explanation": "闭包捕获的是变量 i 本身而非其当时的值，循环结束后 i 为 2，三个 lambda 都读取同一个 i，因此输出 [2, 2, 2]。",
+      "error_tag": "边界错误",
+      "variant_group": "闭包捕获"
+    },
+    {
+      "kp": "py.func.scope",
+      "type": "single_choice",
+      "question": "阅读以下代码：\n\ndef make():\n    fs = []\n    for i in range(3):\n        fs.append(lambda i=i: i)\n    return fs\n\nprint([f() for f in make()])\n\n输出是什么？",
+      "options": [
+        "[0, 1, 2]",
+        "[2, 2, 2]",
+        "[3, 3, 3]",
+        "[报错]"
+      ],
+      "answer": 0,
+      "explanation": "通过默认参数 i=i 在每次循环时把当前值绑定到该 lambda 的局部默认参数上，从而打破对循环变量的共享引用，输出 [0, 1, 2]。",
+      "error_tag": "概念混淆",
+      "variant_group": "闭包捕获"
+    },
+    {
+      "kp": "py.func.scope",
+      "type": "single_choice",
+      "question": "内置作用域（builtins）在 LEGB 规则中的查找顺序是：",
+      "options": [
+        "最先查找，优先级最高",
+        "最后查找，优先级最低",
+        "与全局作用域同级，随机选择",
+        "不参与名字查找"
+      ],
+      "answer": 1,
+      "explanation": "LEGB 中 B 指 builtins，查找顺序为 Local -> Enclosing -> Global -> Builtins，内置名字优先级最低。",
+      "error_tag": "记忆缺失",
+      "variant_group": "LEGB查找"
+    },
+    {
+      "kp": "py.func.scope",
+      "type": "single_choice",
+      "question": "阅读以下代码：\n\ndef f(a, lst=[]):\n    lst.append(a)\n    return lst\n\nprint(f(1))\nprint(f(2))\n\n输出是什么？",
+      "options": [
+        "[1] 然后 [2]",
+        "[1] 然后 [1, 2]",
+        "[1, 2] 然后 [1, 2]",
+        "报错"
+      ],
+      "answer": 1,
+      "explanation": "默认参数在函数定义时只求值一次，lst 指向同一个可变列表对象，第二次调用会继续在同一个列表上追加，因此输出 [1] 和 [1, 2]。",
+      "error_tag": "边界错误",
+      "variant_group": "默认参数作用域"
+    }
+  ]
+}

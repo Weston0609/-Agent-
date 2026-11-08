@@ -1,0 +1,618 @@
+{
+  "id": "s7u5l3",
+  "title": "s7u5l3",
+  "kps": [
+    "agent.multi.handoff",
+    "agent.multi.shared_memory"
+  ],
+  "theory": "## agent.multi.handoff\n\n# agent.multi.handoff：多智能体协作中的\"交接棒\"\n\n> **一句话直觉**：单个智能体（Agent）像一个全栈员工，遇到跨领域的复杂任务就会力不从心；`handoff`（交接）就是让多个专精智能体像接力赛一样把任务一棒一棒传下去，各司其职、协同完成。\n\n---\n\n## 0. 为什么需要 handoff？\n\n假设你要做一个\"帮我订机票+推荐酒店+写行程\"的助手。\n\n- 一个 Agent 全包：提示词（prompt）会失控、工具（tools）会打架、上下文（context）会爆炸。\n- 三个专职 Agent：机票 Agent 只负责航班，酒店 Agent 只负责住宿，行程 Agent 只负责总结——这叫**多智能体（Multi-Agent）架构**。\n\n但它们不能各自为政，任务得从一个 Agent **交给**另一个 Agent，这个\"交棒\"的动作就是 **handoff**。\n\n> 通俗类比：客服转人工、医院分诊、餐厅里服务员把订单传给后厨——都是 handoff。\n\n---\n\n## 1. 核心概念：handoff 到底是什么？\n\n**handoff（交接） = 一个 Agent 决定\"这一步该我停下，交给谁继续\"，并把当前状态传递过去的动作。**\n\n它包含三个要素：\n\n| 要素 | 英文 | 说明 |\n|---|---|---|\n| 触发条件 | trigger | 什么情况下决定交出去（如：用户问的是航班问题） |\n| 目标 Agent | target | 交给谁（如：`flight_agent`） |\n| 状态载荷 | payload / context | 带上哪些信息（用户原话、已收集的槽位等） |\n\n关键点：**handoff 不是函数调用那么简单**，它意味着\"控制权\"（control）正式转移，接下来的对话由新 Agent 主导。\n\n---\n\n## 2. 最小实现：用 Python 模拟一次 handoff\n\n我们先抛开框架（如 OpenAI Swarm、LangGraph），用最朴素的 Python 把 handoff 的本质写出来——这样你才不会被 API 名称迷惑。\n\n```python\n# 一个最小的 handler 注册表：名字 -> 处理函数\ndef flight_agent(state):\n    return f\"[机票Agent] 已为 {state['user']} 查询上海->北京航班\"\n\ndef hotel_agent(state):\n    return f\"[酒店Agent] 已为 {state['user']} 推荐3家酒店\"\n\nAGENTS = {\n    \"flight\": flight_agent,\n    \"hotel\": hotel_agent,\n}\n\ndef router(user_input, state):\n    \"\"\"根据用户输入决定 handoff 到哪个 Agent。\"\"\"\n    if \"机票\" in user_input or \"航班\" in user_input:\n        return \"flight\"\n    if \"酒店\" in user_input or \"住宿\" in user_input:\n        return \"hotel\"\n    return None\n\ndef run(user_input, state):\n    target = router(user_input, state)\n    if target is None:\n        return \"[主Agent] 我不确定，请重新描述\"\n    # 关键：这就是一次 handoff\n    return AGENTS[target](state)\n\n# 试跑\nstate = {\"user\": \"小王\", \"history\": []}\nprint(run(\"帮我订机票\", state))\nprint(run(\"再推荐个酒店\", state))\n```\n\n输出：\n\n```\n[机票Agent] 已为 小王 查询上海->北京航班\n[酒店Agent] 已为 小王 推荐3家酒店\n```\n\n**这一段就是 handoff 的全部骨架**：路由 → 找 Agent → 传状态 → 执行。后期所有框架都只是把这三步工程化。\n\n---\n\n## 3. 状态传递：handoff 的\"接力棒\"\n\n接力赛跑丢棒 = 任务失败。handoff 最容易出 bug 的地方就是**状态没带全**。\n\n一个健壮的 handoff 至少要传递：\n\n- `user_input`：原始问题（防止下一位 Agent 上下文缺失）\n- `history`：之前几个 Agent 已经做了什么\n- `slots`：已收集的结构化信息（出发地、日期…）\n- `next`：本次交给谁（有些框架把这个显式写在消息里）\n\n```python\nfrom dataclasses import dataclass, field\nfrom typing import List, Dict, Optional\n\n@dataclass\nclass HandoffState:\n    user_input: str\n    history: List[str] = field(default_factory=list)\n    slots: Dict[str, str] = field(default_factory=dict)\n    next: Optional[str] = None   # 显式记录交接目标\n\n# Agent 执行完后，把\"我做了什么\"写进 history，再把控制权 shift\ndef flight_agent(state: HandoffState) -> HandoffState:\n    state.slots[\"route\"] = \"SHA->PEK\"\n    state.history.append(\"flight_agent: 查到了 SHA->PEK 的航班\")\n    state.next = \"hotel\"   # 显式 handoff 到酒店 Agent\n    return state\n\ndef hotel_agent(state: HandoffState) -> HandoffState:\n    state.slots[\"hotel\"] = \"外滩某酒店\"\n    state.history.append(\"hotel_agent: 推荐了外滩酒店\")\n    state.next = None      # 结束\n    return state\n\nREGISTRY = {\"flight\": flight_agent, \"hotel\": hotel_agent}\n\ndef run_chain(state: HandoffState, entry=\"flight\", max_steps=5):\n    state.next = entry\n    step = 0\n    while state.next and step < max_steps:\n        agent = REGISTRY[state.next]\n        state = agent(state)\n        step += 1\n    return state\n\ns = HandoffState(user_input=\"帮我订上海到北京的机票和酒店\")\ns = run_chain(s)\nprint(s.history)\nprint(s.slots)\n```\n\n输出：\n\n```\n['flight_agent: 查到了 SHA->PEK 的航班', 'hotel_agent: 推荐了外滩酒店']\n{'route': 'SHA->PEK', 'hotel': '外滩某酒店'}\n```\n\n**关键工程点**：\n\n- `next` 字段就是接力棒，谁改它谁负责往下传。\n- `max_steps` 是**死循环保险丝**。两个 Agent 互相 handoff 会无限循环，这是实战里最常见的翻车现场。\n- `history` 用追加（append）而不是覆盖，才能让最后出面回答用户的 Agent 有完整上下文。\n\n---\n\n## 4. 控制权模式：谁是\"主管\"？\n\nmulti-handoff 有两种经典拓扑（topology，拓扑结构）：\n\n### 4.1 链式（Chain）\nA → B → C → 结束。适合流程固定的场景（订票→选座→支付）。\n\n### 4.2 星型（Hub-and-Spoke / Supervisor）\n有一个\"主管 Agent\"统一接收所有请求，再决定分给谁，谁做完再回报主管。\n\n```python\ndef supervisor(user_input: str) -> str:\n    \"\"\"主管 Agent：不干活，只分派。\"\"\"\n    if \"机票\" in user_input:\n        return \"flight\"\n    if \"酒店\" in user_input:\n        return \"hotel\"\n    return \"fallback\"\n\ndef worker(agent_name: str, user_input: str):\n    fake_skill = {\n        \"flight\": \"[机票] 查到 3 个航班\",\n        \"hotel\":  \"[酒店] 推荐 3 家酒店\",\n        \"fallback\": \"[兜底] 无法处理\",\n    }\n    return fake_skill[agent_name]\n\ndef hub_handle(user_input: str):\n    agent = supervisor(user_input)\n    result = worker(agent, user_input)\n    return f\"主管分派给 {agent}，返回：{result}\"\n\nprint(hub_handle(\"我想订机票\"))\nprint(hub_handle(\"找个酒店\"))\n```\n\n**选型直觉**：\n- 步骤固定 → 链式，简单可控。\n- 用户意图不确定、Agent 数量多 → 星型，主管集中决策，方便做日志和限流。\n\n---\n\n## 5. 工程级陷阱与防护清单\n\n真正部署时，handoff 需要考虑的不只是路由：\n\n| 风险 | 表现 | 防护 |\n|---|---|---|\n| 无限循环 | A→B→A→B… | `max_steps`、重复目标检测 |\n| 状态丢失 | 下一个 Agent 不知道已经聊过什么 | 显式携带 `history` 和 `slots` |\n| 权限越界 | Agent 误用了不属于它的工具 | 每个 Agent 独立工具集 |\n| 幻觉交接 | LLM 编出一个不存在的 Agent 名 | 目标做白名单校验 |\n| 上下文爆炸 | history 越滚越长 | 对 history 做摘要（summary）后再传 |\n\n**校验示例**：\n\n```python\nALLOWED = {\"flight\", \"hotel\", \"fallback\"}\n\ndef safe_handoff(target: str) -> str:\n    if target not in ALLOWED:\n        return \"fallback\"\n    return target\n\n# 即使 LLM 幻觉出 \"rocket_agent\"，也不会崩溃\nprint(safe_handoff(\"rocket_agent\"))   # fallback\nprint(safe_handoff(\"hotel\"))           # hotel\n```\n\n---\n\n## 6. 小结\n\n- **handoff 的本质**：任务控制权从一个 Agent 转移到另一个 Agent，并携带必要状态。\n- **三要素**：触发条件、目标 Agent、状态载荷。\n- **两种拓扑**：链式（固定流程）与星型（主管调度）。\n- **四项工程细节**：状态显式传递、循环保险丝、白名单校验、历史摘要。\n\n掌握这些，无论你后面用 LangGraph、OpenAI Swarm、CrewAI 还是自研框架，读文档时都会秒懂。\n\n---\n\n## 7. 动手练习\n\n**任务**：实现一个三 Agent 客服系统，用户说一句话，系统自动 handoff 完成服务。\n\n要求：\n\n1. 定义三个 Agent：\n   - `order_agent`：处理\"查订单\"\n   - `refund_agent`：处理\"退款\"\n   - `tech_agent`：处理\"报修/故障\"\n2. 用一个 `HandoffState` 数据类保存 `user_input`、`history`、`next`。\n3. 用户输入\"我想退款，因为我的洗衣机坏了\"：\n   - 应该先 handoff 到 `tech_agent`（先确认故障），\n   - `tech_agent` 处理完后 handoff 到 `refund_agent` 完成退款。\n4. 加 `max_steps=5` 保险丝，并在最后打印：完整 `history`、走过的 Agent 顺序、最终回复。\n5. 加分项：加一个 `safe_handoff` 白名单校验，检测到非法 Agent 名时走 `fallback` 并记录一条告警到 `history`。\n\n**预期结果**（示意）：\n\n```\nAgent 顺序: tech -> refund\nhistory:\n  - tech_agent: 已登记故障工单 #1024\n  - refund_agent: 已发起退款，金额 199 元\n最终回复: 您的洗衣机故障已登记，退款 199 元将在 3 个工作日到账\n```\n\n完成这道题，你就把\"路由、状态、控制权、防护\"四件事全都亲手走了一遍，handoff 的基础就打牢了。\n\n```python\nfrom dataclasses import dataclass, field\nfrom typing import List, Dict, Optional\n\n@dataclass\nclass HandoffState:\n    user_input: str\n    history: List[str] = field(default_factory=list)\n    slots: Dict[str, str] = field(default_factory=dict)\n    next: Optional[str] = None\n\nALLOWED = {\"tech\", \"refund\", \"fallback\"}\n\ndef safe_handoff(target: str, state: HandoffState) -> str:\n    if target not in ALLOWED:\n        state.history.append(f\"warn: illegal handoff -> {target}, fallback\")\n        return \"fallback\"\n    return target\n\ndef tech_agent(state: HandoffState) -> HandoffState:\n    state.slots[\"ticket\"] = \"#1024\"\n    state.history.append(f\"tech_agent: 已登记故障工单 {state.slots['ticket']}\")\n    state.next = safe_handoff(\"refund\", state)\n    return state\n\ndef refund_agent(state: HandoffState) -> HandoffState:\n    state.slots[\"refund\"] = \"199\"\n    state.history.append(f\"refund_agent: 已发起退款，金额 {state.slots['refund']} 元\")\n    state.next = None\n    return state\n\ndef fallback_agent(state: HandoffState) -> HandoffState:\n    state.history.append(\"fallback_agent: 无法处理，转人工\")\n    state.next = None\n    return state\n\nREGISTRY = {\"tech\": tech_agent, \"refund\": refund_agent, \"fallback\": fallback_agent}\n\ndef run_chain(state: HandoffState, entry: str = \"tech\", max_steps: int = 5):\n    state.next = safe_handoff(entry, state)\n    order = []\n    step = 0\n    while state.next and step < max_steps:\n        name = state.next\n        order.append(name)\n        state = REGISTRY[name](state)\n        step += 1\n    return state, order\n\nif __name__ == \"__main__\":\n    s = HandoffState(user_input=\"我想退款，因为我的洗衣机坏了\")\n    s, order = run_chain(s)\n    print(\"Agent 顺序:\", \" -> \".join(order))\n    print(\"history:\")\n    for line in s.history:\n        print(\"  -\", line)\n    print(\"最终回复: 您的洗衣机故障已登记，退款\", s.slots[\"refund\"], \"元将在 3 个工作日到账\")\n```\n\n## agent.multi.shared_memory\n\n# agent.multi.shared_memory\n\n## 一句话直觉\n\n多个 Agent（智能体）协作时，需要一个共同的“白板”来读写信息，`shared_memory` 就是这个白板——没有它，每个 Agent 只能各说各话。\n\n---\n\n## 1. 为什么多 Agent 需要共享记忆\n\n单个 Agent 工作时，它的“记忆”就是自己的对话上下文（context）。但当多个 Agent 一起完成一个任务时，比如：\n\n- Agent A 负责搜索资料\n- Agent B 负责写代码\n- Agent C 负责测试\n\n它们必须能**看到彼此产出的中间结果**。否则 A 搜到的资料 B 拿不到，B 写的代码 C 测不了。\n\n这就是 **shared_memory（共享记忆）** 的用途：一个所有 Agent 都能读写的公共数据结构。\n\n> 术语：\n> - Agent（智能体）：能自主感知环境并采取行动的程序。\n> - Context（上下文）：模型一次调用时能看到的所有文本。\n> - Shared Memory（共享记忆）：多个 Agent 共同读写的存储区。\n\n```python\n# 最朴素的“共享记忆”：一个所有 Agent 都能访问的字典\nshared_memory = {}\n\ndef agent_a_write():\n    shared_memory['research'] = \"Python 的 dict 是有序的\"\n\ndef agent_b_read():\n    # B 能看到 A 写进去的内容\n    return shared_memory.get('research', '暂无资料')\n\nagent_a_write()\nprint(agent_b_read())  # Python 的 dict 是有序的\n```\n\n---\n\n## 2. 共享记忆的最小接口：读、写、列目录\n\n一个能用的 shared_memory 至少要有三个操作：\n\n| 操作 | 含义 | Python 类比 |\n|------|------|-------------|\n| `write(key, value)` | 写入或覆盖一条记忆 | `d[k] = v` |\n| `read(key)` | 读取一条记忆 | `d[k]` |\n| `list_keys()` | 列出所有记忆的键 | `list(d.keys())` |\n\n用一个类封装起来，比裸字典更容易扩展（以后要加锁、加版本号、加持久化都在这里改）：\n\n```python\nclass SharedMemory:\n    \"\"\"多 Agent 共享的白板。\"\"\"\n\n    def __init__(self):\n        self._store = {}\n\n    def write(self, key, value):\n        # 写入或覆盖\n        self._store[key] = value\n\n    def read(self, key, default=None):\n        # 读取，缺失时给默认值\n        return self._store.get(key, default)\n\n    def list_keys(self):\n        # 列出所有键，便于 Agent 发现别人写了什么\n        return list(self._store.keys())\n\n\nmem = SharedMemory()\nmem.write('task', '写一个排序函数')\nmem.write('status', 'in_progress')\nprint(mem.list_keys())   # ['task', 'status']\nprint(mem.read('task'))  # 写一个排序函数\n```\n\n---\n\n## 3. 让记忆“有结构”：消息日志式共享\n\n只存 key-value 有个问题：Agent 之间往往是在**对话**，一次写一条容易丢历史。\n更实用的做法是存一个**消息列表**（message log），每条消息包含：谁写的、什么时候写的、内容是什么。\n\n```python\nimport time\n\nclass MessageBoard:\n    \"\"\"消息日志式共享记忆：追加写入，保留完整历史。\"\"\"\n\n    def __init__(self):\n        self._messages = []\n\n    def post(self, sender, content):\n        # 每条消息记录发送者、时间、内容\n        self._messages.append({\n            'sender': sender,\n            'time': time.time(),\n            'content': content,\n        })\n\n    def history(self):\n        # 返回全部历史（副本，防止外部乱改）\n        return list(self._messages)\n\n    def last_from(self, sender):\n        # 某个 Agent 最近一条发言\n        for msg in reversed(self._messages):\n            if msg['sender'] == sender:\n                return msg['content']\n        return None\n\n\nboard = MessageBoard()\nboard.post('searcher', '找到了 3 篇相关论文')\nboard.post('coder', '根据资料写好了初版')\nboard.post('tester', '第 2 个测试失败')\n\nprint(board.last_from('coder'))   # 根据资料写好了初版\nprint(len(board.history()))       # 3\n```\n\n---\n\n## 4. 并发下的陷阱：多个 Agent 同时写\n\n真实系统里，多个 Agent 可能是**多个线程**在跑。这时“先读后写”会出现竞态条件（race condition）：两个 Agent 都读到旧值，然后都写回，后者覆盖前者。\n\n解决办法是用**锁**（Lock）把“读-改-写”三步保护成原子操作。\n\n```python\nimport threading\n\nclass SafeCounter:\n    \"\"\"线程安全的共享计数器。\"\"\"\n\n    def __init__(self):\n        self._lock = threading.Lock()\n        self._value = 0\n\n    def increment(self):\n        # with 保证同一时刻只有一个线程进入\n        with self._lock:\n            self._value += 1\n\n    @property\n    def value(self):\n        with self._lock:\n            return self._value\n\n\ncounter = SafeCounter()\nthreads = [threading.Thread(target=counter.increment) for _ in range(1000)]\nfor t in threads:\n    t.start()\nfor t in threads:\n    t.join()\n\nprint(counter.value)  # 1000，稳定正确\n```\n\n> 如果没有 `threading.Lock`，这个数字通常会小于 1000，因为发生了丢失更新。\n\n---\n\n## 5. 工程级封装：把上面几点合起来\n\n一个可用的 `SharedMemory` 一般要同时具备：\n\n1. 键值读写（第 2 节）\n2. 消息日志（第 3 节）\n3. 线程安全（第 4 节）\n4. 命名空间（namespace），让不同任务的记忆互不干扰\n\n```python\nimport threading\nimport time\n\nclass SharedMemory:\n    \"\"\"带命名空间和线程安全的多 Agent 共享记忆。\"\"\"\n\n    def __init__(self):\n        self._lock = threading.Lock()\n        self._kv = {}        # (namespace, key) -> value\n        self._log = []       # 全局消息日志\n\n    def write(self, namespace, key, value):\n        with self._lock:\n            self._kv[(namespace, key)] = value\n\n    def read(self, namespace, key, default=None):\n        with self._lock:\n            return self._kv.get((namespace, key), default)\n\n    def post(self, namespace, sender, content):\n        with self._lock:\n            self._log.append({\n                'namespace': namespace,\n                'sender': sender,\n                'time': time.time(),\n                'content': content,\n            })\n\n    def history(self, namespace):\n        with self._lock:\n            return [m for m in self._log if m['namespace'] == namespace]\n```\n\n使用示例：\n\n```python\nmem = SharedMemory()\nmem.write('task-1', 'goal', '写一个排序函数')\nmem.post('task-1', 'planner', '把任务拆成 3 步')\nmem.post('task-1', 'coder', '第 1 步完成')\n\nprint(mem.read('task-1', 'goal'))       # 写一个排序函数\nprint(len(mem.history('task-1')))       # 2\n```\n\n---\n\n## 结尾 · 动手练习\n\n**任务**：在你的电脑上实现一个“两 Agent 协作”小系统。\n\n要求：\n\n1. 复用上面第 5 节的 `SharedMemory`（可以复制粘贴）。\n2. 写两个函数 `agent_researcher(mem)` 和 `agent_writer(mem)`：\n   - `agent_researcher` 往 namespace=`'demo'` 里 `write('finding', '...')` 写一条“研究结论”，并 `post` 一条消息说“我完成了”。\n   - `agent_writer` 从同一个 namespace 里 `read('finding')`，并 `post` 一条消息，内容是“我基于 <finding> 写了段落”。\n3. 用两个 `threading.Thread` 同时启动这两个函数，`join` 之后打印 `mem.history('demo')`。\n4. 观察到什么？如果 writer 先跑，会发生什么？把 writer 的读取逻辑改成“如果没读到就等 0.1 秒重试”，再看一次结果。\n\n**考察点**：共享记忆的读写顺序、竞态条件的真实感受、以及“等待-重试”这种最基本的同步策略。\n\n```python\nimport threading\nimport time\n\nclass SharedMemory:\n    \"\"\"带命名空间和线程安全的多 Agent 共享记忆。\"\"\"\n\n    def __init__(self):\n        self._lock = threading.Lock()\n        self._kv = {}\n        self._log = []\n\n    def write(self, namespace, key, value):\n        with self._lock:\n            self._kv[(namespace, key)] = value\n\n    def read(self, namespace, key, default=None):\n        with self._lock:\n            return self._kv.get((namespace, key), default)\n\n    def post(self, namespace, sender, content):\n        with self._lock:\n            self._log.append({\n                'namespace': namespace,\n                'sender': sender,\n                'time': time.time(),\n                'content': content,\n            })\n\n    def history(self, namespace):\n        with self._lock:\n            return [m for m in self._log if m['namespace'] == namespace]\n\n\ndef agent_researcher(mem):\n    time.sleep(0.05)  # 模拟一点工作耗时\n    mem.write('demo', 'finding', 'dict 在 Python 3.7+ 中保持插入顺序')\n    mem.post('demo', 'researcher', '研究完成')\n\n\ndef agent_writer(mem):\n    # 简单重试：最多等 1 秒\n    finding = None\n    for _ in range(10):\n        finding = mem.read('demo', 'finding')\n        if finding is not None:\n            break\n        time.sleep(0.1)\n    mem.post('demo', 'writer', f'基于{finding!r}写了一段')\n\n\nif __name__ == '__main__':\n    mem = SharedMemory()\n    t1 = threading.Thread(target=agent_researcher, args=(mem,))\n    t2 = threading.Thread(target=agent_writer, args=(mem,))\n    t1.start(); t2.start()\n    t1.join(); t2.join()\n\n    for msg in mem.history('demo'):\n        print(f\"[{msg['sender']}] {msg['content']}\")\n```\n",
+  "quiz": [
+    {
+      "kp": "agent.multi.handoff",
+      "type": "single_choice",
+      "question": "在一个多 Agent 系统中，接待 Agent 判断用户问题需要会计领域的支持，于是把会话连同上下文交给会计 Agent 并结束自身参与。这种做法的关键特征是？",
+      "options": [
+        "控制权被转移给另一个 Agent，由后者继续完成后续交互",
+        "多个 Agent 同时运行并各自独立回答同一问题",
+        "接待 Agent 仍持续监听但不再产生任何输出",
+        "两个 Agent 共享同一份代码但使用不同的提示词"
+      ],
+      "answer": 0,
+      "explanation": "交接（handoff）的本质是把会话控制权转移给另一个 Agent，由接收方继续处理；同时运行、不再输出或仅共享代码都不等同于控制权转移。",
+      "error_tag": "概念混淆",
+      "variant_group": "handoff_basic"
+    },
+    {
+      "kp": "agent.multi.handoff",
+      "type": "single_choice",
+      "question": "某客服系统有两个 Agent：主 Agent 负责闲聊，退款 Agent 负责处理退款。用户提出退款请求后，主 Agent 调用一个工具，该工具返回目标 Agent 而非文本答案。这最可能是在做什么？",
+      "options": [
+        "把工具返回值当作普通文本拼接到回复中",
+        "通过工具调用触发一次 Agent 交接",
+        "重新初始化整个多 Agent 系统",
+        "并行调用退款 Agent 与主 Agent 轮流作答"
+      ],
+      "answer": 1,
+      "explanation": "当工具调用的作用是把控制权指向另一个 Agent 时，这是典型的交接机制；它并不要求重新初始化系统，也不是把返回值当文本拼接。",
+      "error_tag": "机制误解",
+      "variant_group": "handoff_tool"
+    },
+    {
+      "kp": "agent.multi.handoff",
+      "type": "single_choice",
+      "question": "交接后接收 Agent 需要访问之前的对话记录，最直接的做法是？",
+      "options": [
+        "让接收 Agent 重新向用户询问全部信息",
+        "把已有的消息历史一并传递给接收 Agent",
+        "只传递系统提示词，不传历史",
+        "让原 Agent 在后台继续生成回复并转发"
+      ],
+      "answer": 1,
+      "explanation": "把消息历史随交接一起传递，可以让接收方无缝继续对话；反复询问用户或让原 Agent 后台转发都不属于真正的交接。",
+      "error_tag": "实现方式",
+      "variant_group": "handoff_context_pass"
+    },
+    {
+      "kp": "agent.multi.handoff",
+      "type": "single_choice",
+      "question": "如果一个系统把「交接」实现为同时启动两个 Agent 并让它们各自回复用户，会有什么问题？",
+      "options": [
+        "用户会收到多条可能互相矛盾的回复",
+        "系统会立即崩溃",
+        "接收 Agent 无法读取任何历史",
+        "工具调用会失效"
+      ],
+      "answer": 0,
+      "explanation": "这不是交接而是并行输出，用户可能收到多个不一致的回复，违背了交接中控制权单一的原则。",
+      "error_tag": "实现偏差",
+      "variant_group": "handoff_vs_parallel_2"
+    },
+    {
+      "kp": "agent.multi.handoff",
+      "type": "single_choice",
+      "question": "在多 Agent 交接中，保留一份「当前由谁负责」的状态有什么作用？",
+      "options": [
+        "用于计算模型的温度参数",
+        "用于决定下一个回复由哪个 Agent 生成",
+        "用于压缩历史消息",
+        "用于选择向量数据库"
+      ],
+      "answer": 1,
+      "explanation": "跟踪当前负责方可以在交接后正确路由后续输入，避免多个 Agent 同时响应或无人响应。",
+      "error_tag": "状态管理",
+      "variant_group": "handoff_state"
+    },
+    {
+      "kp": "agent.multi.handoff",
+      "type": "single_choice",
+      "question": "以下哪种情况最不适合使用交接？",
+      "options": [
+        "用户问题跨越多个领域且需要不同专家依次处理",
+        "用户问题简单到可由当前 Agent 直接回答",
+        "用户明确要求转接给人工或特定角色",
+        "当前 Agent 缺少完成任务的必要工具"
+      ],
+      "answer": 1,
+      "explanation": "能直接回答的问题无需交接；剩余选项都是交接的合理场景，因为需要不同能力或角色。",
+      "error_tag": "场景判断",
+      "variant_group": "handoff_when"
+    },
+    {
+      "kp": "agent.multi.handoff",
+      "type": "single_choice",
+      "question": "交接机制与「让一个 Agent 调用另一个 Agent 作为工具」相比，关键区别之一是？",
+      "options": [
+        "交接后控制权转移，而工具调用后原 Agent 通常继续主导",
+        "工具调用不能返回任何文本",
+        "交接只能发生一次",
+        "工具调用必须使用不同的模型"
+      ],
+      "answer": 0,
+      "explanation": "作为工具调用时，被调用的 Agent 只是完成一次子任务并把结果返回；交接则是把会话主导权整体转移。",
+      "error_tag": "概念对比",
+      "variant_group": "handoff_vs_tool"
+    },
+    {
+      "kp": "agent.multi.handoff",
+      "type": "single_choice",
+      "question": "某系统在交接工具的描述里写明了「当你无法回答用户问题时调用我」。以下哪项风险最值得关注？",
+      "options": [
+        "模型可能过于轻易地触发交接，把本可回答的问题推给别人",
+        "模型会完全忽略该工具",
+        "系统会丢失所有历史",
+        "接收 Agent 会自动拒绝"
+      ],
+      "answer": 0,
+      "explanation": "把「无法回答」作为触发条件容易让模型在不确定时过早交接，需要在提示或策略中加以约束。",
+      "error_tag": "提示设计",
+      "variant_group": "handoff_prompt"
+    },
+    {
+      "kp": "agent.multi.handoff",
+      "type": "single_choice",
+      "question": "当用户在同一会话中先问退款规定、后又问旅游攻略时，一个良好的交接策略应该？",
+      "options": [
+        "永远停留在第一个接收的 Agent",
+        "根据当前问题再次判断是否需要交接",
+        "把两个问题合并成一个回答",
+        "拒绝回答第二个问题"
+      ],
+      "answer": 1,
+      "explanation": "用户话题可能变化，交接策略应允许根据当前问题重新评估目标 Agent，而不是一次交接后永久固定。",
+      "error_tag": "动态路由",
+      "variant_group": "handoff_dynamic"
+    },
+    {
+      "kp": "agent.multi.handoff",
+      "type": "single_choice",
+      "question": "日志中出现：A 交给 B，B 又交回 A，A 再交给 B……持续多轮。最直接的修复方向是？",
+      "options": [
+        "提高模型温度",
+        "增加历史消息长度",
+        "明确各 Agent 的职责边界并限制交接次数",
+        "把两个 Agent 合并成同一个模型"
+      ],
+      "answer": 2,
+      "explanation": "职责不清是来回推诿的常见根因，配合最大交接次数可以有效终止循环；调节温度或加长历史都无助于解决。",
+      "error_tag": "故障定位",
+      "variant_group": "handoff_loop_fix"
+    },
+    {
+      "kp": "agent.multi.handoff",
+      "type": "single_choice",
+      "question": "关于交接后的用户可见输出，以下哪种设计最清晰？",
+      "options": [
+        "原 Agent 与接收 Agent 都各自输出一条完整回复",
+        "只有接收 Agent 输出面向用户的回复",
+        "由系统随机选择一个 Agent 输出",
+        "两个 Agent 都不输出，等待用户再次提问"
+      ],
+      "answer": 1,
+      "explanation": "交接后由接收方统一对外输出，可以避免重复和矛盾；双方都输出或随机选择都会造成混乱。",
+      "error_tag": "输出归属",
+      "variant_group": "handoff_output"
+    },
+    {
+      "kp": "agent.multi.handoff",
+      "type": "single_choice",
+      "question": "如果在交接时把工具调用结果当作普通文本塞进历史，可能带来的后果是？",
+      "options": [
+        "接收 Agent 无法区分这是工具结果还是用户输入",
+        "系统会拒绝生成回复",
+        "模型会自动切换为并行模式",
+        "工具调用次数会减少"
+      ],
+      "answer": 0,
+      "explanation": "消息角色和来源影响模型对上下文的理解；把工具结果混成普通文本会破坏语义结构，使接收方难以正确解读。",
+      "error_tag": "消息结构",
+      "variant_group": "handoff_message"
+    },
+    {
+      "kp": "agent.multi.handoff",
+      "type": "single_choice",
+      "question": "关于多 Agent 交接与并行多 Agent 协作的区别，以下说法正确的是？",
+      "options": [
+        "交接之后原 Agent 仍负责最终输出，只是辅助新 Agent",
+        "并行协作中每个 Agent 都必须知道其他 Agent 的完整历史",
+        "交接强调控制权在同一时刻只由一方掌握并发生转移",
+        "两者在实现上完全等价，只是命名不同"
+      ],
+      "answer": 2,
+      "explanation": "交接的核心是控制权的转移，通常同一时刻只有一方掌握会话主导权；并行协作则可能多个 Agent 同时工作，两者不等价。",
+      "error_tag": "对比混淆",
+      "variant_group": "handoff_vs_parallel"
+    },
+    {
+      "kp": "agent.multi.handoff",
+      "type": "single_choice",
+      "question": "设计交接时，如果接收 Agent 只拿到用户最后一句而丢失了之前的上下文，最可能出现什么问题？",
+      "options": [
+        "系统会拒绝执行交接",
+        "接收 Agent 的回答会与原任务脱节或重复提问",
+        "接收 Agent 会自动拒绝处理并交还给原 Agent",
+        "交接会变成并行执行"
+      ],
+      "answer": 1,
+      "explanation": "上下文是交接能否顺畅的关键之一；缺少上下文会导致接收方无法理解前因后果，从而答非所问或重复询问。",
+      "error_tag": "上下文缺失",
+      "variant_group": "handoff_context"
+    },
+    {
+      "kp": "agent.multi.handoff",
+      "type": "single_choice",
+      "question": "某系统规定：交接发生后，原 Agent 不再产生任何面向用户的回复。这一约束的主要目的是？",
+      "options": [
+        "避免两个 Agent 同时向用户输出造成混乱",
+        "减少系统的内存占用",
+        "让原 Agent 能继续并行处理其他用户",
+        "强制所有 Agent 使用相同的模型"
+      ],
+      "answer": 0,
+      "explanation": "控制权已经转移，如果原 Agent 仍输出，用户会收到冲突或重复的回复；这一约束主要是为了避免双头输出。",
+      "error_tag": "设计意图误解",
+      "variant_group": "handoff_control"
+    },
+    {
+      "kp": "agent.multi.handoff",
+      "type": "single_choice",
+      "question": "以下哪一项最适合作为触发交接的判断依据？",
+      "options": [
+        "当前 Agent 的回复字数超过阈值",
+        "用户连续发送了两条消息",
+        "当前 Agent 无法可靠完成用户请求，而另一个 Agent 更擅长该领域",
+        "系统运行时间超过五分钟"
+      ],
+      "answer": 2,
+      "explanation": "交接应基于能力匹配：当前 Agent 不擅长而另一 Agent 更合适时才是合理触发；字数、消息条数或运行时间都不是充分理由。",
+      "error_tag": "触发条件错误",
+      "variant_group": "handoff_trigger"
+    },
+    {
+      "kp": "agent.multi.handoff",
+      "type": "single_choice",
+      "question": "如果两个 Agent 互相判断对方更适合，可能反复把控制权推给对方，这种现象通常称为？",
+      "options": [
+        "上下文溢出",
+        "交接循环",
+        "工具调用失败",
+        "模型幻觉"
+      ],
+      "answer": 1,
+      "explanation": "互相推诿导致控制权来回转移，属于交接循环，需要通过明确的归属规则或最大交接次数来规避。",
+      "error_tag": "边界情况",
+      "variant_group": "handoff_loop"
+    },
+    {
+      "kp": "agent.multi.handoff",
+      "type": "single_choice",
+      "question": "为了防止交接无限循环，以下哪种做法最合理？",
+      "options": [
+        "禁止任何 Agent 发起交接",
+        "每次交接后清空全部历史",
+        "设置最大交接次数并在超限时由兜底逻辑处理",
+        "让所有 Agent 共用一个系统提示词"
+      ],
+      "answer": 2,
+      "explanation": "设置最大交接次数并配合兜底处理，可以在保留交接能力的同时避免无限循环；完全禁止或清空历史都会带来其他问题。",
+      "error_tag": "防御设计",
+      "variant_group": "handoff_loop_guard"
+    },
+    {
+      "kp": "agent.multi.handoff",
+      "type": "single_choice",
+      "question": "在实现交接时，把「交给谁」的信息与「用户说了什么」分开传递，主要好处是？",
+      "options": [
+        "让接收方明确自己的角色与任务边界",
+        "减少模型的 token 消耗",
+        "使交接变成同步调用",
+        "避免使用工具调用"
+      ],
+      "answer": 0,
+      "explanation": "明确目标 Agent 与用户输入是两种不同信息，分开传递有助于接收方理解自己该承担的角色和职责。",
+      "error_tag": "信息结构",
+      "variant_group": "handoff_payload"
+    },
+    {
+      "kp": "agent.multi.handoff",
+      "type": "single_choice",
+      "question": "某团队想让主 Agent 在遇到法律问题时自动转给法务 Agent。以下哪种信号最不可靠？",
+      "options": [
+        "用户问题中出现「合同」「赔偿」等关键词",
+        "主 Agent 对该问题的置信度很低",
+        "法务 Agent 当前在线",
+        "用户消息长度恰好是 42 个字符"
+      ],
+      "answer": 3,
+      "explanation": "消息长度与是否需要法律支持没有因果关系，用它作为交接依据属于偶然特征，不可靠。",
+      "error_tag": "特征选择错误",
+      "variant_group": "handoff_trigger_signal"
+    },
+    {
+      "kp": "agent.multi.shared_memory",
+      "type": "single_choice",
+      "question": "在多智能体系统中，多个 agent 需要读取同一份配置状态并写回更新。下列关于「共享内存」的表述，哪一项最准确？",
+      "options": [
+        "共享内存就是让所有 agent 直接操作各自的私有变量，通过命名巧合实现互通",
+        "共享内存是一块被多个 agent 共同访问、需要协调读写以避免冲突的状态存储区域",
+        "共享内存一经创建，任何 agent 都可以随意修改且无需任何同步机制",
+        "共享内存只能被一个 agent 访问，其他 agent 必须通过消息队列间接读取"
+      ],
+      "answer": 1,
+      "explanation": "共享内存的核心是「多访问者 + 同一份状态 + 需要协调」。A 只是巧合通信不是共享；C 忽略了并发写冲突；D 描述的是排他/间接访问，与共享内存定义相反。",
+      "error_tag": "概念混淆",
+      "variant_group": "shared_memory_basic"
+    },
+    {
+      "kp": "agent.multi.shared_memory",
+      "type": "single_choice",
+      "question": "两个 agent 同时读共享内存中的计数器值为 5，各自加 1 后写回。最终计数器最可能变成几？为什么？",
+      "options": [
+        "7，因为两个 agent 的写入会被系统自动合并",
+        "6，因为两次加 1 都会生效",
+        "5，因为写回被拒绝",
+        "可能是 5 或 6，取决于是否发生读-改-写竞态覆盖"
+      ],
+      "answer": 3,
+      "explanation": "若两次读-改-写交错执行（都读到 5 再各自写 6），结果为 6 但丢失一次更新语义；若其中一个写入被后续覆盖或时序不同，可能仅保留 6 或退化为 5 的情况，关键是竞态导致结果不确定。",
+      "error_tag": "边界错误",
+      "variant_group": "shared_memory_race"
+    },
+    {
+      "kp": "agent.multi.shared_memory",
+      "type": "multi_choice",
+      "question": "在设计多 agent 共享内存时，以下哪些属于必须考虑的正确性问题？（选出所有正确项）",
+      "options": [
+        "并发读写引发的竞态条件",
+        "写入后其他 agent 的可见性与顺序",
+        "共享数据的整体容量是否足够大",
+        "基于旧快照写回导致的丢失更新"
+      ],
+      "answer": [
+        0,
+        1,
+        3
+      ],
+      "explanation": "竞态、可见性、丢失更新都是共享内存的核心正确性问题。容量属于资源/性能范畴，不是正确性本身。",
+      "error_tag": "概念混淆",
+      "variant_group": "shared_memory_design"
+    },
+    {
+      "kp": "agent.multi.shared_memory",
+      "type": "multi_choice",
+      "question": "下列哪些做法有助于降低多 agent 共享内存的写冲突？（选出所有正确项）",
+      "options": [
+        "将共享状态按领域拆分为多个独立区域，减少同一把锁的争用",
+        "对计数类更新使用原子操作而非读-改-写",
+        "所有 agent 都先读取整份快照再整体写回",
+        "采用乐观并发控制，在提交前检测版本是否被修改"
+      ],
+      "answer": [
+        0,
+        1,
+        3
+      ],
+      "explanation": "拆分区域、原子操作、乐观并发（版本检测）都能降低冲突或检测冲突。C 的整快照写回正是丢失更新的典型来源，会加剧问题。",
+      "error_tag": "概念混淆",
+      "variant_group": "shared_memory_conflict"
+    },
+    {
+      "kp": "agent.multi.shared_memory",
+      "type": "multi_choice",
+      "question": "关于共享内存中锁的使用，下列说法正确的有哪些？（选出所有正确项）",
+      "options": [
+        "加锁能保证临界区互斥，但会带来等待和潜在死锁风险",
+        "只要加了锁，就一定不会有任何并发问题",
+        "锁的粒度越粗，通常并发度越低",
+        "持锁期间执行耗时操作会放大其他 agent 的等待时间"
+      ],
+      "answer": [
+        0,
+        2,
+        3
+      ],
+      "explanation": "锁保证互斥但非万能（不能解决一致性与死锁等全部问题），粗粒度降低并发度，长持锁放大等待。B 是绝对化误解。",
+      "error_tag": "概念混淆",
+      "variant_group": "shared_memory_lock"
+    },
+    {
+      "kp": "agent.multi.shared_memory",
+      "type": "multi_choice",
+      "question": "下列关于多 agent 共享状态一致性与可用性权衡的说法，正确的有哪些？（选出所有正确项）",
+      "options": [
+        "强一致通常需要更多同步开销，可能降低可用性或延迟",
+        "最终一致允许短时间内 agent 看到不同数据",
+        "强一致和最终一致可以完全同时零成本实现",
+        "一致性模型的选择会影响系统的响应时间和容错能力"
+      ],
+      "answer": [
+        0,
+        1,
+        3
+      ],
+      "explanation": "一致性模型存在权衡：强一致代价高，最终一致有窗口期。一致性选择确实影响延迟与容错。C 与权衡本质矛盾。",
+      "error_tag": "概念混淆",
+      "variant_group": "shared_memory_consistency"
+    },
+    {
+      "kp": "agent.multi.shared_memory",
+      "type": "fill_blank",
+      "question": "多 agent 共享内存中，由于多个 agent 的读-改-写操作交错执行而导致结果不确定的现象，称为____条件（请填写中文或英文术语）。",
+      "options": [],
+      "answer": [
+        "竞态",
+        "竞态条件",
+        "race",
+        "race condition"
+      ],
+      "explanation": "多个访问者以不确定顺序操作同一份数据、结果依赖时序，就是竞态（race condition）。",
+      "error_tag": "记忆缺失",
+      "variant_group": "shared_memory_race"
+    },
+    {
+      "kp": "agent.multi.shared_memory",
+      "type": "fill_blank",
+      "question": "为保证共享内存中「读-改-写」序列不被其他 agent 交错打断，通常需要把这段代码放入____区并提供互斥保护。",
+      "options": [],
+      "answer": [
+        "临界",
+        "临界区",
+        "critical",
+        "critical section"
+      ],
+      "explanation": "临界区指一次只允许一个执行体进入的代码段，用锁等机制保护。",
+      "error_tag": "记忆缺失",
+      "variant_group": "shared_memory_critical"
+    },
+    {
+      "kp": "agent.multi.shared_memory",
+      "type": "fill_blank",
+      "question": "在共享内存中，一个操作对外表现为不可分割、中间状态不被其他访问者观察到，这种性质称为____性。",
+      "options": [],
+      "answer": [
+        "原子",
+        "原子性",
+        "atomic",
+        "atomicity"
+      ],
+      "explanation": "不可分割、无中间可见状态即原子性，是并发正确性的基础性质之一。",
+      "error_tag": "记忆缺失",
+      "variant_group": "shared_memory_atomic"
+    },
+    {
+      "kp": "agent.multi.shared_memory",
+      "type": "code_reading",
+      "question": "阅读下面的多线程共享状态操作代码：\n\n```python\nimport threading\n\ncounter = 0\n\ndef worker():\n    global counter\n    for _ in range(100000):\n        counter = counter + 1\n\nthreads = [threading.Thread(target=worker) for _ in range(2)]\nfor t in threads:\n    t.start()\nfor t in threads:\n    t.join()\nprint(counter)\n```\n\n每次运行后打印出的值通常是多少？请说明原因。",
+      "options": [],
+      "answer": "通常小于 200000，且每次运行结果可能不同。因为 `counter = counter + 1` 不是原子操作，包含读取、加一、写回三步，两个线程交错执行会互相覆盖，导致部分自增丢失。",
+      "explanation": "该代码演示了共享变量上的读-改-写竞态：两个线程可能同时读到相同的旧值再各自加一写回，造成丢失更新，因此结果不确定且一般小于预期。",
+      "error_tag": "边界错误",
+      "variant_group": "shared_memory_code_race"
+    },
+    {
+      "kp": "agent.multi.shared_memory",
+      "type": "code_reading",
+      "question": "阅读下面的多线程共享状态操作代码：\n\n```python\nimport threading\n\nlock = threading.Lock()\ncounter = 0\n\ndef worker():\n    global counter\n    for _ in range(100000):\n        with lock:\n            counter = counter + 1\n\nthreads = [threading.Thread(target=worker) for _ in range(2)]\nfor t in threads:\n    t.start()\nfor t in threads:\n    t.join()\nprint(counter)\n```\n\n与未加锁版本相比，这段代码的输出有什么不同？请解释加锁起了什么作用。",
+      "options": [],
+      "answer": "输出稳定为 200000。`with lock` 使读-改-写序列成为临界区，保证同一时刻只有一个线程执行该序列，消除了竞态和丢失更新。",
+      "explanation": "加锁把非原子的读-改-写包裹为互斥临界区，使自增不会交错，因此计数结果确定且正确。",
+      "error_tag": "概念混淆",
+      "variant_group": "shared_memory_code_lock"
+    },
+    {
+      "kp": "agent.multi.shared_memory",
+      "type": "scenario",
+      "question": "你们的系统有多个 agent 共同维护一份共享任务列表：每个 agent 循环执行「取出一个任务—执行—把状态写回共享内存」。上线后发现同一任务偶尔被两个 agent 同时执行，且某些状态更新莫名丢失。请说明问题出在哪里、你会如何改造。",
+      "options": [],
+      "answer": null,
+      "explanation": "问题根源是取任务与写回都不是原子操作，存在竞态。改造应让「取出任务」成为原子操作（加锁或使用并发安全队列），并对状态写回采用互斥或版本检测，避免丢失更新。",
+      "error_tag": "概念混淆",
+      "variant_group": "shared_memory_scenario_task",
+      "required_keywords": [
+        "并发",
+        "锁",
+        "竞态",
+        "版本"
+      ]
+    },
+    {
+      "kp": "agent.multi.shared_memory",
+      "type": "single_choice",
+      "question": "为了让多个 agent 对共享内存的「读-改-写」不互相覆盖，最直接有效的通用手段是？",
+      "options": [
+        "给每个 agent 分配更快的 CPU",
+        "在共享内存读写时使用锁或其他互斥/原子机制",
+        "增加共享内存的总容量",
+        "让所有 agent 只在启动时访问一次共享内存"
+      ],
+      "answer": 1,
+      "explanation": "竞态的本质是读-改-写不是原子操作，需通过锁、原子操作或事务来保证临界区互斥。增加资源或容量都不解决并发覆盖问题。",
+      "error_tag": "概念混淆",
+      "variant_group": "shared_memory_sync"
+    },
+    {
+      "kp": "agent.multi.shared_memory",
+      "type": "single_choice",
+      "question": "关于共享内存与消息传递的对比，下列说法正确的是？",
+      "options": [
+        "共享内存耦合更松，消息传递耦合更紧",
+        "共享内存需要访问者自己处理同步，消息传递把同步隐含在收发语义中",
+        "消息传递一定比共享内存快，因为它不需要锁",
+        "共享内存无法在多个 agent 之间传递复杂结构，只能传整数"
+      ],
+      "answer": 1,
+      "explanation": "共享内存由访问者显式处理并发协调；消息传递通过通道/队列的收发语义天然避免了直接共享写冲突（但仍有其他一致性问题）。A 把耦合方向说反；C、D 为绝对化错误。",
+      "error_tag": "概念混淆",
+      "variant_group": "shared_memory_vs_message"
+    },
+    {
+      "kp": "agent.multi.shared_memory",
+      "type": "single_choice",
+      "question": "某多 agent 系统把共享内存设计为「每个 agent 持有一份副本，定期批量同步差异」。这种设计最可能引入的问题是？",
+      "options": [
+        "副本之间出现不一致，读取到过期数据",
+        "内存占用变小导致数据丢失",
+        "同步次数减少使网络带宽耗尽",
+        "agent 数量增加使单机 CPU 降频"
+      ],
+      "answer": 0,
+      "explanation": "副本 + 延迟同步会带来一致性与可见性延迟问题（读到旧值）。B、C、D 与复制同步机制的典型风险无关，属于编造后果。",
+      "error_tag": "概念混淆",
+      "variant_group": "shared_memory_replication"
+    },
+    {
+      "kp": "agent.multi.shared_memory",
+      "type": "single_choice",
+      "question": "在多 agent 共享内存中，「可见性」问题主要指什么？",
+      "options": [
+        "共享内存的物理地址是否可被操作系统访问",
+        "某 agent 的写入何时、以何顺序能被其他 agent 观察到",
+        "共享内存是否够大以容纳所有 agent 的数据",
+        "agent 是否能被其他 agent 的身份认证系统识别"
+      ],
+      "answer": 1,
+      "explanation": "可见性关注写入后其他访问者能否及时看到以及看到哪个版本，与内存地址、容量、身份认证都无关。",
+      "error_tag": "记忆缺失",
+      "variant_group": "shared_memory_visibility"
+    },
+    {
+      "kp": "agent.multi.shared_memory",
+      "type": "single_choice",
+      "question": "下面哪种数据结构最适合承担多 agent 共享内存中的「任务队列」角色，让多个 agent 安全地取任务？",
+      "options": [
+        "一个普通 Python list，各 agent 用 list.pop(0) 取任务",
+        "一个普通字典，各 agent 用同名键读写",
+        "带锁的队列结构，取出操作具备原子性",
+        "一个全局变量，各 agent 直接赋值覆盖"
+      ],
+      "answer": 2,
+      "explanation": "任务队列需要并发安全地「取走且只取走一次」，需要原子取出（如带锁队列）。普通 list.pop(0)、字典覆盖、全局变量赋值都存在竞态或语义错误。",
+      "error_tag": "概念混淆",
+      "variant_group": "shared_memory_queue"
+    },
+    {
+      "kp": "agent.multi.shared_memory",
+      "type": "single_choice",
+      "question": "某共享内存用「最后写入者胜出」策略处理并发写。两个 agent 分别写入不同字段 A 和 B，结果 A 的更新丢失。最可能的原因是什么？",
+      "options": [
+        "A 字段类型不合法被拒绝",
+        "两个 agent 各自基于旧快照整体覆盖写回，导致彼此字段互相覆盖",
+        "共享内存容量不足只保留一个字段",
+        "字段名冲突使系统随机丢弃一个"
+      ],
+      "answer": 1,
+      "explanation": "整快照覆盖写会把对方基于旧快照的写覆盖掉，产生丢失更新。类型、容量、字段名都不会导致这种随机字段丢失。",
+      "error_tag": "边界错误",
+      "variant_group": "shared_memory_lost_update"
+    },
+    {
+      "kp": "agent.multi.shared_memory",
+      "type": "single_choice",
+      "question": "关于共享内存中「原子操作」的含义，下列理解正确的是？",
+      "options": [
+        "操作结果一定是整数",
+        "操作完成后内存被清空",
+        "操作对外表现为不可分割，中间状态不会被其他访问者观察到",
+        "操作只能在单线程程序中执行"
+      ],
+      "answer": 2,
+      "explanation": "原子性指操作不可分割、无中间可见状态。与数据类型、是否清空内存、是否单线程无关。",
+      "error_tag": "概念混淆",
+      "variant_group": "shared_memory_atomic"
+    },
+    {
+      "kp": "agent.multi.shared_memory",
+      "type": "single_choice",
+      "question": "某多 agent 系统共享内存被频繁读写导致性能下降。下列哪项改进最具针对性？",
+      "options": [
+        "缩小共享区域的粒度，减少锁的持有时间和冲突范围",
+        "把所有共享数据改为全局变量直接访问",
+        "禁止任何 agent 读取共享数据",
+        "把共享数据复制到每个 agent 并不再同步"
+      ],
+      "answer": 0,
+      "explanation": "细化锁粒度可降低冲突是并发优化的常见手段。B 会加剧竞态；C 破坏功能；D 会造成严重不一致。",
+      "error_tag": "概念混淆",
+      "variant_group": "shared_memory_perf"
+    }
+  ]
+}

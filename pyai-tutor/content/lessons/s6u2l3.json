@@ -1,0 +1,635 @@
+{
+  "id": "s6u2l3",
+  "title": "s6u2l3",
+  "kps": [
+    "ai.nn.dropout",
+    "ai.nn.batchnorm"
+  ],
+  "theory": "## ai.nn.dropout\n\n# 40 分钟教学讲义：`ai.nn.dropout`\n\n## 一句话直觉\n**Dropout（随机失活）是一种在训练神经网络时随机“关掉”一部分神经元的技术，用来防止模型死记硬背训练数据，从而提升在新数据上的表现。**\n\n你可以把它想成：每次训练都让不同的学生（神经元）轮流发言，逼着每个人都能独立解决问题，而不是只靠某几个学霸撑场面。\n\n---\n\n## 1. 为什么需要 Dropout？\n\n神经网络如果参数很多、训练数据很少，很容易 **过拟合（overfitting）**：在训练集上准确率很高，在测试集上却很差。\n\nDropout 的核心思想：\n- 训练时，每一层（或指定层）的神经元以概率 `p` 被临时“丢弃”（输出置 0）。\n- 被丢弃的神经元本次不参与前向传播和反向传播。\n- 测试/推理时，所有神经元都参与，但输出会按比例缩放，保持期望一致。\n\n这样模型不会过度依赖某个神经元，学到的特征更鲁棒（robust）。\n\n---\n\n## 2. Dropout 的数学直觉\n\n假设某层输出为向量 `h`，Dropout 概率为 `p`（丢弃概率）：\n\n训练阶段：\n- 生成一个与 `h` 同形状的伯努利掩码（mask）`m`，每个元素以概率 `1-p` 为 1，以概率 `p` 为 0。\n- 输出为 `h * m`。\n- 为了保持训练和测试的期望一致，通常对结果除以 `1-p`，这叫 **inverted dropout（反向 Dropout）**。\n\n测试阶段：\n- 不做任何丢弃，也不缩放，直接输出 `h`。\n\n一句话：**训练时随机丢弃并放大保留的神经元，测试时全部使用。**\n\n---\n\n## 3. PyTorch 中的 `nn.Dropout`\n\n在 PyTorch 中，`torch.nn.Dropout` 是一个层（module），用法非常简单：\n\n```python\nimport torch\nimport torch.nn as nn\n\ndropout = nn.Dropout(p=0.5)  # p 是丢弃概率，默认 0.5\nx = torch.ones(4, 4)         # 4x4 全 1 输入\n\ndropout.train()              # 训练模式：随机丢弃\ny_train = dropout(x)\nprint(\"训练模式输出：\")\nprint(y_train)\n\ndropout.eval()               # 评估模式：不丢弃\nprint(\"评估模式输出：\")\nprint(dropout(x))\n```\n\n关键点：\n- `p` 是 **丢弃概率**，不是保留概率。\n- 必须正确切换 `train()` 和 `eval()` 模式，否则推理结果会不稳定。\n- `nn.Dropout` 默认使用 inverted dropout，测试时不需要手动缩放。\n\n---\n\n## 4. 在神经网络中怎么放 Dropout？\n\n常见做法：\n- 在全连接层（Linear）之后、激活函数之后，或者激活函数之前。\n- 卷积层（Conv）之后也可以加，但更常用 `nn.Dropout2d`。\n- 输入层也可以加较小的 dropout，但现代网络更常放在中间层。\n\n示例：\n\n```python\nimport torch\nimport torch.nn as nn\n\nclass MLP(nn.Module):\n    def __init__(self):\n        super().__init__()\n        self.net = nn.Sequential(\n            nn.Linear(784, 256),\n            nn.ReLU(),\n            nn.Dropout(p=0.5),      # 隐藏层后丢弃一半\n            nn.Linear(256, 10)\n        )\n\n    def forward(self, x):\n        return self.net(x)\n\nmodel = MLP()\nmodel.train()\nprint(model(torch.randn(8, 784)).shape)  # torch.Size([8, 10])\nmodel.eval()\nprint(model(torch.randn(8, 784)).shape)\n```\n\n---\n\n## 5. 训练与评估的差异\n\n非常重要：\n- **训练时**：Dropout 随机丢弃，输出有随机性。\n- **评估/推理时**：Dropout 不丢弃，输出确定。\n\n如果你忘记调用 `model.eval()`，推理结果会带随机性，指标会变差。\n\n典型训练循环：\n\n```python\nmodel.train()\nfor x, y in train_loader:\n    optimizer.zero_grad()\n    loss = criterion(model(x), y)\n    loss.backward()\n    optimizer.step()\n\nmodel.eval()\nwith torch.no_grad():\n    for x, y in test_loader:\n        pred = model(x)\n        # 计算准确率等\n```\n\n---\n\n## 6. 常用超参数与建议\n\n- `p=0.5` 是经典默认值，适合全连接隐藏层。\n- 输入层常用 `p=0.1~0.2`。\n- 卷积层常用 `p=0.1~0.3`。\n- 如果模型欠拟合（underfitting），减小 `p` 或去掉 Dropout。\n- Dropout 常与权重衰减（weight decay）、批归一化（BatchNorm）等正则化手段配合。\n\n注意：BatchNorm 和 Dropout 同时使用时，顺序和位置要谨慎，通常 Dropout 放在 BatchNorm 之后。\n\n---\n\n## 7. 动手练习\n\n**任务：观察 Dropout 在训练和评估模式下的差异**\n\n1. 创建一个 `nn.Dropout(p=0.3)` 层。\n2. 输入一个 5x5 的全 1 张量。\n3. 分别打印训练模式和评估模式的输出。\n4. 统计训练模式下被置 0 的比例，验证是否接近 0.3。\n5. 再构建一个两层 MLP，在隐藏层后加 Dropout，打印训练和评估模式下同一输入的输出，观察差异。\n\n参考代码：\n\n```python\nimport torch\nimport torch.nn as nn\n\ntorch.manual_seed(42)\ndropout = nn.Dropout(p=0.3)\nx = torch.ones(5, 5)\n\ndropout.train()\ny_train = dropout(x)\nprint(\"训练模式：\\n\", y_train)\nprint(\"置 0 比例：\", (y_train == 0).float().mean().item())\n\ndropout.eval()\ny_eval = dropout(x)\nprint(\"评估模式：\\n\", y_eval)\n```\n\n---\n\n## 8. 常见误区提醒\n\n- 把 `p` 当成保留概率：`p=0.5` 表示丢弃 50%，保留 50%。\n- 推理时忘记 `eval()`：结果随机，评估不稳定。\n- 训练时忘记 `train()`：Dropout 不生效，正则化失效。\n- 在小模型上盲目加高 Dropout：可能导致欠拟合。\n- 以为 Dropout 能替代所有正则化：它只是工具之一。\n\n---\n\n## 9. 小结\n\n- Dropout 是训练时随机丢弃神经元、测试时全量使用的正则化方法。\n- PyTorch 用 `nn.Dropout(p)` 实现，注意 `train()` / `eval()` 切换。\n- 它通过打破神经元之间的共适应（co-adaptation）来提升泛化能力。\n- 合理选择 `p`，并与其他正则化手段配合使用。\n\n## ai.nn.batchnorm\n\n## 一句话直觉\n**BatchNorm（批量归一化，Batch Normalization）** 就像给神经网络每一层的输入做一次“标准化体检”，让数据分布更稳定，从而训练更快、更不容易跑偏。\n\n---\n\n## 1. 为什么需要 BatchNorm？\n\n深度神经网络训练时，每一层的输入分布会随着前面层参数更新而不断变化，这被称为 **内部协变量偏移（Internal Covariate Shift）**。它会导致：\n- 学习率不能设太大\n- 需要精细初始化\n- 容易陷入饱和区（如 Sigmoid 两端）\n\nBatchNorm 的核心思想：对每个 mini-batch（小批量）的数据，按特征维度做归一化，使其均值接近 0、方差接近 1，然后再用两个可学习参数缩放和平移。\n\n公式：\n\n$$\\hat{x} = \\frac{x - \\mu_B}{\\sqrt{\\sigma_B^2 + \\epsilon}}$$\n\n$$y = \\gamma \\hat{x} + \\beta$$\n\n其中 $\\mu_B$、$\\sigma_B^2$ 是当前 batch 的均值和方差，$\\gamma$、$\\beta$ 是可学习参数。\n\n```python\nimport torch\nimport torch.nn as nn\n\n# 一个简单的 BatchNorm1d 示例\nbn = nn.BatchNorm1d(num_features=3)\nx = torch.randn(4, 3)  # batch_size=4, 特征数=3\ny = bn(x)\nprint(y)\n```\n\n---\n\n## 2. 训练与推理阶段的区别\n\n- **训练阶段**：使用当前 mini-batch 的均值和方差进行归一化，同时用滑动平均更新全局均值和方差。\n- **推理阶段**：使用训练阶段累计的全局均值和方差，不再依赖当前 batch。\n\n这也是为什么模型在 `train()` 和 `eval()` 模式下 BatchNorm 行为不同。\n\n```python\nmodel = nn.Sequential(\n    nn.Linear(3, 5),\n    nn.BatchNorm1d(5)\n)\n\nmodel.train()  # 训练模式：使用 batch 统计量\nout_train = model(torch.randn(4, 3))\n\nmodel.eval()   # 推理模式：使用 running_mean / running_var\nout_eval = model(torch.randn(4, 3))\nprint(out_train.shape, out_eval.shape)\n```\n\n---\n\n## 3. 在 CNN 中怎么用？\n\n对于卷积层，BatchNorm 通常作用在通道维度上，使用 `nn.BatchNorm2d`。\n\n```python\nimport torch.nn as nn\n\nconv_bn = nn.Sequential(\n    nn.Conv2d(3, 16, kernel_size=3, padding=1),\n    nn.BatchNorm2d(16),\n    nn.ReLU()\n)\n\nx = torch.randn(2, 3, 8, 8)  # N=2, C=3, H=8, W=8\ny = conv_bn(x)\nprint(y.shape)  # torch.Size([2, 16, 8, 8])\n```\n\n---\n\n## 4. 手动实现一个简化版 BatchNorm\n\n理解内部机制最好的方式是自己写一遍。\n\n```python\nimport torch\n\ndef manual_batchnorm(x, gamma, beta, eps=1e-5):\n    # x: [N, C]，按特征维度 C 做归一化\n    mean = x.mean(dim=0, keepdim=True)\n    var = x.var(dim=0, unbiased=False, keepdim=True)\n    x_hat = (x - mean) / torch.sqrt(var + eps)\n    return gamma * x_hat + beta\n\nx = torch.randn(4, 3)\ngamma = torch.ones(3)\nbeta = torch.zeros(3)\nout = manual_batchnorm(x, gamma, beta)\nprint(out.mean(dim=0), out.std(dim=0, unbiased=False))\n```\n\n---\n\n## 5. 工程实践要点\n\n- **batch size 太小**：统计量不稳定，效果变差，可考虑 GroupNorm 或 LayerNorm。\n- **位置**：通常放在线性/卷积层之后、激活函数之前。\n- **推理导出**：部署时务必切换到 `eval()`，否则结果会随 batch 变化。\n- **与 Dropout 配合**：顺序通常是 `Linear -> BatchNorm -> ReLU -> Dropout`。\n\n```python\nimport torch\nimport torch.nn as nn\n\nclass MLP(nn.Module):\n    def __init__(self):\n        super().__init__()\n        self.net = nn.Sequential(\n            nn.Linear(10, 32),\n            nn.BatchNorm1d(32),\n            nn.ReLU(),\n            nn.Dropout(0.2),\n            nn.Linear(32, 1)\n        )\n    def forward(self, x):\n        return self.net(x)\n\nmodel = MLP()\nmodel.train()\nout = model(torch.randn(8, 10))\nprint(out.shape)\n```\n\n---\n\n## 动手练习\n\n**任务**：在本地完成以下实验：\n\n1. 构造一个二分类数据集（可用 `sklearn.datasets.make_moons`）。\n2. 定义两个结构相同的 MLP：一个带 BatchNorm，一个不带。\n3. 用相同学习率、相同 epoch 训练，比较训练损失下降速度与最终准确率。\n4. 观察带 BatchNorm 的模型在 `train()` 与 `eval()` 模式下对同一批数据的输出差异。\n\n**提交要求**：贴出训练曲线或打印每个 epoch 的 loss/acc，并写出 3 句话总结 BatchNorm 带来的变化。\n",
+  "quiz": [
+    {
+      "kp": "ai.nn.dropout",
+      "type": "single_choice",
+      "question": "在神经网络训练中，Dropout 层的主要作用是什么？",
+      "options": [
+        "在训练时随机将一部分神经元的输出置零，以减少过拟合",
+        "在推理时随机丢弃一部分输入特征，以加速计算",
+        "对所有神经元的输出进行归一化，以稳定训练",
+        "将输入张量中的负值置零，以增加非线性"
+      ],
+      "answer": 0,
+      "explanation": "Dropout 在训练阶段以一定概率随机将神经元输出置零，从而降低神经元之间的共适应性，起到正则化、减少过拟合的作用。推理阶段通常不随机丢弃。",
+      "error_tag": "概念混淆",
+      "variant_group": "dropout_basic"
+    },
+    {
+      "kp": "ai.nn.dropout",
+      "type": "single_choice",
+      "question": "使用 PyTorch 的 nn.Dropout(p=0.5) 时，以下关于训练和推理阶段行为的描述，哪一项正确？",
+      "options": [
+        "训练时以 0.5 的概率将元素置零，并将保留的元素除以 0.5；推理时不做随机置零",
+        "训练时以 0.5 的概率将元素置零，并将保留的元素乘以 0.5；推理时不做随机置零",
+        "训练和推理时都以 0.5 的概率随机置零，且不进行缩放",
+        "训练时不置零，推理时以 0.5 的概率随机置零并缩放"
+      ],
+      "answer": 0,
+      "explanation": "PyTorch 的 Dropout 采用 inverted dropout：训练时按概率 p 置零，并对保留元素除以 (1-p) 进行缩放，使期望不变；推理时直接恒等映射。",
+      "error_tag": "缩放方向错误",
+      "variant_group": "dropout_scaling"
+    },
+    {
+      "kp": "ai.nn.dropout",
+      "type": "single_choice",
+      "question": "在推理阶段，Dropout 层通常等价于什么操作？",
+      "options": [
+        "恒等映射，即不改变输入",
+        "将输入全部置零",
+        "将输入乘以 0.5",
+        "对输入做 L2 归一化"
+      ],
+      "answer": 0,
+      "explanation": "推理阶段 Dropout 不再随机置零，也不做缩放，等价于恒等映射。训练阶段已经通过 inverted dropout 完成了缩放。",
+      "error_tag": "推理行为误解",
+      "variant_group": "dropout_inference"
+    },
+    {
+      "kp": "ai.nn.dropout",
+      "type": "single_choice",
+      "question": "如果训练时使用 Dropout，但推理时发现输出方差明显偏大且结果每次不同，最可能的原因是？",
+      "options": [
+        "推理时没有切换到评估模式，Dropout 仍在随机置零",
+        "推理时错误地启用了 BatchNorm 的 running_mean",
+        "模型参数在推理过程中被更新了",
+        "输入数据没有做归一化"
+      ],
+      "answer": 0,
+      "explanation": "推理时若模型仍处于训练模式，Dropout 会继续随机置零，导致每次输出不同且方差偏大。应调用 eval() 切换模式。",
+      "error_tag": "调试判断错误",
+      "variant_group": "dropout_debug"
+    },
+    {
+      "kp": "ai.nn.dropout",
+      "type": "single_choice",
+      "question": "关于 Dropout 与模型集成的关系，以下说法正确的是？",
+      "options": [
+        "Dropout 训练可以近似看作对大量共享参数的子网络进行集成",
+        "Dropout 会显式训练多个独立模型并取平均",
+        "Dropout 集成后的模型参数量是原来的若干倍",
+        "Dropout 与集成学习没有任何关系"
+      ],
+      "answer": 0,
+      "explanation": "Dropout 在训练时随机生成不同的子网络结构，可看作一种隐式的、参数共享的集成方式，而不是显式训练多个独立模型。",
+      "error_tag": "集成理解偏差",
+      "variant_group": "dropout_ensemble"
+    },
+    {
+      "kp": "ai.nn.dropout",
+      "type": "single_choice",
+      "question": "以下关于 Dropout 对训练时间影响的描述，哪一项合理？",
+      "options": [
+        "Dropout 会增加每次迭代的随机性，通常不会显著减少训练时间",
+        "Dropout 会删掉一半神经元，因此训练时间一定减半",
+        "Dropout 会让模型变小，因此推理时间必然减少",
+        "Dropout 会使反向传播失效，从而缩短训练"
+      ],
+      "answer": 0,
+      "explanation": "Dropout 只是随机置零，计算量并不会按丢弃比例线性减少，通常也不会显著缩短训练时间。推理阶段若已恒等映射，也不会因 Dropout 加快推理。",
+      "error_tag": "性能影响误解",
+      "variant_group": "dropout_performance"
+    },
+    {
+      "kp": "ai.nn.dropout",
+      "type": "single_choice",
+      "question": "在 RNN 或 Transformer 中应用 Dropout 时，以下哪种做法更常见？",
+      "options": [
+        "对每个时间步的输出或注意力权重独立应用 Dropout",
+        "只在第一个时间步应用 Dropout，后续时间步禁用",
+        "在循环展开之前对输入序列整体做一次 Dropout 后不再使用",
+        "把 Dropout 概率设为 1，以完全屏蔽循环连接"
+      ],
+      "answer": 0,
+      "explanation": "在序列模型中，常见做法是在每个时间步的输出、隐藏状态或注意力权重上独立应用 Dropout，也可以使用变分 Dropout 在时间步间共享掩码。设为 1 会丢弃全部信息，不可取。",
+      "error_tag": "序列模型应用误解",
+      "variant_group": "dropout_sequence"
+    },
+    {
+      "kp": "ai.nn.dropout",
+      "type": "single_choice",
+      "question": "以下哪一项最准确地描述了 Dropout 中的“掩码”（mask）？",
+      "options": [
+        "一个与输入同形状的 0/1 张量，用来决定哪些元素被保留或置零",
+        "一个用于计算损失函数的权重矩阵",
+        "一个记录模型参数梯度的缓存",
+        "一个将输入映射到更高维空间的线性变换"
+      ],
+      "answer": 0,
+      "explanation": "Dropout 通过生成与输入同形状的 0/1 掩码，按元素相乘实现随机置零。掩码不是损失权重、梯度缓存或线性变换。",
+      "error_tag": "概念定义模糊",
+      "variant_group": "dropout_mask"
+    },
+    {
+      "kp": "ai.nn.dropout",
+      "type": "single_choice",
+      "question": "假设某层输出使用 Dropout(p=0.2)，训练时某元素被保留，则 inverted dropout 通常会将该元素如何缩放？",
+      "options": [
+        "除以 0.8",
+        "乘以 0.8",
+        "除以 0.2",
+        "保持原值不变"
+      ],
+      "answer": 0,
+      "explanation": "inverted dropout 在训练时对保留元素除以 (1-p)，这里 1-p=0.8，因此除以 0.8，以保持输出期望与不使用 Dropout 时一致。",
+      "error_tag": "缩放计算错误",
+      "variant_group": "dropout_scaling"
+    },
+    {
+      "kp": "ai.nn.dropout",
+      "type": "single_choice",
+      "question": "关于 Dropout 和权重衰减（weight decay）的关系，以下说法正确的是？",
+      "options": [
+        "两者都是正则化手段，但机制不同，可以同时使用",
+        "两者完全等价，使用其中一个即可",
+        "Dropout 是权重衰减的一种特殊形式",
+        "权重衰减会禁用 Dropout"
+      ],
+      "answer": 0,
+      "explanation": "Dropout 通过随机置零引入噪声和子网络集成效应，权重衰减通过惩罚大权重限制模型复杂度，两者机制不同，可以同时使用。",
+      "error_tag": "正则化手段混淆",
+      "variant_group": "dropout_vs_weight_decay"
+    },
+    {
+      "kp": "ai.nn.dropout",
+      "type": "single_choice",
+      "question": "在 PyTorch 中，以下哪种写法会在每次前向传播时产生不同的随机掩码？",
+      "options": [
+        "在模型处于训练模式时，重复调用包含 nn.Dropout 的模块",
+        "在模型处于评估模式时，重复调用包含 nn.Dropout 的模块",
+        "在模型处于评估模式时，调用 model.eval() 后重复推理",
+        "无论训练还是评估模式，Dropout 都使用固定掩码"
+      ],
+      "answer": 0,
+      "explanation": "只有在训练模式下，nn.Dropout 才会每次前向传播重新采样随机掩码；评估模式下 Dropout 等价于恒等映射，不再产生随机性。",
+      "error_tag": "随机性来源误解",
+      "variant_group": "dropout_randomness"
+    },
+    {
+      "kp": "ai.nn.dropout",
+      "type": "single_choice",
+      "question": "以下关于 Dropout 对梯度流动影响的描述，哪一项正确？",
+      "options": [
+        "被置零的神经元在前向和反向中都不参与，因此该次迭代不会收到梯度",
+        "被置零的神经元仍然会收到完整梯度，只是输出为零",
+        "Dropout 会使所有神经元的梯度都变为零",
+        "Dropout 不影响反向传播，只影响前向传播"
+      ],
+      "answer": 0,
+      "explanation": "被掩码置零的神经元在该次前向中输出为零，反向传播时对应梯度也为零，因此本次迭代不会更新这些被丢弃的连接。",
+      "error_tag": "梯度传播误解",
+      "variant_group": "dropout_gradient"
+    },
+    {
+      "kp": "ai.nn.dropout",
+      "type": "single_choice",
+      "question": "在评估一个使用了 Dropout 的模型时，忘记调用 model.eval() 会导致什么后果？",
+      "options": [
+        "推理时仍然随机置零神经元，使输出不稳定且可能变差",
+        "模型参数量突然增加，导致显存不足",
+        "Dropout 层会被自动移除，模型结构改变",
+        "梯度无法回传，训练立即报错"
+      ],
+      "answer": 0,
+      "explanation": "model.eval() 会将 Dropout 等层切换到推理模式。若忘记调用，推理时仍会随机置零，导致结果具有随机性且与训练时的期望不一致。",
+      "error_tag": "训练/推理模式混淆",
+      "variant_group": "dropout_eval_mode"
+    },
+    {
+      "kp": "ai.nn.dropout",
+      "type": "single_choice",
+      "question": "如果发现模型在训练集上表现很好但在验证集上很差，以下哪种调整最可能合理？",
+      "options": [
+        "适当增加 Dropout 概率或添加 Dropout 层",
+        "完全移除所有 Dropout 层",
+        "把 Dropout 概率设为 1",
+        "只在推理阶段启用 Dropout"
+      ],
+      "answer": 0,
+      "explanation": "训练好、验证差是典型过拟合，适当增强正则化（如增大 Dropout 概率或添加 Dropout 层）是合理方向。移除 Dropout 或把 p 设为 1 都不合理，推理阶段不应启用随机 Dropout。",
+      "error_tag": "调参方向错误",
+      "variant_group": "dropout_tuning"
+    },
+    {
+      "kp": "ai.nn.dropout",
+      "type": "single_choice",
+      "question": "关于 Dropout 概率 p 的取值，以下说法正确的是？",
+      "options": [
+        "p 表示被置零的概率，p 越大正则化越强，但过大可能导致欠拟合",
+        "p 表示被保留的概率，p 越大正则化越强",
+        "p 必须大于 0.5，否则 Dropout 不起作用",
+        "p 只能取 0 或 1，取中间值没有意义"
+      ],
+      "answer": 0,
+      "explanation": "在常见框架中，p 是被置零的概率。p 越大丢弃越多、正则化越强，但过大时模型容量不足，可能欠拟合。",
+      "error_tag": "参数含义误解",
+      "variant_group": "dropout_prob"
+    },
+    {
+      "kp": "ai.nn.dropout",
+      "type": "single_choice",
+      "question": "以下哪一项最不可能是使用 Dropout 的合适场景？",
+      "options": [
+        "模型已经严重欠拟合，训练误差远高于验证误差",
+        "全连接层参数量很大，训练集相对较小",
+        "深层网络中出现明显的过拟合现象",
+        "需要在训练时引入随机性以提升泛化能力"
+      ],
+      "answer": 0,
+      "explanation": "Dropout 是正则化手段，主要用于缓解过拟合。若模型已经欠拟合，再加强正则化通常会使训练误差进一步升高，因此不合适。",
+      "error_tag": "适用场景误判",
+      "variant_group": "dropout_when_to_use"
+    },
+    {
+      "kp": "ai.nn.dropout",
+      "type": "single_choice",
+      "question": "在卷积神经网络中，Dropout 通常更常被放在哪里？",
+      "options": [
+        "全连接层之后，而不是直接放在卷积层输出上",
+        "卷积层之前，直接作用于输入图像像素",
+        "池化层内部，替代池化操作",
+        "批归一化层内部，与归一化同时进行"
+      ],
+      "answer": 0,
+      "explanation": "传统做法中 Dropout 多用于全连接层之后。卷积层通常参数量较少且具有空间结构，直接对卷积输出做元素级 Dropout 效果有限，常使用 Dropout2d 或 SpatialDropout。",
+      "error_tag": "位置误用",
+      "variant_group": "dropout_position"
+    },
+    {
+      "kp": "ai.nn.dropout",
+      "type": "single_choice",
+      "question": "以下哪一项不是 Dropout 能够减少过拟合的合理解释？",
+      "options": [
+        "Dropout 会永久删除一部分神经元，从而减少模型参数量",
+        "Dropout 阻止神经元之间产生过强的共适应关系",
+        "Dropout 可以看作是对许多子网络进行集成",
+        "Dropout 在训练时引入噪声，起到类似数据增强的正则化效果"
+      ],
+      "answer": 0,
+      "explanation": "Dropout 只是在训练时随机临时置零，并不会永久删除参数或减少模型参数量。其他三项都是常见的合理解释。",
+      "error_tag": "机制误解",
+      "variant_group": "dropout_mechanism"
+    },
+    {
+      "kp": "ai.nn.dropout",
+      "type": "single_choice",
+      "question": "关于批归一化（BatchNorm）和 Dropout 同时使用时，以下说法较合理的是？",
+      "options": [
+        "两者都有正则化或稳定训练的作用，同时使用可能相互干扰，需要根据任务调整",
+        "两者完全等价，同时使用会报错",
+        "BatchNorm 会禁用 Dropout，所以不能同时出现",
+        "Dropout 会禁用 BatchNorm，所以不能同时出现"
+      ],
+      "answer": 0,
+      "explanation": "BatchNorm 和 Dropout 都会影响训练动态和统计量，同时使用并不一定带来叠加收益，有时会互相干扰，实践中需要根据具体任务和顺序进行调参。",
+      "error_tag": "组件交互误解",
+      "variant_group": "dropout_with_bn"
+    },
+    {
+      "kp": "ai.nn.dropout",
+      "type": "single_choice",
+      "question": "如果想在 PyTorch 中对整个通道进行 Dropout，而不是对单个元素，应该优先考虑使用什么？",
+      "options": [
+        "nn.Dropout2d 或 nn.Dropout3d",
+        "nn.Dropout 并手动把 p 设为 1",
+        "nn.BatchNorm2d",
+        "nn.MaxPool2d"
+      ],
+      "answer": 0,
+      "explanation": "nn.Dropout2d/3d 会以通道为单位进行丢弃，适合卷积特征图。普通 nn.Dropout 是元素级丢弃，不能实现整通道丢弃。",
+      "error_tag": "API 混淆",
+      "variant_group": "dropout_types"
+    },
+    {
+      "kp": "ai.nn.dropout",
+      "type": "single_choice",
+      "question": "以下代码片段中，Dropout 会在哪种模式下随机置零？\n\nimport torch\nimport torch.nn as nn\n\nmodel = nn.Sequential(nn.Linear(10, 10), nn.Dropout(p=0.3))\nmodel.train()\nout = model(torch.randn(1, 10))",
+      "options": [
+        "训练模式，因此会以 0.3 的概率随机置零",
+        "推理模式，因此不会随机置零",
+        "无论什么模式都会以 0.3 的概率随机置零",
+        "无论什么模式都不会随机置零"
+      ],
+      "answer": 0,
+      "explanation": "调用 model.train() 后将模型置为训练模式，nn.Dropout 在训练模式下才会按概率 p 随机置零。",
+      "error_tag": "模式与行为混淆",
+      "variant_group": "dropout_code_behavior"
+    },
+    {
+      "kp": "ai.nn.batchnorm",
+      "type": "single_choice",
+      "question": "在卷积神经网络中，批归一化（Batch Normalization）通常被插入到哪个位置？",
+      "options": [
+        "卷积层之后、激活函数之前",
+        "激活函数之后、下一层卷积之前",
+        "池化层之后、全连接层之前",
+        "损失函数计算之后"
+      ],
+      "answer": 0,
+      "explanation": "批归一化通常插入在卷积/全连接层之后、非线性激活函数之前，先对线性输出做标准化再激活，能稳定分布并加速收敛。",
+      "error_tag": "概念混淆",
+      "variant_group": "bn_position"
+    },
+    {
+      "kp": "ai.nn.batchnorm",
+      "type": "single_choice",
+      "question": "训练时批归一化对一个小批量（mini-batch）的输入进行标准化，其标准化使用的均值与方差来自哪里？",
+      "options": [
+        "整个训练集的全局均值和方差",
+        "当前这个小批量样本的均值和方差",
+        "上一个批次的均值和方差",
+        "初始化时随机生成的均值和方差"
+      ],
+      "answer": 1,
+      "explanation": "训练阶段批归一化使用当前 mini-batch 内的统计量进行标准化，这也是其名称“批”归一化的来源。",
+      "error_tag": "概念混淆",
+      "variant_group": "bn_train_stats"
+    },
+    {
+      "kp": "ai.nn.batchnorm",
+      "type": "multi_choice",
+      "question": "关于批归一化（Batch Normalization），下列说法正确的有哪些？",
+      "options": [
+        "训练时使用当前批次的均值和方差",
+        "推理时使用训练累积的移动平均统计量",
+        "它包含可学习的缩放和平移参数",
+        "它会完全消除内部协变量偏移并因此不再需要其他正则化"
+      ],
+      "answer": [
+        0,
+        1,
+        2
+      ],
+      "explanation": "前三项正确。D 错在“完全消除”和“不再需要其他正则化”——批归一化只是缓解分布变化，仍有轻微正则化但不足以替代 Dropout 等。",
+      "error_tag": "概念混淆",
+      "variant_group": "bn_basic_props"
+    },
+    {
+      "kp": "ai.nn.batchnorm",
+      "type": "multi_choice",
+      "question": "下列哪些情形可能导致批归一化效果不佳或不适用？",
+      "options": [
+        "训练批量非常小",
+        "在线学习且每次只有一个样本",
+        "需要严格的逐样本推理且模型未正确切换到推理模式",
+        "批量很大且数据分布稳定"
+      ],
+      "answer": [
+        0,
+        1,
+        2
+      ],
+      "explanation": "小批量、单样本在线学习会让统计量噪声过大；推理时若忘记切换到推理模式，仍用批次统计会带来不一致。批量大且稳定时批归一化通常表现良好。",
+      "error_tag": "边界错误",
+      "variant_group": "bn_limitations"
+    },
+    {
+      "kp": "ai.nn.batchnorm",
+      "type": "multi_choice",
+      "question": "批归一化通常能带来下列哪些好处？",
+      "options": [
+        "允许使用更大的学习率，加速收敛",
+        "降低对参数初始化的敏感度",
+        "减少对 Dropout 等正则化的依赖（但不完全替代）",
+        "保证模型在任意批量大小下都绝对稳定"
+      ],
+      "answer": [
+        0,
+        1,
+        2
+      ],
+      "explanation": "批归一化稳定分布、平滑优化地形，允许更大学习率、降低初始化敏感度，并有轻微正则化；但不保证任意批量大小下稳定，尤其小批量。",
+      "error_tag": "概念混淆",
+      "variant_group": "bn_benefits"
+    },
+    {
+      "kp": "ai.nn.batchnorm",
+      "type": "multi_choice",
+      "question": "在实现批归一化层时，通常需要保存或维护哪些量？",
+      "options": [
+        "可学习的缩放参数 γ",
+        "可学习的平移参数 β",
+        "训练累积的移动平均均值和方差",
+        "每个训练样本的原始输入"
+      ],
+      "answer": [
+        0,
+        1,
+        2
+      ],
+      "explanation": "批归一化层保存 γ、β 以及用于推理的移动平均统计量；不需要保存全部训练样本输入。",
+      "error_tag": "记忆缺失",
+      "variant_group": "bn_parameters"
+    },
+    {
+      "kp": "ai.nn.batchnorm",
+      "type": "fill_blank",
+      "question": "训练批归一化时，对每个小批量计算均值 μ 和方差 σ²，然后用公式 (x - μ) / sqrt(σ² + ____) 进行标准化。横线处应填入的符号名称是？",
+      "options": [],
+      "answer": [
+        "epsilon",
+        "ε",
+        "eps"
+      ],
+      "explanation": "分母中加上一个小常数 ε（epsilon），防止方差为零时除零，保证数值稳定。",
+      "error_tag": "记忆缺失",
+      "variant_group": "bn_epsilon"
+    },
+    {
+      "kp": "ai.nn.batchnorm",
+      "type": "fill_blank",
+      "question": "批归一化在标准化之后应用可学习的仿射变换 y = ____ * x_hat + β，其中 x_hat 为标准化结果。横线处应填入的参数名称是？",
+      "options": [],
+      "answer": [
+        "gamma",
+        "γ",
+        "缩放参数",
+        "scale"
+      ],
+      "explanation": "γ（gamma）是缩放参数，β（beta）是平移参数，二者使网络能恢复被标准化削弱的表达能力。",
+      "error_tag": "记忆缺失",
+      "variant_group": "bn_affine"
+    },
+    {
+      "kp": "ai.nn.batchnorm",
+      "type": "code_reading",
+      "question": "阅读以下伪代码：\n```\nif training:\n    mean = batch.mean(dim=[0, 2, 3])\n    var  = batch.var(dim=[0, 2, 3])\n    update_running_stats(mean, var)\nelse:\n    mean = running_mean\n    var  = running_var\n```\n这段代码描述的是哪种归一化层在训练与推理阶段的行为？请说明判断依据。",
+      "options": [],
+      "answer": "这是批归一化（Batch Normalization）。判断依据：训练阶段沿批次及空间维度(dim=[0,2,3])按通道统计均值方差并更新 running 统计量，推理阶段改用累积的 running_mean/running_var，这正是批归一化区分训练/推理模式的典型特征。",
+      "explanation": "训练用当前批次统计量并更新移动平均，推理用移动平均统计量，是批归一化的核心行为；若为 Layer Norm 则不会依赖 batch 维度，也不会有 running 统计。",
+      "error_tag": "概念混淆",
+      "variant_group": "bn_train_eval_code"
+    },
+    {
+      "kp": "ai.nn.batchnorm",
+      "type": "code_reading",
+      "question": "某模型训练时使用了批归一化，验证时准确率远低于训练准确率且波动很大。检查发现验证代码没有把模型切换到推理模式。请解释原因。",
+      "options": [],
+      "answer": "因为未切换到推理模式时，批归一化仍使用验证批次的均值和方差来标准化，而验证批次可能很小、分布与训练不一致，导致统计量噪声大且与训练时的移动平均不匹配，从而使验证表现变差；切换到推理模式后应使用训练累积的移动平均统计量。",
+      "explanation": "批归一化训练/推理统计来源不同，忘记切换模式会导致统计量误用，是工程中常见 bug。",
+      "error_tag": "边界错误",
+      "variant_group": "bn_train_eval_code"
+    },
+    {
+      "kp": "ai.nn.batchnorm",
+      "type": "scenario",
+      "question": "你在训练一个目标检测模型，由于显存限制只能用很小的批量（如 2）。同事建议仍然使用批归一化。请分析小批量下使用批归一化可能的问题，并提出至少一个替代或缓解方案。",
+      "options": [],
+      "answer": null,
+      "explanation": "小批量时批归一化统计量估计方差大、噪声重，训练不稳定且推理统计不匹配；可用 Layer Norm、Group Norm 等不依赖批次的归一化，或跨设备同步批归一化，或使用大动量/预训练微调等缓解。",
+      "error_tag": "边界错误",
+      "variant_group": "bn_small_batch",
+      "required_keywords": [
+        "批归一化",
+        "统计量",
+        "训练不稳定",
+        "Group Norm",
+        "同步批归一化"
+      ]
+    },
+    {
+      "kp": "ai.nn.batchnorm",
+      "type": "scenario",
+      "question": "线上部署一个已训练好的带批归一化层的模型时，你发现同一输入在不同批次下推理结果不一致。请分析最可能的原因，并说明排查方向。",
+      "options": [],
+      "answer": null,
+      "explanation": "最可能原因是模型仍处于训练模式，批归一化用了当前批次的统计量，导致输出依赖同批次其他样本而不一致；应确保调用 eval 切换到推理模式，并检查 running 统计量是否正确加载。",
+      "error_tag": "概念混淆",
+      "variant_group": "bn_inference_consistency",
+      "required_keywords": [
+        "批归一化",
+        "训练模式",
+        "推理模式",
+        "eval",
+        "running统计量"
+      ]
+    },
+    {
+      "kp": "ai.nn.batchnorm",
+      "type": "single_choice",
+      "question": "批归一化在标准化之后还引入了可学习的缩放参数 γ 和平移参数 β，其主要目的是什么？",
+      "options": [
+        "减少模型参数量",
+        "恢复网络原本的表达能力，使标准化不至于限制特征分布",
+        "加快数据加载速度",
+        "防止梯度消失导致的所有数值问题"
+      ],
+      "answer": 1,
+      "explanation": "标准化会把特征强制变为零均值单位方差，可能削弱表达能力；γ 和 β 提供可学习的仿射变换，让网络能够恢复所需的分布。",
+      "error_tag": "概念混淆",
+      "variant_group": "bn_affine"
+    },
+    {
+      "kp": "ai.nn.batchnorm",
+      "type": "single_choice",
+      "question": "关于推理（inference）阶段批归一化的行为，下列说法正确的是？",
+      "options": [
+        "仍然使用当前推理批次的均值和方差",
+        "使用训练过程中累积的滑动平均均值和方差",
+        "直接跳过归一化计算",
+        "使用随机采样的均值和方差"
+      ],
+      "answer": 1,
+      "explanation": "推理时没有“批次”概念或批次可能很小，因此使用训练期间累积的移动平均统计量，保证输出确定性。",
+      "error_tag": "概念混淆",
+      "variant_group": "bn_eval_stats"
+    },
+    {
+      "kp": "ai.nn.batchnorm",
+      "type": "single_choice",
+      "question": "批归一化在训练时对小批量统计量的依赖，导致其在下列哪种场景下效果可能明显变差？",
+      "options": [
+        "批量很大且样本独立同分布",
+        "批量非常小或序列长度差异大（如小批量 NLP 任务）",
+        "使用 ReLU 激活函数时",
+        "使用带动量的优化器时"
+      ],
+      "answer": 1,
+      "explanation": "小批量时统计量估计噪声大，批归一化不稳定，这也是 Layer Normalization 等替代方案出现的原因。",
+      "error_tag": "边界错误",
+      "variant_group": "bn_small_batch"
+    },
+    {
+      "kp": "ai.nn.batchnorm",
+      "type": "single_choice",
+      "question": "批归一化中通常设置一个很小的常数 ε 加到方差上，其作用是什么？",
+      "options": [
+        "增加模型参数量",
+        "防止方差为零时出现除以零的数值不稳定",
+        "控制学习率大小",
+        "让均值变为非零"
+      ],
+      "answer": 1,
+      "explanation": "ε 是为了数值稳定，避免方差接近零时除法爆炸或产生 NaN。",
+      "error_tag": "记忆缺失",
+      "variant_group": "bn_epsilon"
+    },
+    {
+      "kp": "ai.nn.batchnorm",
+      "type": "single_choice",
+      "question": "批归一化在训练时使用移动平均更新全局统计量，其中动量（momentum）参数通常控制什么？",
+      "options": [
+        "梯度下降的学习率",
+        "全局统计量更新的平滑程度",
+        "γ 和 β 的初始化范围",
+        "批大小的上限"
+      ],
+      "answer": 1,
+      "explanation": "动量决定新批次统计量融入历史移动平均的比例，影响推理时统计量的平滑与稳定性。",
+      "error_tag": "概念混淆",
+      "variant_group": "bn_momentum"
+    },
+    {
+      "kp": "ai.nn.batchnorm",
+      "type": "single_choice",
+      "question": "批归一化常被认为具有轻微的正则化效果，主要原因是什么？",
+      "options": [
+        "它直接对损失函数加了 L2 惩罚",
+        "训练时每个批次的统计量带来噪声，起到类似 Dropout 的扰动作用",
+        "它减少了网络层数",
+        "它固定了所有权重"
+      ],
+      "answer": 1,
+      "explanation": "基于小批量的均值方差估计带有随机噪声，给训练引入扰动，因此有轻微正则化效果，但不能替代专门的 Dropout。",
+      "error_tag": "概念混淆",
+      "variant_group": "bn_regularization"
+    },
+    {
+      "kp": "ai.nn.batchnorm",
+      "type": "single_choice",
+      "question": "在卷积神经网络中，若某层输出形状为 (N, C, H, W)，批归一化通常沿哪些维度计算统计量？",
+      "options": [
+        "仅沿 N 维度",
+        "沿 N、H、W 维度，对每个通道 C 单独计算",
+        "沿 C、H、W 维度，对每个样本 N 单独计算",
+        "沿所有维度一起计算一个标量"
+      ],
+      "answer": 1,
+      "explanation": "对卷积特征，批归一化对每个通道在批和空间维度上统计，得到 C 个均值和 C 个方差，按通道进行标准化。",
+      "error_tag": "边界错误",
+      "variant_group": "bn_conv_dim"
+    },
+    {
+      "kp": "ai.nn.batchnorm",
+      "type": "single_choice",
+      "question": "以下哪种归一化方法不依赖批次维度、更适合小批量或变长序列？",
+      "options": [
+        "Batch Normalization",
+        "Layer Normalization",
+        "Batch Renormalization",
+        "Synchronized Batch Normalization"
+      ],
+      "answer": 1,
+      "explanation": "Layer Normalization 在单个样本的特征维度上统计，与批量大小无关，适合小批量或序列模型。",
+      "error_tag": "概念混淆",
+      "variant_group": "bn_vs_ln"
+    }
+  ]
+}

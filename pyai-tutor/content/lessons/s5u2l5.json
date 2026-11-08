@@ -1,0 +1,285 @@
+{
+  "id": "s5u2l5",
+  "title": "s5u2l5",
+  "kps": [
+    "py.db.neo4j",
+    "py.db.cypher"
+  ],
+  "theory": "## py.db.neo4j\n\n# 图数据库：Neo4j 与关系型数据库的边界\n\n> **一句话直觉**：关系型数据库回答「这一行的第 3 列是什么」，图数据库回答「从 A 出发走三步能到谁」——后者在社交网络、推荐、风控这类「关系本身就是数据」的场景里，一条 SQL 要写十几个 JOIN，而图数据库只需要一句话。\n\n## 1. 什么时候该换图数据库\n\n先看一个真实的对比。假设要查「和 Alice 一起参加过活动、且那些人的朋友里买过商品 X 的人」：\n\n```sql\n-- 关系型：三层 JOIN，深一层就再套一层\nSELECT DISTINCT p.name\nFROM person alice\nJOIN attends a1 ON a1.person_id = alice.id\nJOIN event e   ON e.id = a1.event_id\nJOIN attends a2 ON a2.event_id = e.id\nJOIN friendship f ON f.person_a = a2.person_id\nJOIN person p  ON p.id = f.person_b\nJOIN purchase pu ON pu.person_id = p.id\nWHERE alice.name = 'Alice' AND pu.product_id = 'X';\n```\n\n```cypher\n// 图数据库：把路径直接画出来\nMATCH (alice:Person {name: 'Alice'})-[:ATTENDS]->(e:Event)<-[:ATTENDS]-(other:Person)\n      -[:FRIEND]->(buyer:Person)-[:PURCHASE]->(p:Product {id: 'X'})\nRETURN DISTINCT buyer.name;\n```\n\n差别不在语法糖，而在**执行代价**：关系型的每多一层 JOIN 都要重新做一次索引查找或哈希连接，而图数据库的遍历是「顺着指针走」，代价只和实际走过的边数成正比（Neo4j 官方称之为 index-free adjacency）。所以深度 2–3 的查询两者差距不明显，深度 5 以上关系型就会指数级劣化。\n\n判断标准可以记成三条：\n\n1. **查询形态是路径而不是集合**——「谁和谁有什么关系」「从这到那怎么走」。\n2. **关系的深度不固定**——今天查两跳，明天产品要查五跳。\n3. **关系本身带属性且要被查询**——朋友关系上有「认识时间」「亲密度」。\n\n反过来，如果业务主要是按主键取行、做聚合统计、事务性记账，那就是关系型数据库的强项，别为了用图而用图。\n\n## 2. 用 Python 连上 Neo4j\n\nNeo4j 官方驱动是 `neo4j`，安装与连接都很直接：\n\n```python\nfrom neo4j import GraphDatabase\n\ndriver = GraphDatabase.driver(\n    \"bolt://localhost:7687\",\n    auth=(\"neo4j\", \"your-password\"),\n)\n\n# 连接池复用，不要每次查询都新建 driver\ntry:\n    with driver.session(database=\"neo4j\") as session:\n        result = session.run(\"RETURN 1 AS n\")\n        print(result.single()[\"n\"])       # 1\nfinally:\n    driver.close()\n```\n\n几个工程要点：\n\n- **driver 是长生命周期的连接池**，应用启动建一次、退出时 `close()`，别放在函数里反复创建。\n- **session 是轻量作用域**，一次业务操作一个 session；用 `with` 保证异常时也归还连接。\n- **查询一律用参数化**，Neo4j 用 `$name` 占位，绝不要拼字符串——和 SQL 注入是同一类问题。\n\n```python\ndef find_friends(session, name: str):\n    # 正确：参数化\n    return session.run(\n        \"MATCH (p:Person {name: $name})-[:FRIEND]->(f) RETURN f.name AS name\",\n        name=name,\n    ).data()\n```\n\n## 3. 批量写入：用 UNWIND 而不是循环\n\n新手最容易踩的性能坑是「在 Python 里 for 循环逐条 MERGE」。网络往返才是瓶颈，一次往返写 1 条和写 1000 条成本几乎一样。\n\n```python\npeople = [{\"name\": \"Alice\", \"age\": 30}, {\"name\": \"Bob\", \"age\": 25}]\n\n# 慢：N 次网络往返\nfor p in people:\n    session.run(\"CREATE (n:Person {name: $name})\", **p)\n\n# 快：1 次网络往返，服务端展开\nsession.run(\n    \"UNWIND $rows AS row \"\n    \"MERGE (n:Person {name: row.name}) \"\n    \"SET n.age = row.age\",\n    rows=people,\n)\n```\n\n`MERGE` 是「有则匹配、无则创建」，天然幂等，适合做导入；`CREATE` 无条件插入，重复执行会产生重复节点。批量导入用 `MERGE` 配合唯一约束才不会把自己写成脏数据：\n\n```cypher\nCREATE CONSTRAINT person_name IF NOT EXISTS\nFOR (p:Person) REQUIRE p.name IS UNIQUE;\n```\n\n## 4. 索引与执行计划\n\n图数据库不是不需要索引——**起点节点的定位**仍然靠索引。遍历本身便宜，但从几十万个节点里找出名为 Alice 的那一个，没有索引就是全表扫。\n\n```cypher\nCREATE INDEX person_age IF NOT EXISTS FOR (p:Person) ON (p.age);\n\n-- 看执行计划，确认起点走了索引而不是 AllNodesScan\nEXPLAIN MATCH (p:Person {name: 'Alice'}) RETURN p;\n```\n\n`EXPLAIN` 只出计划不执行，`PROFILE` 会真跑一遍并带上实际行数。排查慢查询时先用 `EXPLAIN` 看有没有 `AllNodesScan`，那基本就是缺索引。\n\n## 5. 常见误区\n\n- **把图数据库当文档库用**：只存节点不存边，那用关系型或 MongoDB 更省事。\n- **没有方向的边**：`MATCH (a)-[:FRIEND]-(b)` 会双向匹配，结果翻倍，需要 `DISTINCT` 或明确方向。\n- **超深遍历不做限制**：`MATCH (a)-[:FRIEND*]-(b)` 在稠密图上会爆内存，务必加 `*1..3` 这样的上限。\n- **事务边界过大**：一次事务写十万条会长时间持锁，按 1000–10000 条分批提交。\n\n## 小结\n\n关系型存「实体」，图数据库存「实体和实体之间的关系」。选型的判断点不是数据量大小，而是查询形态：**当你的核心问题是路径，而不是集合**，就该考虑图数据库。\n\n## py.db.cypher\n\n# Cypher 查询语言：把图查询写成图案\n\n> **一句话直觉**：Cypher 用 ASCII 画图——`(节点)-[关系]->(节点)`。你写下的形状就是你要找的形状，读代码的人不用在脑子里翻译 JOIN。\n\n## 1. 基本图案\n\n```cypher\n// 节点用圆括号，关系用方括号加箭头\n(alice:Person {name: 'Alice'})-[:FRIEND]->(bob:Person)\n```\n\n- `(alice:Person {name: 'Alice'})`：变量 `alice`、标签 `Person`、属性过滤。变量只在当前查询内有效。\n- `-[:FRIEND]->`：关系类型 `FRIEND`，箭头表示方向。`-[:FRIEND]-` 不限定方向。\n- 关系也能带属性：`-[r:WORKS_AT {since: 2020}]->`。\n\n四条最基本的子句：`MATCH` 找图案、`WHERE` 过滤、`RETURN` 返回、`CREATE` / `MERGE` 写入。\n\n```cypher\nMATCH (p:Person)-[:LIVES_IN]->(c:City {name: '上海'})\nWHERE p.age > 25\nRETURN p.name AS name, p.age AS age\nORDER BY age DESC\nLIMIT 10;\n```\n\n## 2. 变长路径：图数据库的核心能力\n\n`*min..max` 表示「重复这条关系 1 到 3 次」：\n\n```cypher\n// 找 Alice 三跳以内的所有朋友\nMATCH path = (alice:Person {name: 'Alice'})-[:FRIEND*1..3]->(f:Person)\nRETURN f.name, length(path) AS hops\nORDER BY hops;\n```\n\n**务必写上界**。`*` 不带上限在稠密图上会展开成天文数字的路径。如果你确实想要「任意深度」，用 `shortestPath` 或 `apoc.path.expandConfig` 这类带剪枝的工具，而不是裸 `*`。\n\n最短路径：\n\n```cypher\nMATCH (a:Person {name: 'Alice'}), (b:Person {name: 'Bob'})\nMATCH path = shortestPath((a)-[:FRIEND*..6]-(b))\nRETURN [n IN nodes(path) | n.name] AS route, length(path) AS hops;\n```\n\n`[n IN nodes(path) | n.name]` 是列表推导，把路径上的节点映射成名字列表。\n\n## 3. 聚合与分组\n\nCypher 的聚合和 SQL 很像，但**不需要 GROUP BY**——`RETURN` 里非聚合的表达式自动成为分组键：\n\n```cypher\nMATCH (p:Person)-[:PURCHASE]->(prod:Product)\nRETURN prod.category AS category,\n       count(p)        AS buyers,\n       avg(prod.price) AS avg_price\nORDER BY buyers DESC;\n```\n\n常用聚合：`count()`、`sum()`、`avg()`、`min()`、`max()`、`collect()`。`collect()` 把值收成列表，很适合「每人买过的商品」这种一對多输出：\n\n```cypher\nMATCH (p:Person)-[:PURCHASE]->(prod:Product)\nRETURN p.name AS person, collect(prod.name) AS products;\n```\n\n## 4. 写入：CREATE / MERGE / SET / DELETE\n\n```cypher\n// 建节点和关系\nCREATE (a:Person {name: 'Alice'})-[:FRIEND {since: 2021}]->(b:Person {name: 'Bob'});\n\n// 幂等导入：有则复用、无则创建\nMERGE (p:Person {name: 'Alice'})\nON CREATE SET p.created = timestamp()\nON MATCH  SET p.seen = timestamp();\n\n// 更新属性\nMATCH (p:Person {name: 'Alice'}) SET p.age = 31, p.city = '杭州';\n\n// 删关系再删节点（有关系的节点不能直接删）\nMATCH (p:Person {name: 'Bob'})-[r:FRIEND]->() DELETE r, p;\n// 或者一次带走 DETACH DELETE\nMATCH (p:Person {name: 'Bob'}) DETACH DELETE p;\n```\n\n`MERGE` 的匹配条件决定了幂等性：`MERGE (p:Person {name: 'Alice'})` 以 name 为唯一标识；如果 `MERGE` 里带了可变属性（比如同时写 `{name: 'Alice', age: 30}`），那 age 变了就会**新建一个节点**，这是最隐蔽的重复数据来源。规则是：`MERGE` 只用稳定标识，其他属性用 `ON CREATE SET` / `SET`。\n\n## 5. 在 Python 里跑 Cypher\n\n```python\nfrom neo4j import GraphDatabase\n\ndriver = GraphDatabase.driver(\"bolt://localhost:7687\", auth=(\"neo4j\", \"pw\"))\n\nwith driver.session() as s:\n    # 1) 参数化查询\n    rows = s.run(\n        \"MATCH (p:Person)-[:FRIEND*1..2]->(f:Person {name: $name}) \"\n        \"RETURN DISTINCT f.name AS name LIMIT $limit\",\n        name=\"Alice\", limit=20,\n    ).data()\n\n    # 2) 批量写入用 UNWIND\n    s.run(\n        \"UNWIND $rows AS row \"\n        \"MERGE (p:Person {id: row.id}) SET p.name = row.name\",\n        rows=[{\"id\": 1, \"name\": \"Alice\"}, {\"id\": 2, \"name\": \"Bob\"}],\n    )\n\ndriver.close()\n```\n\n注意 `LIMIT $limit` 在部分 Neo4j 版本里不支持参数化，遇到报错就改成 f-string 拼一个**已经校验成整数**的值，绝不要把用户输入拼进去。\n\n## 6. 常见错误清单\n\n| 现象 | 原因 | 修法 |\n| --- | --- | --- |\n| 结果重复 | 关系没写方向，正反各匹配一次 | 明确 `->`，或 `RETURN DISTINCT` |\n| 内存暴涨 | `*` 没写上界 | 改成 `*1..3` |\n| 越跑越慢 | 起点没走索引 | `CREATE INDEX` + `EXPLAIN` 确认 |\n| 节点重复 | `MERGE` 带了易变属性 | 只用稳定标识做 `MERGE` |\n| 删不掉节点 | 还有关系连着 | `DETACH DELETE` |\n\n## 小结\n\nCypher 的学习成本主要在「把问题翻译成图案」这一步，语法本身很小。写查询时先问自己两件事：**起点是什么（能不能走索引）**、**要走的路径有没有上界**。这两点决定查询是毫秒还是超时。\n",
+  "quiz": [
+    {
+      "kp": "py.db.neo4j",
+      "type": "single_choice",
+      "question": "以下哪种业务场景最适合用图数据库而不是关系型数据库？",
+      "options": [
+        "订单支付流水记账，需要严格事务",
+        "查找「共同好友的好友里买过某商品的人」这类多跳关系",
+        "按主键查询用户资料",
+        "对日志表做按天聚合统计"
+      ],
+      "answer": 1,
+      "explanation": "图数据库的优势在路径遍历；按主键取行、事务记账、聚合统计都是关系型的强项。",
+      "error_tag": "选型错误",
+      "variant_group": "graph_when_to_use"
+    },
+    {
+      "kp": "py.db.neo4j",
+      "type": "single_choice",
+      "question": "Neo4j 中 `driver` 对象的正确使用方式是？",
+      "options": [
+        "每次查询前新建，查询后立即 close",
+        "应用启动时建一次并复用，退出时 close",
+        "每个 HTTP 请求新建一个，不用 close",
+        "必须全局单例，且永不 close"
+      ],
+      "answer": 1,
+      "explanation": "driver 内部是连接池，长生命周期复用；session 才是轻量的请求级作用域。",
+      "error_tag": "工程实践缺失",
+      "variant_group": "neo4j_driver_lifecycle"
+    },
+    {
+      "kp": "py.db.neo4j",
+      "type": "single_choice",
+      "question": "向 Neo4j 批量写入 1000 个节点，以下哪种做法性能最好？",
+      "options": [
+        "在 Python 里 for 循环，每次 session.run 一条 CREATE",
+        "在 Python 里 for 循环，每次 session.run 一条 MERGE",
+        "用一条 UNWIND $rows AS row MERGE ... 传 1000 行参数",
+        "开 1000 个线程并发写"
+      ],
+      "answer": 2,
+      "explanation": "瓶颈是网络往返。UNWIND 让服务端一次展开全部行，一次往返完成；循环写法是 1000 次往返。",
+      "error_tag": "性能误判",
+      "variant_group": "neo4j_batch_write"
+    },
+    {
+      "kp": "py.db.neo4j",
+      "type": "single_choice",
+      "question": "执行 `EXPLAIN MATCH (p:Person {name:'Alice'}) RETURN p` 的计划里出现 AllNodesScan，说明什么？",
+      "options": [
+        "查询语法有误",
+        "没有为 Person.name 建索引，正在全表扫描找起点",
+        "数据库连接断了",
+        "结果集太大需要分页"
+      ],
+      "answer": 1,
+      "explanation": "AllNodesScan 表示起点节点是逐个扫出来的，通常意味着缺索引。",
+      "error_tag": "诊断能力缺失",
+      "variant_group": "neo4j_explain"
+    },
+    {
+      "kp": "py.db.neo4j",
+      "type": "single_choice",
+      "question": "为什么说图数据库的遍历代价只与走过的边数相关？",
+      "options": [
+        "因为它把整张图缓存在内存里",
+        "因为它用 index-free adjacency，节点直接持有相邻边的物理指针，不需要再查索引",
+        "因为它会自动建好所有索引",
+        "因为它只支持小规模数据"
+      ],
+      "answer": 1,
+      "explanation": "index-free adjacency：每个节点记录相邻边的物理位置，遍历是顺指针走，不需要每跳做一次索引查找。",
+      "error_tag": "原理不清",
+      "variant_group": "neo4j_index_free"
+    },
+    {
+      "kp": "py.db.neo4j",
+      "type": "multi_choice",
+      "question": "关于 Neo4j 的索引与约束，以下说法正确的有哪些？（多选）",
+      "options": [
+        "遍历本身便宜，但定位起点节点仍需要索引",
+        "CREATE CONSTRAINT ... REQUIRE p.name IS UNIQUE 可以保证 name 不重复",
+        "图数据库不需要任何索引",
+        "EXPLAIN 只输出计划不实际执行查询",
+        "PROFILE 会实际执行查询并给出真实行数"
+      ],
+      "answer": [0, 1, 3, 4],
+      "explanation": "图数据库不索引边，但起点定位仍需索引；唯一约束保证 MERGE 的幂等性；EXPLAIN 不执行、PROFILE 执行。",
+      "error_tag": "概念混淆",
+      "variant_group": "neo4j_index_constraint"
+    },
+    {
+      "kp": "py.db.neo4j",
+      "type": "fill_blank",
+      "question": "Neo4j 的 Python 官方驱动包名是 ______（pip install 时使用的名字）。",
+      "options": [],
+      "answer": ["neo4j"],
+      "explanation": "官方驱动是 neo4j，提供 GraphDatabase.driver 与 session。",
+      "error_tag": "记忆缺失",
+      "variant_group": "neo4j_driver_package"
+    },
+    {
+      "kp": "py.db.neo4j",
+      "type": "fill_blank",
+      "question": "Neo4j 默认的 Bolt 协议端口是 ______。",
+      "options": [],
+      "answer": ["7687"],
+      "explanation": "Bolt 默认监听 7687，HTTP 接口是 7474。",
+      "error_tag": "记忆缺失",
+      "variant_group": "neo4j_port"
+    },
+    {
+      "kp": "py.db.neo4j",
+      "type": "code_reading",
+      "question": "阅读以下代码，说明它有什么问题：\n\nfrom neo4j import GraphDatabase\n\ndef add_user(name):\n    driver = GraphDatabase.driver(\"bolt://localhost:7687\", auth=(\"neo4j\", \"pw\"))\n    with driver.session() as s:\n        s.run(\"CREATE (p:Person {name: $name})\", name=name)\n    driver.close()",
+      "options": [],
+      "answer": "每次调用都新建 driver 又立即 close，连接池完全没被复用，每次都要重新握手建连，高频调用时延迟和资源开销都很大。正确做法是 driver 在应用启动时建一次、全局复用，退出时再 close；函数里只开 session。",
+      "explanation": "driver 是连接池，长生命周期；session 才是请求级作用域。",
+      "error_tag": "工程实践缺失",
+      "variant_group": "neo4j_driver_in_function"
+    },
+    {
+      "kp": "py.db.neo4j",
+      "type": "code_reading",
+      "question": "以下导入代码重复执行两次，第二次之后 Person 节点会变成多少个？为什么？\n\nrows = [{\"id\": 1, \"name\": \"Alice\", \"age\": 30}]\nsession.run(\n    \"UNWIND $rows AS row MERGE (p:Person {id: row.id, age: row.age}) RETURN count(p)\",\n    rows=rows,\n)",
+      "options": [],
+      "answer": "还是 1 个，因为两次的 age 都是 30，MERGE 条件完全一致。但如果第二次 age 变成 31，就会新建一个节点、总共 2 个——MERGE 把 age 也当成了匹配条件，所以带易变属性的 MERGE 会产生重复数据。正确写法是只用稳定标识 MERGE，其余属性用 SET。",
+      "explanation": "MERGE 的匹配模式里所有属性都参与匹配，易变属性会导致「匹配不上就新建」。",
+      "error_tag": "边界错误",
+      "variant_group": "neo4j_merge_variable_prop"
+    },
+    {
+      "kp": "py.db.neo4j",
+      "type": "scenario",
+      "question": "一个电商团队想把「用户看过什么、买过什么、和谁是好友、喜欢哪些类目」做进推荐系统，目前数据在 PostgreSQL 里，一个推荐查询要 JOIN 五张表，平均耗时 800ms 且随好友数增长持续变慢。请说明你会如何判断是否该迁移到图数据库，以及迁移时要注意什么。",
+      "options": [],
+      "answer": null,
+      "explanation": "考查选型判断与迁移工程：查询形态是路径、深度不固定、关系带属性 → 适合图数据库；迁移要处理双写/回填、索引与约束、批量导入方式、以及不要一次迁全部。",
+      "error_tag": "场景分析不足",
+      "variant_group": "graph_migration_decision",
+      "required_keywords": ["路径", "多跳", "索引", "批量导入", "双写", "回填"]
+    },
+    {
+      "kp": "py.db.cypher",
+      "type": "single_choice",
+      "question": "Cypher 里 `(alice:Person {name:'Alice'})-[:FRIEND]->(bob:Person)` 描述的是什么？",
+      "options": [
+        "一张名为 alice 的表与一张名为 bob 的表做外键关联",
+        "名为 Alice 的 Person 节点通过一条 FRIEND 关系指向一个 Person 节点",
+        "把 alice 的值赋给 bob",
+        "创建两个 Person 节点但不建立关系"
+      ],
+      "answer": 1,
+      "explanation": "圆括号是节点、方括号是关系、箭头是方向，整体就是一个图案（pattern）。",
+      "error_tag": "概念混淆",
+      "variant_group": "cypher_pattern_basic"
+    },
+    {
+      "kp": "py.db.cypher",
+      "type": "single_choice",
+      "question": "`MATCH (a)-[:FRIEND*1..3]->(b)` 中 `*1..3` 的含义是？",
+      "options": [
+        "关系属性有 1 到 3 个",
+        "最多匹配 3 个节点",
+        "同一条 FRIEND 关系重复 1 到 3 次，即一到三跳",
+        "只匹配前三条结果"
+      ],
+      "answer": 2,
+      "explanation": "*min..max 表示变长路径的重复次数，也就是跳数；不写上界会在稠密图上爆炸。",
+      "error_tag": "语法错误",
+      "variant_group": "cypher_variable_length"
+    },
+    {
+      "kp": "py.db.cypher",
+      "type": "single_choice",
+      "question": "以下哪个 Cypher 语句能返回最短路径上的节点名字列表？",
+      "options": [
+        "MATCH (a)-[:FRIEND*]-(b) RETURN a, b",
+        "MATCH p = shortestPath((a)-[:FRIEND*..6]-(b)) RETURN [n IN nodes(p) | n.name]",
+        "MATCH (a)-[:FRIEND]->(b) RETURN count(*)",
+        "MATCH p = (a)-[:FRIEND]-(b) RETURN length(p)"
+      ],
+      "answer": 1,
+      "explanation": "shortestPath 求最短路径，[n IN nodes(p) | n.name] 是列表推导，把路径节点映射成名字。",
+      "error_tag": "语法错误",
+      "variant_group": "cypher_shortest_path"
+    },
+    {
+      "kp": "py.db.cypher",
+      "type": "single_choice",
+      "question": "关于 `MERGE` 与 `CREATE` 的区别，以下说法正确的是？",
+      "options": [
+        "MERGE 更快，CREATE 更慢",
+        "CREATE 无条件插入，MERGE 是「匹配到就复用、匹配不到才创建」",
+        "两者完全等价，只是写法不同",
+        "MERGE 只能用于关系，CREATE 只能用于节点"
+      ],
+      "answer": 1,
+      "explanation": "MERGE 的语义是 upsert，天然幂等；CREATE 重复执行会产生重复数据。",
+      "error_tag": "概念混淆",
+      "variant_group": "cypher_merge_vs_create"
+    },
+    {
+      "kp": "py.db.cypher",
+      "type": "single_choice",
+      "question": "`MATCH (p:Person)-[:PURCHASE]->(prod:Product) RETURN prod.category, count(p)` 这条查询的分组依据是什么？",
+      "options": [
+        "必须额外写 GROUP BY prod.category",
+        "RETURN 里非聚合表达式自动成为分组键，即 prod.category",
+        "按 p 分组",
+        "不会分组，返回所有行"
+      ],
+      "answer": 1,
+      "explanation": "Cypher 不需要 GROUP BY，RETURN 中非聚合项即分组键。",
+      "error_tag": "语法错误",
+      "variant_group": "cypher_implicit_grouping"
+    },
+    {
+      "kp": "py.db.cypher",
+      "type": "multi_choice",
+      "question": "以下哪些是 Cypher 里常见的性能或正确性问题？（多选）",
+      "options": [
+        "关系不写方向导致正反各匹配一次、结果重复",
+        "变长路径 `*` 不写上界导致内存暴涨",
+        "起点节点没有索引，走 AllNodesScan",
+        "MERGE 里带上会变化的属性，导致重复节点",
+        "删除有关系的节点时不用 DETACH DELETE 会报错"
+      ],
+      "answer": [0, 1, 2, 3, 4],
+      "explanation": "五项都是实际高频坑：方向、上界、起点索引、MERGE 条件、删除前先断关系。",
+      "error_tag": "边界错误",
+      "variant_group": "cypher_pitfalls"
+    },
+    {
+      "kp": "py.db.cypher",
+      "type": "fill_blank",
+      "question": "Cypher 中用于把查询结果里的值收集成一个列表的聚合函数是 ______（例如 collect(prod.name)）。",
+      "options": [],
+      "answer": ["collect", "COLLECT"],
+      "explanation": "collect() 把多行值收成一个列表，适合一对多输出。",
+      "error_tag": "记忆缺失",
+      "variant_group": "cypher_collect"
+    },
+    {
+      "kp": "py.db.cypher",
+      "type": "fill_blank",
+      "question": "在 Cypher 中，要在删除节点的同时一并删除它所有关系，应使用 ______ DELETE 节点。",
+      "options": [],
+      "answer": ["DETACH", "detach"],
+      "explanation": "有关系的节点不能直接 DELETE，必须先删关系；DETACH DELETE 一步完成。",
+      "error_tag": "记忆缺失",
+      "variant_group": "cypher_detach_delete"
+    },
+    {
+      "kp": "py.db.cypher",
+      "type": "code_reading",
+      "question": "阅读以下 Cypher，说明结果为什么会比预期多一倍：\n\nMATCH (a:Person {name:'Alice'})-[:FRIEND]-(b:Person)\nRETURN b.name;",
+      "options": [],
+      "answer": "关系没写方向（-[:FRIEND]- 而不是 -[:FRIEND]->），Cypher 会同时匹配「Alice 指向 b」和「b 指向 Alice」两个方向，所以每条朋友关系会被匹配两次，同一个 b.name 出现两遍。修法是明确方向或加 RETURN DISTINCT。",
+      "explanation": "无方向关系是双向匹配，这是 Cypher 结果翻倍最常见的原因。",
+      "error_tag": "边界错误",
+      "variant_group": "cypher_undirected_dup"
+    },
+    {
+      "kp": "py.db.cypher",
+      "type": "scenario",
+      "question": "团队要在 Neo4j 里导入 200 万条「用户-商品-购买时间」的关系数据，要求可重复执行不产生重复数据，且导入过程不能长时间锁库。请描述你的导入方案和关键取舍。",
+      "options": [],
+      "answer": null,
+      "explanation": "考查批量导入工程：MERGE + 唯一约束保证幂等、UNWIND 批量减少往返、分批事务控制锁持有时间，必要时用 LOAD CSV 或 neo4j-admin import。",
+      "error_tag": "场景分析不足",
+      "variant_group": "cypher_bulk_import",
+      "required_keywords": ["MERGE", "UNWIND", "唯一约束", "分批", "事务", "幂等"]
+    }
+  ]
+}

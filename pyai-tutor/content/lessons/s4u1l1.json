@@ -1,0 +1,941 @@
+{
+  "id": "s4u1l1",
+  "title": "s4u1l1",
+  "kps": [
+    "py.cpy.object_model",
+    "py.cpy.refcount",
+    "py.cpy.gc"
+  ],
+  "theory": "## py.cpy.object_model\n\n# Python 并发对象模型（py.cpy.object_model）教学讲义\n\n> **一句话直觉**：Python 的并发能力受限于它的对象模型——`GIL`、引用计数、可变/不可变对象、对象在进程/线程/协程之间的可见性，决定了你写的每一段 `thread`、`multiprocessing`、`asyncio` 代码到底是快、是慢、还是不安全。\n\n在学完线程、进程、协程之后，你可能会有一个困惑：为什么有些代码在多线程下能提速，有些反而更慢？为什么改一个 `int` 不生效，改一个 `list` 就生效？这些现象的背后，全部是 CPython（Python 官方解释器）的**对象模型**在起作用。本节课我们用 4 个小节把这件事讲透。\n\n---\n\n## 第 1 节：一切皆对象，一切皆引用\n\n在 Python 里，**变量不是盒子**，变量只是**指向对象的引用（reference）**。\n\n- 每个对象有 3 个核心属性：**id（身份）**、**type（类型）**、**value（值）**。\n- `is` 比较的是 `id`，`==` 比较的是 `value`。\n- 赋值 `b = a` 只是让 `b` 和 `a` 指向同一个对象，**不会复制**。\n\n这是理解后面所有并发问题的地基。\n\n```python\n# demo1_reference.py\nimport sys\n\na = [1, 2, 3]\nb = a               # b 与 a 指向同一个 list 对象\nb.append(4)\nprint(a)            # [1, 2, 3, 4] —— a 也被改了！\n\nprint(id(a) == id(b))   # True，同一个对象\nprint(sys.getrefcount(a))  # 引用计数，通常比看到的 +1（getrefcount 自身会加一次）\n\n# 不可变对象示例\nx = 10\ny = x\ny += 1              # 这里其实创建了一个新 int 对象，x 不变\nprint(x, y)         # 10 11\n```\n\n**关键结论**：可变对象（mutable，如 `list`/`dict`/`set`）在多个并发单元间共享时，天然存在被同时修改的风险；不可变对象（immutable，如 `int`/`str`/`tuple`）一旦创建就不变，天然线程安全。\n\n---\n\n## 第 2 节：引用计数与 GIL —— 为什么多线程不能跑满多核\n\nCPython 用**引用计数（reference counting）** 管理内存：每个对象有一个计数器，赋值/传参会让计数 +1，离开作用域/重新赋值让计数 -1，计数归零就立刻回收。\n\n为了让引用计数在多线程下不崩，CPython 引入了 **全局解释器锁（GIL，Global Interpreter Lock）**：**任意时刻，只有一个线程能执行 Python 字节码**。\n\n所以：\n\n- **IO 密集型（I/O bound）** 任务：线程在 `time.sleep`、`socket.recv` 等时会释放 GIL，多线程**有效**。\n- **CPU 密集型（CPU bound）** 任务：线程一直抢着 GIL，多线程**几乎没有提速**，甚至更慢；要用 `multiprocessing` 绕开 GIL。\n\n```python\n# demo2_gil.py\nimport time, threading, multiprocessing\n\ndef cpu_work(n=10**7):\n    s = 0\n    for i in range(n):\n        s += i * i\n    return s\n\n# 单线程\nt0 = time.perf_counter()\ncpu_work(); cpu_work()\nprint(\"single :\", round(time.perf_counter()-t0, 3), \"s\")\n\n# 多线程（受 GIL 限制，几乎不会变快）\nt0 = time.perf_counter()\nts = [threading.Thread(target=cpu_work) for _ in range(2)]\n[t.start() for t in ts]; [t.join() for t in ts]\nprint(\"thread :\", round(time.perf_counter()-t0, 3), \"s\")\n\n# 多进程（各自有独立解释器和 GIL，真正并行）\nt0 = time.perf_counter()\nps = [multiprocessing.Process(target=cpu_work) for _ in range(2)]\n[p.start() for p in ps]; [p.join() for p in ps]\nprint(\"process:\", round(time.perf_counter()-t0, 3), \"s\")\n```\n\n**关键结论**：\n\n| 场景 | 推荐 |\n| --- | --- |\n| I/O 密集 | `threading` / `asyncio` |\n| CPU 密集 | `multiprocessing` / 原生扩展 / Cython |\n| 高并发网络 | `asyncio` + `aiohttp`/`httpx` |\n\n---\n\n## 第 3 节：对象在进程、线程、协程间的“可见性”\n\n同一个对象在不同并发模型里的命运完全不同：\n\n- **线程之间**：共享同一个解释器内存，变量**天然共享**。但要注意**竞态条件（race condition）**，需要 `Lock` / `RLock` / `Queue`。\n- **进程之间**：各自有独立内存。传递对象必须**序列化（pickling）**，且是最常见的坑之一；跨进程共享内存要用 `multiprocessing.shared_memory` 或 `Value`/`Array`。\n- **协程之间**：同一个线程内协作式调度，共享内存但**不能在 await 中让出时被外部同时改**；用 `asyncio.Lock` 等异步同步原语保护，且注意不要在其中执行阻塞调用（用 `run_in_executor`）。\n\n```python\n# demo3_visibility.py\nimport threading\n\ncounter = 0\ndef add():\n    global counter\n    for _ in range(100_000):\n        counter += 1  # 这不是原子操作：读-改-写三步！\n\nts = [threading.Thread(target=add) for _ in range(4)]\n[t.start() for t in ts]; [t.join() for t in ts]\nprint(\"no lock :\", counter)  # 往往小于 400000\n\nlock = threading.Lock()\ncounter = 0\ndef add_safe():\n    global counter\n    for _ in range(100_000):\n        with lock:            # 加锁保证读-改-写是原子的\n            counter += 1\n\nts = [threading.Thread(target=add_safe) for _ in range(4)]\n[t.start() for t in ts]; [t.join() for t in ts]\nprint(\"with lock:\", counter)  # 恰好 400000\n```\n\n**关键结论**：Python 的 `+=` 在字节码层面是 `LOAD / BINARY_OP / STORE` 三步，非原子。任何跨并发单元修改共享可变对象，都要问自己：“**我加锁了吗？**”\n\n---\n\n## 第 4 节：可运行示例 —— 用合适的并发对象模型解决合适的问题\n\n下面这段代码把上面所有知识点串起来：**IO 密集用线程，CPU 密集用进程，且各自注意可见性**。\n\n（见 `example_code` 字段。）\n\n运行后你会看到：线程 `sleep` 的 IO 任务几乎同时完成，而进程的 CPU 任务才真正并行起来。\n\n---\n\n## 动手练习\n\n**任务：写一个“混合并发”脚本**\n\n1. 定义两个函数：\n   - `io_task(name)`：`time.sleep(0.5)` 后打印 `f\"{name} done\"`，共 5 个任务。\n   - `cpu_task(n=2*10**6)`：做整数平方和，返回结果，共 2 个任务。\n2. 用 `concurrent.futures.ThreadPoolExecutor` 并发跑 5 个 `io_task`，记录耗时。\n3. 用 `concurrent.futures.ProcessPoolExecutor` 并发跑 2 个 `cpu_task`，记录耗时。\n4. 再做一次对照：把步骤 3 换成 `ThreadPoolExecutor`，比较耗时差异。\n5. 写一段简短总结（3~5 行），解释为什么步骤 3 和步骤 4 结果不同。\n\n**提示**：\n- 用 `time.perf_counter()` 计时。\n- 注意 `if __name__ == \"__main__\":` 保护（`spawn` 模式必须）。\n- 如果觉得结果不明显，把 `cpu_task` 的 `n` 调到 `10**7`。\n\n## py.cpy.refcount\n\n# Python 引用计数（Reference Counting）\n\n## 一句话直觉\n\n**Python 里每个对象都有一个「被多少人牵着」的计数器；计数器归零，对象立即被回收。** 理解引用计数（reference counting），你就理解了 Python 内存管理的底层逻辑，也就能解释「为什么我的对象提前被释放了」「为什么循环引用会造成内存泄漏」这类工程级问题。\n\n---\n\n## 1. 什么是引用计数？\n\n在 CPython（Python 的官方实现）中，每一个 Python 对象（object）在内存里都有一个隐藏字段 `ob_refcnt`，称为**引用计数（reference count）**。它记录「当前有多少个地方正在引用这个对象」。\n\n- 每多一个引用 → 计数 +1\n- 每少一个引用 → 计数 −1\n- 计数归零 → 该对象立即被销毁，占用内存被归还\n\n我们可以用 Python 内置的 `sys.getrefcount()` 观察这个值：\n\n```python\nimport sys\n\na = []                 # 创建一个 list 对象，被 a 引用\nprint(sys.getrefcount(a))  # 通常输出 2：a 本身 + getrefcount 的参数\n\nb = a                  # b 也指向同一个对象\nprint(sys.getrefcount(a))  # 输出 3\n\ndel b                  # 删除 b 这个引用\nprint(sys.getrefcount(a))  # 回到 2\n```\n\n> 小提示：`getrefcount()` 的参数本身会临时给对象加 1，所以看到的数字总是「真实引用数 +1」。\n\n---\n\n## 2. 什么操作会改变引用计数？\n\nCPython 在字节码层面通过 `Py_INCREF` / `Py_DECREF` 两个宏来增减计数。日常写代码时，下面这些操作都会影响计数：\n\n| 操作 | 效果 |\n|---|---|\n| 赋值 `b = a` | +1 |\n| 放进容器 `lst.append(a)` | +1 |\n| 作为函数参数传入（绑定到形参） | +1 |\n| `del b` | −1 |\n| 变量被重新赋值 | 旧对象 −1，新对象 +1 |\n| 变量离开作用域（函数返回） | −1 |\n| 容器被销毁 | 容器内所有元素 −1 |\n\n```python\nimport sys\n\nobj = {\"k\": \"v\"}\nprint(\"初始:\", sys.getrefcount(obj))\n\ncontainer = [obj, obj]          # 同一对象被引用两次\nprint(\"放入容器后:\", sys.getrefcount(obj))\n\ndef f(x):\n    print(\"函数内部:\", sys.getrefcount(x))\n\nf(obj)                          # 传参也会临时 +1\n\ndel container\nprint(\"容器销毁后:\", sys.getrefcount(obj))\n```\n\n这套机制的关键含义是：**Python 对象不需要程序员手动 free。作用域结束、变量被覆盖、容器被销毁，都会自动触发引用计数下降。**\n\n---\n\n## 3. 引用计数如何触发对象销毁？\n\n当一个对象的引用计数降到 0 时，CPython 会立刻调用它的析构方法 `__del__`（如果定义了），然后释放内存。\n\n```python\nclass Probe:\n    def __init__(self, name):\n        self.name = name\n        print(f\"[{self.name}] 创建\")\n    def __del__(self):\n        print(f\"[{self.name}] 销毁\")\n\np = Probe(\"A\")        # 输出：[A] 创建\ndel p                  # 输出：[A] 销毁\nprint(\"程序结束前\")\n```\n\n运行结果里你会看到 `[A] 销毁` 出现在 `del p` 之后、`程序结束前` 之前 —— 这就是**引用计数归零立即回收**的特征，也是它和垃圾回收（GC, Garbage Collection）里「标记-清除（mark-sweep）」最大的区别：即时性。\n\n---\n\n## 4. 引用计数解决不了什么？——循环引用\n\n引用计数有一个众所周知的短板：**循环引用（reference cycle）** 会让计数永远无法归零。\n\n```python\nclass Node:\n    def __init__(self):\n        self.peer = None\n    def __del__(self):\n        print(\"Node 被销毁\")\n\na = Node()\nb = Node()\na.peer = b        # a 引用 b\nb.peer = a        # b 引用 a —— 形成环\ndel a\ndel b\n\nimport gc\nprint(\"手动触发 gc 前\")\ngc.collect()\nprint(\"手动触发 gc 后\")\n```\n\n即便 `del a` 和 `del b` 都执行了，两个 Node 的引用计数都还剩 1（彼此互相引用），所以「立即回收」失效。此时需要 CPython 的**分代垃圾回收器（generational GC）** 定期扫描，找出不可达的循环并清除。所以引用计数只是 Python 内存管理的一半，另一半是 GC。\n\n---\n\n## 5. 工程上为什么要关心引用计数？\n\n在真实项目中，这些场景都跟引用计数直接相关：\n\n1. **对象的生命周期时机**：`__del__`、上下文管理器（context manager）的清理逻辑，什么时候被唤起，与引用计数密不可分。\n2. **资源释放延迟**：如果一个文件对象、socket 被其他结构偷偷持有了引用，它就不会及时关闭。\n3. **循环引用泄漏**：缓存容器、双向链表、父子节点对象，都可能制造长久不被回收的环。\n4. **CPython 的实现细节**：其它 Python 实现（如 PyPy、Jython）用的是完全不同的内存模型，因此官方文档警告「不要依赖 CPython 的引用计数行为写代码」。\n\n一个简单判断「对象是否仍被引用」的辅助函数：\n\n```python\nimport sys\n\ndef alive_count(obj):\n    # 返回减掉 getrefcount 自身参数后的引用数\n    return sys.getrefcount(obj) - 1\n\nx = object()\nprint(alive_count(x))       # 1\nholder = {\"x\": x}\nprint(alive_count(x))       # 2\nholder.clear()\nprint(alive_count(x))       # 1\n```\n\n---\n\n## 动手练习（建议 15~20 分钟）\n\n**目标**：亲手观察引用计数在「传参 / 容器 / 循环引用」三种场景下的变化。\n\n1. 定义类 `Tracker`，在 `__init__` 里 `print(\"创建\", id(self))`，在 `__del__` 里 `print(\"销毁\", id(self))`。\n2. 用 `sys.getrefcount` 写一个辅助函数 `count(obj)`，返回真实引用数。\n3. 依次完成下列实验并记录每次 `count` 的输出以及 `创建/销毁` 打印的时机：\n   - 创建对象绑定到变量 `t`\n   - 把 `t` 放进一个 list\n   - 把 `t` 作为参数传给一个普通函数\n   - `del t`\n   - `list.clear()`\n4. 再创建两个 `Tracker` 对象，让它们互相通过属性引用形成环。执行 `del` 后检查 `__del__` **是否被触发**；然后调用 `gc.collect()`，再观察。\n\n**提交要求**：提交你的脚本和运行输出，并用三句话解释：\n- 为什么 `__del__` 有时立即打印，有时要等 `gc.collect()`？\n- 引用计数在什么情况下失效？\n- 在写工程代码时，你会怎样避免意外的循环引用？\n\n```python\nimport sys\nimport gc\n\n\ndef count(obj):\n    \"\"\"返回去掉 getrefcount 自身参数后的真实引用数。\"\"\"\n    return sys.getrefcount(obj) - 1\n\n\nclass Tracker:\n    def __init__(self, name):\n        self.name = name\n        self.peer = None\n        print(f\"创建 {self.name} id={id(self)}\")\n\n    def __del__(self):\n        print(f\"销毁 {self.name} id={id(self)}\")\n\n\n# 1) 基本引用计数变化\nt = Tracker(\"A\")\nprint(\"绑定变量后 count =\", count(t))\n\nlst = [t]\nprint(\"放入 list 后 count =\", count(t))\n\n\ndef take(x):\n    print(\"函数内部 count =\", count(x))\n\n\ntake(t)\nprint(\"函数返回后 count =\", count(t))\n\ndel t\nprint(\"del t 后（对象仍在 list 中）count 无法直接测，因变量已删）\")\n\nlst.clear()   # 这里会触发 __del__\nprint(\"---- list.clear() 之后应看到 '销毁 A' 打印 ----\")\n\n# 2) 循环引用场景\nprint(\"\\n=== 循环引用实验 ===\")\na = Tracker(\"X\")\nb = Tracker(\"Y\")\na.peer = b\nb.peer = a\ndel a\ndel b\nprint(\"del 之后，X / Y 尚未被 __del__（因为有环）\")\n\ncollected = gc.collect()\nprint(f\"gc.collect() 回收对象数 = {collected}\")\n```\n\n## py.cpy.gc\n\n# py.cpy.gc：Python 引用计数与垃圾回收\n\n> **一句话直觉**：Python 帮你自动管理内存，但你必须知道「什么时候对象会被回收、什么时候不会」——否则会写出悄悄泄漏内存的代码。\n\n本知识点讲解 Python 的 **引用计数（Reference Counting）** 与 **垃圾回收（Garbage Collection，简称 GC）** 机制。这是 Python 内存管理的核心，也是从零基础走向工程级必须跨过的一道坎。\n\n---\n\n## 1. 为什么需要它：内存不是无限的\n\n程序运行的每一个对象（数字、字符串、列表、类的实例）都占用内存。手动管理内存（像 C 语言那样 `malloc` / `free`）容易出错：忘释放 → 内存泄漏；释放两次 → 崩溃。Python 采用**自动内存管理（Automatic Memory Management）**，你只管创建对象，回收由解释器负责。\n\n理解这套机制能帮你回答三类工程问题：\n- 为什么我的程序内存一直涨？（循环引用、全局缓存）\n- 为什么对象没有立刻被销毁？（还有引用存在）\n- 为什么大数据集迟迟不释放？（容器仍持有引用）\n\n---\n\n## 2. 引用计数：对象生命的「计数器」\n\nPython 中每个对象都有一个 **引用计数（reference count）**，记录有多少个地方指向它。\n\n- 赋值、传参、放入容器 → 计数 +1\n- 变量被重新赋值、离开作用域、从容器中删除 → 计数 -1\n- 计数降为 **0** → 对象立即被释放\n\n可以用 `sys.getrefcount()` 观察（注意：调用这个函数本身会临时 +1）。\n\n```python\nimport sys\n\nx = []                    # 创建空列表，引用计数至少为 1\nprint(sys.getrefcount(x)) # 通常是 2（x + getrefcount 的临时参数）\n\ny = x                     # 又多一个引用\nprint(sys.getrefcount(x)) # 变成 3\n\ndel y                     # 少一个引用\nprint(sys.getrefcount(x)) # 回到 2\n```\n\n**关键结论**：引用计数是「即时」的，一旦计数归零，CPython 会立刻回收内存，不等 GC。\n\n---\n\n## 3. 引用计数的死穴：循环引用\n\n如果两个对象互相引用，即使外部已经没有任何变量指向它们，它们的计数也不会归零——因为它们互相「支撑」着对方。\n\n```python\na = {}\nb = {}\na['b'] = b   # a 引用 b\nb['a'] = a   # b 引用 a\n\ndel a\ndel b\n# 此时两个字典已经没有外部引用，但它们互相引用\n# 引用计数都不为 0，光靠引用计数无法回收！\n```\n\n这就是为什么 Python 还需要第二个机制：**垃圾回收器（Garbage Collector）**。\n\n---\n\n## 4. 分代垃圾回收：专治循环引用\n\nPython 的 `gc` 模块实现了一个 **分代回收器（Generational GC）**，专门检测并回收「循环引用但不可达」的对象。\n\n核心思想：\n- 对象被分到 3 代：第 0 代（新对象）、第 1 代、第 2 代（存活久的老对象）。\n- 新对象频繁被检查，老对象检查频率低——因为「活得越久，越可能继续活」。\n- 触发条件由阈值控制，可以用 `gc.get_threshold()` 查看。\n\n```python\nimport gc\n\nprint(gc.get_threshold())     # 默认 (700, 10, 10)\nprint(gc.isenabled())         # True，GC 默认开启\n\n# 手动触发一次完整回收（调试时常用）\ncollected = gc.collect()\nprint('回收对象数:', collected)\n```\n\n**工程要点**：\n- 大多数时候你不需要手动调用 `gc.collect()`。\n- 处理大对象图（如大型图结构、缓存）后，手动回收一次可以立刻释放内存。\n- 极端性能场景下可 `gc.disable()`，但要非常谨慎，容易内存泄漏。\n\n---\n\n## 5. 弱引用：不增加计数的「安全指针」\n\n有时你想「观察」一个对象，但不想阻止它被回收。这时用 **弱引用（weak reference）**。\n\n```python\nimport weakref\n\nclass Node:\n    pass\n\nn = Node()\nr = weakref.ref(n)       # 弱引用，不增加 n 的引用计数\nprint(r() is n)          # True，对象还活着\n\ndel n                    # 强引用消失\nprint(r())               # None，对象已被回收\n```\n\n弱引用常用于缓存、观察者模式、父子对象关系，避免「缓存把对象永远钉住」这类内存泄漏。\n\n---\n\n## 小结\n\n| 机制 | 作用 | 触发时机 |\n|------|------|----------|\n| 引用计数 | 回收无引用对象 | 计数归零立即回收 |\n| 分代 GC | 回收循环引用对象 | 达到阈值或手动调用 |\n| 弱引用 | 不阻止回收的引用 | 对象被回收后返回 None |\n\n掌握这三者，你就能写出「内存行为可预测」的 Python 代码。\n\n```python\nimport sys\nimport gc\nimport weakref\n\n# 1) 引用计数演示\nx = []\nbase = sys.getrefcount(x)\ny = x\nassert sys.getrefcount(x) == base + 1\ndel y\n\n# 2) 循环引用 + GC 回收演示\nclass Node:\n    def __init__(self, name):\n        self.name = name\n        self.partner = None\n\na = Node('A')\nb = Node('B')\na.partner = b\nb.partner = a\n\nref = weakref.ref(a)      # 用弱引用观察 a 是否被回收\nprint('before del, alive:', ref() is not None)\n\ndel a\ndel b\n# 此时两个对象循环引用，引用计数不为 0\nprint('after del, alive:', ref() is not None)  # 仍可能是 True\n\ngc.collect()             # 手动触发分代 GC\nprint('after gc, alive:', ref() is not None)   # 应该是 False\n\n# 看出区别了吗？引用计数处理不了循环引用，GC 才能。\n```\n",
+  "quiz": [
+    {
+      "kp": "py.cpy.object_model",
+      "type": "single_choice",
+      "question": "以下代码的输出是什么？\n\na = [1, 2, 3]\nb = a\nb.append(4)\nprint(a)",
+      "options": [
+        "[1, 2, 3]",
+        "[1, 2, 3, 4]",
+        "[4]",
+        "报错"
+      ],
+      "answer": 1,
+      "explanation": "b = a 只是让 b 和 a 指向同一个列表对象，修改 b 也会反映到 a 上，因此输出 [1, 2, 3, 4]。",
+      "error_tag": "对引用赋值理解错误",
+      "variant_group": "py.cpy.object_model_reference"
+    },
+    {
+      "kp": "py.cpy.object_model",
+      "type": "single_choice",
+      "question": "以下代码的输出是什么？\n\nx = 10\ny = x\ny = 20\nprint(x)",
+      "options": [
+        "10",
+        "20",
+        "None",
+        "报错"
+      ],
+      "answer": 0,
+      "explanation": "整数是不可变对象，y = 20 只是让 y 重新绑定到一个新对象，不会影响 x，所以 x 仍然是 10。",
+      "error_tag": "混淆可变对象与不可变对象的赋值行为",
+      "variant_group": "py.cpy.object_model_reference"
+    },
+    {
+      "kp": "py.cpy.object_model",
+      "type": "single_choice",
+      "question": "以下代码的输出是什么？\n\na = [1, 2, 3]\nb = a\nb += [4]\nprint(a)",
+      "options": [
+        "[1, 2, 3]",
+        "[1, 2, 3, 4]",
+        "[4]",
+        "报错"
+      ],
+      "answer": 1,
+      "explanation": "对于列表，+= 会调用 __iadd__ 进行原地扩展，a 和 b 仍指向同一个列表，所以 a 也会变成 [1, 2, 3, 4]。",
+      "error_tag": "混淆 += 与 + 对可变对象的效果",
+      "variant_group": "py.cpy.object_model_mutation"
+    },
+    {
+      "kp": "py.cpy.object_model",
+      "type": "single_choice",
+      "question": "关于 Python 中变量与对象的关系，下列说法正确的是？",
+      "options": [
+        "变量是存储值的容器，赋值时值被复制进变量",
+        "变量是指向对象的引用，赋值时绑定到对象",
+        "变量和对象是同一个概念",
+        "变量只能指向不可变对象"
+      ],
+      "answer": 1,
+      "explanation": "Python 中变量是名字到对象的引用绑定，赋值只是让变量指向某个对象，而不是把值复制到变量里。",
+      "error_tag": "对变量本质理解错误",
+      "variant_group": "py.cpy.object_model_concept"
+    },
+    {
+      "kp": "py.cpy.object_model",
+      "type": "single_choice",
+      "question": "以下代码的输出是什么？\n\na = {'x': 1}\nb = a.copy()\nb['x'] = 2\nprint(a['x'])",
+      "options": [
+        "1",
+        "2",
+        "报错",
+        "None"
+      ],
+      "answer": 0,
+      "explanation": "dict.copy() 是浅拷贝，b 是新的字典对象，修改 b['x'] 不会影响 a['x']，因此输出 1。",
+      "error_tag": "对字典浅拷贝理解错误",
+      "variant_group": "py.cpy.object_model_shallow_copy"
+    },
+    {
+      "kp": "py.cpy.object_model",
+      "type": "single_choice",
+      "question": "以下代码的输出是什么？\n\na = {'x': [1, 2]}\nb = a.copy()\nb['x'].append(3)\nprint(a['x'])",
+      "options": [
+        "[1, 2]",
+        "[1, 2, 3]",
+        "[3]",
+        "报错"
+      ],
+      "answer": 1,
+      "explanation": "dict.copy() 只是浅拷贝，字典中嵌套的列表仍是同一个对象，所以修改 b['x'] 会影响 a['x']。",
+      "error_tag": "对浅拷贝理解不完整",
+      "variant_group": "py.cpy.object_model_shallow_copy"
+    },
+    {
+      "kp": "py.cpy.object_model",
+      "type": "single_choice",
+      "question": "以下代码的输出是什么？\n\nt = (1, 2, 3)\nt2 = t\nt2 += (4,)\nprint(t)",
+      "options": [
+        "(1, 2, 3)",
+        "(1, 2, 3, 4)",
+        "报错",
+        "None"
+      ],
+      "answer": 0,
+      "explanation": "元组不可变，t2 += (4,) 会创建一个新元组并让 t2 指向它，t 仍指向原来的元组。",
+      "error_tag": "对不可变对象的 += 行为理解错误",
+      "variant_group": "py.cpy.object_model_immutable"
+    },
+    {
+      "kp": "py.cpy.object_model",
+      "type": "single_choice",
+      "question": "以下代码的输出是什么？\n\nx = 'abc'\ny = x\ny += 'd'\nprint(x)",
+      "options": [
+        "abc",
+        "abcd",
+        "报错",
+        "None"
+      ],
+      "answer": 0,
+      "explanation": "字符串不可变，y += 'd' 会创建新字符串并让 y 指向它，x 仍指向原来的 'abc'。",
+      "error_tag": "对不可变对象的 += 行为理解错误",
+      "variant_group": "py.cpy.object_model_immutable"
+    },
+    {
+      "kp": "py.cpy.object_model",
+      "type": "single_choice",
+      "question": "以下代码的输出是什么？\n\ndef add(lst):\n    lst = lst + [1]\n    return lst\n\na = [0]\nb = add(a)\nprint(a, b)",
+      "options": [
+        "[0] [0, 1]",
+        "[0, 1] [0, 1]",
+        "[0] [0]",
+        "[0, 1] [0]"
+      ],
+      "answer": 0,
+      "explanation": "函数内 lst = lst + [1] 创建了新列表并让局部变量 lst 指向它，不会修改传入的 a，因此 a 仍为 [0]，b 为 [0, 1]。",
+      "error_tag": "误认为函数内重新赋值会影响外部引用",
+      "variant_group": "py.cpy.object_model_function_ref"
+    },
+    {
+      "kp": "py.cpy.object_model",
+      "type": "single_choice",
+      "question": "以下代码的输出是什么？\n\ndef add(lst):\n    lst.append(1)\n    return lst\n\na = [0]\nb = add(a)\nprint(a, b)",
+      "options": [
+        "[0] [0, 1]",
+        "[0, 1] [0, 1]",
+        "[0] [0]",
+        "[0, 1] [0]"
+      ],
+      "answer": 1,
+      "explanation": "函数内 lst.append(1) 是原地修改，a 和 b 都指向同一个列表，因此两者都是 [0, 1]。",
+      "error_tag": "对原地修改与重新赋值的区别理解不清",
+      "variant_group": "py.cpy.object_model_function_ref"
+    },
+    {
+      "kp": "py.cpy.object_model",
+      "type": "single_choice",
+      "question": "以下代码的输出是什么？\n\na = [1, 2, 3]\nb = list(a)\nb[0] = 99\nprint(a[0])",
+      "options": [
+        "99",
+        "1",
+        "报错",
+        "None"
+      ],
+      "answer": 1,
+      "explanation": "list(a) 创建了一个新列表（浅拷贝），修改 b 不会影响 a，因此 a[0] 仍为 1。",
+      "error_tag": "误认为 list() 返回原对象",
+      "variant_group": "py.cpy.object_model_shallow_copy"
+    },
+    {
+      "kp": "py.cpy.object_model",
+      "type": "single_choice",
+      "question": "以下代码的输出是什么？\n\na = [1, 2, 3]\nb = a\nc = a[:]\nprint(a is b, a is c)",
+      "options": [
+        "True True",
+        "True False",
+        "False True",
+        "False False"
+      ],
+      "answer": 1,
+      "explanation": "b = a 让 b 和 a 指向同一个对象，a is b 为 True；c = a[:] 创建了新列表，a is c 为 False。",
+      "error_tag": "混淆引用赋值与切片拷贝",
+      "variant_group": "py.cpy.object_model_identity"
+    },
+    {
+      "kp": "py.cpy.object_model",
+      "type": "single_choice",
+      "question": "以下代码的输出是什么？\n\na = [1, 2, 3]\nb = a[:]\nb[0] = 100\nprint(a[0])",
+      "options": [
+        "100",
+        "1",
+        "None",
+        "报错"
+      ],
+      "answer": 1,
+      "explanation": "切片 a[:] 会创建一个新的列表对象（浅拷贝），修改 b 不会影响 a，因此 a[0] 仍为 1。",
+      "error_tag": "误认为切片赋值共享引用",
+      "variant_group": "py.cpy.object_model_shallow_copy"
+    },
+    {
+      "kp": "py.cpy.object_model",
+      "type": "single_choice",
+      "question": "以下代码的输出是什么？\n\na = [[1, 2], [3, 4]]\nb = a[:]\nb[0].append(99)\nprint(a[0])",
+      "options": [
+        "[1, 2]",
+        "[1, 2, 99]",
+        "[99]",
+        "报错"
+      ],
+      "answer": 1,
+      "explanation": "切片是浅拷贝，外层列表是新的，但内层列表仍是同一个对象，所以修改 b[0] 会影响 a[0]。",
+      "error_tag": "对浅拷贝理解不完整",
+      "variant_group": "py.cpy.object_model_shallow_copy"
+    },
+    {
+      "kp": "py.cpy.object_model",
+      "type": "single_choice",
+      "question": "以下代码的输出是什么？\n\nimport copy\na = [[1, 2], [3, 4]]\nb = copy.deepcopy(a)\nb[0].append(99)\nprint(a[0])",
+      "options": [
+        "[1, 2]",
+        "[1, 2, 99]",
+        "[99]",
+        "报错"
+      ],
+      "answer": 0,
+      "explanation": "deepcopy 会递归复制嵌套对象，b 和 a 完全独立，修改 b[0] 不会影响 a[0]。",
+      "error_tag": "对深拷贝与浅拷贝的区别理解不清",
+      "variant_group": "py.cpy.object_model_deep_copy"
+    },
+    {
+      "kp": "py.cpy.object_model",
+      "type": "single_choice",
+      "question": "以下代码的输出是什么？\n\na = (1, 2, [3, 4])\na[2].append(5)\nprint(a)",
+      "options": [
+        "(1, 2, [3, 4])",
+        "(1, 2, [3, 4, 5])",
+        "报错",
+        "(1, 2, 3, 4, 5)"
+      ],
+      "answer": 1,
+      "explanation": "元组本身不可变，但元组中存储的列表对象是可变的，可以修改该列表的内容。",
+      "error_tag": "误认为元组内所有内容都不可变",
+      "variant_group": "py.cpy.object_model_immutable"
+    },
+    {
+      "kp": "py.cpy.object_model",
+      "type": "single_choice",
+      "question": "以下代码的输出是什么？\n\na = 1\nb = 1\nprint(a is b)",
+      "options": [
+        "True",
+        "False",
+        "报错",
+        "不确定"
+      ],
+      "answer": 0,
+      "explanation": "小整数在 CPython 中会被缓存复用，a 和 b 指向同一个整数对象，因此 a is b 为 True。",
+      "error_tag": "混淆 is 与 == 的语义",
+      "variant_group": "py.cpy.object_model_identity"
+    },
+    {
+      "kp": "py.cpy.object_model",
+      "type": "single_choice",
+      "question": "以下代码的输出是什么？\n\na = [1, 2, 3]\nb = [1, 2, 3]\nprint(a == b, a is b)",
+      "options": [
+        "True True",
+        "True False",
+        "False True",
+        "False False"
+      ],
+      "answer": 1,
+      "explanation": "== 比较值是否相等，is 比较是否为同一个对象。a 和 b 值相等但不是同一对象，所以输出 True False。",
+      "error_tag": "混淆 == 与 is",
+      "variant_group": "py.cpy.object_model_identity"
+    },
+    {
+      "kp": "py.cpy.object_model",
+      "type": "single_choice",
+      "question": "以下代码的输出是什么？\n\ndef f(lst=[]):\n    lst.append(1)\n    return lst\n\nprint(f())\nprint(f())",
+      "options": [
+        "[1]\n[1]",
+        "[1]\n[1, 1]",
+        "[1, 1]\n[1, 1]",
+        "报错"
+      ],
+      "answer": 1,
+      "explanation": "默认参数在函数定义时只求值一次，可变默认参数会被多次调用共享，因此第一次输出 [1]，第二次输出 [1, 1]。",
+      "error_tag": "可变默认参数陷阱",
+      "variant_group": "py.cpy.object_model_default_arg"
+    },
+    {
+      "kp": "py.cpy.object_model",
+      "type": "single_choice",
+      "question": "以下代码的输出是什么？\n\na = [1, 2, 3]\nb = a\nb = b + [4]\nprint(a)",
+      "options": [
+        "[1, 2, 3]",
+        "[1, 2, 3, 4]",
+        "[4]",
+        "报错"
+      ],
+      "answer": 0,
+      "explanation": "b = b + [4] 创建了一个新列表并让 b 指向它，不会修改原来的 a，所以 a 仍为 [1, 2, 3]。",
+      "error_tag": "混淆原地修改与创建新对象",
+      "variant_group": "py.cpy.object_model_mutation"
+    },
+    {
+      "kp": "py.cpy.refcount",
+      "type": "single_choice",
+      "question": "在 CPython 中，关于对象引用计数的描述，下列哪一项是正确的？",
+      "options": [
+        "引用计数记录的是对象被多少个变量名或容器引用，当计数变为 0 时对象通常会被立即回收",
+        "引用计数记录的是对象在内存中的字节数，当其归零时对象被回收",
+        "引用计数只在垃圾回收器运行时才会更新，平时不变化",
+        "引用计数只能由 gc 模块手动增减，解释器不会自动维护"
+      ],
+      "answer": 0,
+      "explanation": "CPython 的核心内存管理机制之一是引用计数：每个对象维护一个被引用的次数，当引用计数降为 0 时，对象会立即被释放。它记录的是引用数量而非字节数，并且由解释器自动维护，不需要手动调用 gc 模块。",
+      "error_tag": "概念混淆",
+      "variant_group": "refcount_basic"
+    },
+    {
+      "kp": "py.cpy.refcount",
+      "type": "single_choice",
+      "question": "执行以下代码后，列表对象 a 的引用计数会发生怎样的变化？\n\na = [1, 2, 3]\nb = a\ndel a",
+      "options": [
+        "创建时计数为 1，b = a 后变为 2，del a 后减为 1，对象仍然存活",
+        "创建时计数为 1，b = a 后仍为 1（因为 b 只是别名不增加计数）",
+        "del a 后计数变为 0，列表对象立即被回收",
+        "b = a 会复制对象，因此产生两个独立对象，各自计数为 1"
+      ],
+      "answer": 0,
+      "explanation": "b = a 只是让 b 指向同一个列表对象，引用计数从 1 增加到 2；del a 只删除名字 a 的绑定，计数减为 1，对象仍被 b 引用所以不会回收。赋值不会复制对象。",
+      "error_tag": "边界错误",
+      "variant_group": "refcount_del"
+    },
+    {
+      "kp": "py.cpy.refcount",
+      "type": "multi_choice",
+      "question": "关于引用计数与循环垃圾回收（gc）的关系，下列描述正确的有哪些？（多选）",
+      "options": [
+        "引用计数无法回收互相引用的对象，需要 gc 处理",
+        "gc 模块可以检测并回收循环引用",
+        "引用计数和 gc 是两套互补的机制，共同管理内存",
+        "启用了引用计数就不需要 gc，循环引用也会自动归零",
+        "gc.collect() 可以主动触发一轮循环垃圾回收"
+      ],
+      "answer": [
+        0,
+        1,
+        2,
+        4
+      ],
+      "explanation": "引用计数与循环 gc 互补：前者处理计数归零，后者处理循环引用。gc.collect 可手动触发回收。认为“有引用计数就不需要 gc”是常见误解，循环引用不会自动归零。",
+      "error_tag": "概念混淆",
+      "variant_group": "refcount_cycle"
+    },
+    {
+      "kp": "py.cpy.refcount",
+      "type": "multi_choice",
+      "question": "关于 sys.getrefcount 的使用，下列说法正确的有哪些？（多选）",
+      "options": [
+        "它返回的值通常比对象“真实”引用数多 1",
+        "它需要 import sys 才能使用",
+        "它可以用来观察某对象被引用的多少",
+        "它返回的是对象的字节大小",
+        "调用它不会对对象产生任何临时引用"
+      ],
+      "answer": [
+        0,
+        1,
+        2
+      ],
+      "explanation": "getrefcount 属于 sys 模块，返回计数并因传参多 1，可用于观察引用情况。它不返回字节大小，且调用时确实会产生一个临时引用。",
+      "error_tag": "记忆缺失",
+      "variant_group": "refcount_getrefcount"
+    },
+    {
+      "kp": "py.cpy.refcount",
+      "type": "multi_choice",
+      "question": "下列哪些说法与 CPython 引用计数机制相符？（多选）",
+      "options": [
+        "每个对象都维护一个引用计数",
+        "引用计数由解释器自动维护，开发者通常无需手动增减",
+        "引用计数归零时对象被释放是确定性的",
+        "引用计数无法处理循环引用",
+        "引用计数需要开发者手动调用才能更新"
+      ],
+      "answer": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "explanation": "引用计数由解释器自动维护，每个对象有一个计数，归零即释放（确定性），且无法处理循环引用。它不需要开发者手动更新，故最后一项错误。",
+      "error_tag": "概念混淆",
+      "variant_group": "refcount_basic"
+    },
+    {
+      "kp": "py.cpy.refcount",
+      "type": "fill_blank",
+      "question": "在 CPython 中，当对象的引用计数降为 ______ 时，对象通常会被立即回收。",
+      "options": [],
+      "answer": [
+        "0",
+        "零"
+      ],
+      "explanation": "引用计数的核心规则：计数降为 0 时对象被立即释放（在没有循环引用等特殊情况时）。",
+      "error_tag": "记忆缺失",
+      "variant_group": "refcount_basic"
+    },
+    {
+      "kp": "py.cpy.refcount",
+      "type": "fill_blank",
+      "question": "模块 sys 中用于查看对象引用计数的函数是 ______。",
+      "options": [],
+      "answer": [
+        "getrefcount",
+        "sys.getrefcount"
+      ],
+      "explanation": "sys.getrefcount(obj) 用于返回对象的引用计数，注意返回值通常比真实引用数多 1。",
+      "error_tag": "记忆缺失",
+      "variant_group": "refcount_getrefcount"
+    },
+    {
+      "kp": "py.cpy.refcount",
+      "type": "fill_blank",
+      "question": "CPython 中，引用计数无法回收的一类典型情况是对象之间存在 ______ 引用。",
+      "options": [],
+      "answer": [
+        "循环",
+        "circular",
+        "循环引用"
+      ],
+      "explanation": "循环引用使对象的计数都不为 0，引用计数无法释放它们，需要循环垃圾回收器（gc）处理。",
+      "error_tag": "概念混淆",
+      "variant_group": "refcount_cycle"
+    },
+    {
+      "kp": "py.cpy.refcount",
+      "type": "code_reading",
+      "question": "阅读代码，回答运行时输出（假设没有其他引用）：\n\nimport sys\na = []\nb = a\nlst = [a]\nprint(sys.getrefcount(a))\n\n问：输出最接近哪个数值？为什么？",
+      "options": [],
+      "answer": "输出为 4。a 本身、b、lst 中的元素各持有一个引用（共 3 个），再加上 getrefcount 传参产生的临时引用，共 4。",
+      "explanation": "a 和 b 指向同一列表，lst 又持有一个引用，实际引用数为 3；getrefcount 调用时把 a 作为实参传入，多一个临时引用，因此返回 4。这体现了“比真实引用多 1”的规则。",
+      "error_tag": "边界错误",
+      "variant_group": "refcount_getrefcount"
+    },
+    {
+      "kp": "py.cpy.refcount",
+      "type": "code_reading",
+      "question": "阅读代码，说明对象回收时机：\n\nclass Node:\n    def __init__(self):\n        self.other = None\n\nn1 = Node()\nn2 = Node()\nn1.other = n2\nn2.other = n1\ndel n1, n2\n\n问：这段代码执行后，两个 Node 对象的引用计数各是多少？会被引用计数机制回收吗？",
+      "options": [],
+      "answer": "每个 Node 对象仍被对方通过 other 属性引用，引用计数各为 1，不为 0，因此不会因引用计数归零而被回收；它们构成循环引用，只能由循环垃圾回收器（gc）来检测和回收。",
+      "explanation": "del n1, n2 只删除了外部名字，但两个对象通过实例属性互相引用，计数保持为 1。引用计数无法处理这种情况，正是循环 gc 存在的意义。",
+      "error_tag": "概念混淆",
+      "variant_group": "refcount_cycle"
+    },
+    {
+      "kp": "py.cpy.refcount",
+      "type": "code_reading",
+      "question": "阅读代码并说明 s2 处字符串对象的引用计数变化：\n\ns1 = \"abc\"\ns2 = s1\ns1 = \"xyz\"\n\n问：执行完毕后，字符串 \"abc\" 的引用计数是多少？是否会被回收？",
+      "options": [],
+      "answer": "\"abc\" 仍被 s2 引用，引用计数为 1，不会被回收；而 \"xyz\" 被 s1 引用，计数为 1。",
+      "explanation": "s2 = s1 使 \"abc\" 计数增至 2；s1 = \"xyz\" 只是把名字 s1 重新绑定到新对象，\"abc\" 计数减为 1，因仍被 s2 引用而不回收。",
+      "error_tag": "边界错误",
+      "variant_group": "refcount_del"
+    },
+    {
+      "kp": "py.cpy.refcount",
+      "type": "scenario",
+      "question": "工程场景：某服务在长时间运行后内存持续增长。经排查，代码中维护了一个缓存字典，键值对里的对象之间形成了复杂的相互引用（对象 A 的属性指向 B，B 又指回 A），而且这些对象在业务上已经不再使用。请分析为什么单纯依赖引用计数无法释放这些内存，并给出可行的处理方向。",
+      "options": [],
+      "answer": null,
+      "explanation": "对象之间互相引用使各自引用计数都不为 0，引用计数机制无法回收它们，导致内存持续增长。解决方向包括：使用 gc 模块的循环垃圾回收（必要时手动触发）、打破循环引用（如使用弱引用 weakref）、或在业务层清理不再使用的缓存条目。",
+      "error_tag": "概念混淆",
+      "variant_group": "refcount_cycle",
+      "required_keywords": [
+        "缓存",
+        "内存"
+      ]
+    },
+    {
+      "kp": "py.cpy.refcount",
+      "type": "single_choice",
+      "question": "关于 sys.getrefcount(obj) 的返回值，下列说法正确的是？",
+      "options": [
+        "它返回对象的引用计数，但由于调用时会把 obj 作为参数传入，返回值通常比实际引用数多 1",
+        "它返回对象当前的精确引用计数，没有任何偏差",
+        "它返回对象的字节大小",
+        "它返回一个布尔值，表示对象是否只被引用一次"
+      ],
+      "answer": 0,
+      "explanation": "sys.getrefcount 在调用时会把 obj 临时作为实参传入，这个临时引用会使计数 +1，因此返回值通常比“真实”引用数多 1，常被称为“比实际多 1”的计数。它不返回字节大小或布尔值。",
+      "error_tag": "记忆缺失",
+      "variant_group": "refcount_getrefcount"
+    },
+    {
+      "kp": "py.cpy.refcount",
+      "type": "single_choice",
+      "question": "下列哪种情况会导致对象的引用计数增加？",
+      "options": [
+        "把对象放入一个列表，例如 lst.append(obj)",
+        "对对象执行 del 语句",
+        "对象离开其所在函数的局部作用域",
+        "把一个变量重新绑定到别的对象"
+      ],
+      "answer": 0,
+      "explanation": "将对象放入容器（如 append）会让容器持有对该对象的引用，引用计数增加。del、离开作用域、重新绑定都会减少原有对象的引用计数。",
+      "error_tag": "概念混淆",
+      "variant_group": "refcount_increase"
+    },
+    {
+      "kp": "py.cpy.refcount",
+      "type": "single_choice",
+      "question": "以下代码中，字符串对象在何处最可能因为引用计数归零而被立即回收？\n\ndef f():\n    s = \"hello\"\n    return len(s)\n\nf()",
+      "options": [
+        "函数 f 执行完毕、局部名字 s 被销毁时",
+        "函数 f 被调用之前",
+        "字符串对象永远不会被回收",
+        "只有在解释器退出时才会被回收"
+      ],
+      "answer": 0,
+      "explanation": "局部变量 s 在函数返回后随栈帧销毁，其引用的字符串对象引用计数减为 0（若无其他引用），CPython 会立即回收它。这体现了引用计数“实时回收”的特点。",
+      "error_tag": "概念混淆",
+      "variant_group": "refcount_scope"
+    },
+    {
+      "kp": "py.cpy.refcount",
+      "type": "single_choice",
+      "question": "关于引用计数机制无法直接处理的场景，下列说法正确的是？",
+      "options": [
+        "循环引用（对象之间相互引用）可能使引用计数都不为 0，需要额外的循环垃圾回收器来处理",
+        "引用计数可以自动回收所有对象，包括循环引用，所以不需要其他机制",
+        "引用计数会主动检测并打破循环引用",
+        "只要使用列表就不会产生循环引用"
+      ],
+      "answer": 0,
+      "explanation": "引用计数只能处理引用数归零的情况。若两个对象互相引用，各自的计数都不为 0，无法靠引用计数释放，需要 CPython 的循环垃圾回收器（gc）来检测并回收。",
+      "error_tag": "概念混淆",
+      "variant_group": "refcount_cycle"
+    },
+    {
+      "kp": "py.cpy.refcount",
+      "type": "single_choice",
+      "question": "执行下面的代码，sys.getrefcount 的返回值最有可能是多少？\n\nimport sys\nx = object()\nprint(sys.getrefcount(x))",
+      "options": [
+        "2",
+        "1",
+        "0",
+        "不确定，取决于对象类型"
+      ],
+      "answer": 0,
+      "explanation": "x 本身持有一个引用，加上 getrefcount 传参时的临时引用，共 2。因此返回值通常为 2（比实际 1 多 1）。这是对 getrefcount “多 1”特性的直接应用。",
+      "error_tag": "边界错误",
+      "variant_group": "refcount_getrefcount"
+    },
+    {
+      "kp": "py.cpy.refcount",
+      "type": "single_choice",
+      "question": "关于 CPython 中整数（小整数缓存）与引用计数，下列说法正确的是？",
+      "options": [
+        "小整数会被缓存复用，多个变量可能引用同一对象，因此其引用计数可能大于 1 且不由单个变量独占",
+        "每个整数都是全新对象，引用计数始终为 1",
+        "整数对象不参与引用计数",
+        "小整数缓存会导致整数无法被回收"
+      ],
+      "answer": 0,
+      "explanation": "CPython 缓存一定范围内的小整数，多个变量可能指向同一对象，因此该对象的引用计数反映的是所有引用它的地方之和，而非某个变量独占。它不影响引用计数的正常增减。",
+      "error_tag": "概念混淆",
+      "variant_group": "refcount_small_int"
+    },
+    {
+      "kp": "py.cpy.refcount",
+      "type": "single_choice",
+      "question": "以下哪段描述最准确地说明“引用计数为 0 时对象被回收”的时机？",
+      "options": [
+        "当最后一个引用被移除的瞬间，对象即被释放，回收是确定性的",
+        "对象总是在程序退出时才被统一回收",
+        "必须显式调用 gc.collect() 才会回收",
+        "只有在内存不足时才会回收"
+      ],
+      "answer": 0,
+      "explanation": "引用计数的一个重要优势是回收的确定性：当最后一个引用消失、计数归零时对象立即被释放，不需要等到程序结束或手动触发。gc.collect 主要针对循环引用。",
+      "error_tag": "概念混淆",
+      "variant_group": "refcount_deterministic"
+    },
+    {
+      "kp": "py.cpy.refcount",
+      "type": "multi_choice",
+      "question": "下列哪些操作会导致某个对象的引用计数减少？（多选）",
+      "options": [
+        "del 一个引用该对象的变量",
+        "把该变量重新绑定到另一个对象",
+        "该对象作为局部变量所在的函数返回",
+        "把该对象追加进一个列表",
+        "删除包含该对象的容器元素"
+      ],
+      "answer": [
+        0,
+        1,
+        2,
+        4
+      ],
+      "explanation": "del、重新绑定、离开作用域、从容器中删除元素都会移除对对象的引用，使计数减少。而把对象放入容器（如列表追加）会增加引用，不是减少。",
+      "error_tag": "概念混淆",
+      "variant_group": "refcount_increase"
+    },
+    {
+      "kp": "py.cpy.gc",
+      "type": "single_choice",
+      "question": "关于 CPython 的分代垃圾回收机制，下列说法正确的是？",
+      "options": [
+        "新创建的对象默认位于最老的一代，以减少扫描次数",
+        "第 0 代对象经过一次回收存活后会被提升到第 1 代",
+        "引用计数无法处理任何循环引用，只能靠分代回收解决",
+        "分代回收会在每次分配对象时都扫描全部三代对象"
+      ],
+      "answer": 1,
+      "explanation": "CPython 将对象按存活时间分为三代，新对象在第 0 代，经过一次回收仍存活会被提升到下一代。选项 A 错在默认位于第 0 代；选项 C 错在引用计数能处理大部分垃圾，只是处理不了循环引用；选项 D 错在分代回收按阈值触发且通常优先扫描年轻代。",
+      "error_tag": "概念混淆",
+      "variant_group": "分代回收基本概念"
+    },
+    {
+      "kp": "py.cpy.gc",
+      "type": "single_choice",
+      "question": "在 CPython 中，以下哪种情况最可能导致对象无法被引用计数机制立即回收？",
+      "options": [
+        "对象的引用计数变为 0",
+        "对象被一个全局变量引用",
+        "两个对象互相引用，但外部已无引用指向它们",
+        "对象仅被局部变量引用，且函数尚未返回"
+      ],
+      "answer": 2,
+      "explanation": "循环引用会使彼此的引用计数都不为 0，引用计数机制无法检测，需要分代回收来处理。选项 A 会立即触发回收；B、D 都是正常的可达引用，本就不该被回收。",
+      "error_tag": "概念混淆",
+      "variant_group": "引用计数与循环引用"
+    },
+    {
+      "kp": "py.cpy.gc",
+      "type": "single_choice",
+      "question": "一个对象定义了 __del__ 方法，在分代垃圾回收处理循环引用时可能带来什么影响？",
+      "options": [
+        "Python 会立即抛出异常并终止程序",
+        "__del__ 方法会被自动忽略，不影响回收",
+        "在较新的 CPython 中，带 __del__ 的对象也能被回收，但顺序无法保证，早期版本可能无法回收",
+        "__del__ 会阻止对象进入第 0 代"
+      ],
+      "answer": 2,
+      "explanation": "循环引用加 __del__ 曾在旧版本中导致对象无法回收；较新的 CPython 改进了对带 __del__ 循环的收集能力，但析构顺序仍不确定。因此不能依赖 __del__ 做关键资源清理。",
+      "error_tag": "边界错误",
+      "variant_group": "__del__ 与 GC"
+    },
+    {
+      "kp": "py.cpy.gc",
+      "type": "single_choice",
+      "question": "有关 gc.get_threshold() 的返回值，正确的是？",
+      "options": [
+        "返回一个整数，表示当前第 0 代的阈值",
+        "返回一个元组 (threshold0, threshold1, threshold2)",
+        "返回当前已分配但未回收的对象数量",
+        "返回上次回收耗时（秒）"
+      ],
+      "answer": 1,
+      "explanation": "gc.get_threshold() 返回包含三个整数的元组，对应各代触发回收的阈值；gc.set_threshold() 用于修改它们。",
+      "error_tag": "记忆缺失",
+      "variant_group": "gc 阈值机制"
+    },
+    {
+      "kp": "py.cpy.gc",
+      "type": "single_choice",
+      "question": "关于 gc.is_tracked(obj) 的含义，正确的是？",
+      "options": [
+        "判断对象是否被引用计数管理",
+        "判断对象是否被当前 GC 跟踪，可能参与循环引用的处理",
+        "判断对象是否已经死亡",
+        "判断对象是否支持弱引用"
+      ],
+      "answer": 1,
+      "explanation": "gc.is_tracked() 返回对象是否在 GC 的跟踪集合中。不包含引用其他被跟踪对象的原子类型通常返回 False。",
+      "error_tag": "记忆缺失",
+      "variant_group": "GC 跟踪对象范围"
+    },
+    {
+      "kp": "py.cpy.gc",
+      "type": "single_choice",
+      "question": "以下是某程序中手动触发回收的代码，它是为了完成什么目的？",
+      "options": [
+        "回收第 0 代对象，常用于短生命周期对象较多的场景",
+        "只回收第 2 代对象，减少对年轻代的干扰",
+        "清空引用计数为 0 的对象并重置阈值",
+        "冻结当前对象集合，防止它们被回收"
+      ],
+      "answer": 0,
+      "explanation": "gc.collect(0) 只回收第 0 代，即最年轻的一代，常用于高频短生命周期对象的场景中及时释放内存，开销比全代回收小。",
+      "error_tag": "边界错误",
+      "variant_group": "gc.collect 用法"
+    },
+    {
+      "kp": "py.cpy.gc",
+      "type": "multi_choice",
+      "question": "以下哪些说法关于 CPython 垃圾回收是正确的？（多选）",
+      "options": [
+        "引用计数是主要的、即时性的内存回收方式",
+        "分代回收用于处理引用计数无法处理的循环引用",
+        "gc.collect() 只能回收第 0 代对象",
+        "gc.disable() 会停止自动分代回收，但引用计数仍然工作",
+        "所有 Python 对象都会被分代回收器跟踪"
+      ],
+      "answer": [
+        0,
+        1,
+        3
+      ],
+      "explanation": "A、B、D 分别描述引用计数的作用、分代回收的定位、gc.disable 的语义，均正确。C 错在 gc.collect() 默认回收全部代；E 错在原子类型等对象通常不被跟踪。",
+      "error_tag": "概念混淆",
+      "variant_group": "GC 机制综合"
+    },
+    {
+      "kp": "py.cpy.gc",
+      "type": "multi_choice",
+      "question": "以下哪些方式有助于缓解程序中的循环引用问题？（多选）",
+      "options": [
+        "将双向引用改为单向引用",
+        "使用 weakref 存储反向引用",
+        "在长生命周期对象上使用 __del__ 来主动释放",
+        "在合适时机手动调用 gc.collect()"
+      ],
+      "answer": [
+        0,
+        1,
+        3
+      ],
+      "explanation": "打破或弱化循环、适时手动回收都是有效手段。C 中依赖 __del__ 不可靠：带 __del__ 的循环在历史上可能无法回收，析构顺序也不确定，因此不能作为缓解手段。",
+      "error_tag": "概念混淆",
+      "variant_group": "循环引用应对"
+    },
+    {
+      "kp": "py.cpy.gc",
+      "type": "multi_choice",
+      "question": "关于 gc 模块接口，下列哪些调用是真实且语义正确的？（多选）",
+      "options": [
+        "gc.collect(1) 回收第 0 代和第 1 代",
+        "gc.get_count() 返回一个三元组，表示各代当前计数",
+        "gc.set_threshold(700, 10, 10) 修改各代回收阈值",
+        "gc.get_referrers(obj) 返回直接引用 obj 的对象列表",
+        "gc.collect() 会同时强制清空所有弱引用指向的对象"
+      ],
+      "answer": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "explanation": "A、B、C、D 都是 gc 模块公开接口的正确描述。E 错在回收行为不应被理解为强制清空所有弱引用对象；弱引用目标只有在没有强引用时才会被回收。",
+      "error_tag": "记忆缺失",
+      "variant_group": "gc 接口综合"
+    },
+    {
+      "kp": "py.cpy.gc",
+      "type": "fill_blank",
+      "question": "在 CPython 中，垃圾回收主要由引用计数和____回收配合完成，后者用于处理循环引用。请填写该机制的通用名称（中文或英文均可）。",
+      "options": [],
+      "answer": [
+        "分代",
+        "分代回收",
+        "generational",
+        "generational GC",
+        "gc",
+        "垃圾回收"
+      ],
+      "explanation": "CPython 的垃圾回收由引用计数和分代回收（generational GC）共同完成，分代回收用于清理引用计数无法处理的循环引用。",
+      "error_tag": "记忆缺失",
+      "variant_group": "分代回收基本概念"
+    },
+    {
+      "kp": "py.cpy.gc",
+      "type": "fill_blank",
+      "question": "gc 模块中用于临时停用自动回收的函数是 gc.____()，它不影响引用计数机制。",
+      "options": [],
+      "answer": [
+        "disable",
+        "disable()"
+      ],
+      "explanation": "gc.disable() 停用自动分代回收，但引用计数仍正常工作；gc.enable() 用于恢复。",
+      "error_tag": "记忆缺失",
+      "variant_group": "gc 开关控制"
+    },
+    {
+      "kp": "py.cpy.gc",
+      "type": "code_reading",
+      "question": "阅读以下代码，解释运行结果及原因：\n\nimport gc\n\nclass Node:\n    def __init__(self):\n        self.next = None\n\na = Node()\nb = Node()\na.next = b\nb.next = a\ndel a\ndel b\nprint(gc.collect() >= 0)\n\n请说明 del 之后这两个 Node 对象是否被引用计数立即回收，以及 gc.collect() 在其中起什么作用。",
+      "options": [],
+      "answer": "del a 和 del b 只删除了外部对这两个对象的强引用。由于 a.next 和 b.next 彼此引用，两个对象的引用计数都不为 0，引用计数机制无法回收它们。它们成为不可达的循环引用，需要 gc.collect() 触发（或自动触发的分代回收）才能被回收。gc.collect() 返回本次回收到的不可达对象数，是合法调用，结果通常是非负整数。",
+      "explanation": "本题考察循环引用与分代回收的分工：引用计数处理普通垃圾，循环引用交由 GC。del 仅减少外部引用，不会立即回收互为引用的对象。",
+      "error_tag": "概念混淆",
+      "variant_group": "循环引用与 GC 协调"
+    },
+    {
+      "kp": "py.cpy.gc",
+      "type": "single_choice",
+      "question": "CPython 中 gc 模块的阈值参数 (threshold0, threshold1, threshold2) 中，threshold0 主要控制什么？",
+      "options": [
+        "第 0 代对象数量减去第 1 代对象数量达到该值时触发第 1 代回收",
+        "分配对象数减去释放对象数达到该值时触发第 0 代回收",
+        "第 2 代回收的最大对象数量",
+        "手动调用 gc.collect() 时需要等待的毫秒数"
+      ],
+      "answer": 1,
+      "explanation": "gc 内部维护分配计数与释放计数之差，当该差值超过 threshold0 时触发第 0 代回收。threshold1 和 threshold2 分别控制第 1、2 代回收的触发条件。",
+      "error_tag": "记忆缺失",
+      "variant_group": "gc 阈值机制"
+    },
+    {
+      "kp": "py.cpy.gc",
+      "type": "scenario",
+      "question": "某长期运行的数据服务使用 CPython，运行几天后内存占用持续上升。初步排查发现大量业务对象之间存在双向引用（父子互指），且对象声明了 __del__ 方法用于清理外部资源。团队希望在不改变业务模型的前提下降低内存增长。请给出你的处理思路，并说明为什么不建议仅通过 gc.disable() 或仅依赖 __del__ 来解决问题。",
+      "options": [],
+      "answer": null,
+      "explanation": "应从循环引用入手：用弱引用或单向引用打破父子互指；在合适时机手动触发 gc.collect() 或调整分代回收阈值；避免依赖 __del__ 做关键清理，因为析构顺序不确定且历史版本可能阻碍循环回收；gc.disable() 只会让循环引用更晚释放，不是解决方案。",
+      "error_tag": "场景分析不足",
+      "variant_group": "内存增长与循环引用处理",
+      "required_keywords": [
+        "弱引用",
+        "循环引用",
+        "gc.collect",
+        "分代回收阈值",
+        "__del__"
+      ]
+    },
+    {
+      "kp": "py.cpy.gc",
+      "type": "single_choice",
+      "question": "调用 gc.collect() 时不传参数，默认会做什么？",
+      "options": [
+        "只回收第 0 代对象",
+        "回收全部三代对象，等价于 gc.collect(2)",
+        "仅清理已断开的循环引用，不触碰存活对象",
+        "强制将回收阈值重置为默认值"
+      ],
+      "answer": 1,
+      "explanation": "gc.collect() 默认参数为 generation=2，执行一次完整的全代回收。它会遍历各代并回收不可达对象，但不会改变阈值设置。",
+      "error_tag": "记忆缺失",
+      "variant_group": "gc.collect 用法"
+    },
+    {
+      "kp": "py.cpy.gc",
+      "type": "single_choice",
+      "question": "关于 gc.disable() 的作用，下列说法正确的是？",
+      "options": [
+        "完全关闭引用计数机制，垃圾不再被回收",
+        "仅关闭自动分代回收，手动调用 gc.collect() 仍可执行回收",
+        "禁止创建任何新对象",
+        "清空当前所有可回收对象"
+      ],
+      "answer": 1,
+      "explanation": "gc.disable() 只停用自动触发的分代回收，引用计数仍在工作，且手动 gc.collect() 依旧可以运行。选项 A 是对引用计数的误解。",
+      "error_tag": "概念混淆",
+      "variant_group": "gc 开关控制"
+    },
+    {
+      "kp": "py.cpy.gc",
+      "type": "single_choice",
+      "question": "以下关于 gc.get_objects() 的描述，正确的是？",
+      "options": [
+        "返回当前被 GC 跟踪的所有对象列表",
+        "返回所有仍被引用的对象及其引用计数字典",
+        "返回下一次回收将释放的对象列表",
+        "返回历史上被回收过的对象总数"
+      ],
+      "answer": 0,
+      "explanation": "gc.get_objects() 返回当前被垃圾回收器跟踪的对象列表，常用于调试内存问题，但它不保证包含全部对象（如部分内置类型可能不被跟踪）。",
+      "error_tag": "记忆缺失",
+      "variant_group": "gc 调试接口"
+    },
+    {
+      "kp": "py.cpy.gc",
+      "type": "single_choice",
+      "question": "CPython 中，以下哪种对象通常不会被分代垃圾回收器跟踪？",
+      "options": [
+        "自定义类实例",
+        "包含其他对象引用的列表",
+        "只包含不可变原子类型（如整数）的对象",
+        "协程对象"
+      ],
+      "answer": 2,
+      "explanation": "GC 只跟踪可能形成循环引用的容器类型对象。整数等原子类型不包含对其他被跟踪对象的引用，通常不被 GC 跟踪，它们靠引用计数即可回收。",
+      "error_tag": "概念混淆",
+      "variant_group": "GC 跟踪对象范围"
+    },
+    {
+      "kp": "py.cpy.gc",
+      "type": "single_choice",
+      "question": "关于 gc.freeze() 的用途，下列说法正确的是？",
+      "options": [
+        "冻结当前所有存活对象，使它们不再参与后续的 GC 扫描",
+        "阻止新对象被分配到第 0 代",
+        "将对象永久锁定在内存中，无法被任何机制回收",
+        "暂停 GC 直到调用 gc.unfreeze()"
+      ],
+      "answer": 0,
+      "explanation": "gc.freeze() 将当前所有被跟踪对象移出 GC 各代，之后不再扫描它们，常用于 fork 前减少写时复制开销。它不改变引用计数语义，也不能阻止对象在未来被引用计数释放。",
+      "error_tag": "记忆缺失",
+      "variant_group": "gc.freeze 用途"
+    },
+    {
+      "kp": "py.cpy.gc",
+      "type": "single_choice",
+      "question": "若发现程序内存持续增长且怀疑存在循环引用导致对象无法释放，最合适的排查方式是？",
+      "options": [
+        "调用 gc.disable() 关闭回收以减少开销",
+        "使用 gc.set_debug(gc.DEBUG_LEAK) 观察回收情况并用 gc.get_referrers 分析引用",
+        "用 del 删除所有全局变量",
+        "把 sys.setrecursionlimit 调大"
+      ],
+      "answer": 1,
+      "explanation": "定位循环引用可用 gc 的调试与内省接口，如开启 DEBUG_LEAK 查看难以回收的对象，再用 gc.get_referrers / gc.get_referents 分析引用链。关闭回收或改递归限制都与问题无关。",
+      "error_tag": "概念混淆",
+      "variant_group": "循环引用排查"
+    },
+    {
+      "kp": "py.cpy.gc",
+      "type": "single_choice",
+      "question": "关于弱引用（weakref）与垃圾回收的关系，说法正确的是？",
+      "options": [
+        "弱引用会增加对象的引用计数，从而阻止其被回收",
+        "弱引用不会增加引用计数，因此不阻止对象被垃圾回收",
+        "只有被 GC 跟踪的对象才能被弱引用",
+        "弱引用只能指向不可变对象"
+      ],
+      "answer": 1,
+      "explanation": "弱引用不增加目标对象的引用计数，因此目标对象在仅有弱引用时仍可被引用计数或分代回收释放。部分内置类型（如 list、tuple）不支持弱引用，但不限于不可变对象。",
+      "error_tag": "概念混淆",
+      "variant_group": "弱引用与回收"
+    }
+  ]
+}

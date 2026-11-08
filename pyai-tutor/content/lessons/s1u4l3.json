@@ -1,0 +1,641 @@
+{
+  "id": "s1u4l3",
+  "title": "s1u4l3",
+  "kps": [
+    "py.type.tuple",
+    "py.type.tuple_unpack"
+  ],
+  "theory": "## py.type.tuple\n\n# Python 元组类型 `tuple` 完全指南\n\n## 一句话直觉\n\n**元组（tuple）是 Python 中“不可变的有序容器”——一旦创建就不能增删改元素，这让它天生适合表达“固定结构的数据”，例如坐标 `(x, y)`、RGB 颜色 `(r, g, b)`、数据库查询的一行结果。**\n\n学习 `tuple` 类型注解（type annotation）的意义在于：让类型检查器（type checker，如 mypy、pyright）能帮你在运行前发现“长度不对”“元素类型写错”的问题。\n\n---\n\n## 第 1 节：元组本身——不可变、可迭代、可解包\n\n元组用圆括号 `()` 定义（逗号才是关键，括号可以省略）。它支持索引、切片、迭代、解包，但**不支持原地修改**。\n\n```python\n# 01_basic_tuple.py\npoint = (3, 5)             # 一个二元元组\nempty = ()                 # 空元组\nsingle = (42,)             # 单元素元组：必须有逗号！\nnot_a_tuple = (42)         # 这不是元组，就是整数 42\n\nprint(type(point))         # <class 'tuple'>\nprint(point[0], point[1])  # 3 5\n\nx, y = point               # 解包（unpacking）\nprint(x + y)               # 8\n\n# point[0] = 99            # 会抛 TypeError：'tuple' object does not support item assignment\n```\n\n**关键结论：**\n- 逗号才决定是不是元组，`(42)` 是整数，`(42,)` 才是元组。\n- 元组不可变 → 可以作为字典的键（key）、集合的元素；列表不行。\n\n---\n\n## 第 2 节：注解的三种“形状”——定长、变长、空\n\nPython 3.9+ 起可以直接写内置泛型 `tuple[...]`（无需 `from typing import Tuple`）。类型注解里元组有**三种形态**：\n\n1. **定长元组** `tuple[T1, T2, ...]`：长度和每个位置类型都固定。\n2. **变长同型元组** `tuple[T, ...]`：任意长度，所有元素都是 `T`。\n3. **空元组** `tuple[()]`：只允许 `()`。\n\n```python\n# 02_annotation_shapes.py\n\n# 形态 1：定长，位置类型固定\nrgb: tuple[int, int, int] = (255, 0, 128)\n\n# 形态 2：变长，所有元素同型\nscores: tuple[int, ...] = (90, 85)\nscores = (90, 85, 77)      # OK：变长\nscores = ()                # OK：空也符合\n\n# 形态 3：只允许空元组\nnever_has_content: tuple[()] = ()\n\n# 一个经典的“写错”示例：\nbad: tuple[int] = (1, 2, 3)   # 类型检查器会报错：长度为 1\n```\n\n**为什么 `tuple[int]` 表示“长度恰好为 1”？**\n因为 `tuple[int]` 是“定长元组”形态的语法糖，它等价于 `tuple[int]`（长度为 1，位置 0 是 int）。要表达“任意长度的 int 元组”，必须写 `tuple[int, ...]`。\n\n---\n\n## 第 3 节：裸 `tuple` vs `tuple[Any, ...]`\n\n不带方括号的 `tuple` 是合法注解，它等价于 `tuple[Any, ...]`——即“任意长度、任意元素”，基本等于放弃检查。\n\n```python\n# 03_plain_vs_any.py\nz: tuple = (\"foo\", \"bar\")   # 等价于 tuple[Any, ...]\nz = (1, 2, 3)                # OK\nz = ()                       # OK\n\n# 但如果想约束元素类型，就必须显式写变长形态：\nx: tuple[int, ...] = (1, 2)\nx = (1, 2, 3)                # OK\n# x = (\"foo\", \"bar\")         # 类型检查器报错：元素必须是 int\n```\n\n**经验法则：** 生产代码里尽量避免裸 `tuple`，要么写清长度（定长），要么写 `tuple[T, ...]`（变长），让类型系统真正发挥作用。\n\n---\n\n## 第 4 节：`type[C]`——变量装的是“类本身”而不是“类的实例”\n\n这是一个常被混淆的概念。`x: C` 表示 `x` 是 `C` 的实例；而 `x: type[C]` 表示 `x` 是 `C` 这个类对象本身（可以调用它来构造实例）。\n\n```python\n# 04_type_of_classes.py\nclass User:\n    def __init__(self, name: str = \"anon\") -> None:\n        self.name = name\n\nclass ProUser(User):\n    pass\n\n# 工厂函数：接收一个“类”作为参数，返回它的实例\ndef make_new_user(user_class: type[User]) -> User:\n    return user_class()\n\nprint(make_new_user(User).name)      # anon\nprint(make_new_user(ProUser).name)   # anon\n# make_new_user(User())              # 类型检查器报错：传了实例而不是类\n# make_new_user(int)                 # 类型检查器报错：int 不是 User 子类\n```\n\n**关键结论：**\n- `type[User]` 是**协变（covariant）**的：`type[ProUser]` 可以当作 `type[User]` 使用。\n- `type[Any]` 等价于裸 `type`，是所有元类（metaclass）体系的根。\n\n---\n\n## 第 5 节：工程进阶——`*Ts` 变长类型参数\n\nPEP 646 引入的“类型变量元组（TypeVarTuple）”让元组注解可以在泛型里“展开”，用于精确表达“变长但每个位置类型都被跟踪”的场景（例如张量的形状）。\n\n```python\n# 05_variadic.py\nfrom typing import TypeVarTuple, Unpack  # Python 3.11+ 也可以用内置写法\n\nTs = TypeVarTuple(\"Ts\")\n\ndef move_first_to_last(tup: tuple[int, Unpack[Ts]]) -> tuple[Unpack[Ts], int]:\n    first, *rest = tup\n    return (*rest, first)\n\n# 简单演示（实际返回值类型由类型检查器推导）\nprint(move_first_to_last((1, \"spam\", 3.0)))  # ('spam', 3.0, 1)\n```\n\n> 提示：本节是“进阶视野”，初学阶段只需知道有这种能力；日常业务代码用 `tuple[T, ...]` 和 `tuple[A, B]` 已经覆盖 95% 场景。\n\n---\n\n## 常见误区（pitfalls）\n\n1. **`(42)` 不是元组**：必须写 `(42,)`。单元素元组少了逗号就是整数。\n2. **`tuple[int]` 不等于 `tuple[int, ...]`**：前者长度必须是 1，很多初学者以为它表示“int 的元组”。要变长必须加 `...`。\n3. **裸 `tuple` 不做任何检查**：它等价于 `tuple[Any, ...]`，会绕过类型检查器。\n4. **`type[C]` 和 `C` 完全不同**：前者指“类对象”，后者指“实例”。工厂函数参数要用 `type[C]`。\n5. **类型注解运行时不强制**：Python 解释器不会因为注解不匹配而抛错，只有类型检查器（mypy/pyright）和 IDE 会提示，别指望它代替运行时校验。\n6. **`*Ts` 每次只允许出现一次**：`tuple[*Ts, *Ts]` 非法；同一参数列表里最多一个 `TypeVarTuple`。\n\n---\n\n## 动手练习\n\n**任务：写一个“颜色工具”小模块**\n\n1. 定义类型别名 `RGB = tuple[int, int, int]`，写函数 `to_hex(color: RGB) -> str`，把 `(255, 0, 128)` 转成 `'#ff0080'`（每段用 `format(v, '02x')`，注意越界要抛 `ValueError`）。\n2. 写函数 `mix(colors: tuple[RGB, ...]) -> RGB`，输入任意长度的 RGB 元组，返回各通道平均值（取整）的 RGB。\n3. 写函数 `make_palette(factory: type[tuple]) -> tuple`，用 `type[...]` 注解演示“传入类对象”的用法（可以先返回 `factory((1, 2, 3))`）。\n4. 用 `mypy` 或 VS Code Pylance 检查：故意写 `c: tuple[int] = (1, 2, 3)`，确认工具报错。\n\n**验收标准：** `to_hex((255, 0, 128)) == '#ff0080'`；`mix(((0,0,0), (10,10,10))) == (5, 5, 5)`；类型检查器能捕捉到 `tuple[int]` 长度不匹配的错误。\n\n```python\n# example.py —— 可直接运行：元组类型注解核心演示\nfrom typing import TypeVarTuple, Unpack\n\n# 1) 三种元组注解形态\nrgb: tuple[int, int, int] = (255, 0, 128)   # 定长：位置类型固定\nscores: tuple[int, ...] = (90, 85, 77)      # 变长：任意长度，同型\nalways_empty: tuple[()] = ()                # 只允许空元组\n\n# 2) 裸 tuple 等价于 tuple[Any, ...]\nz: tuple = (\"foo\", \"bar\")\nz = (1, 2, 3)   # OK\nz = ()          # OK\n\n# 3) type[C]：变量装的是“类本身”\nclass User:\n    def __init__(self, name: str = \"anon\") -> None:\n        self.name = name\n\nclass ProUser(User):\n    pass\n\ndef make_new_user(user_class: type[User]) -> User:\n    return user_class()\n\nassert make_new_user(User).name == \"anon\"\nassert make_new_user(ProUser).name == \"anon\"\n\n# 4) 变长类型参数（PEP 646 风格，Python 3.11+）\nTs = TypeVarTuple(\"Ts\")\n\ndef move_first_to_last(tup: tuple[int, Unpack[Ts]]) -> tuple[Unpack[Ts], int]:\n    first, *rest = tup\n    return (*rest, first)\n\nassert move_first_to_last((1, \"spam\", 3.0)) == (\"spam\", 3.0, 1)\n\nprint(\"all assertions passed\")\n```\n\n## py.type.tuple_unpack\n\n# 元组解包（Tuple Unpacking）：一句话直觉\n\n**为什么学它？** 因为元组解包让你用「左边一排变量，右边一个容器」的方式，一次性把数据拆开赋值，代码短、可读性高，是 Python 里最常用的语法糖之一。\n\n---\n\n## 1. 什么是元组解包（Tuple Unpacking）\n\n元组（tuple）是有序、不可变的容器；解包（unpacking）就是把容器里的元素「按位置」分配给左边的一组变量。\n\n```python\n# 最基础的形式：左边变量数 = 右边元素数\npoint = (3, 5)\nx, y = point          # 把 point 的两个元素分别赋给 x、y\nprint(x, y)           # 3 5\n```\n\n**关键结论 1**：解包不要求右边是 tuple，任何可迭代对象（iterable）都可以。\n\n```python\n# 列表、字符串、range 都能解包\na, b = [10, 20]\nc, d = \"hi\"           # 字符串也是可迭代对象\nprint(a, b, c, d)     # 10 20 h i\n```\n\n---\n\n## 2. 用星号 `*` 收集剩余元素（Starred Assignment）\n\n当元素个数不固定时，可以用一个带 `*` 的变量「兜住」剩下的元素，得到的是一个列表（list）。\n\n```python\n# *rest 收集中间所有剩余元素\nfirst, *middle, last = [1, 2, 3, 4, 5]\nprint(first)    # 1\nprint(middle)   # [2, 3, 4]\nprint(last)     # 5\n```\n\n**关键结论 2**：一个解包表达式中最多只能出现一个 `*`，它负责收集，不会报「数量不匹配」。\n\n```python\n# 只留第一个，其余全收\nhead, *tail = (\"a\", \"b\", \"c\", \"d\")\nprint(head, tail)   # a ['b', 'c', 'd']\n```\n\n---\n\n## 3. 嵌套解包（Nested Unpacking）\n\n右边元素本身也可以是容器，只要左边的结构「形状匹配」就能递归拆开。\n\n```python\n# 嵌套结构：(姓名, (年, 月, 日))\nrecord = (\"Alice\", (1995, 6, 18))\nname, (year, month, day) = record\nprint(name, year, month, day)   # Alice 1995 6 18\n```\n\n**关键结论 3**：嵌套解包要求左右两侧结构一一对应，多一层少一层都会 `ValueError`。\n\n```python\n# 配合 * 收集嵌套里的剩余项\n(a, b), *rest = ((1, 2), 3, 4)\nprint(a, b, rest)   # 1 2 [3, 4]\n```\n\n---\n\n## 4. 在函数参数与返回中使用\n\n解包在函数定义和调用里非常常见：`*args` 收集位置参数，`**kwargs` 收集关键字参数；函数返回元组时可以直接解包接收。\n\n```python\ndef min_max(nums):\n    # 返回一个元组\n    return min(nums), max(nums)\n\n# 调用方直接解包接收\nlo, hi = min_max([3, 1, 4, 1, 5, 9])\nprint(lo, hi)   # 1 9\n```\n\n**关键结论 4**：`*` 在「赋值左边」表示收集，在「调用实参」表示展开，两者方向相反但同名。\n\n```python\ndef add3(a, b, c):\n    return a + b + c\n\nargs = (1, 2, 3)\nprint(add3(*args))   # 6，把元组展开成三个实参\n```\n\n---\n\n## 5. 交换变量与循环解包：工程里最常见的两种用法\n\n```python\n# 用法一：一行交换两个变量（本质是元组解包）\nx, y = 1, 2\nx, y = y, x\nprint(x, y)   # 2 1\n\n# 用法二：遍历 dict.items() 时直接解包键值对\nprices = {\"apple\": 3, \"banana\": 5}\nfor name, price in prices.items():\n    print(name, price)\n```\n\n**关键结论 5**：`for a, b in iterable` 是工程代码里解包出现频率最高的场景，能把「取元组再索引」变成一行。\n\n```python\n# 对比：不用解包 vs 用解包\npairs = [(1, \"one\"), (2, \"two\")]\n\nfor pair in pairs:\n    print(pair[0], pair[1])   # 老写法\n\nfor num, word in pairs:\n    print(num, word)          # 解包写法，更清晰\n```\n\n---\n\n## 动手练习（Local Exercise）\n\n**任务**：写一个函数 `split_scores(scores)`，接收一个分数列表（如 `[88, 92, 79, 95, 60]`），返回一个元组 `(highest, lowest, middle_list)`：\n- `highest` 是最高分\n- `lowest` 是最低分\n- `middle_list` 是去掉最高分和最低分后剩下的分数列表\n\n要求：\n1. 先把列表排序；\n2. **必须使用带 `*` 的解包** 把去掉首尾后的中间部分收集成一个列表；\n3. 调用时用元组解包接收三个返回值并打印。\n\n提示骨架：\n\n```python\ndef split_scores(scores):\n    ordered = sorted(scores)\n    lowest, *middle, highest = ordered   # 你的解包在这里\n    return highest, lowest, middle\n\nhi, lo, mid = split_scores([88, 92, 79, 95, 60])\nprint(hi, lo, mid)\n```\n\n完成后思考：如果传入空列表或只有一个元素，会怎样？如何用条件判断让函数更健壮？\n\n```python\n# 可运行示例：元组解包的 5 种典型用法\n\n# 1) 基础解包\npoint = (3, 5)\nx, y = point\nprint(\"基础:\", x, y)                      # 3 5\n\n# 2) 星号收集剩余元素\nfirst, *middle, last = [1, 2, 3, 4, 5]\nprint(\"星号:\", first, middle, last)       # 1 [2, 3, 4] 5\n\n# 3) 嵌套解包\nrecord = (\"Alice\", (1995, 6, 18))\nname, (year, month, day) = record\nprint(\"嵌套:\", name, year, month, day)    # Alice 1995 6 18\n\n# 4) 函数返回元组 + 调用方解包\ndef min_max(nums):\n    return min(nums), max(nums)\n\nlo, hi = min_max([3, 1, 4, 1, 5, 9])\nprint(\"函数:\", lo, hi)                    # 1 9\n\n# 5) 循环里解包键值对\nprices = {\"apple\": 3, \"banana\": 5}\nfor fruit, price in prices.items():\n    print(\"循环:\", fruit, price)\n```\n",
+  "quiz": [
+    {
+      "kp": "py.type.tuple",
+      "type": "single_choice",
+      "question": "运行以下代码，输出是什么？\nt = (1, 2, 3)\nprint(type(t))",
+      "options": [
+        "<class 'list'>",
+        "<class 'tuple'>",
+        "<class 'set'>",
+        "<class 'str'>"
+      ],
+      "answer": 1,
+      "explanation": "圆括号括起来、用逗号分隔的多个值是元组，type() 返回 <class 'tuple'>。",
+      "error_tag": "类型混淆",
+      "variant_group": "tuple_basic_type"
+    },
+    {
+      "kp": "py.type.tuple",
+      "type": "single_choice",
+      "question": "运行以下代码，输出是什么？\nt = (1)\nprint(type(t))",
+      "options": [
+        "<class 'tuple'>",
+        "<class 'int'>",
+        "<class 'list'>",
+        "报错 TypeError"
+      ],
+      "answer": 1,
+      "explanation": "括号里只有一个元素时，括号只起分组作用，t 实际是整数。单元素元组必须写成 (1,)。",
+      "error_tag": "单元素元组写法混淆",
+      "variant_group": "tuple_singleton"
+    },
+    {
+      "kp": "py.type.tuple",
+      "type": "single_choice",
+      "question": "运行以下代码，输出是什么？\nt = (1, 2, 3)\nprint(2 in t)",
+      "options": [
+        "True",
+        "False",
+        "2",
+        "报错 TypeError"
+      ],
+      "answer": 0,
+      "explanation": "in 运算符用于成员判断，元素 2 在元组中存在，结果 True。",
+      "error_tag": "成员运算混淆",
+      "variant_group": "tuple_membership"
+    },
+    {
+      "kp": "py.type.tuple",
+      "type": "single_choice",
+      "question": "运行以下代码，输出是什么？\nt = (1, 2, 3, 2)\nprint(t.count(2))",
+      "options": [
+        "1",
+        "2",
+        "3",
+        "4"
+      ],
+      "answer": 1,
+      "explanation": "count() 统计元素出现次数，2 出现了两次。",
+      "error_tag": "方法语义混淆",
+      "variant_group": "tuple_count"
+    },
+    {
+      "kp": "py.type.tuple",
+      "type": "single_choice",
+      "question": "运行以下代码，输出是什么？\nt = ('a', 'b', 'c', 'b')\nprint(t.index('b'))",
+      "options": [
+        "1",
+        "2",
+        "3",
+        "报错 ValueError"
+      ],
+      "answer": 0,
+      "explanation": "index() 返回元素第一次出现的下标，'b' 首次出现在下标 1。",
+      "error_tag": "方法语义混淆",
+      "variant_group": "tuple_index"
+    },
+    {
+      "kp": "py.type.tuple",
+      "type": "single_choice",
+      "question": "运行以下代码，哪一行会产生异常？\nt = (1, 2)\nt.append(3)\nprint(t)",
+      "options": [
+        "第 1 行",
+        "第 2 行",
+        "第 3 行",
+        "不会产生异常"
+      ],
+      "answer": 1,
+      "explanation": "元组没有 append() 方法，第 2 行会抛出 AttributeError。",
+      "error_tag": "混淆 list 与 tuple 方法",
+      "variant_group": "tuple_no_list_methods"
+    },
+    {
+      "kp": "py.type.tuple",
+      "type": "single_choice",
+      "question": "运行以下代码，输出是什么？\na, b = (1, 2)\nprint(a, b)",
+      "options": [
+        "1 2",
+        "(1, 2) (1, 2)",
+        "报错 ValueError",
+        "2 1"
+      ],
+      "answer": 0,
+      "explanation": "元组支持解包赋值，按位置把 1 和 2 分别赋给 a、b。",
+      "error_tag": "解包理解错误",
+      "variant_group": "tuple_unpacking"
+    },
+    {
+      "kp": "py.type.tuple",
+      "type": "single_choice",
+      "question": "运行以下代码，输出是什么？\na, b = (1, 2, 3)\nprint(a, b)",
+      "options": [
+        "1 2",
+        "1 3",
+        "2 3",
+        "报错 ValueError"
+      ],
+      "answer": 3,
+      "explanation": "解包时左右数量必须一致，左边 2 个变量对应右边 3 个元素会抛 ValueError。",
+      "error_tag": "解包数量不匹配",
+      "variant_group": "tuple_unpacking"
+    },
+    {
+      "kp": "py.type.tuple",
+      "type": "single_choice",
+      "question": "运行以下代码，输出是什么？\nt = (1, [2, 3])\nt[1].append(4)\nprint(t)",
+      "options": [
+        "报错 TypeError",
+        "(1, [2, 3, 4])",
+        "(1, [2, 3])",
+        "(1, 2, 3, 4)"
+      ],
+      "answer": 1,
+      "explanation": "元组本身不可变，但其中元素可以是可变对象；这里修改的是列表本身，所以能成功。",
+      "error_tag": "不可变性理解不完整",
+      "variant_group": "tuple_immutable_nested"
+    },
+    {
+      "kp": "py.type.tuple",
+      "type": "single_choice",
+      "question": "运行以下代码，输出是什么？\nt = (1, 2, [3, 4])\nt[2] = [5, 6]\nprint(t)",
+      "options": [
+        "(1, 2, [5, 6])",
+        "(1, 2, [3, 4])",
+        "报错 TypeError",
+        "报错 IndexError"
+      ],
+      "answer": 2,
+      "explanation": "给元组的元素重新赋值等同于修改元组结构，会抛出 TypeError，即使该位置原本是列表。",
+      "error_tag": "不可变性理解不完整",
+      "variant_group": "tuple_immutable_nested"
+    },
+    {
+      "kp": "py.type.tuple",
+      "type": "single_choice",
+      "question": "以下哪个表达式创建的是空元组？",
+      "options": [
+        "()",
+        "[]",
+        "{}",
+        "(None)"
+      ],
+      "answer": 0,
+      "explanation": "() 是空元组；[] 是空列表；{} 是空字典；(None) 是值为 None 的表达式。",
+      "error_tag": "字面量混淆",
+      "variant_group": "tuple_literal"
+    },
+    {
+      "kp": "py.type.tuple",
+      "type": "single_choice",
+      "question": "运行以下代码，输出是什么？\nt = (1, 2, 3)\nprint(len(t), max(t), min(t))",
+      "options": [
+        "3 3 1",
+        "3 1 3",
+        "1 3 3",
+        "报错 TypeError"
+      ],
+      "answer": 0,
+      "explanation": "len() 返回元素个数 3，max() 返回最大值 3，min() 返回最小值 1。",
+      "error_tag": "内置函数语义混淆",
+      "variant_group": "tuple_builtin_funcs"
+    },
+    {
+      "kp": "py.type.tuple",
+      "type": "single_choice",
+      "question": "运行以下代码，输出是什么？\nt = (5,)\nprint(type(t), len(t))",
+      "options": [
+        "<class 'tuple'> 1",
+        "<class 'int'> 1",
+        "<class 'tuple'> 0",
+        "报错 SyntaxError"
+      ],
+      "answer": 0,
+      "explanation": "(5,) 中的逗号使其成为只有一个元素的元组，长度为 1。",
+      "error_tag": "单元素元组写法混淆",
+      "variant_group": "tuple_singleton"
+    },
+    {
+      "kp": "py.type.tuple",
+      "type": "single_choice",
+      "question": "运行以下代码，输出是什么？\nt = (1, 2, 3)\nt[0] = 100\nprint(t)",
+      "options": [
+        "(100, 2, 3)",
+        "(1, 2, 3)",
+        "报错 TypeError",
+        "报错 IndexError"
+      ],
+      "answer": 2,
+      "explanation": "元组是不可变序列，不支持项目赋值，会抛出 TypeError。",
+      "error_tag": "可变性误判",
+      "variant_group": "tuple_immutable"
+    },
+    {
+      "kp": "py.type.tuple",
+      "type": "single_choice",
+      "question": "运行以下代码，输出是什么？\nt = (1, 2, 3)\nprint(t[1])",
+      "options": [
+        "1",
+        "2",
+        "3",
+        "报错 IndexError"
+      ],
+      "answer": 1,
+      "explanation": "元组支持下标访问，下标从 0 开始，t[1] 取第二个元素 2。",
+      "error_tag": "索引基础错误",
+      "variant_group": "tuple_indexing"
+    },
+    {
+      "kp": "py.type.tuple",
+      "type": "single_choice",
+      "question": "运行以下代码，输出是什么？\nt = (1, 2, 3, 4)\nprint(t[-1])",
+      "options": [
+        "1",
+        "3",
+        "4",
+        "报错 IndexError"
+      ],
+      "answer": 2,
+      "explanation": "负数下标从末尾计数，-1 表示最后一个元素 4。",
+      "error_tag": "负索引理解错误",
+      "variant_group": "tuple_indexing"
+    },
+    {
+      "kp": "py.type.tuple",
+      "type": "single_choice",
+      "question": "运行以下代码，输出是什么？\nt = (0, 1, 2, 3, 4, 5)\nprint(t[1:4])",
+      "options": [
+        "(1, 2, 3)",
+        "(1, 2, 3, 4)",
+        "(0, 1, 2, 3)",
+        "(0, 1, 2, 3, 4)"
+      ],
+      "answer": 0,
+      "explanation": "切片 [1:4] 包含起始下标 1、不包含结束下标 4，得到 (1, 2, 3)，且结果为元组。",
+      "error_tag": "切片边界错误",
+      "variant_group": "tuple_slicing"
+    },
+    {
+      "kp": "py.type.tuple",
+      "type": "single_choice",
+      "question": "运行以下代码，输出是什么？\nt = (1, 2, 3)\nprint(t[::-1])",
+      "options": [
+        "(1, 2, 3)",
+        "(3, 2, 1)",
+        "(1, 3)",
+        "报错 TypeError"
+      ],
+      "answer": 1,
+      "explanation": "切片步长为 -1 时反转序列，结果为 (3, 2, 1)，元组切片仍返回元组。",
+      "error_tag": "切片步长错误",
+      "variant_group": "tuple_slicing"
+    },
+    {
+      "kp": "py.type.tuple",
+      "type": "single_choice",
+      "question": "运行以下代码，输出是什么？\na = (1, 2)\nb = a + (3, 4)\nprint(b)",
+      "options": [
+        "(1, 2, 3, 4)",
+        "(4, 6)",
+        "(1, 2, (3, 4))",
+        "报错 TypeError"
+      ],
+      "answer": 0,
+      "explanation": "元组的 + 运算符表示拼接，返回新元组 (1, 2, 3, 4)。",
+      "error_tag": "运算符语义混淆",
+      "variant_group": "tuple_concat"
+    },
+    {
+      "kp": "py.type.tuple",
+      "type": "single_choice",
+      "question": "运行以下代码，输出是什么？\na = (1, 2)\nb = a * 3\nprint(b)",
+      "options": [
+        "(1, 2, 1, 2, 1, 2)",
+        "(3, 6)",
+        "(3, 3)",
+        "报错 TypeError"
+      ],
+      "answer": 0,
+      "explanation": "元组与整数相乘表示重复拼接，得到 (1, 2, 1, 2, 1, 2)。",
+      "error_tag": "运算符语义混淆",
+      "variant_group": "tuple_repeat"
+    },
+    {
+      "kp": "py.type.tuple_unpack",
+      "type": "single_choice",
+      "question": "执行以下代码后，x、y、z 的值分别是什么？\n\nt = (1, 2, 3)\nx, y, z = t",
+      "options": [
+        "x=1, y=2, z=3",
+        "x=(1,), y=(2,), z=(3,)",
+        "x=1, y=2, z=(3,)",
+        "抛出 ValueError"
+      ],
+      "answer": 0,
+      "explanation": "元组解包会把可迭代对象 t 中的三个元素依次分配给左侧三个变量，因此 x、y、z 分别是 1、2、3。",
+      "error_tag": "概念混淆",
+      "variant_group": "tuple_unpack_basic"
+    },
+    {
+      "kp": "py.type.tuple_unpack",
+      "type": "single_choice",
+      "question": "执行以下代码会发生什么？\n\nt = (1, 2, 3)\na, b = t",
+      "options": [
+        "a=1, b=2，剩余元素被忽略",
+        "a=1, b=2, 3 被赋给 b 成为 (2,3)",
+        "抛出 ValueError: too many values to unpack",
+        "抛出 TypeError"
+      ],
+      "answer": 2,
+      "explanation": "左侧变量数量少于右侧元素数量时（无星号收集），Python 会抛出 ValueError: too many values to unpack。",
+      "error_tag": "边界错误",
+      "variant_group": "tuple_unpack_count_mismatch"
+    },
+    {
+      "kp": "py.type.tuple_unpack",
+      "type": "single_choice",
+      "question": "以下代码哪个会抛出异常？",
+      "options": [
+        "a, (b, c) = (1, (2, 3))",
+        "(a, b), c = (1, 2), 3",
+        "a, b = (1, 2), (3, 4)",
+        "a, (b, c) = (1, 2, 3)"
+      ],
+      "answer": 3,
+      "explanation": "嵌套解包要求结构匹配。a, (b, c) = (1, 2, 3) 中右侧第二项是整数 3，不可再解包，会抛 TypeError。其余选项结构均匹配。",
+      "error_tag": "边界错误",
+      "variant_group": "tuple_unpack_nested"
+    },
+    {
+      "kp": "py.type.tuple_unpack",
+      "type": "multi_choice",
+      "question": "关于赋值语句中的星号解包（如 a, *b = ...），以下说法正确的有哪些？",
+      "options": [
+        "一个赋值目标中最多只能有一个星号变量",
+        "星号变量收集到的结果是一个列表",
+        "星号变量收集到的结果是一个元组",
+        "星号变量可以为空列表（当没有剩余元素时）",
+        "星号变量必须放在最左边"
+      ],
+      "answer": [
+        0,
+        1,
+        3
+      ],
+      "explanation": "赋值解包中星号变量最多一个，收集结果为 list，且当没有剩余元素时为空列表 []；星号变量可出现在任意位置，不必在最左边。",
+      "error_tag": "概念混淆",
+      "variant_group": "tuple_unpack_star_rules"
+    },
+    {
+      "kp": "py.type.tuple_unpack",
+      "type": "multi_choice",
+      "question": "以下哪些对象可以直接出现在解包赋值右侧（作为被解包的可迭代对象）？",
+      "options": [
+        "元组",
+        "列表",
+        "字符串",
+        "生成器",
+        "整数"
+      ],
+      "answer": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "explanation": "元组、列表、字符串、生成器都是可迭代对象，可被解包；整数不可迭代，放在右侧会抛 TypeError。",
+      "error_tag": "概念混淆",
+      "variant_group": "tuple_unpack_any_iterable"
+    },
+    {
+      "kp": "py.type.tuple_unpack",
+      "type": "multi_choice",
+      "question": "给定 t = (1, 2, 3, 4, 5)，以下哪些解包赋值是合法的？",
+      "options": [
+        "a, b, *c = t",
+        "*a, b, c = t",
+        "a, *b, c = t",
+        "a, *b, *c = t",
+        "*a = t"
+      ],
+      "answer": [
+        0,
+        1,
+        2
+      ],
+      "explanation": "星号变量最多一个且位置任意，故 a,b,*c / *a,b,c / a,*b,c 都合法；两个星号非法，单独 *a 也非法（星号变量必须与其他目标共存）。",
+      "error_tag": "语法规则缺失",
+      "variant_group": "tuple_unpack_star_rules"
+    },
+    {
+      "kp": "py.type.tuple_unpack",
+      "type": "multi_choice",
+      "question": "关于嵌套解包，以下哪些说法正确？",
+      "options": [
+        "嵌套结构的内层必须也是可迭代对象",
+        "嵌套解包的括号可以省略，如 a, b, c = 1, 2, 3",
+        "嵌套解包要求两侧结构完全一致才能成功",
+        "嵌套解包中可以使用多个星号"
+      ],
+      "answer": [
+        0,
+        1,
+        2
+      ],
+      "explanation": "嵌套解包要求结构匹配，内层须是可迭代对象，括号可省略；但整个模式中仍最多一个星号，不能多个。",
+      "error_tag": "概念混淆",
+      "variant_group": "tuple_unpack_nested"
+    },
+    {
+      "kp": "py.type.tuple_unpack",
+      "type": "fill_blank",
+      "question": "补全代码，使得在参数数量可变的情况下，把多余的位置参数收集起来：\ndef total(*____):\n    return sum(____)",
+      "options": [],
+      "answer": [
+        "nums",
+        "nums"
+      ],
+      "explanation": "函数定义中 *nums 把多余位置实参收集为元组，函数体内可直接对其求和，故两处都填 nums（变量名可自定义但需一致）。",
+      "error_tag": "记忆缺失",
+      "variant_group": "tuple_unpack_call_star"
+    },
+    {
+      "kp": "py.type.tuple_unpack",
+      "type": "fill_blank",
+      "question": "执行下面的代码，打印结果是什么？\n\nt = (1, 2, 3)\na, *b = t\nprint(b, type(b).__name__)",
+      "options": [],
+      "answer": [
+        "[2, 3] list",
+        "[2, 3], list",
+        "[2, 3] list"
+      ],
+      "explanation": "星号变量收集剩余元素为列表，故输出 [2, 3] list。",
+      "error_tag": "概念混淆",
+      "variant_group": "tuple_unpack_star"
+    },
+    {
+      "kp": "py.type.tuple_unpack",
+      "type": "code_reading",
+      "question": "阅读代码回答问题：\n\nfirst, *middle, last = [10, 20, 30, 40, 50]\nprint(first, middle, last)\n\n输出是什么？",
+      "options": [],
+      "answer": "10 [20, 30, 40] 50",
+      "explanation": "first 取第一个元素 10，last 取最后一个元素 50，中间的 *middle 收集剩余元素成为列表 [20, 30, 40]。",
+      "error_tag": "概念混淆",
+      "variant_group": "tuple_unpack_star"
+    },
+    {
+      "kp": "py.type.tuple_unpack",
+      "type": "code_reading",
+      "question": "阅读代码并说明为何抛出异常：\n\nt = (1, 2)\na, b, c = t\n\n为什么会报错？报什么错？",
+      "options": [],
+      "answer": "左侧有三个变量但右侧只有两个元素，值不足以解包，抛出 ValueError: not enough values to unpack (expected 3, got 2)。",
+      "explanation": "无星号收集时，变量数必须与元素数相等。这里元素少于变量数，抛 ValueError not enough values to unpack。",
+      "error_tag": "边界错误",
+      "variant_group": "tuple_unpack_count_mismatch"
+    },
+    {
+      "kp": "py.type.tuple_unpack",
+      "type": "scenario",
+      "question": "工程场景：你需要写一个函数处理日志记录，每条日志是形如 (timestamp, level, message, extra) 的元组，但有时 extra 字段缺失，只给出前面三个元素。你希望函数既能接收三个元素的元组也能接收四个元素的元组。请说明你会如何用解包实现，并解释为什么用星号收集可能不合适。",
+      "options": [],
+      "answer": [
+        "根号"
+      ],
+      "explanation": "由于元素数量可变，不能写成固定三变量解包，否则缺元素时会抛 ValueError。可用 a, b, *rest = record，rest 收集剩余元素为列表；然后判断 rest 是否为空来处理 extra 缺失。星号收集能容忍数量变化。",
+      "error_tag": "场景应用错误",
+      "variant_group": "tuple_unpack_scenario",
+      "required_keywords": [
+        "可变参数",
+        "解包",
+        "ValueError",
+        "星号表达式",
+        "剩余元素"
+      ]
+    },
+    {
+      "kp": "py.type.tuple_unpack",
+      "type": "single_choice",
+      "question": "执行以下代码后，a 和 rest 的值分别是什么？\n\nt = (1, 2, 3, 4)\na, *rest = t",
+      "options": [
+        "a=(1,), rest=[2,3,4]",
+        "a=1, rest=[2,3,4]",
+        "a=1, rest=(2,3,4)",
+        "语法错误，元组不能用星号解包"
+      ],
+      "answer": 1,
+      "explanation": "带星号的变量会收集剩余所有元素，并且总是生成列表（list），因此 rest 为 [2, 3, 4]。",
+      "error_tag": "概念混淆",
+      "variant_group": "tuple_unpack_star"
+    },
+    {
+      "kp": "py.type.tuple_unpack",
+      "type": "scenario",
+      "question": "工程场景：你的代码里有这么一行：a, b = get_point()，但上线后偶尔报 ValueError: too many values to unpack。请说明这个错误的根本原因，并给出一种稳健的改法（不改变函数返回值的前提下）。",
+      "options": [],
+      "answer": [
+        "根号"
+      ],
+      "explanation": "get_point() 返回的元素数量多于左侧变量数时会抛 ValueError: too many values to unpack。稳健改法可写成 a, b, *rest = get_point()，用星号收集多余元素，或先接收整个返回值再按需取前两个。",
+      "error_tag": "场景应用错误",
+      "variant_group": "tuple_unpack_scenario",
+      "required_keywords": [
+        "解包",
+        "ValueError",
+        "星号表达式",
+        "可迭代对象",
+        "扩展解包"
+      ]
+    },
+    {
+      "kp": "py.type.tuple_unpack",
+      "type": "single_choice",
+      "question": "以下哪种解包写法在 Python 中是合法的？",
+      "options": [
+        "*a, b = (1, 2, 3)",
+        "a, *b, *c = (1, 2, 3)",
+        "*a = (1, 2, 3)",
+        "a, b, *c, d = (1, 2, 3, 4)"
+      ],
+      "answer": 0,
+      "explanation": "一个解包目标中最多只能有一个星号变量，且星号变量可以出现在任意位置；*a, b = (1,2,3) 合法。多个星号、单独星号、星号后仍有普通变量均非法。",
+      "error_tag": "语法规则缺失",
+      "variant_group": "tuple_unpack_star_rules"
+    },
+    {
+      "kp": "py.type.tuple_unpack",
+      "type": "single_choice",
+      "question": "关于解包赋值，以下说法正确的是？",
+      "options": [
+        "解包赋值的右侧只能是元组，列表不行",
+        "解包赋值的右侧可以是任意可迭代对象",
+        "解包赋值只能用于元组，字符串不能被解包",
+        "解包时左侧变量数必须严格等于右侧元素数"
+      ],
+      "answer": 1,
+      "explanation": "解包的本质是迭代右侧对象，任何可迭代对象（列表、字符串、生成器、字典等）都可以被解包；变量数可不相等（借助星号收集）。",
+      "error_tag": "概念混淆",
+      "variant_group": "tuple_unpack_any_iterable"
+    },
+    {
+      "kp": "py.type.tuple_unpack",
+      "type": "single_choice",
+      "question": "执行以下代码，输出是什么？\n\na, b = [1, 2]\na, b = b, a\nprint(a, b)",
+      "options": [
+        "1 2",
+        "2 1",
+        "2 2",
+        "抛出错误"
+      ],
+      "answer": 1,
+      "explanation": "右侧 b, a 先被求值为一个元组 (2, 1)，再解包赋给 a, b，实现安全交换，输出 2 1。",
+      "error_tag": "概念混淆",
+      "variant_group": "tuple_unpack_swap"
+    },
+    {
+      "kp": "py.type.tuple_unpack",
+      "type": "single_choice",
+      "question": "以下代码的输出是什么？\n\nd = {'x': 1, 'y': 2}\na, b = d\nprint(a, b)",
+      "options": [
+        "1 2",
+        "x y",
+        "(1, 2)",
+        "抛出 ValueError"
+      ],
+      "answer": 1,
+      "explanation": "对字典解包时迭代的是它的键，因此 a、b 得到字符串 'x'、'y'，输出 x y。要解包值需用 d.values()。",
+      "error_tag": "概念混淆",
+      "variant_group": "tuple_unpack_dict"
+    },
+    {
+      "kp": "py.type.tuple_unpack",
+      "type": "single_choice",
+      "question": "以下代码的输出是什么？\n\nt = (1, [2, 3], 4)\na, b, c = t\nb.append(5)\nprint(t)",
+      "options": [
+        "(1, [2, 3, 4], 4)",
+        "(1, [2, 3, 5], 4)",
+        "(1, [2, 3], 4)",
+        "抛出 TypeError"
+      ],
+      "answer": 1,
+      "explanation": "解包只是重新绑定引用，b 与 t 中第二个元素指向同一列表，修改列表内容会反映到元组中。元组本身不可变但内部可变对象可被修改。",
+      "error_tag": "概念混淆",
+      "variant_group": "tuple_unpack_reference"
+    },
+    {
+      "kp": "py.type.tuple_unpack",
+      "type": "single_choice",
+      "question": "在函数定义中，形如 def f(a, *args): 里的 *args，其作用最准确的说法是？",
+      "options": [
+        "把 a 之后的位置参数收集为一个元组",
+        "把 a 之后的位置参数收集为一个列表",
+        "表示参数 a 是关键字参数",
+        "表示必须传入恰好两个参数"
+      ],
+      "answer": 0,
+      "explanation": "函数定义中的 *args 会把多余的位置实参收集成一个元组（tuple），这与赋值语句里星号变量收集成 list 不同。",
+      "error_tag": "概念混淆",
+      "variant_group": "tuple_unpack_call_star"
+    },
+    {
+      "kp": "py.type.tuple_unpack",
+      "type": "single_choice",
+      "question": "调用函数时使用 f(*t)，其中 t = (1, 2, 3)，其效果等价于？",
+      "options": [
+        "f(t)",
+        "f(t[0], t[1], t[2])",
+        "f([1, 2, 3])",
+        "f(1, 2, 3) 且会创建列表"
+      ],
+      "answer": 1,
+      "explanation": "调用处的 *t 会把可迭代对象 t 展开为逐个位置实参，等价于 f(t[0], t[1], t[2])，即 f(1, 2, 3)。",
+      "error_tag": "概念混淆",
+      "variant_group": "tuple_unpack_call_star"
+    }
+  ]
+}

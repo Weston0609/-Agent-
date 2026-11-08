@@ -1,0 +1,625 @@
+{
+  "id": "s6u2l2",
+  "title": "s6u2l2",
+  "kps": [
+    "ai.nn.optim",
+    "ai.nn.sgd_adam"
+  ],
+  "theory": "## ai.nn.optim\n\n## 一句话直觉\n\n**`ai.nn.optim`（优化器，optimizer）就是神经网络（neural network）的“方向盘和油门”：它根据损失函数（loss function）算出的梯度（gradient），决定参数（parameter）往哪走、走多大一步。**\n\n学它是因为：模型能不能学会、学得快不快、稳不稳，几乎都取决于优化器怎么用。\n\n---\n\n## 1. 为什么需要优化器：从“猜参数”到“按梯度改参数”\n\n神经网络训练的本质是：找到一组参数，使损失函数尽量小。\n\n最朴素的做法是随机试参数，但参数可能有百万甚至十亿个，随机试不可行。\n\n优化器做的事是：\n\n1. 看当前梯度（方向）；\n2. 按某种规则更新参数；\n3. 反复迭代，让损失下降。\n\n最小例子：\n\n```python\n# 最小优化过程：y = x^2，最小值在 x=0\nx = 5.0\nlr = 0.1\nfor i in range(10):\n    grad = 2 * x          # dy/dx = 2x\n    x = x - lr * grad     # 梯度下降：往梯度反方向走\n    print(i, x, x*x)\n```\n\n这里 `x = x - lr * grad` 就是最原始的优化器。\n\n---\n\n## 2. `ai.nn.optim` 里的核心角色：参数、梯度、学习率\n\n在 `ai.nn.optim` 这类模块里，通常围绕三个东西展开：\n\n- **参数（parameter）**：模型要学的权重 `weight`、偏置 `bias`；\n- **梯度（gradient）**：损失对参数的偏导，表示“往哪改会让损失变大”；\n- **学习率（learning rate, lr）**：每次更新走多大一步。\n\n学习率太大会震荡甚至发散，太小会学得很慢。\n\n```python\n# 对比学习率对优化的影响\nfor lr in [0.01, 0.1, 1.1]:\n    x = 5.0\n    for _ in range(10):\n        x = x - lr * (2 * x)\n    print(f\"lr={lr}, final x={x:.4f}, loss={x*x:.4f}\")\n```\n\n结论：\n\n- `lr=0.01`：下降慢；\n- `lr=0.1`：较合适；\n- `lr=1.1`：可能发散。\n\n---\n\n## 3. 最常见的优化器：SGD、Momentum、Adam\n\n### 3.1 SGD（随机梯度下降，Stochastic Gradient Descent）\n\n每次用当前梯度直接更新：\n\n```python\n# SGD 更新公式：param = param - lr * grad\nx = 5.0\nlr = 0.1\nfor _ in range(20):\n    grad = 2 * x\n    x -= lr * grad\nprint(\"SGD final x:\", x)\n```\n\n优点：简单、内存小。\n\n缺点：容易在狭长山谷里来回震荡，收敛慢。\n\n### 3.2 Momentum（动量）\n\n引入“速度”，让更新方向更平滑：\n\n```python\n# Momentum：保留一部分上一步方向\nx = 5.0\nlr = 0.1\nv = 0.0\nbeta = 0.9\nfor _ in range(20):\n    grad = 2 * x\n    v = beta * v + grad      # 累积历史梯度\n    x -= lr * v\nprint(\"Momentum final x:\", x)\n```\n\n优点：减少震荡，加速沿稳定方向前进。\n\n### 3.3 Adam（自适应矩估计，Adaptive Moment Estimation）\n\nAdam 同时利用：\n\n- 一阶动量：梯度均值；\n- 二阶动量：梯度平方均值；\n- 对每个参数自适应调整学习率。\n\n```python\n# 简化版 Adam 思路\nx = 5.0\nlr = 0.1\nm = 0.0\nv = 0.0\nbeta1, beta2 = 0.9, 0.999\neps = 1e-8\nfor t in range(1, 21):\n    grad = 2 * x\n    m = beta1 * m + (1 - beta1) * grad\n    v = beta2 * v + (1 - beta2) * grad * grad\n    m_hat = m / (1 - beta1 ** t)\n    v_hat = v / (1 - beta2 ** t)\n    x -= lr * m_hat / (v_hat ** 0.5 + eps)\nprint(\"Adam final x:\", x)\n```\n\n优点：默认好用，适合大多数任务。\n\n注意：不是永远最好，仍需调学习率。\n\n---\n\n## 4. 工程里怎么用：`zero_grad`、`backward`、`step`\n\n在 PyTorch 等框架里，优化器通常遵循三步：\n\n1. `optimizer.zero_grad()`：清空上一轮梯度；\n2. `loss.backward()`：反向传播，计算梯度；\n3. `optimizer.step()`：根据梯度更新参数。\n\n```python\n# 伪代码结构，展示标准训练循环\n# optimizer.zero_grad()\n# loss = model(x)\n# loss.backward()\n# optimizer.step()\n```\n\n如果忘记 `zero_grad()`，梯度会累加，导致更新错误。\n\n```python\n# 梯度累加示意图\nparams = [1.0]\ngrads = [0.0]\n\n# 第一次 backward\ngrads[0] += 2.0\nprint(\"after first backward:\", grads[0])\n\n# 忘记 zero_grad，第二次 backward\ngrads[0] += 2.0\nprint(\"after second backward:\", grads[0])  # 变成 4.0，不是 2.0\n```\n\n---\n\n## 5. 如何选择与调参\n\n经验规则：\n\n- 初学/小模型：先用 `SGD + Momentum` 或 `Adam`；\n- 追求稳定：`Adam`、`AdamW`；\n- 追求最终精度：很多视觉任务会用 `SGD + Momentum`；\n- 学习率是最重要的超参数（hyperparameter）；\n- 常见学习率：`1e-2`、`1e-3`、`1e-4`；\n- 可配合学习率调度器（scheduler），如 `StepLR`、`CosineAnnealingLR`。\n\n```python\n# 学习率衰减直觉：后期步子变小，便于收敛\nlr = 0.1\nfor epoch in range(5):\n    print(\"epoch\", epoch, \"lr\", lr)\n    lr *= 0.5\n```\n\n---\n\n## 动手练习\n\n### 任务：比较三种优化器的收敛速度\n\n在本地用纯 Python 实现并比较：\n\n1. 目标函数：`f(x) = (x - 3)^2`\n2. 初始值：`x = 10`\n3. 迭代 20 次\n4. 分别实现：\n   - 朴素 SGD\n   - Momentum\n   - Adam\n5. 打印每次迭代后的 `x` 和 `loss`\n6. 最后回答：\n   - 哪个最快接近 `x = 3`？\n   - 学习率改成 `0.01` 和 `1.0` 后有什么变化？\n\n提示：\n\n- `f'(x) = 2 * (x - 3)`\n- 可固定 `lr=0.1` 先测一次\n- 再改学习率做对比\n\n```python\n# ai.nn.optim 最小可运行示例：比较 SGD、Momentum、Adam\n\nimport math\n\n\ndef run_sgd(x0, lr=0.1, steps=20):\n    x = x0\n    history = []\n    for _ in range(steps):\n        grad = 2 * (x - 3)          # f(x) = (x-3)^2 的导数\n        x = x - lr * grad           # SGD 更新\n        loss = (x - 3) ** 2\n        history.append((x, loss))\n    return history\n\n\ndef run_momentum(x0, lr=0.1, beta=0.9, steps=20):\n    x = x0\n    v = 0.0\n    history = []\n    for _ in range(steps):\n        grad = 2 * (x - 3)\n        v = beta * v + grad         # 动量累积\n        x = x - lr * v\n        loss = (x - 3) ** 2\n        history.append((x, loss))\n    return history\n\n\ndef run_adam(x0, lr=0.1, beta1=0.9, beta2=0.999, eps=1e-8, steps=20):\n    x = x0\n    m = 0.0\n    v = 0.0\n    history = []\n    for t in range(1, steps + 1):\n        grad = 2 * (x - 3)\n        m = beta1 * m + (1 - beta1) * grad\n        v = beta2 * v + (1 - beta2) * grad * grad\n        m_hat = m / (1 - beta1 ** t)\n        v_hat = v / (1 - beta2 ** t)\n        x = x - lr * m_hat / (math.sqrt(v_hat) + eps)\n        loss = (x - 3) ** 2\n        history.append((x, loss))\n    return history\n\n\nif __name__ == \"__main__\":\n    x0 = 10.0\n    for name, history in [\n        (\"SGD\", run_sgd(x0)),\n        (\"Momentum\", run_momentum(x0)),\n        (\"Adam\", run_adam(x0)),\n    ]:\n        final_x, final_loss = history[-1]\n        print(f\"{name}: final_x={final_x:.6f}, final_loss={final_loss:.6e}\")\n```\n\n## ai.nn.sgd_adam\n\n## 一句话直觉\n\n**SGD（Stochastic Gradient Descent，随机梯度下降）** 和 **Adam（Adaptive Moment Estimation，自适应矩估计）** 是训练神经网络时最常用的两种**优化器（optimizer）**：它们决定“每次根据梯度把参数改多少”。\n\n你可以把训练神经网络想成下山：损失函数是山谷，参数是位置，梯度告诉你哪个方向最陡。SGD 是“每次只看一小批数据，朝着下坡方向走一步”；Adam 是“不仅看当前坡度，还记录过去坡度的均值和波动，自动调整每个参数的学习步长”。\n\n---\n\n## 1. 为什么需要优化器？\n\n神经网络的参数 $\\theta$ 通过最小化损失函数 $L(\\theta)$ 来学习。最基础的方法是梯度下降：\n\n$$\\theta_{t+1} = \\theta_t - \\eta \\nabla L(\\theta_t)$$\n\n其中 $\\eta$ 是**学习率（learning rate）**。但全量梯度下降每次要用整个数据集，太慢；于是我们使用小批量（mini-batch）估计梯度，这就是 SGD。\n\n```python\nimport torch\nimport torch.nn as nn\n\n# 一个简单的线性回归模型\nmodel = nn.Linear(10, 1)\n\n# 使用 SGD 优化器，学习率 0.01\noptimizer = torch.optim.SGD(model.parameters(), lr=0.01)\n\n# 模拟一个 batch 的输入和目标\nx = torch.randn(32, 10)\ny = torch.randn(32, 1)\n\n# 前向传播\npred = model(x)\nloss = nn.functional.mse_loss(pred, y)\n\n# 反向传播 + 更新参数\noptimizer.zero_grad()   # 清空上一轮梯度\nloss.backward()         # 计算梯度\noptimizer.step()        # 按 SGD 规则更新参数\n```\n\n**结论**：SGD 的核心是“用 mini-batch 梯度估计真实梯度，然后沿负梯度方向更新”。\n\n---\n\n## 2. SGD 的变体：动量（Momentum）\n\n普通 SGD 在峡谷状损失面上容易震荡。**动量（Momentum）** 让更新方向累积历史梯度，像小球滚下山一样平滑：\n\n$$v_{t+1} = \\beta v_t + \\nabla L(\\theta_t)$$\n$$\\theta_{t+1} = \\theta_t - \\eta v_{t+1}$$\n\nPyTorch 中通过 `momentum` 参数启用。\n\n```python\n# 使用带动量的 SGD\noptimizer = torch.optim.SGD(model.parameters(), lr=0.01, momentum=0.9)\n\n# 训练步骤不变\npred = model(x)\nloss = nn.functional.mse_loss(pred, y)\noptimizer.zero_grad()\nloss.backward()\noptimizer.step()\n```\n\n**结论**：动量可以加速收敛并减少震荡，是 SGD 最常用的增强。\n\n---\n\n## 3. Adam：自适应学习率的代表\n\nAdam 同时维护梯度的一阶矩（均值）和二阶矩（未中心化方差）估计，并为每个参数单独调整学习率：\n\n$$m_t = \\beta_1 m_{t-1} + (1-\\beta_1) g_t$$\n$$v_t = \\beta_2 v_{t-1} + (1-\\beta_2) g_t^2$$\n$$\\hat{m}_t = \\frac{m_t}{1-\\beta_1^t}, \\quad \\hat{v}_t = \\frac{v_t}{1-\\beta_2^t}$$\n$$\\theta_{t+1} = \\theta_t - \\eta \\frac{\\hat{m}_t}{\\sqrt{\\hat{v}_t} + \\epsilon}$$\n\n默认超参数：$\\beta_1=0.9, \\beta_2=0.999, \\epsilon=10^{-8}$。\n\n```python\n# 使用 Adam 优化器，通常默认学习率 0.001\noptimizer = torch.optim.Adam(model.parameters(), lr=0.001)\n\n# 训练步骤与 SGD 完全一致\npred = model(x)\nloss = nn.functional.mse_loss(pred, y)\noptimizer.zero_grad()\nloss.backward()\noptimizer.step()\n```\n\n**结论**：Adam 对学习率不敏感、收敛快，适合大多数深度学习任务；但某些计算机视觉任务中，精调后的 SGD + Momentum 可能泛化更好。\n\n---\n\n## 4. SGD vs Adam：如何选择？\n\n- **SGD**：简单、内存小、理论性质好；需要调学习率和动量，收敛可能慢。\n- **Adam**：自适应、默认参数通常好用、收敛快；可能在某些任务上泛化略差。\n- **经验法则**：快速原型用 Adam；追求极致精度可尝试 SGD + Momentum + 学习率调度。\n\n```python\n# 对比两种优化器的参数量（Adam 会保存更多状态）\nmodel_sgd = nn.Linear(10, 1)\nmodel_adam = nn.Linear(10, 1)\n\nopt_sgd = torch.optim.SGD(model_sgd.parameters(), lr=0.01)\nopt_adam = torch.optim.Adam(model_adam.parameters(), lr=0.001)\n\nprint('SGD state:', opt_sgd.state_dict())\nprint('Adam state:', opt_adam.state_dict())  # 包含 exp_avg 和 exp_avg_sq\n```\n\n**结论**：Adam 以更多内存为代价换取更稳定的自适应步长。\n\n---\n\n## 5. 工程实践要点\n\n- 学习率是最重要的超参数：SGD 常用 0.1/0.01，Adam 常用 0.001/0.0001。\n- 使用**学习率调度器（scheduler）** 动态降低学习率。\n- 梯度裁剪（gradient clipping）防止梯度爆炸。\n- 权重衰减（weight decay）在 Adam 中建议用 AdamW。\n\n```python\n# 使用 AdamW 和余弦退火调度器\noptimizer = torch.optim.AdamW(model.parameters(), lr=0.001, weight_decay=0.01)\nscheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=100)\n\n# 每个 epoch 后调用 scheduler.step()\n# scheduler.step()\n```\n\n**结论**：真实工程中，优化器往往与调度器、正则化配合使用。\n\n---\n\n## 动手练习\n\n**任务**：在本地用 PyTorch 训练一个简单线性回归模型，比较 SGD 和 Adam 的收敛速度。\n\n1. 生成 1000 个样本：$y = 3x + 2 + \\text{噪声}$。\n2. 分别用 `torch.optim.SGD(lr=0.01)` 和 `torch.optim.Adam(lr=0.01)` 训练 100 个 epoch。\n3. 记录每个 epoch 的损失，用 matplotlib 画出两条损失曲线。\n4. 观察哪个优化器收敛更快，并思考原因。\n\n```python\n# 示例代码框架\nimport torch\nimport torch.nn as nn\nimport matplotlib.pyplot as plt\n\ntorch.manual_seed(42)\nX = torch.randn(1000, 1)\ny = 3 * X + 2 + 0.1 * torch.randn(1000, 1)\n\ndef train(optimizer_name):\n    model = nn.Linear(1, 1)\n    if optimizer_name == 'sgd':\n        opt = torch.optim.SGD(model.parameters(), lr=0.01)\n    else:\n        opt = torch.optim.Adam(model.parameters(), lr=0.01)\n    losses = []\n    for epoch in range(100):\n        pred = model(X)\n        loss = nn.functional.mse_loss(pred, y)\n        opt.zero_grad()\n        loss.backward()\n        opt.step()\n        losses.append(loss.item())\n    return losses\n\nsgd_losses = train('sgd')\nadam_losses = train('adam')\n\nplt.plot(sgd_losses, label='SGD')\nplt.plot(adam_losses, label='Adam')\nplt.xlabel('Epoch')\nplt.ylabel('MSE Loss')\nplt.legend()\nplt.show()\n```\n",
+  "quiz": [
+    {
+      "kp": "ai.nn.optim",
+      "type": "single_choice",
+      "question": "在使用随机梯度下降训练神经网络时，若把学习率设置得过大，最可能出现下列哪种现象？",
+      "options": [
+        "损失函数值持续上升或在最优值附近剧烈震荡，难以收敛",
+        "模型参数几乎不再更新，损失函数下降极其缓慢",
+        "模型一定会在训练集上取得更好的泛化性能",
+        "优化器会自动把学习率调小以避免发散"
+      ],
+      "answer": 0,
+      "explanation": "学习率过大时，参数更新步长过大，可能越过最优点甚至导致损失发散或剧烈震荡；参数几乎不动通常是学习率过小；优化器不会在纯 SGD 中自动调整学习率。",
+      "error_tag": "学习率影响理解错误",
+      "variant_group": "optim_lr_effect"
+    },
+    {
+      "kp": "ai.nn.optim",
+      "type": "single_choice",
+      "question": "下列关于带动量（momentum）的优化方法的描述，哪一项是正确的？",
+      "options": [
+        "它通过累积历史梯度方向来加速更新，并能在一定程度上抑制震荡",
+        "它每次更新只使用当前 batch 的梯度，不参考历史信息",
+        "它会为每个参数单独维护一个学习率，因此属于自适应学习率方法",
+        "它等价于把学习率固定减半，因此收敛速度一定变慢"
+      ],
+      "answer": 0,
+      "explanation": "动量法引入速度项，累积历史梯度，使更新在一致方向上加速并在震荡方向上相互抵消；逐参数自适应学习率是 AdaGrad/RMSProp/Adam 等的特征。",
+      "error_tag": "动量机制误解",
+      "variant_group": "optim_momentum"
+    },
+    {
+      "kp": "ai.nn.optim",
+      "type": "single_choice",
+      "question": "对于稀疏梯度场景（例如大规模嵌入表），下列哪种优化器通常更合适？",
+      "options": [
+        "AdaGrad 或 Adam 等自适应方法，因为它们能为不常更新的参数保留较大步长",
+        "纯 SGD，因为它完全不考虑梯度稀疏性",
+        "只使用动量而不使用自适应学习率的方法",
+        "任何优化器效果都完全相同，无需选择"
+      ],
+      "answer": 0,
+      "explanation": "AdaGrad 会累积历史梯度平方，使频繁更新的参数步长减小、稀疏参数仍能获得较大更新；Adam 也有类似自适应能力。纯 SGD 对稀疏特征更新较慢。",
+      "error_tag": "稀疏梯度优化器选择错误",
+      "variant_group": "optim_sparse"
+    },
+    {
+      "kp": "ai.nn.optim",
+      "type": "single_choice",
+      "question": "在使用 Adam 时，若发现训练初期更新步长过大导致不稳定，可以调整哪个超参数来缓解？",
+      "options": [
+        "减小初始学习率或增大 epsilon",
+        "把权重衰减系数设为负值",
+        "把 batch size 设为 0",
+        "关闭所有激活函数"
+      ],
+      "answer": 0,
+      "explanation": "Adam 中学习率控制整体步长，epsilon 用于数值稳定；减小学习率或增大 epsilon 可缓解初期不稳定；权重衰减不能为负；batch size 不能为 0；关闭激活函数会改变模型。",
+      "error_tag": "Adam 超参数理解错误",
+      "variant_group": "optim_adam_hp"
+    },
+    {
+      "kp": "ai.nn.optim",
+      "type": "single_choice",
+      "question": "在训练中，如果验证集损失开始上升而训练集损失仍在下降，最合理的优化相关做法是？",
+      "options": [
+        "考虑减小学习率、增加正则化或提前停止，以缓解过拟合",
+        "把学习率调到非常大，让训练损失下降更快",
+        "移除验证集，只监控训练损失",
+        "把所有权重初始化为 0，重新训练"
+      ],
+      "answer": 0,
+      "explanation": "验证损失上升而训练损失下降是过拟合的典型信号，可通过减小学习率、正则化、早停等缓解；增大学习率可能加剧不稳定；移除验证集无法解决过拟合；权重全零会破坏对称性。",
+      "error_tag": "过拟合应对策略错误",
+      "variant_group": "optim_overfit"
+    },
+    {
+      "kp": "ai.nn.optim",
+      "type": "single_choice",
+      "question": "关于二阶优化方法（如牛顿法）与一阶方法（如 SGD）的比较，下列说法哪一项更准确？",
+      "options": [
+        "二阶方法利用曲率信息，理论上收敛更快，但计算和存储海森矩阵代价高",
+        "二阶方法不需要计算任何导数，因此适用于不可导函数",
+        "一阶方法一定比二阶方法收敛快，因为计算简单",
+        "二阶方法只能用于线性模型，不能用于神经网络"
+      ],
+      "answer": 0,
+      "explanation": "牛顿法等二阶方法利用二阶导数（曲率）信息，迭代次数可能更少，但海森矩阵的计算与存储成本高，在深度网络中常采用拟牛顿或近似方法；它仍需要导数信息。",
+      "error_tag": "一阶二阶方法对比错误",
+      "variant_group": "optim_second_order"
+    },
+    {
+      "kp": "ai.nn.optim",
+      "type": "single_choice",
+      "question": "在 PyTorch 风格训练循环中，通常需要在反向传播前调用优化器的哪个方法？",
+      "options": [
+        "zero_grad()，用于清空上一轮累积的梯度",
+        "step()，用于更新参数",
+        "backward()，用于计算梯度",
+        "to(device)，用于把优化器移动到 GPU"
+      ],
+      "answer": 0,
+      "explanation": "在 PyTorch 中一般顺序为 optimizer.zero_grad() 清空梯度、loss.backward() 反向传播、optimizer.step() 更新参数；to(device) 用于张量或模块而非优化器。",
+      "error_tag": "训练循环顺序错误",
+      "variant_group": "optim_pytorch_loop"
+    },
+    {
+      "kp": "ai.nn.optim",
+      "type": "single_choice",
+      "question": "关于学习率预热（warmup）策略，下列描述哪一项正确？",
+      "options": [
+        "在训练初期从小学习率逐渐增大，以避免早期不稳定，常用于 Transformer 训练",
+        "在训练初期使用极大学习率，以便快速下降",
+        "在训练全程保持学习率不变，因此与预热无关",
+        "预热只能在训练结束后使用，用于微调模型"
+      ],
+      "answer": 0,
+      "explanation": "预热让学习率从较小值逐步升高，缓解训练初期因参数随机、梯度不稳定导致的问题，Transformer 等模型常用；它不是全程恒定，也不是训练结束后使用。",
+      "error_tag": "学习率预热理解错误",
+      "variant_group": "optim_warmup"
+    },
+    {
+      "kp": "ai.nn.optim",
+      "type": "single_choice",
+      "question": "在比较不同优化器时，下列哪种做法更科学？",
+      "options": [
+        "固定网络结构、数据划分和训练轮数等条件，只改变优化器进行对比",
+        "为每个优化器分别使用不同的训练集和测试集",
+        "只比较训练损失，忽略验证集表现",
+        "每次只训练一个 batch 就得出结论"
+      ],
+      "answer": 0,
+      "explanation": "对比优化器时应控制变量，固定其他因素，只改变优化器，并同时关注验证集表现和训练稳定性；使用不同数据划分或只训练一个 batch 无法得到可靠结论。",
+      "error_tag": "实验对比方法错误",
+      "variant_group": "optim_experiment"
+    },
+    {
+      "kp": "ai.nn.optim",
+      "type": "single_choice",
+      "question": "关于 SGD 中的噪声，下列说法哪一项更合理？",
+      "options": [
+        "小批量带来的梯度噪声可能帮助模型逃离尖锐极小，从而可能改善泛化",
+        "梯度噪声总是有害，必须完全消除才能训练",
+        "只要使用全批量梯度下降，就不存在任何噪声",
+        "噪声大小与 batch size 无关"
+      ],
+      "answer": 0,
+      "explanation": "小批量 SGD 的噪声具有正则化效果，可能帮助找到更平坦的极小值；噪声并非总是有害；全批量也可能有数值噪声；batch size 越小，梯度估计的方差通常越大。",
+      "error_tag": "梯度噪声作用误解",
+      "variant_group": "optim_noise"
+    },
+    {
+      "kp": "ai.nn.optim",
+      "type": "single_choice",
+      "question": "在 Adam 中，偏差校正（bias correction）的作用是什么？",
+      "options": [
+        "在训练初期修正一阶和二阶矩估计的偏差，使更新步长更合理",
+        "把学习率永久性增大一倍",
+        "消除权重衰减带来的影响",
+        "保证优化器不会陷入任何局部极小"
+      ],
+      "answer": 0,
+      "explanation": "Adam 的一阶和二阶矩初始为 0，早期估计偏向 0，偏差校正通过除以 (1-β^t) 修正，使初期更新更准确；它不永久改变学习率，也不消除权重衰减或保证全局最优。",
+      "error_tag": "Adam 偏差校正误解",
+      "variant_group": "optim_adam_bias"
+    },
+    {
+      "kp": "ai.nn.optim",
+      "type": "single_choice",
+      "question": "在训练深度网络时，若发现梯度范数非常小、参数几乎不更新，下列哪项措施更可能有效？",
+      "options": [
+        "检查是否使用了饱和激活函数或过深网络，考虑改用 ReLU 等或引入残差连接",
+        "把学习率设为 0 以稳定训练",
+        "删除所有正则化项并立即停止训练",
+        "把 batch size 设为整个数据集大小"
+      ],
+      "answer": 0,
+      "explanation": "梯度消失常与饱和激活函数和网络过深有关，改用 ReLU、残差连接、合适的初始化等可缓解；学习率为 0 会停止更新；删除正则化不直接解决梯度消失；全批量不解决该问题。",
+      "error_tag": "梯度消失应对错误",
+      "variant_group": "optim_vanishing_grad"
+    },
+    {
+      "kp": "ai.nn.optim",
+      "type": "single_choice",
+      "question": "Adam 优化器与纯 SGD 相比，一个显著特点是什么？",
+      "options": [
+        "它为每个参数自适应地调整更新步长，并利用梯度的一阶和二阶矩估计",
+        "它不使用任何梯度信息，只根据参数大小更新",
+        "它必须配合固定的学习率，不能设置初始学习率",
+        "它只能用于卷积神经网络，不能用于全连接网络"
+      ],
+      "answer": 0,
+      "explanation": "Adam 结合动量（一阶矩）和 RMSProp 思想（二阶矩），为不同参数自适应调整步长；它仍需要设置初始学习率，且适用于多种网络结构。",
+      "error_tag": "Adam 特性混淆",
+      "variant_group": "optim_adam"
+    },
+    {
+      "kp": "ai.nn.optim",
+      "type": "single_choice",
+      "question": "在训练一个很深的网络时，使用 SGD 发现损失下降很慢且容易停在鞍点附近。若希望利用历史梯度信息帮助逃离鞍点并加速收敛，较合适的选择是？",
+      "options": [
+        "使用带动量的 SGD 或 Adam 等自适应优化器",
+        "把学习率直接设为 0，让参数保持不变",
+        "去掉所有激活函数，使模型变为线性模型",
+        "把 batch size 固定为 1 并关闭所有随机性"
+      ],
+      "answer": 0,
+      "explanation": "动量和自适应优化器能利用历史梯度信息在鞍点附近继续移动；学习率为 0 则无法训练；去掉激活函数会降低模型表达能力；batch size 为 1 并不直接解决鞍点问题。",
+      "error_tag": "优化器选择不当",
+      "variant_group": "optim_saddle"
+    },
+    {
+      "kp": "ai.nn.optim",
+      "type": "single_choice",
+      "question": "小批量随机梯度下降（mini-batch SGD）中，batch size 的选择会影响训练。下列说法哪一项更合理？",
+      "options": [
+        "较小的 batch size 通常带来更大的梯度噪声，可能有助于跳出局部极小，但训练波动更大",
+        "batch size 越大，梯度估计一定越准确，因此泛化性能一定越好",
+        "batch size 必须等于整个训练集大小，否则无法计算梯度",
+        "batch size 只影响显存占用，对优化过程没有任何影响"
+      ],
+      "answer": 0,
+      "explanation": "小 batch 的梯度噪声较大，可能带来正则化效果并帮助逃离尖锐极小，但训练曲线更波动；大 batch 梯度更准但不保证泛化更好；batch size 不必等于全集；它会影响梯度噪声和优化动态。",
+      "error_tag": "batch size 影响理解错误",
+      "variant_group": "optim_batch"
+    },
+    {
+      "kp": "ai.nn.optim",
+      "type": "single_choice",
+      "question": "使用学习率衰减策略（如每隔若干 epoch 将学习率乘以 0.1）的主要目的是什么？",
+      "options": [
+        "在训练后期减小步长，使模型更精细地逼近损失函数的极小值",
+        "在训练初期让参数完全不更新，以节省计算",
+        "让优化器自动增加动量系数，从而加速收敛",
+        "保证训练损失单调下降，不会出现任何波动"
+      ],
+      "answer": 0,
+      "explanation": "学习率衰减让初期大步探索、后期小步微调，有助于稳定收敛到更优的极小值；它不保证损失单调下降，也不直接改变动量系数。",
+      "error_tag": "学习率调度目标误解",
+      "variant_group": "optim_lr_decay"
+    },
+    {
+      "kp": "ai.nn.optim",
+      "type": "single_choice",
+      "question": "关于权重衰减（weight decay）与 L2 正则化，下列说法哪一项是正确的？",
+      "options": [
+        "在标准 SGD 中，权重衰减常等价于加入 L2 正则项，倾向于让权重变小以抑制过拟合",
+        "权重衰减会强制所有权重变为 0，使模型失去表达能力",
+        "权重衰减只能用于 Adam，不能用于 SGD",
+        "权重衰减与正则化无关，它只是把学习率乘以一个常数"
+      ],
+      "answer": 0,
+      "explanation": "在 SGD 中权重衰减通常实现为 L2 正则，使权重趋向较小值，缓解过拟合；它不会强制权重全为 0；SGD 和 Adam 都可使用；它与学习率缩放不是同一概念。",
+      "error_tag": "权重衰减概念混淆",
+      "variant_group": "optim_weight_decay"
+    },
+    {
+      "kp": "ai.nn.optim",
+      "type": "single_choice",
+      "question": "在自适应学习率方法（如 RMSProp）中，学习率被逐参数缩放。这样做的直接好处是什么？",
+      "options": [
+        "梯度较大的参数更新步长相对减小，梯度较小的参数更新步长相对增大",
+        "所有参数的更新步长完全相等，便于并行计算",
+        "优化器不再需要任何超参数，完全自动训练",
+        "它保证训练损失一定单调下降"
+      ],
+      "answer": 0,
+      "explanation": "RMSProp 等根据历史梯度平方的均值缩放各参数的学习率，使不同参数的更新更均衡；它仍需要初始学习率等超参数，也不保证损失单调下降。",
+      "error_tag": "自适应学习率机制误解",
+      "variant_group": "optim_adaptive"
+    },
+    {
+      "kp": "ai.nn.optim",
+      "type": "single_choice",
+      "question": "在训练时发现损失出现 NaN。从优化器角度排查，下列哪一项最可能是原因？",
+      "options": [
+        "学习率过大导致参数更新发散，数值溢出",
+        "batch size 太小，梯度估计噪声大但不会导致溢出",
+        "使用了权重衰减，因此参数被强制归零",
+        "优化器没有设置动量，因此梯度无法计算"
+      ],
+      "answer": 0,
+      "explanation": "学习率过大可能使参数更新发散，激活值或梯度爆炸，最终出现 NaN；小 batch 噪声大但不必然溢出；权重衰减不会把参数强制归零；无动量不影响梯度计算。",
+      "error_tag": "训练发散原因误判",
+      "variant_group": "optim_nan"
+    },
+    {
+      "kp": "ai.nn.optim",
+      "type": "single_choice",
+      "question": "下列关于梯度裁剪（gradient clipping）的说法，哪一项正确？",
+      "options": [
+        "它限制梯度的大小，常用于缓解 RNN 等模型中的梯度爆炸问题",
+        "它通过限制参数值的大小来防止过拟合",
+        "它等价于把学习率设置为 0，因此会停止训练",
+        "它只能用于 Adam 优化器，不能用于 SGD"
+      ],
+      "answer": 0,
+      "explanation": "梯度裁剪对梯度范数或数值设上限，防止梯度爆炸，常用于 RNN/Transformer；限制参数大小是权重约束而非梯度裁剪；它不停止训练；SGD 和 Adam 都可配合使用。",
+      "error_tag": "梯度裁剪概念混淆",
+      "variant_group": "optim_clip"
+    },
+    {
+      "kp": "ai.nn.sgd_adam",
+      "type": "single_choice",
+      "question": "在训练神经网络时，以下关于 SGD 和 Adam 的描述，哪一项最准确？",
+      "options": [
+        "SGD 每个参数使用相同的固定学习率；Adam 为每个参数自适应调整有效步长",
+        "SGD 一定比 Adam 收敛更快，因为它的更新方向更准确",
+        "Adam 不需要设置学习率，任何情况下都能自动找到最优解",
+        "SGD 和 Adam 的唯一区别是 Adam 使用了更大的批量大小"
+      ],
+      "answer": 0,
+      "explanation": "SGD 对所有参数使用同一学习率；Adam 通过一阶矩和二阶矩估计为每个参数自适应调整步长。SGD 并非总比 Adam 快，Adam 仍需设置学习率（只是对初始学习率不那么敏感），批量大小也不是二者的本质区别。",
+      "error_tag": "概念混淆",
+      "variant_group": "sgd_adam_基本区别"
+    },
+    {
+      "kp": "ai.nn.sgd_adam",
+      "type": "single_choice",
+      "question": "Adam 优化器中同时维护一阶矩估计和二阶矩估计，它们分别近似的是？",
+      "options": [
+        "梯度的均值和梯度平方的均值",
+        "参数的均值和参数的方差",
+        "学习率的均值和动量的大小",
+        "梯度的中位数和梯度的最大值"
+      ],
+      "answer": 0,
+      "explanation": "Adam 的一阶矩估计近似梯度的一阶矩（均值），二阶矩估计近似梯度平方的均值，用于对每个参数做自适应缩放。它不追踪参数本身或学习率的统计量。",
+      "error_tag": "概念混淆",
+      "variant_group": "adam_矩估计"
+    },
+    {
+      "kp": "ai.nn.sgd_adam",
+      "type": "multi_choice",
+      "question": "下列哪些情形可能使训练难以收敛或出现异常？（多选）",
+      "options": [
+        "学习率设置得过大",
+        "Adam 中二阶矩估计接近 0 而未做数值稳定处理",
+        "所有参数初始化为相同的值",
+        "训练前对输入特征做了标准化"
+      ],
+      "answer": [
+        0,
+        1,
+        2
+      ],
+      "explanation": "学习率过大会导致震荡或发散；二阶矩接近 0 时若不做数值稳定（如加 epsilon）会导致除以极小值；参数全相同会破坏对称性使各神经元学到相同的东西。输入标准化通常有助于训练而非导致不收敛。",
+      "error_tag": "边界错误",
+      "variant_group": "训练_不收敛原因"
+    },
+    {
+      "kp": "ai.nn.sgd_adam",
+      "type": "fill_blank",
+      "question": "Adam 的更新公式中，为了防止除以过小的二阶矩估计值，通常会在分母上加上一个很小的常数，这个常数通常记作 ________。",
+      "options": [],
+      "answer": [
+        "epsilon",
+        "eps",
+        "ε",
+        "epsilon（eps）",
+        "eps/epsilon"
+      ],
+      "explanation": "Adam 更新分母为 sqrt(v_hat) + epsilon，其中 epsilon 是数值稳定项，防止除以零或极小值导致更新爆炸。",
+      "error_tag": "记忆缺失",
+      "variant_group": "adam_数值稳定"
+    },
+    {
+      "kp": "ai.nn.sgd_adam",
+      "type": "fill_blank",
+      "question": "在使用带动量的 SGD 时，除了学习率之外还需要设置的一个关键超参数是 ________ 系数，它控制历史梯度方向的保留程度。",
+      "options": [],
+      "answer": [
+        "动量",
+        "momentum",
+        "动量系数",
+        "momentum coefficient"
+      ],
+      "explanation": "带动量 SGD 的动量系数（通常记作 momentum 或 beta）决定历史梯度被累积和保留的比例，是影响收敛速度与稳定性的关键超参数。",
+      "error_tag": "记忆缺失",
+      "variant_group": "sgd_动量"
+    },
+    {
+      "kp": "ai.nn.sgd_adam",
+      "type": "fill_blank",
+      "question": "Adam 中用于修正训练初期矩估计偏差的机制称为 ________ 校正。",
+      "options": [],
+      "answer": [
+        "偏差",
+        "偏差校正",
+        "bias correction",
+        "bias"
+      ],
+      "explanation": "由于一阶、二阶矩估计初始化为 0，训练初期估计偏小，Adam 通过偏差校正（除以 1 - beta^t）来修正，使初期更新更合理。",
+      "error_tag": "记忆缺失",
+      "variant_group": "adam_偏差校正"
+    },
+    {
+      "kp": "ai.nn.sgd_adam",
+      "type": "fill_blank",
+      "question": "在优化器选择上，若希望训练初期收敛更快且不想精细调整学习率，通常优先尝试 ________ 优化器；若更看重某些任务上的泛化表现且愿意调参，可尝试带动量的 SGD。",
+      "options": [],
+      "answer": [
+        "Adam",
+        "adam",
+        "自适应学习率",
+        "自适应"
+      ],
+      "explanation": "Adam 因其自适应特性和对学习率相对不敏感，常作为快速起步的默认选择；而调参良好的带动量 SGD 在某些任务上表现更好。",
+      "error_tag": "概念混淆",
+      "variant_group": "优化器_选择策略"
+    },
+    {
+      "kp": "ai.nn.sgd_adam",
+      "type": "code_reading",
+      "question": "阅读以下伪代码片段（假设 grad 为当前批次对某参数的梯度，lr 为学习率）：\n\nv = beta1 * v + (1 - beta1) * grad\ns = beta2 * s + (1 - beta2) * grad * grad\nv_hat = v / (1 - beta1 ** t)\ns_hat = s / (1 - beta2 ** t)\nparam = param - lr * v_hat / (sqrt(s_hat) + eps)\n\n这段代码实现的是哪个优化器的更新过程？请说明判断依据。",
+      "options": [],
+      "answer": "这是 Adam 优化器。依据是：同时维护一阶矩估计 v 和二阶矩估计 s，分别用指数加权平均更新；随后对两者做偏差校正得到 v_hat、s_hat；最后用 v_hat 除以 sqrt(s_hat)（加 eps 做数值稳定）得到自适应步长并更新参数。这些特征正是 Adam 的核心。",
+      "explanation": "该片段的一阶矩、二阶矩、偏差校正和按 sqrt(二阶矩) 缩放的更新，是 Adam 的典型结构，区别于纯 SGD（只有 lr*grad）和带动量 SGD（只有一阶矩、无二阶矩归一化）。",
+      "error_tag": "概念混淆",
+      "variant_group": "adam_代码识别"
+    },
+    {
+      "kp": "ai.nn.sgd_adam",
+      "type": "code_reading",
+      "question": "阅读以下伪代码片段：\n\nv = momentum * v + grad\nparam = param - lr * v\n\n如果 momentum 被设置为 0，这段更新等价于什么？如果 momentum 接近 1（如 0.99），训练可能出现什么现象？",
+      "options": [],
+      "answer": "momentum 为 0 时，v = grad，更新退化为标准的（朴素）SGD：param = param - lr * grad。momentum 接近 1 时，历史梯度被长时间累积，动量项很大，可能导致更新步长过大、震荡甚至发散，同时收敛初期会显得“惯性”过强、反应迟缓。",
+      "explanation": "动量系数控制历史梯度的保留比例。为 0 时退化为朴素 SGD；接近 1 时累积过多历史信息，容易造成更新过冲和不稳定，实际中常取 0.9 左右。",
+      "error_tag": "边界错误",
+      "variant_group": "sgd_动量"
+    },
+    {
+      "kp": "ai.nn.sgd_adam",
+      "type": "scenario",
+      "question": "工程场景：你在训练一个图像分类模型，使用 Adam 优化器，初始学习率 0.01。训练前几个 epoch 损失快速下降，但之后损失开始剧烈震荡，验证集准确率不再提升。团队希望你给出诊断和至少两条改进方案。你会怎么分析并处理？",
+      "options": [],
+      "answer": null,
+      "explanation": "损失后期震荡且验证不再提升，常见原因是 Adam 学习率偏大或缺乏衰减。可降低学习率、引入学习率衰减（如余弦或阶梯衰减），使后期更新更平稳。分析中需提到学习率过大导致震荡、Adam 的自适应特性、以及衰减/降低学习率等手段。",
+      "error_tag": "边界错误",
+      "variant_group": "adam_学习率调节",
+      "required_keywords": [
+        "Adam",
+        "学习率",
+        "学习率衰减",
+        "震荡",
+        "验证集准确率"
+      ]
+    },
+    {
+      "kp": "ai.nn.sgd_adam",
+      "type": "scenario",
+      "question": "工程场景：一个文本分类任务，同事用朴素 SGD 训练，损失下降很慢且在某个方向上反复震荡，收敛需要很多轮。他不想换优化器，只允许调整现有超参数。你会建议他怎么做？请说明理由。",
+      "options": [],
+      "answer": null,
+      "explanation": "在只有朴素 SGD 的前提下，加入动量（设置 momentum 系数，如 0.9）可以累积一致方向的梯度、抵消反复震荡方向的分量，从而加速收敛并减少震荡。理由需围绕动量对历史梯度的累积与震荡抑制展开。",
+      "error_tag": "概念混淆",
+      "variant_group": "sgd_动量",
+      "required_keywords": [
+        "动量",
+        "momentum",
+        "梯度",
+        "震荡",
+        "收敛"
+      ]
+    },
+    {
+      "kp": "ai.nn.sgd_adam",
+      "type": "scenario",
+      "question": "工程场景：团队要从 SGD 切换到 Adam，有人担心‘Adam 会自动调学习率，所以完全不用管学习率’。你如何评估这个说法，并给出上线前的调参建议？",
+      "options": [],
+      "answer": null,
+      "explanation": "该说法不正确。Adam 只是对学习率相对不敏感，并非不需要设置；基础学习率、beta1、beta2、epsilon 等仍是需要选择的超参数，且学习率衰减策略往往同样重要。上线前应做学习率搜索并监控收敛情况。",
+      "error_tag": "概念混淆",
+      "variant_group": "adam_超参数",
+      "required_keywords": [
+        "Adam",
+        "学习率",
+        "超参数",
+        "学习率衰减",
+        "监控收敛"
+      ]
+    },
+    {
+      "kp": "ai.nn.sgd_adam",
+      "type": "single_choice",
+      "question": "带动量的 SGD 更新中，动量项的主要作用是？",
+      "options": [
+        "累积历史梯度方向，抑制震荡并加速在一致方向上的前进",
+        "自动为每个参数计算独立的学习率",
+        "对梯度做二阶矩归一化",
+        "把损失函数变成凸函数以保证全局最优"
+      ],
+      "answer": 0,
+      "explanation": "动量通过累积过去梯度的指数加权平均，使更新在方向一致的维度上加速、在反复震荡的维度上相互抵消，从而加快收敛并减少震荡。按参数自适应学习率是 AdaGrad/RMSProp/Adam 的特点，不是动量的作用。",
+      "error_tag": "概念混淆",
+      "variant_group": "sgd_动量"
+    },
+    {
+      "kp": "ai.nn.sgd_adam",
+      "type": "single_choice",
+      "question": "Adam 中包含偏差校正（bias correction）步骤，它主要解决的问题是？",
+      "options": [
+        "矩估计在训练初期被初始化为 0 而偏小，导致初期更新步长异常",
+        "梯度计算中的数值溢出",
+        "学习率随训练轮数单调下降",
+        "参数初始化方差不一致"
+      ],
+      "answer": 0,
+      "explanation": "一阶、二阶矩估计初始化为 0，训练初期其值会偏向 0，偏差校正通过除以 (1 - beta^t) 进行修正，使初期估计更接近真实值。它不处理数值溢出、学习率衰减或初始化方差。",
+      "error_tag": "记忆缺失",
+      "variant_group": "adam_偏差校正"
+    },
+    {
+      "kp": "ai.nn.sgd_adam",
+      "type": "single_choice",
+      "question": "某模型训练时使用 Adam，发现在验证集上后期损失波动较大、难以稳定收敛。下列哪种做法最可能改善？",
+      "options": [
+        "适当降低学习率，或改用带学习率衰减的策略",
+        "把动量系数设为 0，完全关闭一阶矩估计",
+        "把批量大小缩小到 1 以增加随机性",
+        "把权重初始化全部设为 0"
+      ],
+      "answer": 0,
+      "explanation": "Adam 后期震荡常与学习率偏大或缺乏衰减有关，降低学习率或加入学习率衰减是常见手段。关闭一阶矩会失去动量效果，批量缩到 1 会增大噪声，参数全初始化为 0 会破坏对称性导致无法有效学习。",
+      "error_tag": "边界错误",
+      "variant_group": "adam_学习率调节"
+    },
+    {
+      "kp": "ai.nn.sgd_adam",
+      "type": "single_choice",
+      "question": "关于 SGD 和 Adam 在泛化性能上的常见经验，下列哪项最符合实际情况？",
+      "options": [
+        "在某些任务上精心调参的 SGD（带动量）泛化可能优于 Adam，而 Adam 通常收敛更快",
+        "Adam 由于收敛快，泛化性能一定优于 SGD",
+        "SGD 不需要任何超参数调整，因此泛化总是更好",
+        "两者泛化性能完全一致，与超参数无关"
+      ],
+      "answer": 0,
+      "explanation": "实践中 Adam 通常初期收敛更快，但在部分视觉等任务上，调参良好的带动量 SGD 可能取得更好的泛化。泛化性能与任务、正则化、学习率策略等密切相关，不能一概而论。",
+      "error_tag": "概念混淆",
+      "variant_group": "sgd_adam_泛化对比"
+    },
+    {
+      "kp": "ai.nn.sgd_adam",
+      "type": "single_choice",
+      "question": "以下关于优化器更新中所用梯度来源的说法，正确的是？",
+      "options": [
+        "无论 SGD 还是 Adam，梯度都来自对当前批次损失关于参数的求导",
+        "Adam 使用二阶导数（Hessian）来更新参数",
+        "SGD 不使用梯度，只使用损失值",
+        "Adam 的梯度来自验证集，SGD 的梯度来自训练集"
+      ],
+      "answer": 0,
+      "explanation": "SGD 与 Adam 都属于一阶方法，梯度均由当前批次损失对参数求导（反向传播）得到。Adam 并不计算 Hessian，SGD 也必须使用梯度；两者都基于训练数据计算梯度。",
+      "error_tag": "概念混淆",
+      "variant_group": "优化器_梯度来源"
+    },
+    {
+      "kp": "ai.nn.sgd_adam",
+      "type": "multi_choice",
+      "question": "下列哪些属于 Adam 优化器相对于朴素 SGD 的特点？（多选）",
+      "options": [
+        "使用一阶矩估计（动量）",
+        "使用二阶矩估计做自适应缩放",
+        "包含偏差校正",
+        "对每个参数使用完全相同的更新步长"
+      ],
+      "answer": [
+        0,
+        1,
+        2
+      ],
+      "explanation": "Adam 结合了动量（一阶矩）、自适应缩放（二阶矩）和偏差校正。它恰恰是按参数自适应调整步长的，因此“对每个参数使用完全相同的更新步长”是朴素 SGD 的特征而非 Adam。",
+      "error_tag": "概念混淆",
+      "variant_group": "adam_特性"
+    },
+    {
+      "kp": "ai.nn.sgd_adam",
+      "type": "multi_choice",
+      "question": "在设计训练流程时，以下哪些因素会影响 SGD 或 Adam 的收敛表现？（多选）",
+      "options": [
+        "学习率的大小与衰减策略",
+        "批量大小",
+        "动量系数或 beta 系数",
+        "训练数据的打乱（shuffle）方式"
+      ],
+      "answer": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "explanation": "学习率、批量大小、动量/beta 系数都会直接影响更新行为；数据的打乱方式会影响每个批次梯度的分布与噪声，从而影响收敛。这些因素对 SGD 和 Adam 都重要。",
+      "error_tag": "边界错误",
+      "variant_group": "优化_超参数影响"
+    },
+    {
+      "kp": "ai.nn.sgd_adam",
+      "type": "multi_choice",
+      "question": "关于自适应学习率方法（如 AdaGrad、RMSProp、Adam），下列说法正确的有？（多选）",
+      "options": [
+        "它们会根据梯度历史为不同参数调整有效步长",
+        "AdaGrad 的累积平方梯度会导致学习率单调减小，可能过早停止学习",
+        "RMSProp 通过指数加权平均缓解 AdaGrad 学习率过快衰减的问题",
+        "它们都不需要设置任何学习率超参数"
+      ],
+      "answer": [
+        0,
+        1,
+        2
+      ],
+      "explanation": "自适应方法按参数调整有效步长；AdaGrad 累积所有历史平方梯度，学习率单调下降可能过早衰减；RMSProp 用指数加权平均替代全量累积以缓解该问题。它们通常仍需设置基础学习率，并非完全无需超参数。",
+      "error_tag": "记忆缺失",
+      "variant_group": "自适应学习率_对比"
+    }
+  ]
+}

@@ -1,0 +1,260 @@
+{
+  "id": "s6u5l2",
+  "title": "s6u5l2",
+  "kps": [
+    "ai.mm.doc_understanding",
+    "ai.mm.video_understanding"
+  ],
+  "theory": "## ai.mm.doc_understanding\n\n# 文档理解：为什么 PDF 是最难的多模态输入\n\n> **一句话直觉**：网页是结构化的文本，而 PDF 是一张「打印出来的纸」——它只有坐标，没有语义。谁是什么标题、哪两栏属于同一段、这个表格有几行，PDF 自己都不知道。文档理解的全部难点就在「把版面还原成语义」。\n\n## 1. 三种技术路线\n\n| 路线 | 做法 | 优点 | 缺点 |\n| --- | --- | --- | --- |\n| 文本抽取 | pdfplumber/PyMuPDF 抽文字 + 规则排版 | 快、便宜、可解释 | 双栏/表格/扫描件全崩 |\n| OCR + 版面分析 | 先检测版面块（标题/段落/表格），再逐块 OCR | 对扫描件有效 | 链路长，错误会级联 |\n| 多模态端到端 | 整页当图片喂给 VLM | 能理解表格和图表 | 贵、慢、有幻觉 |\n\n实际系统通常是**组合**：能抽出文字的走文本路线，抽不出（扫描件）或结构复杂（表格）的才升级到多模态。这个「路由」是文档理解系统里最值钱的一层。\n\n## 2. 文本抽取路线：先判断这一页好不好处理\n\n```python\nimport pdfplumber\n\ndef page_quality(page) -> dict:\n    text = page.extract_text() or \"\"\n    chars = len(text.strip())\n    images = len(page.images)\n    tables = page.find_tables()\n    return {\n        \"chars\": chars,\n        \"images\": images,\n        \"tables\": len(tables),\n        # 字符太少但图多 = 大概率是扫描件\n        \"needs_ocr\": chars < 50 and images >= 1,\n        \"has_table\": len(tables) > 0,\n    }\n```\n\n判据很简单但很有效：**一页如果抽出来的字符数不到 50，同时又有整页大小的图片，那它就是扫描件**，文字抽取路线直接放弃，转 OCR。\n\n## 3. 双栏排版为什么会让文本路线崩掉\n\nPDF 里的文字是按「绘制顺序」存的，不是阅读顺序。双栏论文的绘制顺序常常是「左栏第 1 行、右栏第 1 行、左栏第 2 行……」——直接 `extract_text()` 得到的是两栏交错的乱码。\n\n解法是按 x 坐标聚类判断分栏，再分别按 y 排序：\n\n```python\ndef is_two_column(words, page_width, gap_ratio=0.08) -> bool:\n    \"\"\"粗略判断是否双栏：中间带几乎没有字。\"\"\"\n    mid = page_width / 2\n    band = page_width * gap_ratio\n    return not any(mid - band < w[\"x0\"] < mid + band for w in words)\n```\n\n真要做准就得用版面检测模型（LayoutLMv3、DocLayout-YOLO）输出区块和阅读顺序，这是目前工业界的主流做法。\n\n## 4. 表格：别指望文本抽取\n\n`extract_text()` 对表格的输出是一堆错位的数字。`extract_tables()` 能处理有框线的简单表格，但**无框线表格、合并单元格、跨页表格**它都搞不定。\n\n工程上的稳妥顺序：\n\n1. 有框线 → `pdfplumber.extract_tables()`\n2. 无框线但文字可抽 → 按坐标聚类重建行列\n3. 扫描件或复杂合并 → 交给 VLM 直接输出 markdown 表格\n\n```python\nprompt = (\n    \"把这张图中的表格转成 markdown 表格，保持行列对齐。\"\n    \"只输出表格，不要解释。如果某个单元格为空，留空。\"\n)\n```\n\n要求它输出 markdown 而不是自由描述，是为了让结果可以被程序消费——自由描述你还得再写一层解析。\n\n## 5. 分块：文档 RAG 的关键\n\n文档理解通常是为了喂给 RAG。分块策略直接影响检索质量：\n\n- **按标题层级切**：最符合语义，但依赖版面检测能识别标题级别。\n- **按固定长度切**：简单，但会把一个表格切成两半。\n- **按语义切**：用嵌入相似度找断点，效果好但慢。\n\n一个实用规则：**表格和代码块必须整体成块，不能被切断**；正文按 500–800 字切，相邻块保留 10–20% 重叠。\n\n## 6. 评估：文档理解怎么才算做对了\n\n不要用「看起来对不对」验收。可量化的三个指标：\n\n- **字符准确率**：抽出的文本与人工标注的编辑距离。\n- **表格还原率**：单元格级完全匹配的比例。\n- **下游问答准确率**：用一批「答案在文档里」的问题，看检索+回答的命中率。\n\n第三个最贴近业务价值，也最容易暴露分块策略的问题。\n\n## 小结\n\n文档理解的本质是「版面还原」：把只有坐标的 PDF 恢复成有层级、有阅读顺序的结构。技术上先做路由（文本 / OCR / VLM），再针对表格和双栏这两个硬骨头分别处理。\n\n## ai.mm.video_understanding\n\n# 视频理解：本质是「带时间轴的图像序列」\n\n> **一句话直觉**：视频没有新的模态，它只是很多帧图像加上一条时间轴。所有视频理解的难点都可以归结成两件事：**采样哪些帧**、**怎么表示时间关系**。\n\n## 1. 帧采样：决定成本的第一道闸\n\n一段 10 分钟、30fps 的视频有 18000 帧。全送进去不可能，所以必须采样：\n\n| 策略 | 做法 | 适合 |\n| --- | --- | --- |\n| 均匀采样 | 每 N 秒取一帧 | 通用、便宜 |\n| 关键帧 | 用画面变化检测取镜头切换点 | 剪辑视频、教程 |\n| 场景感知 | 检测到动作/事件时加密采样 | 监控、体育 |\n| 音频驱动 | 按语音段落对齐取帧 | 访谈、会议 |\n\n```python\nimport cv2\n\ndef sample_frames(path, every_sec=2.0, max_frames=60):\n    cap = cv2.VideoCapture(path)\n    fps = cap.get(cv2.CAP_PROP_FPS) or 30\n    step = int(fps * every_sec)\n    frames, idx = [], 0\n    while len(frames) < max_frames:\n        ok, frame = cap.read()\n        if not ok:\n            break\n        if idx % step == 0:\n            frames.append(frame)\n        idx += 1\n    cap.release()\n    return frames\n```\n\n`max_frames` 这个上限是必须的——没有它，一段长视频会把显存直接打爆。\n\n## 2. 时间关系怎么表示\n\n这是视频理解区别于图像理解的核心。三种做法：\n\n**① 拼图（frame grid）**：把 N 帧拼成一张大图，当成单图喂给 VLM。最便宜，但时间顺序信息弱，模型只能靠排列位置猜。\n\n**② 时序 token**：每帧编码成 patch token，按时间顺序拼接，加时间位置编码。这是原生视频模型（如 Qwen2-VL 的视频模式）的做法。\n\n**③ 抽帧 + 文本摘要**：先用 VLM 逐帧/逐段描述，再把描述当文本喂给 LLM。便宜、可缓存，但会丢失视觉细节。\n\n```python\n# ③ 的两段式实现\nsummaries = [vlm_describe(f) for f in frames]\ntimeline = \"\\n\".join(f\"[{i*2}s] {s}\" for i, s in enumerate(summaries))\nanswer = llm(f\"以下是视频时间线：\\n{timeline}\\n\\n问题：{question}\")\n```\n\n两段式在工程上很实用：视觉部分只跑一次、结果可缓存，问题变化时只需重跑文本 LLM。\n\n## 3. 音频不能丢\n\n大量视频信息在语音里。只处理画面的视频理解系统，在会议、访谈、教程这类内容上会漏掉一半信息。标准做法是**音视频双路**：\n\n```python\nimport whisper\n\ntranscript = whisper.transcribe(\"video.mp4\")   # 带时间戳的分段文本\n# 再把 transcript 与画面描述按时间戳对齐\n```\n\n对齐后得到的是「时间轴上的多模态事件流」，这才是可检索的单元。\n\n## 4. 视频 RAG 的分块\n\n视频不能按字数分块，要按**时间窗**分块：\n\n- 每块 30–60 秒，块内包含画面描述 + 语音转写。\n- 块之间重叠 5–10 秒，避免答案刚好卡在边界。\n- 每个块存 `(start_sec, end_sec, text, keyframe_uri)`，检索命中后能直接跳到对应位置播放。\n\n这个 `start_sec` 就是视频 RAG 相比文本 RAG 多出来的价值——用户不只要答案，还要「在哪一段」。\n\n## 5. 成本与延迟的现实\n\n一个 1 小时视频的粗算：\n\n- 均匀 2 秒采样 → 1800 帧，太多。\n- 改成 10 秒采样 + 关键帧补充 → 约 360 帧。\n- 每帧若按 256 token 算 → 9 万 token，仍然超预算。\n\n所以真实系统几乎不会「整段视频送模型」，而是**离线预处理成文本+关键帧索引，在线只检索**。和 CLIP 做图搜图的逻辑完全一致：贵的那步离线做，在线只做便宜的检索。\n\n## 6. 常见误区\n\n- **只取首帧或中间帧**：会完全错过视频里的事件。\n- **忽略音频**：会议/教程类内容直接损失一半信息。\n- **没有时间戳**：检索到了却无法定位播放位置，产品价值大打折扣。\n- **在线做全量推理**：延迟和成本都不可接受，必须离线预处理。\n\n## 小结\n\n视频理解 = 帧采样 + 时间表示 + 音频对齐。工程上的关键决策是**采样预算**和**离线/在线的切分**：把昂贵的视觉推理放在离线预处理阶段，在线只做检索和轻量重排。\n",
+  "quiz": [
+    {
+      "kp": "ai.mm.doc_understanding",
+      "type": "single_choice",
+      "question": "PDF 文档理解最本质的难点是什么？",
+      "options": [
+        "PDF 文件太大，读取慢",
+        "PDF 只保存字符坐标，不保存语义结构，需要把版面还原成阅读顺序和层级",
+        "PDF 里的文字都是图片，无法抽取",
+        "PDF 不支持中文"
+      ],
+      "answer": 1,
+      "explanation": "PDF 是「打印出来的纸」，只有坐标没有语义，标题/分栏/表格都要靠版面分析还原。",
+      "error_tag": "原理不清",
+      "variant_group": "doc_pdf_hard"
+    },
+    {
+      "kp": "ai.mm.doc_understanding",
+      "type": "single_choice",
+      "question": "如何快速判断一页 PDF 是扫描件、需要走 OCR？",
+      "options": [
+        "看文件大小是否超过 1MB",
+        "抽取出的字符数极少（如少于 50）且页面有大图",
+        "看页数是否超过 100",
+        "看是否包含表格"
+      ],
+      "answer": 1,
+      "explanation": "扫描件的特征是「有图无字」，字符数极少 + 整页图片就是判据。",
+      "error_tag": "诊断能力缺失",
+      "variant_group": "doc_scan_detect"
+    },
+    {
+      "kp": "ai.mm.doc_understanding",
+      "type": "single_choice",
+      "question": "双栏排版的 PDF 用 extract_text() 抽出来是交错的乱码，根本原因是？",
+      "options": [
+        "字体编码有问题",
+        "PDF 里的文字按绘制顺序存储，不是阅读顺序",
+        "pdfplumber 有 bug",
+        "双栏文档必须用 OCR"
+      ],
+      "answer": 1,
+      "explanation": "绘制顺序常是「左栏第1行、右栏第1行…」，直接抽取就交错；要按 x 坐标聚类分栏再排序。",
+      "error_tag": "原理不清",
+      "variant_group": "doc_two_column"
+    },
+    {
+      "kp": "ai.mm.doc_understanding",
+      "type": "single_choice",
+      "question": "处理无框线、有合并单元格的复杂表格，最稳的做法是？",
+      "options": [
+        "用 extract_text() 后按空格切分",
+        "用 pdfplumber.extract_tables()，它什么表格都能处理",
+        "交给 VLM 直接输出 markdown 表格",
+        "放弃表格内容"
+      ],
+      "answer": 2,
+      "explanation": "extract_tables 只能处理有框线的简单表格；复杂结构用 VLM 转 markdown 更可靠。",
+      "error_tag": "选型错误",
+      "variant_group": "doc_complex_table"
+    },
+    {
+      "kp": "ai.mm.doc_understanding",
+      "type": "single_choice",
+      "question": "文档 RAG 分块时，以下哪条规则最重要？",
+      "options": [
+        "每块必须正好 500 字",
+        "表格和代码块必须整体成块，不能被切断",
+        "块之间绝对不能有重叠",
+        "按页切，一页一块"
+      ],
+      "answer": 1,
+      "explanation": "表格/代码被切断会导致内容无法解读；正文可以按字数切并保留重叠。",
+      "error_tag": "工程实践缺失",
+      "variant_group": "doc_chunking_rule"
+    },
+    {
+      "kp": "ai.mm.doc_understanding",
+      "type": "multi_choice",
+      "question": "关于文档理解的三条技术路线，以下说法正确的有哪些？（多选）",
+      "options": [
+        "文本抽取快且可解释，但双栏/表格/扫描件会失效",
+        "OCR + 版面分析对扫描件有效，但链路长、错误会级联",
+        "多模态端到端能理解表格和图表，但贵、慢、有幻觉",
+        "实际系统应按页面质量做路由，而不是全程只用一条路线",
+        "多模态端到端已经完全取代了文本抽取"
+      ],
+      "answer": [0, 1, 2, 3],
+      "explanation": "三条路线各有边界，生产系统靠路由组合；端到端并未取代便宜路线。",
+      "error_tag": "概念混淆",
+      "variant_group": "doc_three_routes"
+    },
+    {
+      "kp": "ai.mm.doc_understanding",
+      "type": "fill_blank",
+      "question": "Python 中常用于抽取 PDF 文字与表格的库是 ______（pdfplumber）。",
+      "options": [],
+      "answer": ["pdfplumber"],
+      "explanation": "pdfplumber 基于 pdfminer，能拿到字符坐标与表格结构。",
+      "error_tag": "记忆缺失",
+      "variant_group": "doc_pdfplumber"
+    },
+    {
+      "kp": "ai.mm.doc_understanding",
+      "type": "fill_blank",
+      "question": "让 VLM 把表格转成结构化文本时，通常要求它输出 ______ 格式，方便程序直接消费。",
+      "options": [],
+      "answer": ["markdown", "Markdown", "md"],
+      "explanation": "markdown 表格既能被人读，也能被程序解析，比自由描述更可用。",
+      "error_tag": "记忆缺失",
+      "variant_group": "doc_markdown_output"
+    },
+    {
+      "kp": "ai.mm.doc_understanding",
+      "type": "code_reading",
+      "question": "以下代码在处理一份双栏论文 PDF 时输出混乱，请说明原因和修法：\n\nimport pdfplumber\nwith pdfplumber.open(\"paper.pdf\") as pdf:\n    for page in pdf.pages:\n        print(page.extract_text())",
+      "options": [],
+      "answer": "extract_text() 按 PDF 内部的绘制顺序输出字符，而双栏论文的绘制顺序常是「左栏第1行、右栏第1行…」，于是两栏文字交错。修法：用 extract_words() 拿到每个词的 x/y 坐标，先按 x 判断是否双栏（中间带是否有字），再分别按 y 排序输出左栏和右栏；或者用版面检测模型（LayoutLMv3 / DocLayout-YOLO）输出区块与阅读顺序。",
+      "explanation": "PDF 的字符顺序是绘制顺序而非阅读顺序，双栏必须靠坐标重建。",
+      "error_tag": "诊断能力缺失",
+      "variant_group": "doc_two_column_code"
+    },
+    {
+      "kp": "ai.mm.doc_understanding",
+      "type": "scenario",
+      "question": "公司要给一个知识库导入 5 万份 PDF：包含扫描件、双栏论文、大量复杂表格，且要求能回答「某份合同里的违约金比例是多少」这类问题。请说明你的处理链路和验收方式。",
+      "options": [],
+      "answer": null,
+      "explanation": "考查完整链路：按页面质量路由（文本/OCR/VLM）、表格整体成块、按标题层级分块、存原文坐标可回溯、用下游问答准确率而非「看起来对不对」验收。",
+      "error_tag": "场景分析不足",
+      "variant_group": "doc_kb_pipeline",
+      "required_keywords": ["路由", "OCR", "表格", "分块", "准确率", "回溯"]
+    },
+    {
+      "kp": "ai.mm.video_understanding",
+      "type": "single_choice",
+      "question": "视频理解中设置 max_frames 上限的主要原因是？",
+      "options": [
+        "为了美观",
+        "不加限制时长视频会产生海量 token，显存和延迟都会爆掉",
+        "因为模型最多只能读 60 帧",
+        "因为视频帧率总是 30fps"
+      ],
+      "answer": 1,
+      "explanation": "10 分钟 30fps 有 18000 帧，必须靠采样和上限控制成本。",
+      "error_tag": "工程实践缺失",
+      "variant_group": "video_frame_budget"
+    },
+    {
+      "kp": "ai.mm.video_understanding",
+      "type": "single_choice",
+      "question": "「拼图（frame grid）」这种做法的最大缺点是？",
+      "options": [
+        "成本太高",
+        "时间顺序信息弱，模型只能靠帧的排列位置去猜先后",
+        "无法处理彩色视频",
+        "必须依赖音频"
+      ],
+      "answer": 1,
+      "explanation": "拼图最便宜，但把时间维度压成了空间排列，时序信息表达很弱。",
+      "error_tag": "概念混淆",
+      "variant_group": "video_frame_grid"
+    },
+    {
+      "kp": "ai.mm.video_understanding",
+      "type": "single_choice",
+      "question": "只处理画面、不做语音转写的视频理解系统，在哪种内容上损失最大？",
+      "options": [
+        "纯风景延时摄影",
+        "会议、访谈、教程这类以说话为主的内容",
+        "无声的监控录像",
+        "动画片"
+      ],
+      "answer": 1,
+      "explanation": "这类内容的核心信息在语音里，只处理画面等于丢掉一半信息。",
+      "error_tag": "边界错误",
+      "variant_group": "video_audio_missing"
+    },
+    {
+      "kp": "ai.mm.video_understanding",
+      "type": "single_choice",
+      "question": "视频 RAG 分块相比文本 RAG 多出来的关键字段是？",
+      "options": [
+        "字符数",
+        "起止时间戳（start_sec / end_sec），检索命中后能定位到播放位置",
+        "文件大小",
+        "编码格式"
+      ],
+      "answer": 1,
+      "explanation": "用户要的不只是答案，还有「在哪一段」，时间戳是视频 RAG 的核心价值。",
+      "error_tag": "概念混淆",
+      "variant_group": "video_rag_timestamp"
+    },
+    {
+      "kp": "ai.mm.video_understanding",
+      "type": "multi_choice",
+      "question": "关于视频理解的工程实践，以下说法正确的有哪些？（多选）",
+      "options": [
+        "帧采样策略决定成本，必须设上限",
+        "时序信息需要显式建模（时序 token 或带时间戳的描述）",
+        "音频转写与画面对齐能显著提升理解质量",
+        "应该在线对整段视频做全量推理以保证准确",
+        "把视觉推理放在离线预处理、在线只做检索，是成本可接受的做法"
+      ],
+      "answer": [0, 1, 2, 4],
+      "explanation": "在线全量推理不可行；离线预处理 + 在线检索才是工程解。",
+      "error_tag": "工程实践缺失",
+      "variant_group": "video_engineering"
+    },
+    {
+      "kp": "ai.mm.video_understanding",
+      "type": "fill_blank",
+      "question": "开源语音转写模型 ______（OpenAI 出品）常用于给视频生成带时间戳的字幕。",
+      "options": [],
+      "answer": ["whisper", "Whisper"],
+      "explanation": "Whisper 输出带时间戳的分段文本，是视频理解里做音画对齐的常用工具。",
+      "error_tag": "记忆缺失",
+      "variant_group": "video_whisper"
+    },
+    {
+      "kp": "ai.mm.video_understanding",
+      "type": "fill_blank",
+      "question": "OpenCV 中读取视频帧的对象通过 ______ 类创建（cv2.VideoCapture）。",
+      "options": [],
+      "answer": ["VideoCapture", "cv2.VideoCapture"],
+      "explanation": "cv2.VideoCapture 按帧读取视频，是帧采样的基础。",
+      "error_tag": "记忆缺失",
+      "variant_group": "video_videocapture"
+    },
+    {
+      "kp": "ai.mm.video_understanding",
+      "type": "code_reading",
+      "question": "以下采样代码在处理一段 2 小时监控视频时会出什么问题：\n\ncap = cv2.VideoCapture(path)\nframes = []\nwhile True:\n    ok, frame = cap.read()\n    if not ok:\n        break\n    frames.append(frame)\ncap.release()",
+      "options": [],
+      "answer": "把所有帧都读进内存：2 小时 30fps 约 21.6 万帧，每帧 1080p 约 6MB，累计超过 1TB，内存直接爆掉。正确做法是边读边按步长采样、只保留需要的帧，并设 max_frames 上限，处理完及时释放。",
+      "explanation": "全量读帧是视频处理最常见的内存事故，必须按步长采样并限制总量。",
+      "error_tag": "边界错误",
+      "variant_group": "video_read_all_frames"
+    },
+    {
+      "kp": "ai.mm.video_understanding",
+      "type": "scenario",
+      "question": "你要做一个「视频课程问答」产品：用户上传 1 小时的录播课，然后可以问「老师在第几分钟讲了装饰器」。请说明你的离线处理和在线检索链路，以及如何保证答案能定位到具体时间点。",
+      "options": [],
+      "answer": null,
+      "explanation": "考查系统设计：离线采样关键帧 + Whisper 转写 + 按时间窗分块（30-60s，带 start/end）+ 向量化入库；在线检索后返回带时间戳的片段，前端可跳转播放。",
+      "error_tag": "场景分析不足",
+      "variant_group": "video_course_qa",
+      "required_keywords": ["采样", "转写", "时间戳", "分块", "向量", "检索", "离线"]
+    }
+  ]
+}

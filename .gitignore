@@ -1,0 +1,81 @@
+#忽略所有.env文件
+.env
+#忽略lue所有.log文件
+*.log
+# 忽略虚拟环境
+venv
+.venv/
+#忽略Python缓存
+_pycache_/
+# --- Python 进阶 ---
+build/
+dist/
+*.egg-info/
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+.ipynb_checkpoints/
+
+# --- Windows ---
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# --- VS Code（白名单策略）---
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+
+# --- 其他 ---
+.DS_Store
+*.sqlite3
+# --- Python 基础 ---
+__pycache__/
+*.py[cod]
+*$py.class
+ 临时测试文件夹
+_pytest_tmp/
+_pytest_tmp2/
+tmp/
+.tmpc/
+
+# 临时测试文件
+*.txt
+.dsh_probe.txt
+
+# 编译输出
+dst/
+# --- 敏感数据与扫描结果 ---
+_dscan/
+.env
+*.pem
+*.key
+
+# --- 临时探针/一次性脚本 ---
+_probe_*.py
+_validate_*.py
+_verify_*.py
+_scan_*.py
+_run_tests.py
+_export_kb.py
+COMMIT_MSG_TMP.txt
+.dsh_probe.txt
+
+# --- 运行时数据库（二进制，不进版本库）---
+*.db
+*.db-shm
+*.db-wal
+
+# --- 项目内部临时产物 ---
+_tmp*/
+_shots/
+_cdp_profile/
+.tmpx/
+_doc/preview/
+_doc/preview*.pdf
+
+# --- requirements.txt 是必要的，放行 ---
+!requirements.txt

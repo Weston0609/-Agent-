@@ -1,0 +1,947 @@
+{
+  "id": "s1u2l3",
+  "title": "s1u2l3",
+  "kps": [
+    "py.type.str_basic",
+    "py.type.str_index",
+    "py.type.str_method"
+  ],
+  "theory": "## py.type.str_basic\n\n# 字符串基础：从直觉到工程\n\n> **一句话直觉**：字符串（str）是 Python 里用来表示\"文本\"的内置类型，几乎所有程序都要跟它打交道，所以它是你学 Python 的第一块地基。\n\n---\n\n## 1. 字符串是什么：一串不可变的字符\n\n在 Python 中，**字符串（string，简称 str）** 是用单引号 `'...'`、双引号 `\"...\"` 或三引号 `'''...'''` / `\"\"\"...\"\"\"` 包起来的一串字符序列。\n\n它有两个关键属性：\n- **序列（sequence）**：可以通过下标索引、切片、遍历。\n- **不可变（immutable）**：一旦创建，就不能修改其中的字符；任何\"修改\"都会生成新字符串。\n\n```python\ns = \"hello\"\nprint(s[0])       # 'h'  —— 下标从 0 开始\nprint(s[-1])      # 'o'  —— 负数表示从末尾倒数\nprint(s[1:4])     # 'ell' —— 切片，左闭右开\nprint(len(s))     # 5\n\n# 不可变：下面这行会报错\n# s[0] = 'H'      # TypeError: 'str' object does not support item assignment\ns2 = 'H' + s[1:]  # 正确做法：拼一个新字符串\nprint(s2)         # 'Hello'\n```\n\n---\n\n## 2. 字面量（literal）：单引号、双引号、三引号、转义\n\nPython 不区分单双引号；三引号可以写多行。**转义字符（escape character）** 用反斜杠 `\\` 开头。\n\n```python\nprint('it\\'s ok')          # 单引号里含单引号，需要转义\nprint(\"she said: \\\"hi\\\"\") # 双引号同理\nprint('a\\tb')              # \\t 制表符\nprint('line1\\nline2')      # \\n 换行\n\nmulti = \"\"\"第一行\n第二行\"\"\"\nprint(multi)\n\n# 原始字符串 raw string：\\ 不再转义\nprint(r'C:\\Users\\new')     # 输出 C:\\Users\\new\n```\n\n**工程提示**：写路径、正则表达式、Windows 路径时，优先用原始字符串 `r'...'`。\n\n---\n\n## 3. 常用操作：拼接、格式化、常用方法\n\n字符串最常用的几类操作：拼接、格式化（f-string）、查找、替换、大小写、拆分与合并。\n\n```python\nname = \"Ada\"\nage = 36\n\n# 三种常见拼接方式\nprint(\"Hello, \" + name)               # 简单拼接\ngreeting = f\"Hello, {name}, age {age}\"   # f-string（推荐）\nprint(greeting)\nprint(\"Hello, {}\".format(name))       # str.format\n\n# 常用方法\ns = \"  Hello, World  \"\nprint(s.strip())            # 去掉两端空白\nprint(s.lower())            # 小写\nprint(s.upper())            # 大写\nprint(s.replace('World', 'Python'))\nprint(s.find('World'))      # 找不到返回 -1\nprint('World' in s)         # True —— 成员检查\n\n# 拆分与合并\nline = \"a,b,c\"\nparts = line.split(',')     # ['a', 'b', 'c']\nprint(parts)\nprint('-'.join(parts))      # 'a-b-c'\n```\n\n---\n\n## 4. 类型注解中的 str：可读性、静态检查、不强制\n\nPython 3.5 起支持 **类型注解（type hints）**。`str` 是最常见的注解之一。注意：**Python 运行时并不强制类型注解**，它只服务于静态检查器（type checker）、IDE、linter 和读代码的人。\n\n```python\ndef greet(name: str) -> str:\n    return f\"Hello, {name}\"\n\nprint(greet(\"Ada\"))\nprint(greet(123))   # 运行时不会报错（会拼出 'Hello, 123'），但静态检查器会提示\n```\n\n工程价值：\n- 函数签名一眼看出\"输入是字符串、输出也是字符串\"。\n- mypy / pyright 等静态检查器可提前发现 `greet(123)` 这类错误。\n- 与 `typing` 模块配合时，`str` 还能出现在 `list[str]`、`dict[str, int]`、`Sequence[str]` 等复合类型里。\n\n```python\n# 字符串在容器类型注解中很常见\ndef count_chars(text: str) -> dict[str, int]:\n    result: dict[str, int] = {}\n    for ch in text:\n        result[ch] = result.get(ch, 0) + 1\n    return result\n\nprint(count_chars(\"aba\"))   # {'a': 2, 'b': 1}\n```\n\n---\n\n## 5. 不可变带来的工程影响\n\n因为字符串不可变：\n- **可以安全地当字典键（dict key）**：\n  ```python\n  cache = {\"user:1\": \"Ada\"}\n  print(cache[\"user:1\"])\n  ```\n- **可以被多个变量共享**，无需拷贝，安全。\n- **循环里频繁拼接会很慢**，因为每拼一次就新建一个字符串。大批量拼接推荐 `list.append` + `''.join(...)`。\n\n```python\n# 反例：O(n^2) 的字符串拼接\npieces = [\"a\", \"b\", \"c\", \"d\"]\nbad = \"\"\nfor p in pieces:\n    bad += p         # 每次都新建字符串\n\n# 正例：先用 list 收集，再一次性 join\ngood = \"\".join(pieces)\nprint(bad, good)\n```\n\n---\n\n## 小结对照表\n\n| 主题 | 关键点 |\n| --- | --- |\n| 本质 | 不可变字符序列 |\n| 索引/切片 | 从 0 开始，左闭右开，支持负下标 |\n| 字面量 | 单/双/三引号、转义 `\\`、原始串 `r'...'` |\n| 常用方法 | `strip`、`lower`、`replace`、`split`、`join`、`find`、`in` |\n| 类型注解 | `def f(s: str) -> str`，运行时**不强制**，静态检查器用 |\n| 性能 | 大拼接用 `''.join([...])`，别在循环里 `+=` |\n\n```python\ndef count_chars(text: str) -> dict[str, int]:\n    \"\"\"统计字符串中每个字符出现的次数。\"\"\"\n    result: dict[str, int] = {}\n    for ch in text:              # 字符串可迭代\n        result[ch] = result.get(ch, 0) + 1\n    return result\n\n\ndef normalize(names: list[str]) -> str:\n    \"\"\"去掉首尾空白、首字母大写，再用逗号连接。\"\"\"\n    cleaned = [n.strip().capitalize() for n in names]\n    return \", \".join(cleaned)    # 用 join 而不是 += 拼接\n\n\nif __name__ == \"__main__\":\n    print(count_chars(\"aba\"))                       # {'a': 2, 'b': 1}\n    print(normalize([\"  ada \", \"BOB\", \"  cy \"]))   # Ada, Bob, Cy\n```\n\n## py.type.str_index\n\n# 字符串索引（str index）：为什么它是你 Python 之路的第一块基石\n\n> 一句话直觉：字符串索引让你用“第几个字符”的视角精确地读写文本，是所有文本处理、数据清洗、算法题的起点。\n\n---\n\n## 1. 字符串是什么？索引从哪里开始？\n\n在 Python 里，字符串（`str`）是一串**不可变的字符序列**。每个字符都有一个位置编号，称为**索引（index）**。\n\n关键结论：\n- Python 的索引从 **0** 开始，不是 1。\n- 最后一个字符的索引是 `len(s) - 1`。\n- 可以用**负索引**从末尾倒着数：`-1` 是最后一个，`-2` 是倒数第二个。\n\n```python\n# 字符串索引基础\ns = \"Python\"\n\nprint(s[0])   # P  —— 第 0 个字符\nprint(s[1])   # y  —— 第 1 个字符\nprint(s[-1])  # n  —— 最后一个字符\nprint(s[-2])  # o  —— 倒数第二个字符\nprint(len(s)) # 6  —— 字符串长度\n```\n\n---\n\n## 2. 索引是“读”操作，字符串不可变\n\n关键结论：\n- 字符串是**不可变（immutable）**的，不能通过 `s[0] = 'J'` 直接修改。\n- 如果想“修改”，必须创建新字符串，例如拼接、切片或 `replace`。\n\n```python\ns = \"Python\"\n\n# 下面这行会报错：TypeError: 'str' object does not support item assignment\n# s[0] = 'J'\n\n# 正确做法：用索引读出字符，再拼成新字符串\nnew_s = \"J\" + s[1:]\nprint(new_s)  # Jython\n```\n\n---\n\n## 3. 切片（slice）：一次拿多个字符\n\n切片是索引的扩展，语法是 `s[start:stop:step]`。\n\n关键结论：\n- `start` 包含，`stop` **不包含**。\n- 省略 `start` 默认从 0 开始；省略 `stop` 默认到末尾。\n- `step` 可以为负，表示反向取。\n\n```python\ns = \"Python\"\n\nprint(s[0:3])   # Pyt   —— 索引 0、1、2\nprint(s[:3])    # Pyt   —— 从头到索引 2\nprint(s[3:])    # hon   —— 从索引 3 到末尾\nprint(s[::2])   # Pto   —— 每隔一个取一个\nprint(s[::-1])  # nohtyP —— 反转字符串\n```\n\n---\n\n## 4. 索引越界与 `IndexError`\n\n关键结论：\n- 访问不存在的索引会抛出 `IndexError`。\n- 切片越界**不会报错**，只会返回空串或截断到边界。\n\n```python\ns = \"Python\"\n\n# print(s[100])  # IndexError: string index out of range\n\nprint(s[100:200])  # 空字符串，不报错\nprint(s[-100:])    # Python，负索引越界会被截断\n```\n\n---\n\n## 5. 实际工程中的用法：遍历、判断、提取\n\n关键结论：\n- 用 `for i, ch in enumerate(s)` 同时拿到索引和字符。\n- 用 `in` 判断子串是否存在。\n- 用索引和切片做首字母、尾字母、回文判断等。\n\n```python\ns = \"racecar\"\n\n# 同时拿索引和字符\nfor i, ch in enumerate(s):\n    print(i, ch)\n\n# 判断回文：正着读和反着读一样\nis_palindrome = s == s[::-1]\nprint(is_palindrome)  # True\n\n# 提取首字母和尾字母\nprint(s[0], s[-1])    # r r\n```\n\n---\n\n## 动手练习\n\n任务：写一个函数 `analyze_text(text)`，完成以下事情：\n\n1. 打印字符串长度。\n2. 打印第一个字符和最后一个字符。\n3. 打印反转后的字符串。\n4. 判断它是否是回文（正反读一样）。\n5. 如果长度大于等于 3，打印中间那一段 `text[1:-1]`。\n\n示例：\n\n```python\ndef analyze_text(text):\n    # 在这里实现\n    pass\n\nanalyze_text(\"level\")\nanalyze_text(\"Python\")\n```\n\n参考输出：\n\n```\n长度: 5\n首字符: l\n尾字符: l\n反转: level\n是否回文: True\n中间部分: eve\n\n长度: 6\n首字符: P\n尾字符: n\n反转: nohtyP\n是否回文: False\n中间部分: ytho\n```\n\n```python\n# 字符串索引完整示例\ns = \"Python\"\n\nprint(\"原字符串:\", s)\nprint(\"索引 0:\", s[0])\nprint(\"索引 -1:\", s[-1])\nprint(\"切片 1:4:\", s[1:4])\nprint(\"反转:\", s[::-1])\n\n# 遍历索引和字符\nfor i, ch in enumerate(s):\n    print(f\"第 {i} 个字符是 {ch}\")\n\n# 回文判断\nword = \"level\"\nprint(\"level 是否回文:\", word == word[::-1])\n```\n\n## py.type.str_method\n\n## 一句话直觉\n\n字符串是 Python 里最常用的数据类型（type），而字符串方法（str method）就是**让文本变得可加工、可清洗、可组合**的瑞士军刀。\n\n---\n\n## 1. 字符串是不可变的（immutable）\n\n直觉：字符串一旦创建就不能原地修改，所有“修改”都会返回一个新字符串。\n\n```python\ns = \"hello\"\n# s.upper() 不会改变 s 本身，而是返回新字符串\nprint(s.upper())  # HELLO\nprint(s)          # hello\n\n# 如果想保留结果，必须重新赋值\ns = s.upper()\nprint(s)          # HELLO\n```\n\n关键结论：**字符串方法不改变原字符串，只返回新值**。\n\n---\n\n## 2. 大小写与判断方法\n\n直觉：处理用户输入、做校验时，大小写统一和类型判断是最基础的操作。\n\n```python\ntext = \"Python Is Fun\"\n\nprint(text.lower())        # python is fun\nprint(text.upper())        # PYTHON IS FUN\nprint(text.title())        # Python Is Fun\nprint(text.capitalize())   # Python is fun\n\nprint(\"123\".isdigit())     # True\nprint(\"abc\".isalpha())     # True\nprint(\"abc123\".isalnum())  # True\nprint(\"   \".isspace())     # True\nprint(\"Hello\".istitle())   # True\n```\n\n关键结论：**判断类方法返回 bool，常用于表单校验与分支控制**。\n\n---\n\n## 3. 查找、替换与分割\n\n直觉：真实工程里 80% 的文本处理都围绕“找位置、替换内容、按规则拆开”。\n\n```python\ns = \"name:alice;age:30;city:beijing\"\n\n# 查找\nprint(s.find(\"age\"))       # 8，找不到返回 -1\nprint(s.index(\"age\"))      # 8，找不到抛 ValueError\nprint(s.count(\":\"))        # 3\n\n# 替换\nprint(s.replace(\":\", \"=\"))  # name=alice;age=30;city=beijing\n\n# 分割与连接\nparts = s.split(\";\")\nprint(parts)                # ['name:alice', 'age:30', 'city:beijing']\nprint(\" | \".join(parts))    # name:alice | age:30 | city:beijing\n\n# 按行分割\nlines = \"a\\nb\\nc\".splitlines()\nprint(lines)                # ['a', 'b', 'c']\n```\n\n关键结论：**split 用于拆分，join 用于拼接，replace 用于替换**。\n\n---\n\n## 4. 去除空白与填充对齐\n\n直觉：爬虫、日志、表格输出中，去除多余空白和对齐文本非常常见。\n\n```python\nraw = \"   hello world   \"\n\nprint(raw.strip())    # \"hello world\"\nprint(raw.lstrip())   # \"hello world   \"\nprint(raw.rstrip())   # \"   hello world\"\n\n# 去除指定字符\nprint(\"###abc###\".strip(\"#\"))  # abc\n\n# 填充对齐\nprint(\"42\".zfill(5))          # 00042\nprint(\"hi\".ljust(5, \"-\"))     # hi---\nprint(\"hi\".rjust(5, \"-\"))     # ---hi\nprint(\"hi\".center(6, \"*\"))    # **hi**\n```\n\n关键结论：**strip 系列清理边缘字符，ljust/rjust/center/zfill 控制输出宽度**。\n\n---\n\n## 5. 格式化与编码相关方法\n\n直觉：字符串最终要输出给人看，或者编码成字节（bytes）进行网络传输。\n\n```python\nname, score = \"Alice\", 95.5\n\n# format 方法\nprint(\"{} scored {:.1f}\".format(name, score))  # Alice scored 95.5\n\n# 更推荐的 f-string（Python 3.6+）\nprint(f\"{name} scored {score:.1f}\")            # Alice scored 95.5\n\n# 编码与解码\ndata = \"你好\".encode(\"utf-8\")\nprint(data)                                    # b'\\xe4\\xbd\\xa0\\xe5\\xa5\\xbd'\nprint(data.decode(\"utf-8\"))                    # 你好\n\n# 判断前后缀\nprint(\"report.pdf\".endswith(\".pdf\"))           # True\nprint(\"https://a.com\".startswith(\"https\"))     # True\n```\n\n关键结论：**format/f-string 负责展示，encode/decode 负责字节转换，startswith/endswith 负责快速匹配**。\n\n---\n\n## 动手练习\n\n任务：写一个函数 `clean_tags(text)`，接收一段用逗号分隔的标签字符串，要求：\n\n1. 去掉每个标签首尾空白；\n2. 统一转成小写；\n3. 过滤掉空标签；\n4. 去重但保持原有顺序；\n5. 最后用 `\" | \"` 连接返回。\n\n示例：\n\n```python\nclean_tags(\" Python, ,AI , python , Data Science \")\n# 输出: \"python | ai | data science\"\n```\n\n提示：可组合使用 `split`、`strip`、`lower`、`join` 和集合去重技巧。\n\n```python\n# 可运行示例：字符串方法综合练习\ndef clean_tags(text: str) -> str:\n    parts = text.split(\",\")\n    seen = set()\n    result = []\n    for p in parts:\n        tag = p.strip().lower()\n        if tag and tag not in seen:\n            seen.add(tag)\n            result.append(tag)\n    return \" | \".join(result)\n\nprint(clean_tags(\" Python, ,AI , python , Data Science \"))\n# 输出: python | ai | data science\n\n# 补充示例：常见的清洗与格式化\nraw = \"   Hello, World!   \"\nprint(raw.strip().lower().replace(\",\", \"\"))  # hello world!\n\nname, score = \"Bob\", 88.888\nprint(f\"{name:>5} -> {score:.2f}\")          # '  Bob -> 88.89'\n\nprint(\"abc123\".isalnum(), \"abc123\".isdigit())  # True False\nprint(\"file.txt\".endswith(\".txt\"))             # True\nprint(\"a,b,c\".split(\",\"))                     # ['a', 'b', 'c']\nprint(\"- \".join([\"x\", \"y\", \"z\"]))            # x - y - z\n```\n",
+  "quiz": [
+    {
+      "kp": "py.type.str_basic",
+      "type": "single_choice",
+      "question": "执行以下代码后，变量 s 的值是什么？\ns = 'hello'\ns[0] = 'H'",
+      "options": [
+        "s 变为 'Hello'",
+        "s 仍为 'hello'，因为字符串是不可变对象，但该语句不会报错",
+        "程序抛出 TypeError",
+        "s 变为 'H'"
+      ],
+      "answer": 2,
+      "explanation": "Python 中的 str 是不可变类型，不能通过下标赋值修改已有字符串，因此 s[0] = 'H' 会抛出 TypeError: 'str' object does not support item assignment。",
+      "error_tag": "字符串可变性误解",
+      "variant_group": "str_immutable_assignment"
+    },
+    {
+      "kp": "py.type.str_basic",
+      "type": "single_choice",
+      "question": "以下代码的输出是什么？\ns = 'Python'\nprint(s[-3:])",
+      "options": [
+        "'tho'",
+        "'hon'",
+        "'yth'",
+        "'Pyt'"
+      ],
+      "answer": 1,
+      "explanation": "s[-3:] 表示从倒数第 3 个字符开始取到末尾。'Python' 的倒数字符依次为 n(-1)、o(-2)、h(-3)，因此结果是 'hon'。",
+      "error_tag": "负索引切片错误",
+      "variant_group": "str_negative_slice"
+    },
+    {
+      "kp": "py.type.str_basic",
+      "type": "single_choice",
+      "question": "以下代码的输出是什么？\ns = 'Hello World'\nprint(s.upper())",
+      "options": [
+        "'hello world'",
+        "'HELLO WORLD'",
+        "'Hello World'",
+        "'Helloworld'"
+      ],
+      "answer": 1,
+      "explanation": "str.upper() 返回所有字母大写的新字符串，因此 'Hello World' 变为 'HELLO WORLD'。",
+      "error_tag": "大小写转换方法混淆",
+      "variant_group": "str_case_conversion"
+    },
+    {
+      "kp": "py.type.str_basic",
+      "type": "single_choice",
+      "question": "以下代码的输出是什么？\ns = 'hello'\nprint(s.startswith('he'))",
+      "options": [
+        "True",
+        "False",
+        "1",
+        "抛出异常"
+      ],
+      "answer": 0,
+      "explanation": "str.startswith(prefix) 判断字符串是否以指定前缀开头，'hello' 以 'he' 开头，返回 True。",
+      "error_tag": "startswith 返回值类型误解",
+      "variant_group": "str_startswith"
+    },
+    {
+      "kp": "py.type.str_basic",
+      "type": "single_choice",
+      "question": "以下代码的输出是什么？\ns = 'abc123'\nprint(s.isalpha())",
+      "options": [
+        "True",
+        "False",
+        "1",
+        "抛出异常"
+      ],
+      "answer": 1,
+      "explanation": "str.isalpha() 要求字符串所有字符都是字母才返回 True。'abc123' 包含数字，因此返回 False。",
+      "error_tag": "isalpha 判断条件误解",
+      "variant_group": "str_isalpha"
+    },
+    {
+      "kp": "py.type.str_basic",
+      "type": "single_choice",
+      "question": "以下代码的输出是什么？\ns = 'hello'\nprint(len(s))",
+      "options": [
+        "4",
+        "5",
+        "6",
+        "报错"
+      ],
+      "answer": 1,
+      "explanation": "len() 返回字符串中字符的个数。'hello' 有 5 个字符，因此结果为 5。",
+      "error_tag": "len 与索引范围混淆",
+      "variant_group": "str_len"
+    },
+    {
+      "kp": "py.type.str_basic",
+      "type": "single_choice",
+      "question": "以下代码的输出是什么？\ns = 'hello'\nprint('ell' in s)",
+      "options": [
+        "True",
+        "False",
+        "1",
+        "抛出异常"
+      ],
+      "answer": 0,
+      "explanation": "in 运算符用于判断子串是否存在于字符串中。'ell' 是 'hello' 的子串，因此返回 True。",
+      "error_tag": "in 子串判断误解",
+      "variant_group": "str_in"
+    },
+    {
+      "kp": "py.type.str_basic",
+      "type": "single_choice",
+      "question": "以下代码的输出是什么？\nprint('hello' * 3)",
+      "options": [
+        "'hellohellohello'",
+        "'hello hello hello'",
+        "'hello3'",
+        "抛出 TypeError"
+      ],
+      "answer": 0,
+      "explanation": "字符串与整数相乘表示重复拼接。'hello' * 3 得到 'hellohellohello'。",
+      "error_tag": "字符串乘法理解错误",
+      "variant_group": "str_repeat"
+    },
+    {
+      "kp": "py.type.str_basic",
+      "type": "single_choice",
+      "question": "以下代码的输出是什么？\nprint('hello' + 3)",
+      "options": [
+        "'hello3'",
+        "'hello hello hello'",
+        "抛出 TypeError",
+        "3"
+      ],
+      "answer": 2,
+      "explanation": "字符串只能与字符串相加，'hello' + 3 会尝试拼接字符串和整数，抛出 TypeError。若要先转成字符串，应使用 str(3)。",
+      "error_tag": "字符串拼接类型错误",
+      "variant_group": "str_concat_type"
+    },
+    {
+      "kp": "py.type.str_basic",
+      "type": "single_choice",
+      "question": "以下代码的输出是什么？\ns = 'abcdef'\nprint(s[2:4])",
+      "options": [
+        "'cd'",
+        "'cde'",
+        "'bc'",
+        "'def'"
+      ],
+      "answer": 0,
+      "explanation": "切片 s[2:4] 包含索引 2 和 3，不包含 4。'abcdef' 中索引 2 是 'c'，索引 3 是 'd'，因此结果为 'cd'。",
+      "error_tag": "切片左闭右开误解",
+      "variant_group": "str_slice_basic"
+    },
+    {
+      "kp": "py.type.str_basic",
+      "type": "single_choice",
+      "question": "以下代码的输出是什么？\ns = 'hello'\nprint(s.count('l'))",
+      "options": [
+        "1",
+        "2",
+        "3",
+        "0"
+      ],
+      "answer": 1,
+      "explanation": "str.count(sub) 返回子串在字符串中出现的非重叠次数。'hello' 中有两个 'l'，因此结果为 2。",
+      "error_tag": "count 计数错误",
+      "variant_group": "str_count"
+    },
+    {
+      "kp": "py.type.str_basic",
+      "type": "single_choice",
+      "question": "以下代码的输出是什么？\ns = 'Hello'\nprint(s.lower().startswith('he'))",
+      "options": [
+        "True",
+        "False",
+        "'he'",
+        "抛出异常"
+      ],
+      "answer": 0,
+      "explanation": "s.lower() 先返回 'hello'，然后 startswith('he') 判断是否以 'he' 开头，结果为 True。",
+      "error_tag": "方法链式调用理解错误",
+      "variant_group": "str_method_chain"
+    },
+    {
+      "kp": "py.type.str_basic",
+      "type": "single_choice",
+      "question": "以下代码的输出是什么？\ns = 'abcdef'\nprint(s[1:5:2])",
+      "options": [
+        "'bd'",
+        "'bcde'",
+        "'bdf'",
+        "'ce'"
+      ],
+      "answer": 0,
+      "explanation": "切片 s[1:5:2] 从索引 1 开始，到索引 5 之前结束，步长为 2。索引依次为 1、3，对应字符 'b'、'd'，所以结果是 'bd'。",
+      "error_tag": "切片步长理解错误",
+      "variant_group": "str_slice_step"
+    },
+    {
+      "kp": "py.type.str_basic",
+      "type": "single_choice",
+      "question": "以下代码的输出是什么？\ns = 'hello'\nprint(s[::-1])",
+      "options": [
+        "'hello'",
+        "'olleh'",
+        "'h'",
+        "抛出异常"
+      ],
+      "answer": 1,
+      "explanation": "s[::-1] 使用负步长 -1，从后向前取整个字符串，因此得到反转后的 'olleh'。",
+      "error_tag": "负步长切片错误",
+      "variant_group": "str_reverse_slice"
+    },
+    {
+      "kp": "py.type.str_basic",
+      "type": "single_choice",
+      "question": "以下代码的输出是什么？\ns = 'hello world'\nprint(s.find('o'))",
+      "options": [
+        "4",
+        "7",
+        "5",
+        "-1"
+      ],
+      "answer": 0,
+      "explanation": "str.find(sub) 返回子串第一次出现的最低索引。'hello world' 中第一个 'o' 出现在索引 4。",
+      "error_tag": "find 返回值理解错误",
+      "variant_group": "str_find_index"
+    },
+    {
+      "kp": "py.type.str_basic",
+      "type": "single_choice",
+      "question": "以下代码的输出是什么？\ns = 'hello world'\nprint(s.find('z'))",
+      "options": [
+        "0",
+        "None",
+        "抛出 ValueError",
+        "-1"
+      ],
+      "answer": 3,
+      "explanation": "str.find 在找不到子串时返回 -1，而不是抛出异常。str.index 在找不到时才会抛出 ValueError。",
+      "error_tag": "find 未找到行为混淆",
+      "variant_group": "str_find_not_found"
+    },
+    {
+      "kp": "py.type.str_basic",
+      "type": "single_choice",
+      "question": "以下代码的输出是什么？\ns = '  hello  '\nprint(s.strip())",
+      "options": [
+        "'  hello  '",
+        "'hello'",
+        "'hello  '",
+        "'  hello'"
+      ],
+      "answer": 1,
+      "explanation": "str.strip() 不带参数时，去除字符串首尾的空白字符（空格、换行、制表符等），因此结果为 'hello'。",
+      "error_tag": "strip 作用范围误解",
+      "variant_group": "str_strip_basic"
+    },
+    {
+      "kp": "py.type.str_basic",
+      "type": "single_choice",
+      "question": "以下代码的输出是什么？\ns = 'hello'\nprint(s.replace('l', 'L'))",
+      "options": [
+        "'heLLo'",
+        "'heLlo'",
+        "'heLLo' 且原字符串 s 被修改为 'heLLo'",
+        "'hello'"
+      ],
+      "answer": 0,
+      "explanation": "str.replace 返回一个新字符串，将所有 'l' 替换为 'L'，因此得到 'heLLo'。原字符串 s 不会被修改，因为字符串不可变。",
+      "error_tag": "replace 原地修改误解",
+      "variant_group": "str_replace_basic"
+    },
+    {
+      "kp": "py.type.str_basic",
+      "type": "single_choice",
+      "question": "以下代码的输出是什么？\ns = 'a,b,c'\nprint(s.split(','))",
+      "options": [
+        "['a', 'b', 'c']",
+        "'a b c'",
+        "('a', 'b', 'c')",
+        "'abc'"
+      ],
+      "answer": 0,
+      "explanation": "str.split(',') 使用逗号作为分隔符，将字符串拆分为列表，结果为 ['a', 'b', 'c']。",
+      "error_tag": "split 返回类型错误",
+      "variant_group": "str_split_basic"
+    },
+    {
+      "kp": "py.type.str_basic",
+      "type": "single_choice",
+      "question": "以下代码的输出是什么？\nprint(','.join(['a', 'b', 'c']))",
+      "options": [
+        "'a,b,c'",
+        "'abc'",
+        "['a', ',', 'b', ',', 'c']",
+        "抛出 TypeError"
+      ],
+      "answer": 0,
+      "explanation": "str.join(iterable) 用调用该方法的字符串连接可迭代对象中的字符串元素。','.join(['a','b','c']) 得到 'a,b,c'。",
+      "error_tag": "join 调用方式混淆",
+      "variant_group": "str_join_basic"
+    },
+    {
+      "kp": "py.type.str_index",
+      "type": "single_choice",
+      "question": "已知 s = \"Python\"，则 s[0] 与 s[-1] 的值分别是什么？",
+      "options": [
+        "'P' 和 'n'",
+        "'P' 和 'o'",
+        "'y' 和 'n'",
+        "'y' 和 'o'"
+      ],
+      "answer": 0,
+      "explanation": "正索引从 0 开始，s[0] 是首字符 'P'；负索引从 -1 开始指向最后一个字符，s[-1] 是 'n'。",
+      "error_tag": "概念混淆",
+      "variant_group": "str_index_basic"
+    },
+    {
+      "kp": "py.type.str_index",
+      "type": "single_choice",
+      "question": "对于字符串 s = \"hello\"，表达式 s[len(s) - 1] 的结果是什么？",
+      "options": [
+        "'h'",
+        "'o'",
+        "'l'",
+        "报 IndexError"
+      ],
+      "answer": 1,
+      "explanation": "len(s) 为 5，len(s)-1 为 4，s[4] 即最后一个字符 'o'。这是用长度换算最后一个下标的标准写法。",
+      "error_tag": "边界错误",
+      "variant_group": "str_index_basic"
+    },
+    {
+      "kp": "py.type.str_index",
+      "type": "multi_choice",
+      "question": "阅读代码：\ns = \"hello\"\n下列哪些表达式不会抛出异常？（多选）",
+      "options": [
+        "s[0:100]",
+        "s[-100:2]",
+        "s[10]",
+        "s[1:4]",
+        "s[:]"
+      ],
+      "answer": [
+        0,
+        1,
+        3,
+        4
+      ],
+      "explanation": "切片对越界的 start/stop 会做截断处理，不报错：s[0:100]='hello'，s[-100:2]='he'，s[:]='hello'。只有直接下标访问 s[10] 越界才会抛 IndexError。",
+      "error_tag": "边界错误",
+      "variant_group": "str_slice_bounds"
+    },
+    {
+      "kp": "py.type.str_index",
+      "type": "multi_choice",
+      "question": "下列哪些方式可以安全地取得字符串 s 的最后一个字符？（多选）",
+      "options": [
+        "s[-1]",
+        "s[len(s)-1]",
+        "s[len(s)]",
+        "s[-1:]",
+        "s[0]"
+      ],
+      "answer": [
+        0,
+        1,
+        3
+      ],
+      "explanation": "s[-1] 与 s[len(s)-1] 都取下表最后一个字符；s[-1:] 是切片，结果也是最后一个字符组成的字符串。s[len(s)] 越界报错，s[0] 取的是首字符。",
+      "error_tag": "边界错误",
+      "variant_group": "str_index_equiv"
+    },
+    {
+      "kp": "py.type.str_index",
+      "type": "fill_blank",
+      "question": "补全代码，使其输出字符串 s 的最后一个字符（不使用负索引）：\nprint(s[______])",
+      "options": [],
+      "answer": [
+        "len(s)-1",
+        "len(s) - 1",
+        "len(s)- 1",
+        "len(s) -1"
+      ],
+      "explanation": "最后一个字符的下标等于字符串长度减一，即 len(s)-1。",
+      "error_tag": "边界错误",
+      "variant_group": "str_index_basic"
+    },
+    {
+      "kp": "py.type.str_index",
+      "type": "fill_blank",
+      "question": "已知 s = \"abcdef\"，要使表达式 s[______] 的值为字符串 'cde'，请填写一个合法的下标区间（不含空格）。",
+      "options": [],
+      "answer": [
+        "2:5",
+        "2:5:",
+        "2: 5"
+      ],
+      "explanation": "切片 s[2:5] 取下标 2、3、4，对应 'c'、'd'、'e'，结果为 'cde'。切片是左闭右开区间。",
+      "error_tag": "边界错误",
+      "variant_group": "str_slice_basic"
+    },
+    {
+      "kp": "py.type.str_index",
+      "type": "fill_blank",
+      "question": "已知 s = \"Python\"，则表达式 s[-3] 的值是 ______（只填字符，不含引号）。",
+      "options": [],
+      "answer": [
+        "h",
+        "'h'",
+        "\"h\""
+      ],
+      "explanation": "\"Python\" 长度为 6，-3 等价于下标 3，对应字符 'h'。",
+      "error_tag": "概念混淆",
+      "variant_group": "str_index_negative"
+    },
+    {
+      "kp": "py.type.str_index",
+      "type": "code_reading",
+      "question": "阅读代码并写出输出：\ns = \"abcdef\"\nprint(s[1:5][-1])\n",
+      "options": [],
+      "answer": "e",
+      "explanation": "s[1:5] 得到 'bcde'，再对其取 [-1] 得到最后一个字符 'e'。这是切片后再索引的链式操作。",
+      "error_tag": "边界错误",
+      "variant_group": "str_slice_chain"
+    },
+    {
+      "kp": "py.type.str_index",
+      "type": "code_reading",
+      "question": "阅读代码并解释为什么输出是这个结果：\ns = \"abc\"\nresult = \"\"\nfor i in range(len(s) - 1, -1, -1):\n    result += s[i]\nprint(result)\n",
+      "options": [],
+      "answer": "输出 cba。range(len(s)-1, -1, -1) 生成 2、1、0 的下标序列，依次取 'c'、'b'、'a' 并拼接，实现字符串反转。注意 range 的 stop 取 -1 是由于右开区间，以保证下标 0 被包含。",
+      "explanation": "",
+      "error_tag": "边界错误",
+      "variant_group": "str_index_iteration"
+    },
+    {
+      "kp": "py.type.str_index",
+      "type": "code_reading",
+      "question": "阅读代码并写出输出：\ns = \"hello\"\nprint(s[100:])\n",
+      "options": [],
+      "answer": "输出空字符串（打印时为一个空行）。当切片起点超过字符串长度时，结果为空字符串，Python 不会抛出 IndexError。",
+      "explanation": "",
+      "error_tag": "边界错误",
+      "variant_group": "str_slice_bounds"
+    },
+    {
+      "kp": "py.type.str_index",
+      "type": "scenario",
+      "question": "某工程需要从一行用户输入中安全地取出「最后一个字符」作为校验位。团队里有人写成了 code = line[len(line)]，上线后偶发崩溃。请说明该写法的问题，并给出至少两种更稳妥的取最后一个字符的写法，同时说明输入为空字符串时你会如何处理。",
+      "options": [],
+      "answer": null,
+      "explanation": "len(line) 是长度，最大合法下标为 len(line)-1，直接写 line[len(line)] 必然越界并抛 IndexError。稳妥写法有 line[-1] 或 line[len(line)-1]，二者都需要保证字符串非空。空字符串时这两种写法同样会抛 IndexError，因此应先用 if line 或 if len(line) > 0 判断，再决定返回什么（如返回 None、空串或默认校验位）。",
+      "error_tag": "边界错误",
+      "variant_group": "str_index_engineering",
+      "required_keywords": [
+        "越界",
+        "IndexError",
+        "line[-1]",
+        "len(line)-1",
+        "空字符串判断"
+      ]
+    },
+    {
+      "kp": "py.type.str_index",
+      "type": "scenario",
+      "question": "有一个解析日志行的函数，格式为 \"LEVEL: message\"，开发者想用 s[s.index(':'):] 取出冒号及之后的部分。测试时发现当消息本身含有冒号（如 \"INFO: a:b\"）时结果不符合预期。请分析原因并给出更合适的处理方式，同时说明取冒号之后（不含冒号）的子串应如何写。",
+      "options": [],
+      "answer": null,
+      "explanation": "str.index 返回的是第一个匹配子串的下标，因此当消息中含冒号时，定位到的仍是第一个冒号，s[s.index(':'):] 会从第一个冒号开始截取，从而保留了标题外的内容。要在第一个冒号处切分，应使用 s.index(':')；若想取冒号之后（不含冒号）的部分，应写 s[s.index(':')+1:]，注意 +1 以避免把冒号本身包含进去。若可能不存在冒号，应使用 find 并检查返回值是否为 -1，避免 ValueError。",
+      "error_tag": "边界错误",
+      "variant_group": "str_index_engineering",
+      "required_keywords": [
+        "str.index",
+        "ValueError"
+      ]
+    },
+    {
+      "kp": "py.type.str_index",
+      "type": "single_choice",
+      "question": "执行 s = \"abc\" 后，s[3] 会发生什么？",
+      "options": [
+        "返回空字符串 ''",
+        "返回 None",
+        "抛出 IndexError",
+        "抛出 ValueError"
+      ],
+      "answer": 2,
+      "explanation": "字符串长度为 3，合法下标范围是 0~2 或 -1~-3。访问 s[3] 超出范围，Python 抛出 IndexError: string index out of range。",
+      "error_tag": "边界错误",
+      "variant_group": "str_index_bounds"
+    },
+    {
+      "kp": "py.type.str_index",
+      "type": "scenario",
+      "question": "你正在编写一个把 16 进制颜色字符串（如 \"#1A2B3C\"）拆分为 R、G、B 三个分量的函数。请描述你会如何使用字符串下标与切片取出这三段，并指出容易出现的下标边界错误。",
+      "options": [],
+      "answer": null,
+      "explanation": "颜色字符串 \"#1A2B3C\" 长度为 7，索引 0 是 '#'，之后每两个字符为一个通道。R = s[1:3]、G = s[3:5]、B = s[5:7]。切片是左闭右开，所以起点为奇数、终点为起点加 2。常见错误包括把终点写成包含式（如 s[1:2] 只取一个字符）、把起点写成 0 导致带上 '#'，以及用下标 s[7] 访问最后位置而越界抛 IndexError。应始终注意长度与下标上界的关系。",
+      "error_tag": "边界错误",
+      "variant_group": "str_index_engineering",
+      "required_keywords": [
+        "IndexError",
+        "索引"
+      ]
+    },
+    {
+      "kp": "py.type.str_index",
+      "type": "single_choice",
+      "question": "阅读代码：\ns = \"abcdef\"\nprint(s[-2])\n输出是什么？",
+      "options": [
+        "'b'",
+        "'e'",
+        "'f'",
+        "'d'"
+      ],
+      "answer": 1,
+      "explanation": "负索引 -1 指最后一个字符 'f'，-2 指倒数第二个字符 'e'，因此输出 'e'。",
+      "error_tag": "概念混淆",
+      "variant_group": "str_index_negative"
+    },
+    {
+      "kp": "py.type.str_index",
+      "type": "single_choice",
+      "question": "下列哪一项正确描述了字符串下标 i 与 -i 的关系（设字符串长度为 n，1 <= i <= n）？",
+      "options": [
+        "s[i] 与 s[-i] 总是指向同一字符",
+        "s[i] 与 s[i-n] 指向同一字符",
+        "s[i] 与 s[n-i] 总是指向同一字符",
+        "s[i] 与 s[i+n] 指向同一字符"
+      ],
+      "answer": 1,
+      "explanation": "负索引等价于正索引加上长度：-i 等价于 n - i，因此 s[-i] 等于 s[n-i]；反过来 s[i] 等于 s[i-n]（当 i-n 为负时）。选项 B 描述的是 s[i] == s[i-n] 这一等价转换。",
+      "error_tag": "概念混淆",
+      "variant_group": "str_index_negative"
+    },
+    {
+      "kp": "py.type.str_index",
+      "type": "single_choice",
+      "question": "阅读代码：\ns = \"Python\"\nfor i in range(len(s)):\n    print(s[i], end=\"\")\n这段代码的输出是什么？",
+      "options": [
+        "Python",
+        "Pto",
+        "报错",
+        "空行"
+      ],
+      "answer": 0,
+      "explanation": "range(len(s)) 生成 0 到 5 的下标序列，依次取每个字符并按顺序拼接，输出完整字符串 Python。",
+      "error_tag": "记忆缺失",
+      "variant_group": "str_index_iteration"
+    },
+    {
+      "kp": "py.type.str_index",
+      "type": "single_choice",
+      "question": "关于字符串切片 s[start:stop]，下列说法正确的是？",
+      "options": [
+        "start 和 stop 都是闭区间端点，两边都取到",
+        "stop 下标对应的字符会被包含在结果中",
+        "stop 下标对应的字符不会被包含，切片是左闭右开",
+        "start 必须小于 stop，否则一定报错"
+      ],
+      "answer": 2,
+      "explanation": "切片是左闭右开区间，包含 start 不包含 stop。当 start >= stop 且步长为正时，结果为空字符串而不是报错。",
+      "error_tag": "边界错误",
+      "variant_group": "str_slice_basic"
+    },
+    {
+      "kp": "py.type.str_index",
+      "type": "single_choice",
+      "question": "执行 s = \"abcdefg\" 后，s[2:5] 的结果是？",
+      "options": [
+        "'bcd'",
+        "'cde'",
+        "'cdef'",
+        "'bcd e'"
+      ],
+      "answer": 1,
+      "explanation": "切片 s[2:5] 取下标 2、3、4，对应字符 'c'、'd'、'e'，结果为 'cde'。",
+      "error_tag": "边界错误",
+      "variant_group": "str_slice_basic"
+    },
+    {
+      "kp": "py.type.str_index",
+      "type": "multi_choice",
+      "question": "设 s = \"abcdef\"。下列哪些表达式的值等于 'e'？（多选）",
+      "options": [
+        "s[4]",
+        "s[-2]",
+        "s[len(s)-2]",
+        "s[5]",
+        "s[-1]"
+      ],
+      "answer": [
+        0,
+        1,
+        2
+      ],
+      "explanation": "s[4]='e'；s[-2] 为倒数第二个字符 'e'；s[len(s)-2]=s[4]='e'。s[5]='f'，s[-1]='f'，均不等于 'e'。",
+      "error_tag": "边界错误",
+      "variant_group": "str_index_equiv"
+    },
+    {
+      "kp": "py.type.str_index",
+      "type": "multi_choice",
+      "question": "关于字符串下标访问，下列哪些说法是正确的？（多选）",
+      "options": [
+        "字符串是不可变对象，s[0] = 'X' 会抛出 TypeError",
+        "负索引 -1 表示最后一个字符",
+        "访问越界下标会抛出 IndexError",
+        "字符串下标可以是浮点数，如 s[1.0]"
+      ],
+      "answer": [
+        0,
+        1,
+        2
+      ],
+      "explanation": "字符串不可变，赋值给下标会抛 TypeError；负索引 -1 表示末尾；越界抛 IndexError。下标必须是整数，s[1.0] 会抛 TypeError，所以 D 错误。",
+      "error_tag": "概念混淆",
+      "variant_group": "str_index_property"
+    },
+    {
+      "kp": "py.type.str_method",
+      "type": "single_choice",
+      "question": "执行下列代码后，变量 result 的值是什么？\n\ns = \"Hello, World\"\nresult = s.lower()",
+      "options": [
+        "\"Hello, World\"",
+        "\"hello, world\"",
+        "\"HELLO, WORLD\"",
+        "运行报错"
+      ],
+      "answer": 1,
+      "explanation": "str.lower() 返回一个全部字符转为小写的新字符串。原字符串 s 不会被修改，因为字符串是不可变的，但 result 保存的是转换后的结果 \"hello, world\"。",
+      "error_tag": "概念混淆",
+      "variant_group": "str_lower_upper"
+    },
+    {
+      "kp": "py.type.str_method",
+      "type": "single_choice",
+      "question": "下列代码运行后输出什么？\n\ns = \"  hello  \"\nprint(repr(s.strip()))",
+      "options": [
+        "'  hello  '",
+        "'hello'",
+        "' hello '",
+        "'hello  '"
+      ],
+      "answer": 1,
+      "explanation": "strip() 默认去除字符串两端的所有空白字符（空格、制表符、换行等），只作用于两端，不处理中间内容。所以 \"  hello  \" 变为 \"hello\"。",
+      "error_tag": "边界错误",
+      "variant_group": "str_strip"
+    },
+    {
+      "kp": "py.type.str_method",
+      "type": "single_choice",
+      "question": "对于字符串 s = \"Hello\"，s[::-1] 的结果是？",
+      "options": [
+        "\"Hello\"",
+        "\"olleH\"",
+        "\"H\"",
+        "抛出 ValueError"
+      ],
+      "answer": 1,
+      "explanation": "切片 [::-1] 使用步长 -1 将字符串逆序，因此得到 \"olleH\"。这是不修改原串、返回新字符串的常用逆序写法。",
+      "error_tag": "边界错误",
+      "variant_group": "str_slice_step"
+    },
+    {
+      "kp": "py.type.str_method",
+      "type": "single_choice",
+      "question": "执行下方代码，变量 parts 的值是什么？\n\ns = \"a=b=c\"\nparts = s.split(\"=\", 1)",
+      "options": [
+        "[\"a\", \"b\", \"c\"]",
+        "[\"a\", \"b=c\"]",
+        "[\"a=b\", \"c\"]",
+        "\"a b c\""
+      ],
+      "answer": 1,
+      "explanation": "split 的第二个参数 maxsplit=1 表示最多切分一次，所以只在第一个 \"=\" 处分割，得到 [\"a\", \"b=c\"]。",
+      "error_tag": "边界错误",
+      "variant_group": "str_split"
+    },
+    {
+      "kp": "py.type.str_method",
+      "type": "multi_choice",
+      "question": "下列哪些字符串方法会返回一个新的字符串（而不是就地修改原字符串，也不返回数字）？",
+      "options": [
+        "strip()",
+        "upper()",
+        "replace()",
+        "split()"
+      ],
+      "answer": [
+        0,
+        1,
+        2
+      ],
+      "explanation": "strip、upper、replace 都返回新的字符串。split() 返回的是列表，不是字符串，所以不选。字符串是不可变的，所有这类“修改”方法其实都是返回新对象。",
+      "error_tag": "概念混淆",
+      "variant_group": "str_return_type"
+    },
+    {
+      "kp": "py.type.str_method",
+      "type": "multi_choice",
+      "question": "关于字符串的 strip 系列方法，下列描述正确的有哪些？",
+      "options": [
+        "strip() 去除两端空白字符",
+        "lstrip() 只去除左端字符",
+        "strip(\"ab\") 会去除两端所有出现的 a 或 b 字符",
+        "rstrip() 会去除字符串中间的空白字符"
+      ],
+      "answer": [
+        0,
+        1,
+        2
+      ],
+      "explanation": "strip 默认去除两端空白；传入参数时，参数被当作“要去除的字符集合”，会去掉两端任意属于该集合的字符；lstrip/rstrip 分别只处理左/右端。rstrip 不影响中间部分，所以 D 错误。",
+      "error_tag": "概念混淆",
+      "variant_group": "str_strip"
+    },
+    {
+      "kp": "py.type.str_method",
+      "type": "multi_choice",
+      "question": "下列哪些表达式的结果为 True？",
+      "options": [
+        "\"123\".isdigit()",
+        "\"abc\".islower()",
+        "\"Abc\".islower()",
+        "\"\\t\\n\".isspace()"
+      ],
+      "answer": [
+        0,
+        1,
+        3
+      ],
+      "explanation": "\"123\" 全为数字，isdigit 为 True；\"abc\" 全为小写字母，islower 为 True；\"Abc\" 含有大写字母，islower 为 False；\"\\t\\n\" 全是空白字符，isspace 为 True。",
+      "error_tag": "边界错误",
+      "variant_group": "str_is_checks"
+    },
+    {
+      "kp": "py.type.str_method",
+      "type": "multi_choice",
+      "question": "关于字符串的 startswith/endswith/find/replace，下列说法正确的有哪些？",
+      "options": [
+        "startswith 可以接受字符串元组作为前缀集合",
+        "replace 可以指定替换次数",
+        "find 找不到子串会抛出异常",
+        "replace 返回的是被修改后的原字符串对象本身"
+      ],
+      "answer": [
+        0,
+        1
+      ],
+      "explanation": "startswith 支持元组前缀；replace 的第三个参数可限制替换次数。find 找不到时返回 -1 而非抛异常，故 C 错误；字符串不可变，replace 返回新字符串，不会修改原对象，故 D 错误。",
+      "error_tag": "概念混淆",
+      "variant_group": "str_methods_mixed"
+    },
+    {
+      "kp": "py.type.str_method",
+      "type": "fill_blank",
+      "question": "补全代码，使其把字符串 s（例如 \"hello world\"）的所有单词首字母大写，其余字母小写，并打印结果。\n\ns = \"hello world\"\nprint(s.____())",
+      "options": [],
+      "answer": [
+        "title",
+        "title"
+      ],
+      "explanation": "str.title() 会把每个单词的首字母大写、其余字母小写，得到 \"Hello World\"。注意与 capitalize() 区分，后者只处理整串的第一个字母。",
+      "error_tag": "记忆缺失",
+      "variant_group": "str_title"
+    },
+    {
+      "kp": "py.type.str_method",
+      "type": "fill_blank",
+      "question": "阅读代码并补全空白，使其输出 \"  hi\" 去掉左端空白而不改变右端。\n\ns = \"  hi  \"\nprint(s.____())  # 期望输出: \"hi  \"",
+      "options": [],
+      "answer": [
+        "lstrip",
+        "lstrip()"
+      ],
+      "explanation": "lstrip() 只去除字符串左端的空白字符，保留右端空白，因此 \"  hi  \" 变为 \"hi  \"。如果使用 strip() 会连右端也去掉，不符合要求。",
+      "error_tag": "边界错误",
+      "variant_group": "str_strip"
+    },
+    {
+      "kp": "py.type.str_method",
+      "type": "code_reading",
+      "question": "阅读下面的代码，写出 print 的输出结果：\n\ns = \"Hello\"\nprint(s.find(\"l\"), s.rfind(\"l\"))",
+      "options": [],
+      "answer": "2 3",
+      "explanation": "\"Hello\" 中 l 出现在下标 2 和 3（下标从 0 开始）。find 返回第一次出现的下标 2，rfind 返回最后一次出现的下标 3。",
+      "error_tag": "边界错误",
+      "variant_group": "str_find_index"
+    },
+    {
+      "kp": "py.type.str_method",
+      "type": "code_reading",
+      "question": "阅读下面的代码，写出输出结果：\n\ntext = \"a,b,,c\"\nparts = text.split(\",\")\nprint(len(parts), parts)",
+      "options": [],
+      "answer": "4 ['a', 'b', '', 'c']",
+      "explanation": "split 遇到分隔符就切，连续两个逗号之间会产生一个空字符串元素。所以切分结果为 ['a', 'b', '', 'c']，共有 4 个元素，长度是 4。",
+      "error_tag": "边界错误",
+      "variant_group": "str_split"
+    },
+    {
+      "kp": "py.type.str_method",
+      "type": "single_choice",
+      "question": "以下关于 str.split() 的描述，哪一项是正确的？",
+      "options": [
+        "\"a,b,c\".split(\",\") 返回列表 [\"a\", \"b\", \"c\"]",
+        "\"a,b,c\".split() 返回字符串 \"abc\"",
+        "\"a,b,c\".split(\",\") 会修改原字符串",
+        "\"a b c\".split(\" \") 与 \"a b c\".split() 结果总是一样"
+      ],
+      "answer": 0,
+      "explanation": "split(\",\") 按指定分隔符切分并返回列表。split() 也返回列表而非字符串，字符串本身不可变不会被修改；当字符串含连续空白时，split(\" \") 与无参 split() 结果不同（无参会合并连续空白），故 D 不正确。",
+      "error_tag": "概念混淆",
+      "variant_group": "str_split"
+    },
+    {
+      "kp": "py.type.str_method",
+      "type": "scenario",
+      "question": "工程场景：你需要从一批文件名（如 \"report_2024.csv\"、\"data.txt\"）中过滤出所有扩展名为 \".csv\" 或 \".txt\" 的文件。请简要说明你会如何用字符串方法实现这个过滤，并指出需要注意的一个边界情况。",
+      "options": [],
+      "answer": null,
+      "explanation": "推荐使用 endswith 并传入字符串元组，例如 name.lower().endswith((\".csv\", \".txt\"))，这样一次匹配多种后缀。边界情况是扩展名大小写不一致（如 .CSV），应先用 lower() 统一再比较；同时要注意像 \"a.csv.bak\" 这类名字以 .bak 结尾不应被误判。",
+      "error_tag": "边界错误",
+      "variant_group": "str_startswith_endswith",
+      "required_keywords": [
+        "name.lower",
+        "csv",
+        "csv.bak",
+        "边界"
+      ]
+    },
+    {
+      "kp": "py.type.str_method",
+      "type": "single_choice",
+      "question": "s = \"Python\"，下列哪个操作会抛出异常？",
+      "options": [
+        "s[0]",
+        "s[-1]",
+        "s[1:4]",
+        "s[0] = \"p\""
+      ],
+      "answer": 3,
+      "explanation": "字符串是不可变对象，不能通过下标赋值来修改其内容，s[0] = \"p\" 会抛出 TypeError。取值、负数索引和切片都是合法的读操作。",
+      "error_tag": "概念混淆",
+      "variant_group": "str_immutable"
+    },
+    {
+      "kp": "py.type.str_method",
+      "type": "single_choice",
+      "question": "运行下列代码，输出是什么？\n\ns = \"abc123\"\nprint(s.isdigit(), s.isalpha(), s.isalnum())",
+      "options": [
+        "False False True",
+        "True True True",
+        "False True False",
+        "True False True"
+      ],
+      "answer": 0,
+      "explanation": "\"abc123\" 并非全为数字，所以 isdigit() 为 False；并非全为字母，所以 isalpha() 为 False；由于全部由字母和数字组成，isalnum() 为 True。",
+      "error_tag": "边界错误",
+      "variant_group": "str_is_checks"
+    },
+    {
+      "kp": "py.type.str_method",
+      "type": "single_choice",
+      "question": "执行 \"hello\".replace(\"l\", \"L\") 的结果是？",
+      "options": [
+        "\"heLLo\"",
+        "\"heLlo\"",
+        "\"heLloL\"",
+        "\"HeLLo\""
+      ],
+      "answer": 0,
+      "explanation": "replace 默认把字符串中所有出现的 \"l\" 都替换为 \"L\"，\"hello\" 中两个 l 都被替换，得到 \"heLLo\"。",
+      "error_tag": "记忆缺失",
+      "variant_group": "str_replace"
+    },
+    {
+      "kp": "py.type.str_method",
+      "type": "single_choice",
+      "question": "下列关于 find 与 index 的说法，哪一项正确？",
+      "options": [
+        "两者在找不到子串时都抛异常",
+        "find 找不到返回 -1，index 找不到抛 ValueError",
+        "index 找不到返回 -1，find 找不到抛 ValueError",
+        "find 和 index 都不能接受起止位置参数"
+      ],
+      "answer": 1,
+      "explanation": "find() 找不到子串时返回 -1，而 index() 找不到时会抛出 ValueError。两者都可接受可选的起始和结束位置参数。",
+      "error_tag": "概念混淆",
+      "variant_group": "str_find_index"
+    },
+    {
+      "kp": "py.type.str_method",
+      "type": "single_choice",
+      "question": "执行下列代码后，输出是什么？\n\nprint(\"-\".join([\"a\", \"b\", \"c\"]))",
+      "options": [
+        "\"abc\"",
+        "\"a-b-c\"",
+        "[\"a\", \"-\", \"b\", \"-\", \"c\"]",
+        "抛出 TypeError"
+      ],
+      "answer": 1,
+      "explanation": "join 以调用它的字符串作为连接符，把可迭代对象中的多个字符串依次拼起来，因此 \"-\".join([\"a\",\"b\",\"c\"]) 得到 \"a-b-c\"。要注意 join 只能连接字符串元素，否则会报错。",
+      "error_tag": "概念混淆",
+      "variant_group": "str_join"
+    },
+    {
+      "kp": "py.type.str_method",
+      "type": "single_choice",
+      "question": "关于 startswith 和 endswith，下列说法错误的是？",
+      "options": [
+        "\"image.png\".endswith(\".png\") 返回 True",
+        "\"hello\".startswith(\"he\") 返回 True",
+        "两者都可以接受一个字符串元组作为参数来匹配多种前缀或后缀",
+        "两者都只能一次匹配一个字符"
+      ],
+      "answer": 3,
+      "explanation": "startswith 和 endswith 都能接受字符串或字符串元组作为参数，例如 \"a.txt\".endswith((\".txt\", \".md\"))，因此说它们“只能匹配一个字符”是错误的。",
+      "error_tag": "概念混淆",
+      "variant_group": "str_startswith_endswith"
+    },
+    {
+      "kp": "py.type.str_method",
+      "type": "single_choice",
+      "question": "下列哪个表达式可以用来判断字符串 s 是否以 \"py\" 开头（不区分大小写）？",
+      "options": [
+        "s.startswith(\"py\")",
+        "s.lower().startswith(\"py\")",
+        "s.find(\"py\") == 0",
+        "s.contains(\"py\")"
+      ],
+      "answer": 1,
+      "explanation": "要实现不区分大小写的判断，可先把字符串统一为小写再调用 startswith(\"py\")。A 区分大小写；C 用 find 只判断出现位置，对区分大小写仍有要求且语义不清；D 的 contains 不是字符串方法。",
+      "error_tag": "概念混淆",
+      "variant_group": "str_startswith_endswith"
+    }
+  ]
+}

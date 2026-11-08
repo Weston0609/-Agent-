@@ -1,0 +1,611 @@
+{
+  "id": "s1u6l1",
+  "title": "s1u6l1",
+  "kps": [
+    "py.module.import",
+    "py.module.from_import"
+  ],
+  "theory": "## py.module.import\n\n# py.module.import：从零开始理解 Python 模块与导入\n\n## 一句话直觉\n\n你写 Python 时反复写 `import math`、`from pathlib import Path`，背后的机制就是 **模块（module）** 与 **导入（import）**：它让代码可以拆分到多个文件、按需复用，也让标准库和第三方库能接入你的程序。\n\n这节课我们把 `import` 从“会写”讲到“懂原理、能排错、写出工程级代码”。\n\n---\n\n## 1. 什么是模块？为什么需要 import？\n\n**模块（module）** 就是一个 `.py` 文件。文件名去掉 `.py` 就是模块名，例如 `utils.py` 的模块名是 `utils`。\n\n当你执行 `import utils` 时，Python 会：\n\n1. 找到 `utils.py`；\n2. 执行这个文件中的顶层代码；\n3. 把执行后产生的名字绑定到一个模块对象上；\n4. 在你当前命名空间里创建变量 `utils`，指向这个模块对象。\n\n```python\n# math 是标准库模块，导入后通过 math.sqrt 访问其中的函数\nimport math\n\nprint(math.sqrt(16))  # 4.0\nprint(math.pi)        # 3.141592653589793\n```\n\n关键结论：`import module` 导入的是 **模块对象本身**，不是模块里的所有名字。\n\n---\n\n## 2. import 的四种常用写法\n\n### 2.1 `import module`\n\n导入模块对象，通过 `module.name` 访问。\n\n```python\nimport os\n\nprint(os.getcwd())  # 当前工作目录\n```\n\n### 2.2 `import module as alias`\n\n给模块起别名，常用于长模块名或避免冲突。\n\n```python\nimport numpy as np  # 第三方库常见别名；若未安装会报 ModuleNotFoundError\n\n# print(np.array([1, 2, 3]))\n```\n\n### 2.3 `from module import name`\n\n只把模块中的某个名字导入当前命名空间。\n\n```python\nfrom math import sqrt, pi\n\nprint(sqrt(25))  # 5.0\nprint(pi)        # 3.141592653589793\n```\n\n### 2.4 `from module import name as alias`\n\n导入时重命名，避免和本地名字冲突。\n\n```python\nfrom math import sqrt as square_root\n\nprint(square_root(36))  # 6.0\n```\n\n关键结论：`from ... import ...` 导入的是模块里的 **具体名字**；`import module` 导入的是 **模块对象**。\n\n---\n\n## 3. import 的搜索路径与模块缓存\n\n### 3.1 搜索路径\n\nPython 导入模块时，会按顺序查找：\n\n1. 内置模块（built-in modules），如 `sys`、`math`；\n2. `sys.path` 中的目录列表，通常包括：\n   - 当前脚本所在目录；\n   - 环境变量 `PYTHONPATH` 指定的目录；\n   - 标准库目录；\n   - 第三方包安装目录（如 `site-packages`）。\n\n```python\nimport sys\n\n# 打印前 5 个搜索路径，便于理解“为什么 my_module 能被找到”\nfor path in sys.path[:5]:\n    print(path)\n```\n\n### 3.2 模块缓存 `sys.modules`\n\n模块第一次被导入后，会缓存在 `sys.modules` 中。再次 `import` 同一个模块不会重新执行文件。\n\n```python\nimport sys\nimport math\n\n# math 已经在 sys.modules 中\nprint('math' in sys.modules)  # True\n\n# 再次导入不会重新执行 math.py（标准库也不会重复初始化）\nimport math as math_again\nprint(math is math_again)     # True\n```\n\n关键结论：同一个进程内，同一模块只会被真正执行一次，后续导入命中缓存。\n\n---\n\n## 4. 包（package）与 `__init__.py`\n\n**包（package）** 是包含多个模块的目录。传统上，包目录下需要有一个 `__init__.py`，Python 会把它当作包的初始化模块。\n\n例如：\n\n```text\nmyproject/\n  main.py\n  mypkg/\n    __init__.py\n    math_utils.py\n    string_utils.py\n```\n\n`mypkg/math_utils.py`：\n\n```python\n# 一个普通模块，供包内其他文件导入\ndef add(a, b):\n    return a + b\n```\n\n`main.py` 中可以写：\n\n```python\n# 绝对导入：从包名开始写，推荐做法\nfrom mypkg.math_utils import add\n\nprint(add(2, 3))  # 5\n```\n\n关键结论：包让多个模块组织成一个命名空间；绝对导入（absolute import）可读性最好。\n\n---\n\n## 5. `__name__`、`__all__` 与脚本/模块双身份\n\n### 5.1 `__name__`\n\n每个模块都有一个 `__name__`。直接运行文件时，`__name__ == '__main__'`；被导入时，`__name__` 是模块名。\n\n```python\n# demo_name.py\ndef main():\n    print('作为脚本运行')\n\nif __name__ == '__main__':\n    main()\n```\n\n```bash\npython demo_name.py        # 输出：作为脚本运行\npython -c \"import demo_name\"  # 无输出，因为 __name__ 不是 '__main__'\n```\n\n### 5.2 `__all__`\n\n`__all__` 是一个列表，控制 `from module import *` 时哪些名字会被导出。\n\n```python\n# mymod.py\n__all__ = ['public_func']\n\ndef public_func():\n    return 'public'\n\ndef _private_func():\n    return 'private'\n```\n\n```python\nfrom mymod import *\n\nprint(public_func())  # public\n# print(_private_func())  # NameError，因为不在 __all__ 中\n```\n\n关键结论：工程代码中应避免 `from module import *`，因为它会污染命名空间、让名字来源不清晰。\n\n---\n\n## 6. 常见导入错误与排查思路\n\n- `ModuleNotFoundError`：模块不存在或路径不对。检查模块名、`sys.path`、是否安装第三方包。\n- `ImportError`：模块存在，但里面的名字不存在或循环导入。\n- 循环导入（circular import）：A 导入 B，B 又导入 A。解决方式：延迟导入、重构依赖、把导入放到函数内部。\n- 导入副作用：模块顶层代码在导入时执行。不要把耗时或带副作用的逻辑放在顶层。\n\n```python\n# 不好的做法：导入时执行耗时/副作用代码\ndef _heavy_init():\n    return sum(range(10_000_000))\n\n# _result = _heavy_init()  # 导入这个模块会立刻计算，拖慢启动\n\n# 更好的做法：惰性计算\ndef get_result():\n    return _heavy_init()\n```\n\n---\n\n## 7. 工程级 import 规范\n\n参考 PEP 8 和官方风格指南，推荐：\n\n1. import 放在文件顶部，模块注释和文档字符串之后；\n2. 分组顺序：标准库 → 第三方库 → 本地应用/库；\n3. 每组之间空一行；\n4. 每行只导入一个模块，除非是 `from subprocess import Popen, PIPE` 这种明确同源导入；\n5. 优先使用绝对导入；\n6. 避免通配符导入 `from module import *`；\n7. 模块级 dunder（如 `__all__`、`__version__`）放在文档字符串之后、普通 import 之前，但 `from __future__ import ...` 必须最靠前（文档字符串之后）。\n\n```python\n\"\"\"示例模块：展示推荐的 import 顺序。\"\"\"\n\nfrom __future__ import annotations  # 必须最靠前（文档字符串之后）\n\n__all__ = ['main']\n__version__ = '0.1'\n\n# 标准库\nimport os\nimport sys\nfrom pathlib import Path\n\n# 第三方库（示例，若未安装请注释）\n# import requests\n\n# 本地模块\n# from mypkg import utils\n\n\ndef main() -> None:\n    print(Path.cwd())\n    print(sys.version)\n\n\nif __name__ == '__main__':\n    main()\n```\n\n---\n\n## 动手练习\n\n创建一个本地项目目录 `import_lab/`，完成以下任务：\n\n1. 新建 `import_lab/main.py`；\n2. 新建 `import_lab/tools/__init__.py`；\n3. 新建 `import_lab/tools/math_tools.py`，其中定义：\n   - `add(a, b)` 返回两数之和；\n   - `_secret()` 返回 `'secret'`；\n   - 设置 `__all__ = ['add']`；\n4. 在 `main.py` 中：\n   - 使用 `from tools.math_tools import add` 导入并打印 `add(3, 4)`；\n   - 使用 `import tools.math_tools as mt` 再次导入并打印 `mt.add(10, 20)`；\n   - 打印 `mt.__name__`，观察模块名；\n   - 尝试 `from tools.math_tools import *`，然后调用 `add`，确认 `_secret` 不可直接访问；\n   - 用 `sys.modules` 验证 `tools.math_tools` 已被缓存。\n\n完成后，尝试把 `main.py` 直接运行，也尝试在 `import_lab/` 上一级目录用 `python -m import_lab.main` 运行，观察 `sys.path` 和导入行为差异。\n\n```python\n\"\"\"\n可运行示例：演示 import 的常见写法、__name__、__all__ 与模块缓存。\n保存为 import_demo.py 后直接运行。\n\"\"\"\nimport sys\nimport math\nimport math as math_alias\nfrom math import sqrt, pi\nfrom math import sqrt as square_root\n\n# 1. import module：导入模块对象\nprint('1.', math.sqrt(16))\n\n# 2. import module as alias\nprint('2.', math_alias.sqrt(25))\n\n# 3. from module import name\nprint('3.', sqrt(36), pi)\n\n# 4. from module import name as alias\nprint('4.', square_root(49))\n\n# 5. __name__：直接运行 vs 被导入\nprint('5. __name__ =', __name__)\n\n# 6. 模块缓存：同一个模块只执行一次\nprint('6. math in sys.modules =', 'math' in sys.modules)\nprint('7. math is math_alias =', math is math_alias)\n\n# 8. __all__ 演示：定义一个临时模块对象不现实，这里展示语法意义\n# 真实项目中：mymod.py 中写 __all__ = ['public_func']，from mymod import * 只导入 public_func\n\n# 9. 安全地作为脚本运行\ndef main() -> None:\n    print('9. main() 被调用，当前模块作为脚本运行。')\n\nif __name__ == '__main__':\n    main()\n```\n\n## py.module.from_import\n\n# `from ... import ...`：模块导入的精准手术刀\n\n## 一句话直觉\n\n`import math` 是把整个工具箱搬回家，用的时候得写 `math.sqrt`；而 `from math import sqrt` 是直接从工具箱里只拿一把螺丝刀，用的时候直接 `sqrt`。**它就是「只取我要的，不要多余的」的导入方式。**\n\n---\n\n## 1. 为什么需要 `from ... import ...`？\n\nPython 里一切皆模块（module）。一个 `.py` 文件就是一个模块，模块里可以定义变量、函数、类。要使用别的模块里的东西，就需要「导入」。\n\n最基础的导入是 `import 模块名`：\n\n```python\nimport math\nprint(math.sqrt(16))   # 必须写 math. 前缀\n```\n\n但如果我只用 `sqrt` 一个函数，每次都写 `math.` 太啰嗦，而且代码意图不够聚焦。这时 `from ... import ...` 就派上用场：\n\n```python\nfrom math import sqrt\nprint(sqrt(16))        # 直接调用，省去前缀\n```\n\n**核心结论**：`from 模块 import 名字` 的作用是：先加载整个模块，然后只把指定的「名字」绑定到当前命名空间（namespace），让你可以不带前缀地使用。\n\n---\n\n## 2. 一次导入多个名字，以及用 `as` 起别名\n\n`from ... import ...` 支持一次拿多个名字，用逗号分隔；也支持用 `as` 起别名（alias），解决命名冲突或缩短名字。\n\n```python\n# 一次导入多个\nfrom math import sqrt, pi, factorial\nprint(sqrt(9), pi, factorial(5))\n\n# 起别名：当名字冲突或太长时很有用\nfrom math import sqrt as square_root\nprint(square_root(25))\n\n# 常见工程用法：把 numpy 的常用函数直接拿来\n# from numpy import array as arr\n```\n\n**核心结论**：`as` 只是给导入进来的名字换个「本地称呼」，模块本名不受影响。\n\n---\n\n## 3. `from 模块 import *` 是什么？以及为什么工程上要慎用\n\n`*` 表示「把模块里所有公开名字都导入当前命名空间」。听起来方便，但它是工程上的「反模式」。\n\n模块可以通过 `__all__` 来显式声明「公开名字」——当定义了 `__all__` 时，`import *` 只会导入 `__all__` 里列出的名字。例如官方文档中示例模块：\n\n```python\n# 某模块内部\n__all__ = ['a', 'b', 'c']\n```\n\n那么 `from 模块 import *` 只会导入 `a, b, c`，而不会导入模块内其他非公开名字。\n\n```python\n# 演示 __all__ 的效果（用一个临时模块模拟）\nimport types\n\nm = types.ModuleType('demo')\nm.a = 1\nm.b = 2\nm.c = 3\nm._secret = 999        # 下划线开头，默认不被 import * 导入\nm.__all__ = ['a', 'b', 'c']\n\nns = {}\nexec('from demo import *', {'__builtins__': __builtins__, 'demo': m}, ns)\nprint(sorted(k for k in ns if not k.startswith('_')))  # ['a', 'b', 'c']\n```\n\n**核心结论**：\n- `import *` 会污染当前命名空间，可能意外覆盖你已有的变量。\n- 它让「这个名字从哪来」变得难以追踪（工具、IDE、静态检查都不友好）。\n- **工程上推荐**：显式写出要导入的名字，或整个 `import 模块` 后再用前缀。\n\n---\n\n## 4. 模块级的「元信息」与隐藏约定\n\n每个模块都可以带有一些「魔法」属性（dunder attributes，双下划线属性），它们是模块的元信息：\n\n- `__all__`：`import *` 时公开的名字列表。\n- `__version__`、`__author__`：版本与作者信息，社区约定俗成。\n- `__doc__`：模块的文档字符串（docstring）。\n\n```python\n# 一个符合规范的模块头部写法\n\"\"\"小工具模块。\"\"\"\n\n__all__ = ['add', 'sub']\n__version__ = '0.1'\n__author__ = 'Your Name'\n\ndef add(a, b):\n    return a + b\n\ndef sub(a, b):\n    return a - b\n\ndef _internal():\n    \"\"\"下划线开头：弱内部标记，不被 import * 带走。\"\"\"\n    return 'private'\n```\n\n**核心结论**：写模块时定义 `__all__` 是对使用者的礼貌——它明确告诉别人「哪些是我希望你用的」。\n\n---\n\n## 5. 进阶：`from ... import ...` 的常见陷阱与类型检查技巧\n\n### 5.1 循环导入（circular import）\n\n如果 `a.py` 里 `from b import X`，而 `b.py` 里又 `from a import Y`，就会循环导入，常见报错 `ImportError` / `AttributeError`。工程做法：把导入放到函数内部（延迟导入），或重构依赖关系。\n\n### 5.2 只给类型检查用的导入：`TYPE_CHECKING`\n\n有些模块（比如某些重型库）只在类型注解里用到，运行时导入它会很慢。可以用 `typing.TYPE_CHECKING` 做一个「只对类型检查器可见」的导入：\n\n```python\nfrom typing import TYPE_CHECKING\n\nif TYPE_CHECKING:\n    import expensive_mod   # 运行时不会真的导入\n\ndef fun(arg: \"expensive_mod.SomeType\") -> None:\n    ...\n```\n\n**核心结论**：`TYPE_CHECKING` 在运行时是 `False`，但在静态类型检查器眼里是 `True`，因此既能被类型检查，又不拖慢运行时。\n\n### 5.3 惰性求值的注解\n\n要注意，注解里的名字如果在运行时未定义，普通写法可能触发 `NameError`；可以用字符串形式或 `annotationlib` 的 `Format.STRING` / `Format.FORWARDREF` 来安全获取注解。\n\n---\n\n## 动手练习\n\n**任务**：创建一个「数学小工具」模块，并用 `from ... import ...` 的三种方式分别使用它。\n\n1. 新建文件 `math_utils.py`，内容包含：\n   - 模块 docstring（一行即可）。\n   - `__all__ = ['square', 'cube']`\n   - `__version__ = '0.1'`\n   - 公开函数 `square(x)`、`cube(x)`。\n   - 一个下划线开头的函数 `_helper()`，不要放进 `__all__`。\n2. 新建 `main.py`，依次做三件事并打印结果：\n   - 用 `from math_utils import square` 导入并使用。\n   - 用 `from math_utils import cube as cb` 导入并起别名。\n   - 用 `import math_utils` 整模块导入，调用 `math_utils.square`。\n3. **思考题**：如果你在 `main.py` 里写 `from math_utils import *`，`_helper` 会被导入吗？为什么？请动手验证并写出结论。\n\n**验收标准**：`python main.py` 能正常打印三组结果，并且你能口头解释 `__all__` 与下划线前缀在 `import *` 中的区别。\n",
+  "quiz": [
+    {
+      "kp": "py.module.import",
+      "type": "single_choice",
+      "question": "下面这段代码执行后输出什么？\n\n# math.py\nprint('hello')\n\n# main.py\nimport math\nprint(math.pi > 3)",
+      "options": [
+        "先输出 hello，再输出 True",
+        "只输出 True，因为标准库的 math 优先于同目录同名文件",
+        "抛出错 ImportError",
+        "输出 hello 后出错，因为 math 里没有 pi"
+      ],
+      "answer": 1,
+      "explanation": "Python 在查找模块时会先搜索脚本所在目录。若本地目录存在 math.py，它会覆盖标准库的 math，因此 import math 得到的不是标准库模块，访问 math.pi 会抛 AttributeError。选项 A 是常见误解，但无论如何不会既打印 hello 又成功访问 pi。",
+      "error_tag": "同名模块遮蔽标准库",
+      "variant_group": "import_name_shadow"
+    },
+    {
+      "kp": "py.module.import",
+      "type": "single_choice",
+      "question": "某包目录结构如下：pkg/__init__.py 中执行了 `from . import sub`，且 sub.py 里没有 import pkg。现在在 main.py 中写 `import pkg`，随后尝试 `pkg.sub`，结果如何？",
+      "options": [
+        "可以访问 pkg.sub，因为导入包时会自动导入所有子模块",
+        "可以访问 pkg.sub，因为 __init__.py 中显式导入了子模块",
+        "报 AttributeError，因为 import pkg 只绑定顶层包名",
+        "报 ImportError，循环导入导致的"
+      ],
+      "answer": 1,
+      "explanation": "导入包时执行 __init__.py，其中 `from . import sub` 会把 sub 注册到包命名空间，因此 pkg.sub 可用。选项 A 的误解在于认为导入包会自动导入全部子模块，实际上只有当 __init__.py 或其它地方显式导入才会绑定到包命名空间。选项 C 在未显式导入 sub 时才成立。",
+      "error_tag": "包属性绑定",
+      "variant_group": "package_attribute"
+    },
+    {
+      "kp": "py.module.import",
+      "type": "single_choice",
+      "question": "如下代码：`import random`；随后 `del random`；再执行 `import random`，结果如何？",
+      "options": [
+        "报 NameError",
+        "报 ImportError",
+        "正常绑定 random，模块代码不重复执行（仍在 sys.modules）",
+        "正常绑定 random，且模块代码会再执行一次"
+      ],
+      "answer": 2,
+      "explanation": "del 只删除当前命名空间中的名字绑定，sys.modules 里的模块对象仍在，因此再次 import 只是重新绑定名字，不重复执行模块代码。",
+      "error_tag": "del 与模块缓存",
+      "variant_group": "sys_modules_cache"
+    },
+    {
+      "kp": "py.module.import",
+      "type": "single_choice",
+      "question": "关于 `from m import a, b`，下列哪项正确？",
+      "options": [
+        "m 会被绑定到当前命名空间",
+        "只有 a、b 被绑定，m 本身不绑定",
+        "如果 m 中还有 c，会一并导入",
+        "必须 m 是包，不能是普通模块"
+      ],
+      "answer": 1,
+      "explanation": "from ... import ... 只把列出的名字引入当前命名空间，模块名 m 本身不会被绑定（除非另有绑定）。m 可以是普通模块也可以是包。",
+      "error_tag": "from-import 绑定列表",
+      "variant_group": "import_binding"
+    },
+    {
+      "kp": "py.module.import",
+      "type": "single_choice",
+      "question": "在模块级别写 `__all__ = ['foo']`，主要影响什么？",
+      "options": [
+        "使 foo 成为模块内唯一可访问的名字",
+        "影响 `from m import *` 时被导入的名字集合",
+        "决定模块能否被 import",
+        "决定 foo 是否对外私有"
+      ],
+      "answer": 1,
+      "explanation": "__all__ 主要控制 `from m import *` 导入哪些名字；它不影响常规 import、不影响模块可被导入与否，也不阻止通过 `from m import 具体名字` 导入其它名字，更不是访问控制。",
+      "error_tag": "__all__ 语义",
+      "variant_group": "all_star_import"
+    },
+    {
+      "kp": "py.module.import",
+      "type": "single_choice",
+      "question": "下列哪种导入写法一般不被推荐，原因主要是命名污染与可读性差？",
+      "options": [
+        "import os",
+        "import os.path",
+        "from os import *",
+        "import numpy as np"
+      ],
+      "answer": 2,
+      "explanation": "`from m import *` 会把大量名字一次性引入当前命名空间，容易覆盖已有名字，可读性也差，因此普遍不被推荐。其余写法都明确具体。",
+      "error_tag": "星号导入",
+      "variant_group": "all_star_import"
+    },
+    {
+      "kp": "py.module.import",
+      "type": "single_choice",
+      "question": "导入一个包时，`__init__.py` 的作用不包括下列哪项？",
+      "options": [
+        "把包目录标记为可导入的包（在旧式命名空间包语义下讨论时）",
+        "执行包的初始化代码",
+        "为包命名空间绑定子模块或变量",
+        "自动把包内所有子模块都导入进来"
+      ],
+      "answer": 3,
+      "explanation": "__init__.py 在包被导入时执行，可以执行初始化、绑定名字，也被用作普通包的标记；但它不会自动导入包内的所有子模块，除非显式写出导入语句。",
+      "error_tag": "包初始化误解",
+      "variant_group": "package_attribute"
+    },
+    {
+      "kp": "py.module.import",
+      "type": "single_choice",
+      "question": "在包 pkg 的 sub.py 中写 `from . import util` 与 `from pkg import util`，主要差别是什么？",
+      "options": [
+        "完全等价，运行结果相同",
+        "相对导入依赖当前包名，绝对导入硬编码包名，包被重命名时相对导入更稳",
+        "相对导入更快",
+        "绝对导入在包内不可使用"
+      ],
+      "answer": 1,
+      "explanation": "相对导入相对于当前包，包里代码整体被重命名时仍可用；绝对导入写死了顶层包名。两者语义在正常情况下等价，但可移植性不同。",
+      "error_tag": "绝对导入与相对导入",
+      "variant_group": "relative_import"
+    },
+    {
+      "kp": "py.module.import",
+      "type": "single_choice",
+      "question": "下面代码运行 main.py 时最可能出现什么？\n\n# main.py\nfrom utils.helper import greet\nprint(greet())\n\n# 目录结构：main.py、utils/__init__.py、utils/helper.py",
+      "options": [
+        "正常输出 greet 的返回值",
+        "会因为没有把 utils 加入 sys.path 而失败",
+        "会触发循环导入",
+        "会因为缺少 setup.py 而失败"
+      ],
+      "answer": 0,
+      "explanation": "main.py 所在目录会在启动时加入 sys.path，且 utils 是带 __init__.py 的包，因此 `from utils.helper import greet` 可正常解析（前提是 helper.py 中定义了 greet）。是否安装与 setup.py 无关（选项 D 的误解），与 sys.path 的手工添加也无关（选项 B 的误解）。",
+      "error_tag": "包导入路径",
+      "variant_group": "package_import_path"
+    },
+    {
+      "kp": "py.module.import",
+      "type": "single_choice",
+      "question": "在交互式解释器中 `import sys; sys.modules['nonexist'] = object()` 后，再 `import nonexist`，会怎样？",
+      "options": [
+        "报 ModuleNotFoundError",
+        "正常完成，import 会从 sys.modules 取到该占位对象",
+        "报 TypeError，因为 not a module",
+        "会把 sys.modules 清空"
+      ],
+      "answer": 1,
+      "explanation": "import 首先查询 sys.modules，若已存在直接将其绑定为导入结果，不会检查它是否真的是模块对象。因此该对象会被绑定到名字 nonexist。这是常见的“缓存优先”机制体现，但实际项目不应这么用。",
+      "error_tag": "sys.modules 优先",
+      "variant_group": "sys_modules_cache"
+    },
+    {
+      "kp": "py.module.import",
+      "type": "single_choice",
+      "question": "下面哪一项不是 import 语句在导入目标模块时查找位置的常见来源？",
+      "options": [
+        "脚本所在目录或当前工作目录相关路径",
+        "环境变量 PYTHONPATH 指定的目录",
+        "标准库安装目录",
+        "操作系统内核模块列表"
+      ],
+      "answer": 3,
+      "explanation": "Python 的模块搜索路径由 sys.path 决定，通常包括脚本目录、PYTHONPATH、标准库目录及 site-packages 等；与操作系统内核模块无关。",
+      "error_tag": "模块搜索路径",
+      "variant_group": "sys_path"
+    },
+    {
+      "kp": "py.module.import",
+      "type": "single_choice",
+      "question": "关于 `import a.b` 与 `from a import b`，下列哪项正确？",
+      "options": [
+        "`import a.b` 后可以用 b 直接访问",
+        "两者都会把 b 绑定到当前命名空间",
+        "`import a.b` 绑定 a，`from a import b` 绑定 b",
+        "`from a import b` 会同时导入 a.b.c"
+      ],
+      "answer": 2,
+      "explanation": "`import a.b` 把顶层名 a 绑定进当前命名空间，需要通过 a.b 访问 b；`from a import b` 则把 b 直接绑定。两种写法都不会把顶层 a 同时绑定为 b 以外的名字，也不会自动导入更深层模块。",
+      "error_tag": "点号导入绑定",
+      "variant_group": "import_binding"
+    },
+    {
+      "kp": "py.module.import",
+      "type": "single_choice",
+      "question": "下列关于 `from os import path` 与 `import os.path` 的说法，哪个正确？",
+      "options": [
+        "两者都会把 os 绑定到当前命名空间",
+        "`import os.path` 只把 os 绑定进来，随后可以用 os.path 访问",
+        "`from os import path` 后可以直接用 path.join(...)，但也必须用 os.path.join(...)",
+        "`from os import path` 会把整个 os 模块绑定进来"
+      ],
+      "answer": 1,
+      "explanation": "`import os.path` 绑定的是顶层名称 os（随后可用 os.path 访问），不会绑定名称 path；`from os import path` 则只绑定 path，可以直接用 path.join。选项 A、D 混同了两者的绑定行为，选项 C 自相矛盾。",
+      "error_tag": "import 与 from-import 的绑定差异",
+      "variant_group": "import_binding"
+    },
+    {
+      "kp": "py.module.import",
+      "type": "single_choice",
+      "question": "某模块 a.py 顶层有语句 `from b import foo`，而 b.py 顶层有语句 `from a import bar`。直接 `import a` 最可能发生什么？",
+      "options": [
+        "双方都能顺利导入，因为 import 机制会自动解决循环依赖",
+        "抛 ImportError，提示 cannot import name（或 partially initialized module 相关错误）",
+        "抛 SyntaxError",
+        "只会导入 a，b 被忽略"
+      ],
+      "answer": 1,
+      "explanation": "循环导入时，某一边会先执行到一半，被导入方尝试从尚未完全初始化的模块中取出尚未定义的名字，因而报错。选项 A 的误解常见于认为解释器能自动化解循环依赖。",
+      "error_tag": "循环导入",
+      "variant_group": "circular_import"
+    },
+    {
+      "kp": "py.module.import",
+      "type": "single_choice",
+      "question": "在同一模块中先 `import json`，随后又写了 `json = {}`。之后调用 `json.dumps({'a':1})` 会发生什么？",
+      "options": [
+        "正常工作，模块名不受变量赋值影响",
+        "抛 AttributeError，因为 json 现在指向字典",
+        "抛 ImportError，模块被重新导入",
+        "抛 TypeError，dumps 不存在于字典"
+      ],
+      "answer": 1,
+      "explanation": "import 只是把模块对象绑定到一个名字，之后可以把该名字重新绑定为其它对象，原来的模块仍然存在但名字丢失。再次调用 json.dumps 相当于对字典取属性 dumps，因此 AttributeError。选项 A 误解了名字绑定的可覆盖性。",
+      "error_tag": "名字重绑定",
+      "variant_group": "rebinding"
+    },
+    {
+      "kp": "py.module.import",
+      "type": "single_choice",
+      "question": "对于 `import numpy as np`，下列哪种描述正确？",
+      "options": [
+        "导入 numpy 并创建别名 np，之后只能用 np 访问，numpy 不再绑定",
+        "同时绑定 numpy 和 np 两个名字",
+        "如果 numpy 未安装，import 会静默失败，np 为 None",
+        "np 是 numpy 的副本，修改 numpy 不影响 np"
+      ],
+      "answer": 0,
+      "explanation": "`import X as Y` 只把模块对象绑定到 Y，不绑定原名称 X（除非 X 本就是其它已有名字）。选项 B 误以为两个名字都会被绑定，选项 C、D 完全不符合 import 语义。",
+      "error_tag": "as 别名",
+      "variant_group": "import_as"
+    },
+    {
+      "kp": "py.module.import",
+      "type": "single_choice",
+      "question": "在 foo.py 中，`from . import bar` 这种写法要求什么？",
+      "options": [
+        "foo.py 必须作为顶层脚本直接运行",
+        "foo.py 必须位于某个包内，且该包被以包的形式导入",
+        "bar 必须是标准库模块",
+        "必须已经执行过 import foo"
+      ],
+      "answer": 1,
+      "explanation": "相对导入要求模块所属的包可确定，通常意味着脚本位于包内并以包成员身份被导入（或使用 -m 运行包内模块）。直接运行脚本时 __package__ 为空，相对导入会失败。",
+      "error_tag": "相对导入条件",
+      "variant_group": "relative_import"
+    },
+    {
+      "kp": "py.module.import",
+      "type": "single_choice",
+      "question": "当 import 找不到目标模块时，最典型会抛出什么异常？",
+      "options": [
+        "AttributeError",
+        "ModuleNotFoundError（ImportError 的子类）",
+        "FileNotFoundError",
+        "SyntaxError"
+      ],
+      "answer": 1,
+      "explanation": "找不到模块时 Python 抛 ModuleNotFoundError，它是 ImportError 的子类。AttributeError 是找到了模块但名字不存在；FileNotFoundError 与文件操作有关；SyntaxError 是语法问题。",
+      "error_tag": "导入异常类型",
+      "variant_group": "import_error_type"
+    },
+    {
+      "kp": "py.module.import",
+      "type": "single_choice",
+      "question": "下列哪种情况最可能触发 ImportError 而不是 ModuleNotFoundError？",
+      "options": [
+        "模块名拼写错误",
+        "包里没有这个子模块",
+        "模块存在，但 from m import name 中的 name 不存在",
+        "目标模块没有 __init__.py"
+      ],
+      "answer": 2,
+      "explanation": "模块本身能定位到但所需名字不存在，抛 ImportError（常带 cannot import name）。前两者及缺少 __init__.py（对普通包而言）通常表现为找不到模块，抛 ModuleNotFoundError。",
+      "error_tag": "ImportError 与 ModuleNotFoundError 区分",
+      "variant_group": "import_error_type"
+    },
+    {
+      "kp": "py.module.import",
+      "type": "single_choice",
+      "question": "同一进程内多次 `import os`（不重新加载的话），下列说法正确的是？",
+      "options": [
+        "每次都重新执行 os 模块代码",
+        "第一次执行后模块缓存在 sys.modules，后续 import 直接复用",
+        "第二次会抛 ImportError，模块不可重复导入",
+        "只有第一次 import 会绑定名字，之后 import 语句是语法错误"
+      ],
+      "answer": 1,
+      "explanation": "解释器把已导入模块缓存在 sys.modules，后续 import 语句会命中缓存，只做名字绑定而不重复执行模块顶层代码。选项 A 的误解是以为 import 会反复执行。",
+      "error_tag": "模块缓存",
+      "variant_group": "sys_modules_cache"
+    },
+    {
+      "kp": "py.module.from_import",
+      "type": "single_choice",
+      "question": "在 Python 中，`from math import sqrt` 这种导入方式与 `import math` 相比，最主要的区别是什么？",
+      "options": [
+        "前者把 sqrt 直接引入当前命名空间，可以直接调用 sqrt()；后者需要通过 math.sqrt() 调用",
+        "前者会加载整个 math 模块的所有函数，后者只加载 sqrt",
+        "前者只能导入函数，后者只能导入模块",
+        "两者完全等价，只是写法不同"
+      ],
+      "answer": 0,
+      "explanation": "`from math import sqrt` 把 sqrt 这个名字直接绑定到当前命名空间，可直接调用；`import math` 只绑定模块名 math，需要 math.sqrt() 访问。两种方式都会完整加载模块，区别仅在于名字绑定。",
+      "error_tag": "概念混淆",
+      "variant_group": "from_import_basic"
+    },
+    {
+      "kp": "py.module.from_import",
+      "type": "single_choice",
+      "question": "执行下面代码后，输出是什么？\n\nfrom math import pi\nprint(type(pi))",
+      "options": [
+        "<class 'float'>",
+        "<class 'module'>",
+        "<class 'function'>",
+        "报错：pi 未定义"
+      ],
+      "answer": 0,
+      "explanation": "`from math import pi` 把 math 模块中的 pi 常量绑定到当前命名空间，pi 是浮点数，因此 type(pi) 是 float。它不再是模块对象。",
+      "error_tag": "概念混淆",
+      "variant_group": "from_import_binding"
+    },
+    {
+      "kp": "py.module.from_import",
+      "type": "single_choice",
+      "question": "执行下面代码后，a 的值是？\n\nimport math\nfrom math import pi as a\nprint(a == math.pi)",
+      "options": [
+        "True，a 与 math.pi 指向同一个浮点对象",
+        "False，as 会复制一份新的对象",
+        "报错，a 与 math.pi 不可比较",
+        "True，但 a 是字符串"
+      ],
+      "answer": 0,
+      "explanation": "from import 只是名字绑定，不会复制对象。a 和 math.pi 指向同一个对象，因此比较相等并返回 True。",
+      "error_tag": "概念混淆",
+      "variant_group": "from_import_binding"
+    },
+    {
+      "kp": "py.module.from_import",
+      "type": "multi_choice",
+      "question": "关于 `from . import sibling` 这种相对导入，正确的说法有哪些？",
+      "options": [
+        "它要求当前文件属于一个包（有 __init__.py 或作为包的一部分）",
+        "在直接以脚本方式运行的顶层模块中通常不能使用",
+        "它导入的是同一包内的 sibling 子模块",
+        "它可以替代所有绝对导入的写法",
+        "它在包的 __init__.py 中也可使用"
+      ],
+      "answer": [
+        0,
+        1,
+        2,
+        4
+      ],
+      "explanation": "相对导入要求模块处于包结构中；直接运行顶层脚本时 __package__ 为空，相对导入会失败；它导入同包的 sibling；在 __init__.py 中也可用。D 错误，相对导入不能替代全部绝对导入，特别是跨包场景。",
+      "error_tag": "概念混淆",
+      "variant_group": "from_import_relative"
+    },
+    {
+      "kp": "py.module.from_import",
+      "type": "fill_blank",
+      "question": "要一次性从 math 模块导入 sqrt 和 pi 两个名字，应补全下面的空白：\n\nfrom math import ____",
+      "options": [],
+      "answer": [
+        "sqrt, pi",
+        "sqrt,pi",
+        "pi, sqrt",
+        "pi,sqrt"
+      ],
+      "explanation": "from import 支持用逗号分隔一次导入多个名字，顺序无关紧要，因此 sqrt, pi 或 pi, sqrt 均可。",
+      "error_tag": "记忆缺失",
+      "variant_group": "from_import_syntax"
+    },
+    {
+      "kp": "py.module.from_import",
+      "type": "fill_blank",
+      "question": "如果想在导入时为名字起别名，使得后续可以直接用 sq 调用开方函数，应补全：\n\nfrom math import sqrt ____ sq",
+      "options": [],
+      "answer": [
+        "as",
+        "As",
+        "AS"
+      ],
+      "explanation": "Python 使用 as 关键字为导入的名字设置别名，写法为 from math import sqrt as sq。",
+      "error_tag": "记忆缺失",
+      "variant_group": "from_import_alias"
+    },
+    {
+      "kp": "py.module.from_import",
+      "type": "fill_blank",
+      "question": "补全下面的代码，使其能从 collections 模块导入 OrderedDict 并起别名为 OD（区分大小写无关，只填关键字或名字）：\n\nfrom collections import OrderedDict ____ ____",
+      "options": [],
+      "answer": [
+        "as OD",
+        "as  OD"
+      ],
+      "explanation": "别名写法为 `as OD`，关键字 as 后面跟别名。",
+      "error_tag": "记忆缺失",
+      "variant_group": "from_import_alias"
+    },
+    {
+      "kp": "py.module.from_import",
+      "type": "code_reading",
+      "question": "阅读下面代码，写出输出并说明原因：\n\nimport math\nfrom math import sqrt\n\ndef area(r):\n    return math.pi * sqrt(r)\n\nprint(round(area(4), 2))",
+      "options": [],
+      "answer": "输出 6.28。sqrt(4) 返回 2.0，math.pi 约为 3.14159，相乘得约 6.283，round 保留两位小数为 6.28。这里 sqrt 是通过 from math import 直接绑定的名字，math.pi 通过模块访问。",
+      "explanation": "考察 from import 绑定与模块属性访问混用的场景。sqrt(4) = 2.0，math.pi ≈ 3.14159，乘积约为 6.28318，round 到两位是 6.28。",
+      "error_tag": "概念混淆",
+      "variant_group": "from_import_code"
+    },
+    {
+      "kp": "py.module.from_import",
+      "type": "code_reading",
+      "question": "阅读下面代码，写出输出并解释为什么会这样：\n\nfrom math import sqrt\n\ndef sqrt(x):\n    return 'shadowed'\n\nprint(sqrt(4))",
+      "options": [],
+      "answer": "输出 shadowed。函数定义 sqrt 覆盖了之前 from math import 绑定的 sqrt 名字，因此调用的是本模块定义的函数，返回字符串 'shadowed'。",
+      "explanation": "from import 的名字与普通名字一样存储在当前命名空间，后续 def 定义同名函数会覆盖它。这是导入名字被覆盖的典型例子。",
+      "error_tag": "概念混淆",
+      "variant_group": "from_import_shadow"
+    },
+    {
+      "kp": "py.module.from_import",
+      "type": "code_reading",
+      "question": "阅读下面代码，判断是否会报错，并说明原因：\n\nfrom math import sqrt\nimport math\n\nprint(math.sqrt(9), sqrt(9))",
+      "options": [],
+      "answer": "不会报错，输出 3.0 3.0。from math import sqrt 绑定 sqrt 到当前命名空间，import math 绑定模块名 math，两者互不冲突，可同时使用。",
+      "explanation": "两种导入方式可以在同一模块共存，因为绑定的名字不同（sqrt 与 math）。它们指向同一模块的同一对象。",
+      "error_tag": "概念混淆",
+      "variant_group": "from_import_code"
+    },
+    {
+      "kp": "py.module.from_import",
+      "type": "scenario",
+      "question": "团队里有人写了一个工具模块 utils.py，里面有一个函数 read_config()。同时项目里另一个模块也定义了 read_config()，两个功能完全不同。某同事在下面代码里直接 `from utils import read_config` 后又导入了另一个模块的 read_config，导致调用错乱。作为 reviewer，你会建议他如何修改导入方式以避免名字冲突？请至少给出两种可行做法并说明理由。",
+      "options": [],
+      "answer": null,
+      "explanation": "常见做法包括：1) 用 `import utils` 并通过 utils.read_config() 访问，明确限定命名空间；2) 使用 as 起别名，如 `from utils import read_config as utils_read_config`；3) 对两个来源都使用别名以彻底避免同名冲突。核心是让名字来源清晰、命名空间可控。",
+      "error_tag": "概念混淆",
+      "variant_group": "from_import_scenario",
+      "required_keywords": [
+        "命名空间",
+        "别名",
+        "import as",
+        "模块限定",
+        "import utils"
+      ]
+    },
+    {
+      "kp": "py.module.from_import",
+      "type": "scenario",
+      "question": "某同学写了一个包 mypkg，里面有模块 a.py 和 b.py，b.py 中需要调用 a.py 的函数 helper()。他在 b.py 里写了 `from mypkg.a import helper`，但当直接用 `python b.py` 运行时却报 ImportError 找不到 mypkg。请解释原因，并给出至少两种让他既能作为模块被导入、又能被直接运行时不报错的方案。",
+      "options": [],
+      "answer": null,
+      "explanation": "直接运行 b.py 时，b.py 被视为顶层脚本，其所在目录而非包的父目录被加入 sys.path，找不到 mypkg 包，因此绝对导入失败。可行方案：1) 使用 `python -m mypkg.b` 以模块方式运行；2) 在 b.py 中改用相对导入 `from .a import helper` 并保证通过包方式运行；3) 确保从包的父目录启动并配置好 PYTHONPATH。核心是保证模块处于正确的包上下文中。",
+      "error_tag": "概念混淆",
+      "variant_group": "from_import_scenario",
+      "required_keywords": [
+        "sys.path",
+        "mypkg.b"
+      ]
+    },
+    {
+      "kp": "py.module.from_import",
+      "type": "single_choice",
+      "question": "关于 `from os import path` 与 `import os.path` 的说法，正确的是？",
+      "options": [
+        "前者把 os.path 子模块绑定为名字 path；后者把 os 绑定到当前命名空间，通过 os.path 访问",
+        "前者会导入整个 os 模块的所有子模块",
+        "后者无法使用 os.path 的任何函数",
+        "前者和后者都会把 path 作为顶层名字引入"
+      ],
+      "answer": 0,
+      "explanation": "`from os import path` 把子模块 path 绑定为当前命名空间的 path；`import os.path` 则绑定 os 名字，需用 os.path 访问。两者都可用，但命名空间绑定不同。",
+      "error_tag": "概念混淆",
+      "variant_group": "from_import_submodule"
+    },
+    {
+      "kp": "py.module.from_import",
+      "type": "single_choice",
+      "question": "下面代码的输出是？\n\nfrom math import sqrt\nsqrt = 9\nprint(sqrt)",
+      "options": [
+        "9",
+        "3.0",
+        "报错：不能给导入的名字赋值",
+        "None"
+      ],
+      "answer": 0,
+      "explanation": "from import 只是把名字绑定到当前命名空间，sqrt 可以被重新赋值为 9，此后 sqrt 不再是函数。这是覆盖导入名字的常见陷阱。",
+      "error_tag": "概念混淆",
+      "variant_group": "from_import_shadow"
+    },
+    {
+      "kp": "py.module.from_import",
+      "type": "single_choice",
+      "question": "若模块 a.py 中定义了变量 x = 1，执行 `from a import x` 后修改本模块的 x（x = 2），a 模块中的 x 会怎样？",
+      "options": [
+        "a.x 仍然是 1，因为这是两个独立的命名空间绑定",
+        "a.x 会变成 2，因为是引用传递",
+        "会报错，导入的名字不可修改",
+        "取决于 Python 版本"
+      ],
+      "answer": 0,
+      "explanation": "from import 把对象绑定到当前命名空间的名字上，重新赋值只改变当前模块的绑定，不影响原模块 a 中的 x。",
+      "error_tag": "概念混淆",
+      "variant_group": "from_import_binding"
+    },
+    {
+      "kp": "py.module.from_import",
+      "type": "single_choice",
+      "question": "关于 `from math import *` 的说法，最准确的是？",
+      "options": [
+        "它会把 math 模块中所有不以双下划线开头的公开名字导入当前命名空间",
+        "它只导入 math 模块中定义在 __all__ 之外的私有名字",
+        "它等价于 import math，不改变命名空间",
+        "它一定会导入所有名字，包括以 _ 开头的"
+      ],
+      "answer": 0,
+      "explanation": "星号导入默认导入模块中不以下划线开头的公开名字；若模块定义了 __all__，则按 __all__ 列表导入。它容易造成命名冲突，通常不推荐。",
+      "error_tag": "边界错误",
+      "variant_group": "from_import_star"
+    },
+    {
+      "kp": "py.module.from_import",
+      "type": "multi_choice",
+      "question": "以下关于 `from module import name` 的说法，正确的有哪些？",
+      "options": [
+        "它把 name 直接绑定到当前命名空间",
+        "被导入的 name 可以与本模块已有的名字发生覆盖",
+        "它要求 module 必须已经安装或位于可导入路径中",
+        "它只能一次导入一个名字",
+        "导入后仍然可以通过 name.__module__ 之类的属性追溯来源"
+      ],
+      "answer": [
+        0,
+        1,
+        2
+      ],
+      "explanation": "A 正确，名字被直接绑定；B 正确，会覆盖同名绑定；C 正确，模块必须可导入。D 错误，可一次导入多个名字（用逗号分隔）。E 说法不严谨/并非总是成立，取决于对象类型，通常不作为可靠特性。",
+      "error_tag": "概念混淆",
+      "variant_group": "from_import_basic"
+    },
+    {
+      "kp": "py.module.from_import",
+      "type": "multi_choice",
+      "question": "下列哪些导入写法在语法上是合法的？",
+      "options": [
+        "from collections import defaultdict, Counter",
+        "from os import path as p",
+        "from math import sqrt as s, pi as p",
+        "from import math sqrt",
+        "from json import dumps"
+      ],
+      "answer": [
+        0,
+        1,
+        2,
+        4
+      ],
+      "explanation": "A、B、C、E 都是合法的 from import 写法，支持逗号分隔多个名字和 as 别名。D 语法错误，import 关键字位置不对。",
+      "error_tag": "边界错误",
+      "variant_group": "from_import_syntax"
+    },
+    {
+      "kp": "py.module.from_import",
+      "type": "single_choice",
+      "question": "下面代码的输出是？\n\nfrom collections import Counter as C\nc = C('aabbc')\nprint(c['a'])",
+      "options": [
+        "2",
+        "1",
+        "'a'",
+        "KeyError"
+      ],
+      "answer": 0,
+      "explanation": "Counter 统计每个字符出现次数，'aabbc' 中 'a' 出现 2 次，因此 c['a'] 返回 2。as 只是给 Counter 起别名 C，语义不变。",
+      "error_tag": "记忆缺失",
+      "variant_group": "from_import_alias"
+    },
+    {
+      "kp": "py.module.from_import",
+      "type": "single_choice",
+      "question": "关于 `from math import sqrt, sqrt`（同名重复导入），说法正确的是？",
+      "options": [
+        "可以执行，最终 sqrt 仍然只有一份绑定，指向 math.sqrt",
+        "会抛出 SyntaxError",
+        "会导入两次，产生两个 sqrt",
+        "只会导入第一个，第二个被忽略并报错"
+      ],
+      "answer": 0,
+      "explanation": "重复导入同名名字不会报错，最终命名空间中 sqrt 仍只有一个绑定。Python 允许这种冗余写法，不产生额外效果。",
+      "error_tag": "边界错误",
+      "variant_group": "from_import_syntax"
+    }
+  ]
+}

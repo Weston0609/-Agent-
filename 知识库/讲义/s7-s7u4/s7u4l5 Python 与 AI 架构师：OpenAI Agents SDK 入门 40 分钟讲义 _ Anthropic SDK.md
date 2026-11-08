@@ -1,0 +1,947 @@
+# s7u4l5 Python 与 AI 架构师：OpenAI Agents SDK 入门 40 分钟讲义 / Anthropic SDK 的核心类是 `Anthrop
+
+> 来源 `content/lessons/s7u4l5.json`
+
+## agent.fw.openai_agents_sdk
+
+# Python 与 AI 架构师：OpenAI Agents SDK 入门 40 分钟讲义
+
+## 一句话直觉
+OpenAI Agents SDK（智能体开发工具包）不是让你从零手写“大模型调用 + 工具选择 + 多轮循环”，而是把 **Agent（智能体）**、**Tool（工具）**、**Runner（运行器）**、**Handoff（交接）**、**Guardrail（护栏）** 这些工程模式标准化，让你专注业务逻辑。
+
+本讲目标：从零基础到能写出可运行的单智能体、工具调用、多智能体交接与护栏示例。
+
+---
+
+## 1. 为什么需要 Agents SDK：从“聊天补全”到“代理循环”
+
+大模型 API（Application Programming Interface，应用程序接口）只负责一次输入输出。真正的智能体需要：
+
+1. 接收用户目标
+2. 决定是否调用工具
+3. 执行工具
+4. 把结果回填给模型
+5. 循环直到完成或达到停止条件
+6. 可选：把任务交接给另一个智能体
+7. 可选：安全检查
+
+OpenAI Agents SDK 把这些循环抽象成 `Runner.run()`，你只需要声明 `Agent` 和 `tools`。
+
+**关键结论**：Agents SDK 的核心价值是 **把“模型 + 工具 + 循环 + 交接 + 护栏”变成可组合的声明式代码**。
+
+```python
+# 最小 Agent 定义：不调用工具，只回答
+from agents import Agent, Runner
+import asyncio
+
+agent = Agent(
+    name="Assistant",
+    instructions="你是一个简洁的中文助手。",
+    model="gpt-4o-mini",
+)
+
+async def main():
+    result = await Runner.run(agent, "用一句话解释什么是智能体。")
+    print(result.final_output)
+
+if __name__ == "__main__":
+    asyncio.run(main())
+```
+
+---
+
+## 2. 核心概念：Agent、Tool、Runner
+
+### 2.1 Agent
+`Agent` 是一个配置对象：名称、指令、模型、工具、交接目标、护栏等。它本身不执行循环。
+
+### 2.2 Tool
+`Tool`（工具）让模型能调用 Python 函数。Agents SDK 可以用 `@function_tool` 装饰器自动把函数签名和 docstring（文档字符串）转成模型可理解的工具描述。
+
+### 2.3 Runner
+`Runner`（运行器）负责执行代理循环：调用模型、解析工具调用、执行工具、回填结果、继续循环。
+
+**关键结论**：Agent 是“声明”，Runner 是“执行”，Tool 是“能力边界”。
+
+```python
+from agents import Agent, Runner, function_tool
+import asyncio
+
+@function_tool
+def add(a: int, b: int) -> int:
+    """返回两个整数之和。"""
+    return a + b
+
+agent = Agent(
+    name="Calculator",
+    instructions="你需要用 add 工具计算加法，不要心算。",
+    tools=[add],
+    model="gpt-4o-mini",
+)
+
+async def main():
+    result = await Runner.run(agent, "请计算 37 + 58 等于多少？")
+    print(result.final_output)
+
+if __name__ == "__main__":
+    asyncio.run(main())
+```
+
+---
+
+## 3. 多智能体：Handoff（交接）
+
+当任务需要不同角色时，不必把所有指令塞进一个 Agent。你可以定义多个 Agent，并通过 `handoffs` 声明“谁可以转给谁”。
+
+**关键结论**：Handoff 让智能体系统像团队一样分工：分诊 Agent 负责识别意图，专家 Agent 负责处理。
+
+```python
+from agents import Agent, Runner
+import asyncio
+
+billing_agent = Agent(
+    name="BillingAgent",
+    instructions="你只处理账单、退款、发票问题。",
+    model="gpt-4o-mini",
+)
+
+technical_agent = Agent(
+    name="TechnicalAgent",
+    instructions="你只处理技术故障、登录、API 报错问题。",
+    model="gpt-4o-mini",
+)
+
+triage_agent = Agent(
+    name="TriageAgent",
+    instructions="你是分诊台。根据用户问题，把任务交接给合适的专家。",
+    handoffs=[billing_agent, technical_agent],
+    model="gpt-4o-mini",
+)
+
+async def main():
+    result = await Runner.run(triage_agent, "我登录一直失败，提示 401。")
+    print("最终输出：", result.final_output)
+    print("最后活跃 Agent：", result.last_agent.name)
+
+if __name__ == "__main__":
+    asyncio.run(main())
+```
+
+---
+
+## 4. Guardrail（护栏）：在关键路径上做安全检查
+
+生产级智能体不能完全信任模型输出。Guardrail 可用于：
+
+- 输入检查：是否包含敏感信息、越狱指令
+- 输出检查：是否泄露隐私、是否违反政策
+- 工具参数检查：是否越权调用
+
+**关键结论**：Guardrail 是“可编程的安全阀”，不通过就中断或触发异常。
+
+```python
+from agents import Agent, Runner, GuardrailFunctionOutput, input_guardrail
+import asyncio
+
+@input_guardrail
+async def no_password_guardrail(ctx, agent, user_input):
+    text = str(user_input).lower()
+    triggered = "password" in text or "密码" in text
+    return GuardrailFunctionOutput(
+        output_info={"reason": "检测到密码相关输入"},
+        tripwire_triggered=triggered,
+    )
+
+agent = Agent(
+    name="SafeAssistant",
+    instructions="你是一个安全助手。",
+    input_guardrails=[no_password_guardrail],
+    model="gpt-4o-mini",
+)
+
+async def main():
+    try:
+        result = await Runner.run(agent, "我的密码是 123456，帮我登录。")
+        print(result.final_output)
+    except Exception as e:
+        print("护栏触发：", type(e).__name__, e)
+
+if __name__ == "__main__":
+    asyncio.run(main())
+```
+
+---
+
+## 5. 工程化建议：会话、追踪与错误处理
+
+### 5.1 会话状态
+多轮对话可用 `result.to_input_list()` 把历史回传给下一次 `Runner.run()`。
+
+### 5.2 追踪
+Agents SDK 内置 tracing（追踪），可在 OpenAI 平台查看每次模型调用、工具调用、交接和护栏事件。
+
+### 5.3 错误处理
+工具函数应捕获异常并返回可读错误，避免整个代理循环崩溃。
+
+**关键结论**：工程级智能体 = 声明式 Agent + 可观测 Tracing + 稳健错误处理 + 安全 Guardrail。
+
+```python
+from agents import Agent, Runner, function_tool
+import asyncio
+
+@function_tool
+def safe_divide(a: float, b: float) -> str:
+    """安全除法：b 为 0 时返回错误信息而不是抛异常。"""
+    if b == 0:
+        return "错误：除数不能为 0"
+    return str(a / b)
+
+agent = Agent(
+    name="SafeCalculator",
+    instructions="使用 safe_divide 工具做除法。",
+    tools=[safe_divide],
+    model="gpt-4o-mini",
+)
+
+async def main():
+    result1 = await Runner.run(agent, "10 除以 2 是多少？")
+    print("结果1：", result1.final_output)
+
+    history = result1.to_input_list()
+    result2 = await Runner.run(agent, history + [{"role": "user", "content": "那 10 除以 0 呢？"}])
+    print("结果2：", result2.final_output)
+
+if __name__ == "__main__":
+    asyncio.run(main())
+```
+
+---
+
+## 动手练习
+
+**任务**：本地创建一个“个人记账助手”。
+
+要求：
+1. 定义一个工具 `add_expense(category: str, amount: float) -> str`，把支出追加写入 `expenses.json`。
+2. 定义一个工具 `summarize_expenses() -> str`，读取 `expenses.json` 并按类别汇总。
+3. 创建一个 `Agent`，指令为“你是记账助手，必须调用工具记录和汇总”。
+4. 用 `Runner.run()` 依次测试：
+   - “今天午餐花了 35 元，记在餐饮。”
+   - “打车 18 元，记在交通。”
+   - “帮我汇总所有支出。”
+5. 可选：增加一个输入护栏，检测输入中是否包含“银行卡号”。
+
+**提交**：一个可运行的 `bookkeeping_agent.py`，包含注释和运行截图。
+
+## agent.fw.anthropic_sdk
+
+## 一句话直觉
+
+**Anthropic SDK（Anthropic Software Development Kit）** 是 Anthropic 官方提供的 Python 客户端库，让你用几行代码就能调用 Claude 模型，并且天然支持**工具调用（Tool Use）**、**系统提示（System Prompt）**、**多轮对话（Multi-turn Conversation）**——这正是构建 Agent（智能体）的最小可用起点。
+
+> 学它的理由：Agent 的本质是「让大模型在循环里调用工具、观察结果、再决策」。Anthropic SDK 把这条循环所需的全部原语（primitive）封装得很干净，是理解 Agent 框架底层逻辑的最佳入口。
+
+---
+
+## 1. 安装与最小调用：先让模型说一句话
+
+Anthropic SDK 的核心类是 `Anthropic`。你需要一个 API Key（从 console.anthropic.com 获取），通过环境变量 `ANTHROPIC_API_KEY` 传入最安全。
+
+调用入口是 `client.messages.create()`，它接收：
+- `model`：模型名，如 `claude-3-5-sonnet-20241022`
+- `max_tokens`：最大输出 token 数（必填）
+- `messages`：对话列表，每项是 `{"role": "user"|"assistant", "content": ...}`
+
+```python
+import os
+from anthropic import Anthropic
+
+client = Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
+
+resp = client.messages.create(
+    model="claude-3-5-sonnet-20241022",
+    max_tokens=256,
+    messages=[{"role": "user", "content": "用一句话解释什么是 Agent。"}],
+)
+
+# resp.content 是一个 content block 列表，文本块有 .text 属性
+print(resp.content[0].text)
+```
+
+关键结论：**返回的 `content` 永远是列表**，因为一次回复可能同时包含文本块和工具调用块。这是后面理解工具调用的基础。
+
+---
+
+## 2. System Prompt：给 Agent 定角色
+
+系统提示（System Prompt）用来规定 Agent 的身份、行为边界和输出风格。它通过顶层参数 `system=` 传入，不放在 `messages` 里。
+
+```python
+resp = client.messages.create(
+    model="claude-3-5-sonnet-20241022",
+    max_tokens=256,
+    system="你是一个只用中文回答、语气简洁的助手。",
+    messages=[{"role": "user", "content": "介绍一下你自己。"}],
+)
+print(resp.content[0].text)
+```
+
+关键结论：**System Prompt 是 Agent 的「人格与规则层」**，与用户消息分离，便于工程上做版本管理和 A/B 测试。
+
+---
+
+## 3. 多轮对话：Agent 的「记忆」靠你自己维护
+
+Anthropic SDK **本身无状态（stateless）**——服务端不保存你的对话历史。要实现多轮，你必须把之前所有轮次的 `user` 和 `assistant` 消息都重新传进去。
+
+```python
+messages = []
+
+def chat(user_text: str) -> str:
+    messages.append({"role": "user", "content": user_text})
+    resp = client.messages.create(
+        model="claude-3-5-sonnet-20241022",
+        max_tokens=512,
+        messages=messages,
+    )
+    # 把 assistant 的完整 content 列表原样塞回去，保持格式兼容
+    messages.append({"role": "assistant", "content": resp.content})
+    return resp.content[0].text
+
+print(chat("我叫小明。"))
+print(chat("我叫什么？"))  # 模型能答出「小明」
+```
+
+关键结论：**对话历史就是 Agent 的工作内存**。要控制成本，就得在历史过长时做截断或摘要。
+
+---
+
+## 4. 工具调用（Tool Use）：Agent 真正「动手」的地方
+
+工具调用让模型能请求执行外部函数。流程分三步：
+1. 你在请求里用 `tools=[...]` 声明可用工具（名称、描述、JSON Schema 参数）。
+2. 模型若想调用，会返回 `stop_reason="tool_use"`，`content` 里出现一个 `tool_use` 块（含 `id`、`name`、`input`）。
+3. **你**执行真正的函数，把结果作为 `tool_result` 块、以 `role="user"` 发回，模型据此继续生成。
+
+```python
+tools = [{
+    "name": "get_weather",
+    "description": "查询指定城市的当前天气",
+    "input_schema": {
+        "type": "object",
+        "properties": {"city": {"type": "string", "description": "城市名"}},
+        "required": ["city"],
+    },
+}]
+
+# 假的本地实现
+def get_weather(city: str) -> str:
+    return f"{city} 今天晴，25°C"
+
+messages = [{"role": "user", "content": "北京天气怎么样？"}]
+
+resp = client.messages.create(
+    model="claude-3-5-sonnet-20241022",
+    max_tokens=512,
+    tools=tools,
+    messages=messages,
+)
+messages.append({"role": "assistant", "content": resp.content})
+
+# 遍历模型返回的块，找出工具调用
+for block in resp.content:
+    if block.type == "tool_use":
+        result = get_weather(**block.input)
+        messages.append({
+            "role": "user",
+            "content": [{
+                "type": "tool_result",
+                "tool_use_id": block.id,
+                "content": result,
+            }],
+        })
+
+final = client.messages.create(
+    model="claude-3-5-sonnet-20241022",
+    max_tokens=512,
+    tools=tools,
+    messages=messages,
+)
+print(final.content[0].text)
+```
+
+关键结论：**SDK 只负责「表达意图」，执行代码的责任在你**。这个「请求工具 → 执行 → 回传结果」的循环，就是 Agent Loop 的骨架。
+
+---
+
+## 5. 把它们包成一个最小 Agent 循环
+
+真实的 Agent 就是把这个循环 `while` 起来，直到模型不再请求工具、直接给出最终答复（`stop_reason="end_turn"`）。
+
+```python
+def run_agent(user_input: str, max_steps: int = 5) -> str:
+    messages = [{"role": "user", "content": user_input}]
+    for _ in range(max_steps):
+        resp = client.messages.create(
+            model="claude-3-5-sonnet-20241022",
+            max_tokens=1024,
+            tools=tools,
+            messages=messages,
+        )
+        messages.append({"role": "assistant", "content": resp.content})
+
+        if resp.stop_reason != "tool_use":
+            # 没有工具调用，收工
+            return "".join(b.text for b in resp.content if b.type == "text")
+
+        tool_results = []
+        for block in resp.content:
+            if block.type == "tool_use":
+                out = get_weather(**block.input)  # 生产环境应做异常处理
+                tool_results.append({
+                    "type": "tool_result",
+                    "tool_use_id": block.id,
+                    "content": out,
+                })
+        messages.append({"role": "user", "content": tool_results})
+    return "达到最大步数，未完成。"
+
+print(run_agent("北京天气怎么样？"))
+```
+
+关键结论：**Agent = LLM + 工具 + 循环 + 停止条件**。Anthropic SDK 把这四件事的原语都以最直白的方式暴露给你，理解了它，再看 LangGraph、Claude Agent SDK 等高层框架就不会迷路。
+
+---
+
+## 动手练习
+
+**任务**：写一个能查询任意城市天气的 CLI 小 Agent。
+
+**要求**：
+1. 使用 `anthropic` 包和 `client.messages.create()`。
+2. 定义两个工具：`get_weather(city)`（返回假数据即可）和 `get_time(city)`（返回该城市当前时间的假数据）。
+3. 用一个 `while` 循环实现 Agent Loop，最多 6 步。
+4. 从命令行读取用户输入，循环对话直到用户输入 `exit`。
+5. 每次工具被调用时，打印 `[调用工具] get_weather({"city": "北京"})` 这样的日志。
+
+**验收标准**：输入「北京天气如何，现在几点？」时，模型应在同一轮里连续调用两个工具，并综合两段结果给出答案。
+
+**加分项**：把对话历史持久化到本地 JSON，重启后继续上一轮话题。
+
+
+---
+
+## 本课题目
+
+### single_choice · None
+
+
+
+- [A] 直接用 Python 的装饰器 @tool 标记函数，并将其作为工具传给 Agent
+- [B] 将函数名作为字符串写在 Agent 的 instructions 里，模型会自动调用
+- [C] 把函数改写成 HTTP 接口，再让 Agent 通过 requests 库请求
+- [D] 在 Agent 初始化时传入函数的源码文本，由 SDK 动态执行
+
+**参考答案**：0
+
+**解析**：OpenAI Agents SDK 通过将普通 Python 函数用 @function_tool 装饰（或等价方式）注册为工具传给 Agent，模型才能以结构化方式调用。B 无法让模型实际执行代码；C 不是 SDK 的内置机制；D 不存在这种源码动态执行设计。
+
+### single_choice · None
+
+
+
+- [A] Runner 只执行一次模型调用，工具调用结果不会再次送回模型
+- [B] Runner 会循环执行模型调用与工具调用，直到模型不再请求工具或达到最大轮数
+- [C] Runner 需要开发者手动编写 while 循环来驱动每一轮
+- [D] Runner 会把所有工具调用并行发出后直接结束，不等待结果
+
+**参考答案**：1
+
+**解析**：Runner 内部实现了“模型输出工具调用 → 执行工具 → 把结果回传给模型”的 agent loop，直到模型给出最终回答或命中 max_turns。A、C、D 都与 SDK 的自动循环机制不符。
+
+### single_choice · None
+
+
+
+- [A] 异常会被 SDK 静默忽略，模型继续回答
+- [B] 异常会中断整个运行并把错误抛出给调用者
+- [C] 异常会被自动转换成一段文本回传给模型，作为工具调用结果
+- [D] 异常会导致 Agent 自动切换到另一个模型重试
+
+**参考答案**：2
+
+**解析**：SDK 默认会把工具执行中的异常信息作为工具调用的结果回传给模型，让模型有机会处理或解释。A 并非静默忽略；B 默认不会中断；D 没有自动切换模型重试的机制。
+
+### single_choice · None
+
+
+
+- [A] handoff 会直接把当前对话历史完整传递给目标 Agent
+- [B] handoff 只是把用户消息转发给目标 Agent，不传递历史
+- [C] handoff 后原 Agent 仍然会继续处理后续所有消息
+- [D] handoff 只能在两个 Agent 之间发生一次
+
+**参考答案**：0
+
+**解析**：handoff 会把当前对话上下文交给目标 Agent，使其能接续处理。B 忽略了上下文传递；C 中控制权已转移；D 与可多次转交的事实不符。
+
+### single_choice · None
+
+
+
+- [A] 在 instructions 中要求模型自己输出日志
+- [B] 使用 SDK 的 tracing 功能，并在运行时配置 trace 处理器
+- [C] 在每个工具函数里手动 print 到控制台
+- [D] 把 Agent 的 name 设置为日志文件路径
+
+**参考答案**：1
+
+**解析**：SDK 内置 tracing 机制，可记录 agent、tool、handoff 等事件，并支持自定义 processor。A 不可靠；C 只是局部打印；D 与日志无关。
+
+### single_choice · None
+
+
+
+- [A] Runner.run
+- [B] Runner.run_sync
+- [C] Runner.run_streamed
+- [D] Agent.stream
+
+**参考答案**：2
+
+**解析**：Runner.run_streamed 提供流式事件，可逐步获取模型输出。A、B 是非流式；D 并非该 SDK 的公开方法。
+
+### single_choice · None
+
+
+
+- [A] 一个 Agent 只能使用默认模型，不能指定模型
+- [B] Agent 可以通过 model 参数指定所使用的模型
+- [C] Agent 的模型只能通过环境变量全局设置
+- [D] 每个工具函数都可以独立指定模型
+
+**参考答案**：1
+
+**解析**：Agent 支持通过 model 参数指定模型（也可用默认）。A、C 否定了参数能力；D 中工具不负责指定模型。
+
+### single_choice · None
+
+
+
+- [A] 让工具函数返回 Python 对象，SDK 会序列化后回传
+- [B] 让工具函数返回 None，模型自行推断
+- [C] 把结果写入全局变量，模型会读取
+- [D] 在 instructions 中写“工具结果请自行读取全局变量”
+
+**参考答案**：0
+
+**解析**：工具函数的返回值会被 SDK 序列化并作为工具结果回传给模型。B、C、D 都无法让模型获得实际结果。
+
+### single_choice · None
+
+
+
+- [A] 字符串列表，每项为目标 Agent 的名称
+- [B] Agent 对象列表（或等价的 handoff 描述）
+- [C] 函数列表，每个函数返回一个 Agent
+- [D] 字典，键为目标 Agent 名，值为说明文本
+
+**参考答案**：1
+
+**解析**：handoffs 接受 Agent（或 handoff 配置）列表，SDK 据此生成可转交的目标。A、C、D 都不是其接受的形式。
+
+### single_choice · None
+
+
+
+- [A] 运行继续，但把不合规内容从日志中删除
+- [B] 运行被中断，并以异常形式向调用者报告
+- [C] 模型自动改写输入后继续运行
+- [D] SDK 自动切换到一个更安全的模型
+
+**参考答案**：1
+
+**解析**：tripwire 被触发时会抛出异常，中断当前 run，由调用者决定如何处理。A、C、D 都不是其默认行为。
+
+### single_choice · None
+
+
+
+- [A] 在工具函数内部用 if 判断，不满足时直接返回空字符串
+- [B] 根据条件动态构造 Agent（或动态设置 tools）后再运行
+- [C] 把所有工具都注册，然后在 instructions 中说明何时使用
+- [D] 把工具函数重命名为条件相关的名字
+
+**参考答案**：1
+
+**解析**：工具的可见性由 Agent 的 tools 决定，因此在运行前根据条件动态构造 Agent/工具列表更可靠。A 只是运行时拒绝执行，模型仍会看到并可能反复调用；C 依赖模型自觉；D 没有实际约束力。
+
+### single_choice · None
+
+
+
+- [A] 它是同步阻塞版本，内部会运行异步逻辑并返回最终结果
+- [B] 它只能在同步函数中调用异步工具，否则会报错
+- [C] 它会跳过工具调用，直接返回模型第一次输出
+- [D] 它与 Runner.run 完全相同，只是名字不同
+
+**参考答案**：0
+
+**解析**：run_sync 是同步封装，便于在非异步代码中调用，内部仍执行完整的 agent loop。B 描述错误；C 不成立；D 忽略了同步/异步接口的差异。
+
+### single_choice · None
+
+
+
+- [A] 在分诊 Agent 的 instructions 中写“请调用退款 Agent”
+- [B] 把退款 Agent 作为工具（handoff）加入分诊 Agent 的 handoffs 列表
+- [C] 用 Python 的 import 把退款 Agent 导入分诊 Agent 的函数体内
+- [D] 让两个 Agent 共享同一个模型实例即可自动转交
+
+**参考答案**：1
+
+**解析**：SDK 提供 handoff 机制，把目标 Agent 放入当前 Agent 的 handoffs，模型即可在需要时把控制权交给该 Agent。A 只是文字提示，不构成机制；C 是普通 import；D 共享模型不会触发转交。
+
+### single_choice · None
+
+
+
+- [A] 把数据库查询写成工具函数并注册到 Agent 的 tools
+- [B] 把整个数据库内容放进 instructions 中
+- [C] 让模型直接执行 SQL，SDK 会自动拦截并执行
+- [D] 在 Runner.run 中传入数据库连接对象
+
+**参考答案**：0
+
+**解析**：SDK 通过工具让模型间接执行外部操作，因此应把查询封装为工具函数。B 不现实且成本高；C 中模型不能直接执行 SQL；D 中 Runner.run 不接收数据库连接。
+
+### single_choice · None
+
+
+
+- [A] instructions 只能是静态字符串，不能包含运行时变量
+- [B] instructions 可以是返回字符串的函数，从而根据上下文动态生成提示
+- [C] instructions 会被 SDK 自动翻译成工具调用
+- [D] instructions 必须写在 Agent 的 name 参数中
+
+**参考答案**：1
+
+**解析**：SDK 允许 instructions 为字符串或一个可调用对象（返回字符串），便于动态生成系统提示。A 忽略了动态形式；C 混淆了提示与工具；D 说法错误。
+
+### single_choice · None
+
+
+
+- [A] 提升模型的推理速度
+- [B] 在输入或输出阶段检查内容，必要时中断或阻止不合规的响应
+- [C] 自动为 Agent 生成工具函数
+- [D] 把 Agent 的运行日志上传到云端
+
+**参考答案**：1
+
+**解析**：Guardrail 用于对输入或输出做校验，当检测到不合规内容时可触发 tripwire 中断流程。A、C、D 都不是其设计目的。
+
+### single_choice · None
+
+
+
+- [A] 在创建 Agent 时把计算器函数放进 tools 参数
+- [B] 在创建 Agent 时把计算器函数放进 instructions 参数
+- [C] 在 Runner.run 时把计算器函数作为额外参数传入
+- [D] 在 Agent 的 output_type 中声明计算器函数
+
+**参考答案**：0
+
+**解析**：工具必须通过 Agent 的 tools 参数注册，模型才能感知并调用。B 中 instructions 是提示文本；C 中 Runner.run 不接收工具参数；D 中 output_type 用于结构化输出。
+
+### single_choice · None
+
+
+
+- [A] 一个字符串，直接就是模型的最终回答
+- [B] 一个 RunResult 对象，包含最终输出、中间步骤等信息
+- [C] 一个字典，键为工具名，值为工具返回值
+- [D] 一个生成器，需要不断迭代才能拿到结果
+
+**参考答案**：1
+
+**解析**：Runner.run 返回 RunResult（或流式版本对应对象），其中包含 final_output、new_items 等。A、C、D 都低估或错认了返回结构。
+
+### single_choice · None
+
+
+
+- [A] instructions
+- [B] tools
+- [C] output_type
+- [D] handoffs
+
+**参考答案**：2
+
+**解析**：output_type 用于指定结构化输出的类型（如 Pydantic 模型），SDK 会据此约束模型输出。instructions 是提示，tools 是工具，handoffs 是转交目标。
+
+### single_choice · None
+
+
+
+- [A] name 是模型的名称，决定使用哪个大模型
+- [B] name 是 Agent 的标识名，用于日志、追踪与 handoff 识别
+- [C] name 必须是唯一的全局 ID，否则 SDK 会报错
+- [D] name 会被拼接进 instructions 作为系统提示
+
+**参考答案**：1
+
+**解析**：name 是 Agent 的标识，便于追踪和在 handoff 中识别。模型名由 model 参数决定；name 不必全局唯一；也不会自动拼进 instructions。
+
+### single_choice · None
+
+
+
+- [A] 模型不支持工具调用，应更换模型
+- [B] 达到了最大轮数限制或工具结果无法让模型收敛，应检查工具返回值并调整 max_turns
+- [C] SDK 需要手动调用 finish() 才能结束
+- [D] 工具函数必须返回 JSON 字符串，否则模型不会停止
+
+**参考答案**：1
+
+**解析**：Runner 会循环直到模型不再请求工具或达到 max_turns；若工具返回的信息不能让模型收敛，会持续调用。A 过于武断；C 不存在 finish() 机制；D 不是必须返回 JSON 字符串。
+
+### single_choice · None
+
+
+
+- [A] 必须将 API Key 硬编码在源码中才能调用
+- [B] 通常通过读取环境变量 ANTHROPIC_API_KEY 自动完成认证
+- [C] 只支持在构造函数中传入用户名和密码
+- [D] 认证信息必须写在 requirements.txt 中
+
+**参考答案**：1
+
+**解析**：Anthropic SDK 默认从环境变量 ANTHROPIC_API_KEY 读取密钥，也可以在实例化客户端时显式传入 api_key 参数；把密钥硬编码进源码是不安全的做法。
+
+### single_choice · None
+
+
+
+- [A] 只有 user 一种角色，模型回复由返回结果自行处理
+- [B] messages 中可以使用 system、user、assistant 三种角色混排
+- [C] 系统提示通常通过独立的 system 参数传入，messages 主要是 user 与 assistant
+- [D] assistant 消息不允许由开发者伪造传入
+
+**参考答案**：2
+
+**解析**：Anthropic 的 Messages 接口把系统提示放在顶层 system 参数，messages 数组则由 user 与 assistant 交替构成；把 system 当作 message 角色并非该接口的常规用法。
+
+### single_choice · None
+
+
+
+- [A] 在提示中要求输出 JSON，并对返回文本做容错解析或校验
+- [B] 假定模型一定会输出合法 JSON，直接 json.loads 不做异常处理
+- [C] 关闭 max_tokens 让模型自由发挥
+- [D] 把温度调到最大值以获得最稳定的结构
+
+**参考答案**：0
+
+**解析**：即便提示要求 JSON，也应做解析容错与结构校验；不做异常处理或不设上限都不是稳妥方案，高温度通常降低稳定性。
+
+### multi_choice · None
+
+
+
+- [A] model
+- [B] max_tokens
+- [C] messages
+- [D] system
+- [E] banana_count
+
+**参考答案**：[0, 1, 2, 3]
+
+**解析**：model、max_tokens、messages、system 都是该接口的常见参数；banana_count 是编造的干扰项。
+
+### multi_choice · None
+
+
+
+- [A] 接口本身无状态，需要应用侧维护历史消息列表
+- [B] 每一轮请求都应把此前相关的 user/assistant 消息一并传入
+- [C] 服务端会自动记住上一次会话的全部上下文
+- [D] 过长的历史需要做截断或摘要以控制上下文长度
+
+**参考答案**：[0, 1, 3]
+
+**解析**：该接口是无状态的，上下文靠请求携带；服务端不会自动记住历史，因此需要自行管理并控制长度。
+
+### multi_choice · None
+
+
+
+- [A] 认证失败（密钥无效或缺失）
+- [B] 请求频率超限被限流
+- [C] 网络超时或连接中断
+- [D] 模型返回内容中包含用户未授权的敏感信息而不做任何过滤
+
+**参考答案**：[0, 1, 2, 3]
+
+**解析**：认证、限流、网络问题都属于典型可处理异常；对输出内容做安全过滤同样属于工程上应当考虑的环节。
+
+### multi_choice · None
+
+
+
+- [A] 适合需要边生成边展示的场景，改善用户体感
+- [B] 需要按事件类型判断并增量拼接文本
+- [C] 流式过程中若中途断开，已接收部分可能不完整
+- [D] 开启流式后就不再需要处理限流和网络异常
+
+**参考答案**：[0, 1, 2]
+
+**解析**：流式改善交互体验但要求增量处理，且中断会导致内容不完整；它并不能免除异常处理。
+
+### fill_blank · None
+
+
+
+**参考答案**：["ANTHROPIC_API_KEY"]
+
+**解析**：默认环境变量名为 ANTHROPIC_API_KEY，SDK 会优先读取它，也可显式传入 api_key。
+
+### fill_blank · None
+
+
+
+**参考答案**：["max_tokens", "max_tokens 参数", "max_tokens参数"]
+
+**解析**：max_tokens 控制生成上限，是必填参数，缺失会触发参数校验错误。
+
+### code_reading · None
+
+
+
+**参考答案**：应遍历 resp.content 列表，找到文本类型的内容块并读取其 text 字段（例如 ''.join(block.text for block in resp.content if block.type == 'text')）。因为 content 是内容块列表，并非单个字符串，直接打印或当作字符串使用会得到对象而非纯文本。
+
+**解析**：响应中的 content 是内容块数组，文本块的正文在 text 属性中；需要按类型筛选后拼接，才能得到纯文本。
+
+### code_reading · None
+
+
+
+**参考答案**：问题在于：没有区分可重试与不可重试错误、没有设置最大重试次数、没有采用指数退避，且固定等待 1 秒在高并发下会形成重试风暴。应加上重试上限并采用指数退避（可带随机抖动），同时只对限流、超时等可恢复错误重试。
+
+**解析**：无限且固定间隔的重试会放大服务端压力，也可能掩盖真正的错误；规范的退避加次数上限才可控。
+
+### scenario · None
+
+
+
+**解析**：该接口是无状态的，服务端不会自动保留上一轮上下文，必须由应用侧维护并随请求发送历史消息，同时对超长历史做截断或摘要，并复用客户端实例。
+
+### single_choice · None
+
+
+
+- [A] response.choices[0].message.content
+- [B] response.content 列表中各内容块的 text 字段
+- [C] response.output_text
+- [D] response.result.text
+
+**参考答案**：1
+
+**解析**：Anthropic Messages 接口返回的 content 是一个内容块列表，文本块通过 block.text 取得；choices/message 结构是另一种接口习惯，不能混淆。
+
+### scenario · None
+
+
+
+**解析**：私有仓库仍可能因权限扩大、成员变更或历史记录泄漏密钥；应改为通过环境变量或密钥管理服务注入，并对密钥做定期轮换与最小权限控制。
+
+### single_choice · None
+
+
+
+- [A] 传入 stream=True 后返回的是一个可迭代的事件流，需要逐块读取增量内容
+- [B] 流式模式返回的仍是完整字符串，只是打印方式不同
+- [C] 流式模式不能用 max_tokens 参数
+- [D] 流式模式必须先建立 HTTP 长连接并手动解析 WebSocket
+
+**参考答案**：0
+
+**解析**：开启流式后返回的是事件流对象，需要按事件增量拼接文本；它并非只是打印差异，底层不是 WebSocket，max_tokens 依然适用。
+
+### single_choice · None
+
+
+
+- [A] SDK 自动使用无限长度，永不被截断
+- [B] 通常会被服务端拒绝，因为 max_tokens 是必填参数
+- [C] 自动取 prompt 的长度作为上限
+- [D] SDK 会自动重试直到成功
+
+**参考答案**：1
+
+**解析**：max_tokens 是 Messages 接口的必填参数，缺失会引发参数校验错误；它没有隐含的无限或自动推导语义。
+
+### single_choice · None
+
+
+
+- [A] 立即原样重试，直到成功为止
+- [B] 捕获异常并按指数退避策略重试，同时设置最大重试次数
+- [C] 把 API Key 换成新的就能绕过限流
+- [D] 改用同步转异步即可彻底避免限流
+
+**参考答案**：1
+
+**解析**：限流属于可恢复的暂时性错误，指数退避加重试上限是通用做法；立即重试可能加剧限流，更换密钥或改异步都不是根本解法。
+
+### single_choice · None
+
+
+
+- [A] 先由模型直接执行工具，再把结果回传
+- [B] 先声明工具定义，模型返回工具调用请求，开发者执行后把结果作为消息回传，再由模型续写
+- [C] 工具调用无需回传结果，模型会自动得知执行结果
+- [D] 必须先注册到操作系统才能被模型调用
+
+**参考答案**：1
+
+**解析**：模型只负责生成调用意图，真正执行在应用侧；必须把执行结果作为消息回传，模型才能继续生成最终回复。
+
+### single_choice · None
+
+
+
+- [A] 把密钥写在 Jupyter Notebook 的第一个单元格里方便复用
+- [B] 把密钥提交到私有仓库，因为仓库是私有的
+- [C] 通过环境变量或密钥管理服务注入，源码中不出现明文
+- [D] 把密钥做 base64 编码后再写入源码
+
+**参考答案**：2
+
+**解析**：编码不是加密，提交到仓库也有泄漏风险；通过环境变量或密钥管理服务注入，源码不含明文才是规范做法。
+
+### single_choice · None
+
+
+
+- [A] 系统提示用于设定整体行为与约束，用户消息承载本次具体请求
+- [B] 两者完全等价，只是命名不同
+- [C] 系统提示只能写一句英文
+- [D] 用户消息会覆盖系统提示，系统提示实际不起作用
+
+**参考答案**：0
+
+**解析**：系统提示承担全局角色设定与规则约束，用户消息表达当轮任务；两者语义层级不同，不是等价替换关系。
+
+### single_choice · None
+
+
+
+- [A] 每次请求都新建客户端并重新读取密钥，以提升安全性
+- [B] 在应用生命周期内复用同一个客户端实例，避免频繁创建连接
+- [C] 必须每个线程各建一万个客户端才安全
+- [D] 客户端只能在模块导入时创建，不可在其他位置创建
+
+**参考答案**：1
+
+**解析**：客户端通常持有连接池等资源，复用可减少开销；频繁创建并不会提升安全性，也不会带来额外正确性。

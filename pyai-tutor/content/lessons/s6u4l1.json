@@ -1,0 +1,653 @@
+{
+  "id": "s6u4l1",
+  "title": "s6u4l1",
+  "kps": [
+    "ai.embed.word2vec",
+    "ai.embed.sentence_transformer"
+  ],
+  "theory": "## ai.embed.word2vec\n\n# 从词到向量：理解 Word2Vec\n\n## 一句话直觉\n\n**Word2Vec（词向量）** 的目标，是把“词”变成一串数字（向量），并且让语义相近的词在向量空间里也靠得近——这样机器才能“理解”词与词之间的关系。\n\n---\n\n## 1. 为什么需要 Word2Vec？\n\n传统做法把词当成离散符号（one-hot，独热编码）：\n\n- “猫” = [1, 0, 0, ...]\n- “狗” = [0, 1, 0, ...]\n- “汽车” = [0, 0, 1, ...]\n\n问题是：任意两个词的距离都一样，模型无法知道“猫”和“狗”比“猫”和“汽车”更接近。\n\nWord2Vec 的核心思想：**一个词的含义，由它经常出现的上下文决定**（distributional hypothesis，分布式假设）。\n\n```python\n# 直观对比：one-hot 无法表达相似度\nimport numpy as np\n\ncat = np.array([1, 0, 0])\ndog = np.array([0, 1, 0])\ncar = np.array([0, 0, 1])\n\ndef cosine(a, b):\n    return float(a @ b / (np.linalg.norm(a) * np.linalg.norm(b)))\n\nprint(\"猫 vs 狗:\", cosine(cat, dog))   # 0.0\nprint(\"猫 vs 车:\", cosine(cat, car))   # 0.0\n# one-hot 下所有词都正交，无法体现语义关系\n```\n\n---\n\n## 2. Word2Vec 的两种训练方式\n\nWord2Vec 有两大经典架构：\n\n### 2.1 CBOW（Continuous Bag-of-Words，连续词袋）\n\n用**上下文词**预测**中心词**。\n\n例如句子：“我 喜欢 吃 苹果”\n- 输入：我、喜欢、苹果\n- 目标：吃\n\n### 2.2 Skip-gram（跳字模型）\n\n用**中心词**预测**上下文词**。\n\n- 输入：吃\n- 目标：我、喜欢、苹果\n\n> 工程经验：Skip-gram 对低频词效果更好，但训练更慢；CBOW 训练更快，适合大规模语料。\n\n```python\n# 用 gensim 训练一个最小 Word2Vec 模型\n# 安装：pip install gensim\nfrom gensim.models import Word2Vec\n\n# 语料：每个句子是一个词列表\nsentences = [\n    [\"我\", \"喜欢\", \"吃\", \"苹果\"],\n    [\"我\", \"喜欢\", \"吃\", \"香蕉\"],\n    [\"他\", \"喜欢\", \"吃\", \"苹果\"],\n    [\"猫\", \"喜欢\", \"吃\", \"鱼\"],\n    [\"狗\", \"喜欢\", \"吃\", \"肉\"],\n]\n\n# sg=1 表示 Skip-gram；sg=0 表示 CBOW\nmodel = Word2Vec(sentences, vector_size=20, window=2, min_count=1, sg=1, epochs=100)\n\n# 查看“苹果”的向量\nprint(model.wv[\"苹果\"])\n\n# 找与“苹果”最相似的词\nprint(model.wv.most_similar(\"苹果\", topn=3))\n```\n\n---\n\n## 3. 词向量的几何意义\n\n训练完成后，每个词是一个稠密向量（dense vector），比如 100 维、300 维。\n\n我们可以做“词向量算术”：\n\n> 国王 - 男人 + 女人 ≈ 女王\n\n这体现了 Word2Vec 捕捉到的**线性语义关系**。\n\n```python\n# 假设已训练好较大语料模型\n# 这里演示 API 用法（真实效果需要足够语料）\n# model.wv.most_similar(positive=[\"国王\", \"女人\"], negative=[\"男人\"])\n\n# 用余弦相似度衡量两个词\nfrom numpy import dot\nfrom numpy.linalg import norm\n\nv1 = model.wv[\"苹果\"]\nv2 = model.wv[\"香蕉\"]\n\ncos_sim = dot(v1, v2) / (norm(v1) * norm(v2))\nprint(\"苹果 vs 香蕉 相似度:\", cos_sim)\n```\n\n---\n\n## 4. 训练参数与工程要点\n\n常见参数：\n\n| 参数 | 含义 | 建议 |\n|---|---|---|\n| `vector_size` | 向量维度 | 100~300 常用 |\n| `window` | 上下文窗口大小 | 5 左右常用 |\n| `min_count` | 忽略低频词 | 至少 1，通常 5 |\n| `sg` | 0=CBOW，1=Skip-gram | 视任务而定 |\n| `negative` | 负采样数量 | 5~20 |\n| `epochs` | 训练轮数 | 5~20 |\n\n**负采样（negative sampling）**：Word2Vec 不直接做 softmax（输出维度=词表大小），而是把问题变成二分类，随机抽一些“负样本”词，大幅加速训练。\n\n```python\n# 展示常用参数配置\nmodel = Word2Vec(\n    sentences,\n    vector_size=100,   # 向量维度\n    window=5,          # 上下文窗口\n    min_count=5,       # 忽略出现次数少于5的词\n    sg=1,              # Skip-gram\n    negative=5,        # 负采样\n    epochs=10,\n    workers=4,         # 并行线程\n)\n```\n\n---\n\n## 5. Word2Vec 的局限与后续发展\n\n局限：\n\n1. **静态向量**：一个词只有一个向量，无法处理多义词（“苹果”公司 vs 水果）。\n2. **依赖语料**：语料质量决定效果。\n3. **无法处理未登录词（OOV，Out-of-Vocabulary）**：没见过的词没有向量。\n\n后续发展：\n\n- **GloVe（Global Vectors）**：基于全局共现矩阵。\n- **FastText**：引入子词（subword），缓解 OOV。\n- **ELMo / BERT**：上下文相关（contextualized）词向量，一个词在不同句子中向量不同。\n\n```python\n# FastText 可以处理未登录词（通过子词）\n# from gensim.models import FastText\n# ft = FastText(sentences, vector_size=20, min_count=1)\n# print(ft.wv[\"苹果派\"])   # 即使没出现过，也能得到向量\n```\n\n---\n\n## 动手练习\n\n**任务：用 Word2Vec 找“语义最近邻”**\n\n1. 准备一个小语料：自己写 20~30 个中文句子，主题围绕“水果、动物、交通工具”。\n2. 用 `gensim` 训练一个 Word2Vec 模型（`vector_size=50, window=3, min_count=1, sg=1`）。\n3. 完成以下操作：\n   - 输出“苹果”的向量前 5 维。\n   - 找出与“苹果”最相似的 3 个词。\n   - 计算“猫”和“狗”的余弦相似度，并与“猫”和“汽车”的相似度对比。\n4. 思考：为什么在你的小语料上效果可能不理想？语料规模对 Word2Vec 有什么影响？\n\n**提交形式**：一段可运行 Python 脚本 + 一段简短分析（200 字以内）。\n\n## ai.embed.sentence_transformer\n\n# Sentence Transformer：让句子变成向量\n\n> 一句话直觉：计算机读不懂“你好”和“Hello”为什么意思相近，Sentence Transformer（句子转换器）就是把一句自然语言压成一串数字向量，让“意思相近的句子，向量也相近”，从而让机器能算相似度、做检索、做聚类、做推荐。\n\n本讲义面向零基础到工程级，目标是在 40 分钟内让你理解它是什么、为什么有效、怎么用、怎么落地，并能自己写出一个小型语义检索 Demo。\n\n---\n\n## 1. 从“词向量”到“句向量”：为什么要专门学 Sentence Transformer\n\n传统 NLP（Natural Language Processing，自然语言处理）里，词可以被表示成向量，例如 Word2Vec、GloVe。但工程中我们真正处理的是句子、段落、文档。\n\n朴素做法是把句子中每个词的词向量求平均。问题是：\n\n- “狗咬人”和“人咬狗”词一样，平均后几乎一样，但语义完全不同。\n- “我不喜欢这部电影”和“我喜欢这部电影”也会被平均得非常接近。\n\n所以我们需要一个模型，直接输入整句，输出一个固定长度的句向量（sentence embedding，句子嵌入）。Sentence Transformer 就是这类模型的代表。\n\n它的核心思想是：用 Transformer（一种基于自注意力机制的神经网络架构）编码句子，再通过对比学习（contrastive learning）训练，让语义相近的句子在向量空间里靠近，语义不同的句子远离。\n\n```python\n# 先建立直觉：句子可以由模型编码成向量\n# 这里只演示概念，不依赖联网下载模型\nsentences = [\"猫坐在垫子上\", \"一只猫在垫子上休息\", \"今天天气很好\"]\n\n# 假设我们已经有一个编码函数 encode(text) -> list[float]\n# 真实模型会在后文使用 sentence-transformers 库加载\nprint(\"我们要把每句话变成一个固定长度向量\")\nprint(\"然后比较向量之间的距离，距离越小，语义越相似\")\n```\n\n---\n\n## 2. 核心机制：Transformer 编码 + 池化 + 对比学习\n\nSentence Transformer 通常由三部分组成：\n\n1. **Transformer 编码器（Transformer Encoder）**：把输入 token（词元）序列变成上下文相关的 token 向量。\n2. **池化层（Pooling）**：把多个 token 向量压成一个句向量。常见有 CLS pooling、Mean pooling、Max pooling。\n3. **训练目标（Training Objective）**：常用对比学习，让正样本对（语义相近）向量更近，负样本对更远。\n\n你可以把它理解成：\n\n```text\n句子 -> 分词 -> Transformer -> 每个 token 一个向量 -> 池化 -> 一个句向量\n```\n\n工程上最常用的是 Mean pooling：对所有 token 向量取平均。\n\n```python\nimport numpy as np\n\n# 模拟 Transformer 输出：3 个 token，每个 token 是 4 维向量\ntoken_embeddings = np.array([\n    [0.1, 0.2, 0.3, 0.4],\n    [0.2, 0.1, 0.4, 0.3],\n    [0.3, 0.3, 0.2, 0.2],\n])\n\n# Mean pooling：按 token 维度求平均，得到一个句向量\nsentence_embedding = token_embeddings.mean(axis=0)\nprint(sentence_embedding)  # [0.2 0.2 0.3 0.3]\n```\n\n关键结论：句向量不是简单词向量平均，而是经过上下文编码后的 Token 向量再做池化。\n\n---\n\n## 3. 最常用工具：sentence-transformers 库\n\n实际开发中，我们很少从零训练，而是直接使用 `sentence-transformers` 库加载预训练模型。\n\n安装：\n\n```bash\npip install -U sentence-transformers\n```\n\n最小可用代码：\n\n```python\nfrom sentence_transformers import SentenceTransformer\n\n# 加载一个轻量多语言模型，第一次运行会自动下载\nmodel = SentenceTransformer(\"paraphrase-multilingual-MiniLM-L12-v2\")\n\nsentences = [\n    \"猫坐在垫子上\",\n    \"一只猫在垫子上休息\",\n    \"今天天气很好\",\n]\n\n# 编码：输出形状为 (句子数, 向量维度)\nembeddings = model.encode(sentences)\nprint(embeddings.shape)\nprint(embeddings[0][:5])\n```\n\n这里模型名 `paraphrase-multilingual-MiniLM-L12-v2` 的意思是：\n\n- `paraphrase`：面向释义/相似句任务训练。\n- `multilingual`：多语言。\n- `MiniLM-L12`：较小的 Transformer 结构，适合工程部署。\n\n关键结论：工程中优先选“任务匹配 + 语言匹配 + 体积可接受”的预训练模型。\n\n---\n\n## 4. 怎么用：相似度、检索、聚类\n\n得到句向量后，最常用的操作是余弦相似度（cosine similarity）。\n\n公式：\n\n```text\ncos(a, b) = a · b / (||a|| * ||b||)\n```\n\n范围通常在 -1 到 1，越接近 1 越相似。\n\n```python\nfrom sentence_transformers import SentenceTransformer, util\n\nmodel = SentenceTransformer(\"paraphrase-multilingual-MiniLM-L12-v2\")\n\nsentences = [\n    \"猫坐在垫子上\",\n    \"一只猫在垫子上休息\",\n    \"今天天气很好\",\n]\n\nembeddings = model.encode(sentences, convert_to_tensor=True)\n\n# 计算第 0 句和第 1 句的余弦相似度\nsim_01 = util.cos_sim(embeddings[0], embeddings[1])\n# 计算第 0 句和第 2 句的余弦相似度\nsim_02 = util.cos_sim(embeddings[0], embeddings[2])\n\nprint(\"0 和 1 相似度：\", sim_01.item())\nprint(\"0 和 2 相似度：\", sim_02.item())\n```\n\n工程级最小检索系统：\n\n```python\nfrom sentence_transformers import SentenceTransformer, util\n\nmodel = SentenceTransformer(\"paraphrase-multilingual-MiniLM-L12-v2\")\n\n# 知识库文档\ndocs = [\n    \"Python 是一种编程语言\",\n    \"猫科动物包括猫、狮子和老虎\",\n    \"余弦相似度用于衡量向量方向接近程度\",\n    \"北京是中国的首都\",\n]\n\ndoc_embeddings = model.encode(docs, convert_to_tensor=True)\n\nquery = \"哪种动物属于猫科？\"\nquery_embedding = model.encode(query, convert_to_tensor=True)\n\n# 计算查询与所有文档的相似度\nscores = util.cos_sim(query_embedding, doc_embeddings)[0]\n\n# 取最相似的前 2 个\nbest = scores.topk(k=2)\nfor score, idx in zip(best.values, best.indices):\n    print(f\"相似度={score:.4f} 文档={docs[idx]}\")\n```\n\n关键结论：句向量把“语义匹配”变成了“向量近邻搜索”。\n\n---\n\n## 5. 工程级注意点：归一化、批处理、模型选择与部署\n\n当你从 Demo 走向生产，要关注这些点：\n\n1. **归一化（Normalization）**：很多模型输出未归一化，做余弦相似度前最好 `normalize_embeddings=True`。\n2. **批处理（Batching）**：`encode` 支持批量输入，显著提升吞吐。\n3. **向量维度与存储**：句向量通常是 384、512、768 维，存入向量数据库（Vector Database）如 FAISS、Milvus、Chroma。\n4. **模型选择**：\n   - 多语言：`paraphrase-multilingual-*`\n   - 英文检索：`all-MiniLM-L6-v2`、`multi-qa-MiniLM-L6-cos-v1`\n   - 高精度：`BAAI/bge-*`、`intfloat/e5-*`\n5. **版本与缓存**：模型首次下载后会缓存，生产环境要固定版本，避免行为漂移。\n\n```python\nfrom sentence_transformers import SentenceTransformer\nimport numpy as np\n\nmodel = SentenceTransformer(\"paraphrase-multilingual-MiniLM-L12-v2\")\n\nsentences = [\"句子一\", \"句子二\", \"句子三\"]\n\n# normalize_embeddings=True 让向量长度为 1，之后点积等于余弦相似度\nembeddings = model.encode(\n    sentences,\n    batch_size=32,\n    normalize_embeddings=True,\n    show_progress_bar=False,\n)\n\n# 因为已归一化，点积就是余弦相似度\nsim_matrix = np.dot(embeddings, embeddings.T)\nprint(sim_matrix)\n```\n\n关键结论：生产环境要固定模型、归一化向量、批量编码，并配合向量数据库做近邻搜索。\n\n---\n\n## 6. 常见对比：Sentence Transformer 与普通 Transformer\n\n普通 BERT（Bidirectional Encoder Representations from Transformers）输出的是 token 级向量，直接拿 CLS 向量做句子相似度效果往往一般，因为没有专门为句子相似度训练。\n\nSentence Transformer 通过孪生网络（Siamese Network）或对比学习，把“句子对是否相似”作为训练目标，因此更适合：\n\n- 语义搜索（Semantic Search）\n- 文本聚类（Text Clustering）\n- 去重（Deduplication）\n- 推荐召回（Recommendation Retrieval）\n- RAG（Retrieval-Augmented Generation，检索增强生成）中的召回阶段\n\n```python\n# 伪代码对比：普通 BERT 取 CLS 和 Sentence Transformer 的差异\n# 普通 BERT：\n# outputs = bert_model(input_ids)\n# cls_vector = outputs.last_hidden_state[:, 0, :]\n# 问题：CLS 向量未必适合余弦相似度\n\n# Sentence Transformer：\n# embedding = model.encode(\"句子\")\n# 优点：直接为句子相似度优化，开箱即用\nprint(\"做语义相似度任务，优先用 Sentence Transformer\")\n```\n\n---\n\n## 7. 动手练习\n\n**任务：搭建一个本地“迷你语义搜索”脚本。**\n\n要求：\n\n1. 安装 `sentence-transformers`。\n2. 准备至少 8 条中文短句作为知识库，主题可以是你喜欢的电影、书籍或技术概念。\n3. 用 `paraphrase-multilingual-MiniLM-L12-v2` 编码知识库。\n4. 输入一个查询句，输出相似度最高的前 3 条。\n5. 把 `normalize_embeddings=True` 打开，并解释为什么余弦相似度仍然正确。\n6. 额外挑战：把知识库向量保存为 `.npy` 文件，下次直接加载，不重复编码。\n\n示例骨架：\n\n```python\nfrom sentence_transformers import SentenceTransformer, util\nimport numpy as np\n\nmodel = SentenceTransformer(\"paraphrase-multilingual-MiniLM-L12-v2\")\n\ndocs = [\n    \"替换成你的第 1 条知识\",\n    \"替换成你的第 2 条知识\",\n    # ... 至少 8 条\n]\n\ndoc_emb = model.encode(docs, normalize_embeddings=True, convert_to_tensor=True)\nquery = \"输入你的查询句\"\nquery_emb = model.encode(query, normalize_embeddings=True, convert_to_tensor=True)\n\nscores = util.cos_sim(query_emb, doc_emb)[0]\ntop = scores.topk(k=3)\nfor s, i in zip(top.values, top.indices):\n    print(f\"{s:.4f}\\t{docs[i]}\")\n\n# 保存与加载\nnp.save(\"doc_emb.npy\", doc_emb.cpu().numpy())\nloaded = np.load(\"doc_emb.npy\")\nprint(loaded.shape)\n```\n\n完成后你应该能回答：\n\n- 为什么句向量能表示语义？\n- 为什么需要池化？\n- 为什么余弦相似度适合句向量？\n- 生产中如何选模型和存向量？\n\n如果这四点都清晰，你已经掌握了 Sentence Transformer 的核心。\n",
+  "quiz": [
+    {
+      "kp": "ai.embed.word2vec",
+      "type": "single_choice",
+      "question": "在使用 Word2Vec 的 Skip-gram 模型训练词向量时，下列哪一项最准确地描述了它的训练目标？",
+      "options": [
+        "给定中心词，预测它周围的上下文词",
+        "给定上下文词，预测中心词",
+        "给定一个句子，预测整句的情感极性",
+        "给定两个词，直接输出它们的余弦相似度"
+      ],
+      "answer": 0,
+      "explanation": "Skip-gram 的核心思想是用中心词预测上下文词；选项 B 是 CBOW 的目标，C、D 均不是 Word2Vec 的训练目标。",
+      "error_tag": "模型方向混淆",
+      "variant_group": "word2vec_training_objective"
+    },
+    {
+      "kp": "ai.embed.word2vec",
+      "type": "single_choice",
+      "question": "在使用 Word2Vec 训练时，若把窗口大小 window 从 2 增大到 10，最可能出现的直接效果是？",
+      "options": [
+        "每个中心词会关联到更远的上下文词，学到的共现关系范围更广",
+        "词表大小会立即增大 5 倍",
+        "模型会自动从 Skip-gram 切换为 CBOW",
+        "训练得到的词向量维度会自动变为 10"
+      ],
+      "answer": 0,
+      "explanation": "窗口大小决定中心词与上下文词的最大距离；窗口越大，纳入的上下文越远，但不会改变词表、模型结构或向量维度。",
+      "error_tag": "超参数作用误解",
+      "variant_group": "word2vec_window_effect"
+    },
+    {
+      "kp": "ai.embed.word2vec",
+      "type": "single_choice",
+      "question": "在使用 Word2Vec 时，若希望模型更关注词序信息、对低频词也学得较好，通常更倾向于选择？",
+      "options": [
+        "Skip-gram",
+        "CBOW",
+        "词袋模型",
+        "TF-IDF"
+      ],
+      "answer": 0,
+      "explanation": "Skip-gram 用中心词预测上下文，对低频词和词序信息通常表现更好；CBOW 更平滑、训练更快但低频词效果往往稍弱；词袋和 TF-IDF 不是 Word2Vec 的模型变体。",
+      "error_tag": "模型选择混淆",
+      "variant_group": "word2vec_model_choice"
+    },
+    {
+      "kp": "ai.embed.word2vec",
+      "type": "single_choice",
+      "question": "在使用 Word2Vec 时，若训练语料规模非常大，下列哪一项通常能显著降低训练时间且不改变模型的基本目标？",
+      "options": [
+        "使用负采样或层次 softmax 替代完整 softmax",
+        "把向量维度设置为 1",
+        "把窗口大小设置为 0",
+        "删除所有高频词"
+      ],
+      "answer": 0,
+      "explanation": "负采样和层次 softmax 都是加速训练、近似完整 softmax 的常用方法；维度设为 1、窗口设为 0 或删除高频词会破坏训练效果或目标。",
+      "error_tag": "训练加速方法误解",
+      "variant_group": "word2vec_training_speedup"
+    },
+    {
+      "kp": "ai.embed.word2vec",
+      "type": "single_choice",
+      "question": "关于 Word2Vec 得到的词向量，下列哪一项说法是正确的？",
+      "options": [
+        "词向量可以通过语义类比任务进行定性评估，例如“国王 - 男人 + 女人”接近“女王”",
+        "词向量的每一维都严格对应一个语法标签",
+        "词向量训练完成后不能再用于其他下游任务",
+        "词向量只能用于英文，不能用于中文"
+      ],
+      "answer": 0,
+      "explanation": "词向量的语义类比是经典评估方式；每一维通常不可解释，词向量可迁移到多种下游任务，也不限语言。",
+      "error_tag": "词向量评估误解",
+      "variant_group": "word2vec_evaluation"
+    },
+    {
+      "kp": "ai.embed.word2vec",
+      "type": "single_choice",
+      "question": "在使用 Word2Vec 训练时，若把 sg 参数从 1 改为 0，会发生什么？",
+      "options": [
+        "训练模型从 Skip-gram 切换为 CBOW",
+        "训练模型从 CBOW 切换为 Skip-gram",
+        "窗口大小自动变为 0",
+        "负采样被自动关闭"
+      ],
+      "answer": 0,
+      "explanation": "在常见实现中，sg=1 表示 Skip-gram，sg=0 表示 CBOW；该参数不控制窗口大小或负采样。",
+      "error_tag": "参数含义误解",
+      "variant_group": "word2vec_model_choice"
+    },
+    {
+      "kp": "ai.embed.word2vec",
+      "type": "single_choice",
+      "question": "使用 Word2Vec 训练词向量时，下列哪一项最可能导致“训练出的向量对当前任务帮助不大”？",
+      "options": [
+        "训练语料的领域与下游任务差异很大",
+        "训练语料规模较大且覆盖面广",
+        "根据任务调整了窗口大小",
+        "对语料进行了分词和去噪"
+      ],
+      "answer": 0,
+      "explanation": "词向量会继承训练语料的领域分布，领域差异大时迁移效果可能差；其余选项通常是正面做法。",
+      "error_tag": "领域迁移问题",
+      "variant_group": "word2vec_domain_mismatch"
+    },
+    {
+      "kp": "ai.embed.word2vec",
+      "type": "single_choice",
+      "question": "在 Word2Vec 中，若把训练语料中的句子顺序完全打乱，最可能的影响是？",
+      "options": [
+        "对共现统计影响不大，词向量整体仍然可以正常训练",
+        "词表大小会立即变为 0",
+        "Skip-gram 会自动变成 CBOW",
+        "所有词向量都会变成零向量"
+      ],
+      "answer": 0,
+      "explanation": "Word2Vec 主要依赖局部窗口内的共现关系，句子整体顺序对训练影响有限；它不会改变词表、模型类型或使向量归零。",
+      "error_tag": "语料顺序理解",
+      "variant_group": "word2vec_corpus_order"
+    },
+    {
+      "kp": "ai.embed.word2vec",
+      "type": "single_choice",
+      "question": "关于 Word2Vec 与词袋模型（Bag-of-Words）的区别，下列哪一项最准确？",
+      "options": [
+        "Word2Vec 学习低维稠密词向量，而词袋模型通常产生高维稀疏表示",
+        "Word2Vec 不能用于文本分类，词袋模型可以",
+        "Word2Vec 不需要语料，词袋模型需要语料",
+        "Word2Vec 只能处理英文，词袋模型只能处理中文"
+      ],
+      "answer": 0,
+      "explanation": "Word2Vec 的输出是低维稠密向量，词袋模型通常是高维稀疏计数或权重向量；两者都可以用于文本分类，也都需要语料，且不限语言。",
+      "error_tag": "表示方法混淆",
+      "variant_group": "word2vec_vs_bow"
+    },
+    {
+      "kp": "ai.embed.word2vec",
+      "type": "single_choice",
+      "question": "在使用 Word2Vec 时，若把迭代次数（epochs）设置得过小，最可能的结果是？",
+      "options": [
+        "模型尚未充分学习共现统计，词向量质量可能较差",
+        "词表大小会自动缩小",
+        "窗口大小会自动变大",
+        "负采样会自动关闭"
+      ],
+      "answer": 0,
+      "explanation": "迭代次数不足会导致模型欠拟合；它不会改变词表、窗口或负采样设置。",
+      "error_tag": "训练轮数影响",
+      "variant_group": "word2vec_epochs_effect"
+    },
+    {
+      "kp": "ai.embed.word2vec",
+      "type": "single_choice",
+      "question": "使用 Word2Vec 时，下列哪一项最有助于缓解“高频词主导训练”的问题？",
+      "options": [
+        "对高频词进行下采样（subsampling）",
+        "把向量维度设置为 1",
+        "把窗口大小设置为整个语料长度",
+        "删除所有低频词"
+      ],
+      "answer": 0,
+      "explanation": "下采样可以降低高频词在训练中的权重，缓解其主导问题；其余选项会破坏训练或与目标无关。",
+      "error_tag": "高频词处理误解",
+      "variant_group": "word2vec_subsampling"
+    },
+    {
+      "kp": "ai.embed.word2vec",
+      "type": "single_choice",
+      "question": "在 Word2Vec 中，若训练完成后发现“电脑”和“计算机”的余弦相似度很高，最合理的解释是？",
+      "options": [
+        "它们在训练语料中经常出现在相似的上下文里",
+        "它们的词向量维度完全相同",
+        "它们的词频完全相同",
+        "它们的词表下标相邻"
+      ],
+      "answer": 0,
+      "explanation": "Word2Vec 基于分布式假设，上下文相似会导致词向量相似；维度相同是普遍现象，词频和下标的接近并不决定语义相似度。",
+      "error_tag": "共现假设理解",
+      "variant_group": "word2vec_distributional_hypothesis"
+    },
+    {
+      "kp": "ai.embed.word2vec",
+      "type": "single_choice",
+      "question": "在使用 Word2Vec 的 CBOW 模型时，下列关于输入和输出的说法哪一项正确？",
+      "options": [
+        "输入是多个上下文词，输出是中心词",
+        "输入是中心词，输出是多个上下文词",
+        "输入是整篇文档，输出是文档主题",
+        "输入是词向量，输出是词频统计"
+      ],
+      "answer": 0,
+      "explanation": "CBOW 使用上下文词预测中心词；选项 B 是 Skip-gram 的方向，C、D 与该模型无关。",
+      "error_tag": "模型方向混淆",
+      "variant_group": "word2vec_training_objective"
+    },
+    {
+      "kp": "ai.embed.word2vec",
+      "type": "single_choice",
+      "question": "关于 Word2Vec 词向量的可迁移性，下列哪一项最准确？",
+      "options": [
+        "在大规模通用语料上训练的词向量可以作为下游任务的初始化或特征输入",
+        "词向量一旦训练完成，只能用于训练时使用的那个任务",
+        "词向量不能用于任何深度学习模型",
+        "词向量必须与训练时的词表完全一致才能在任何任务中使用"
+      ],
+      "answer": 0,
+      "explanation": "预训练词向量常被迁移到下游任务作为初始化或特征；它不限于原任务，也可用于深度学习模型，词表可以按需裁剪或映射。",
+      "error_tag": "迁移学习理解",
+      "variant_group": "word2vec_transferability"
+    },
+    {
+      "kp": "ai.embed.word2vec",
+      "type": "single_choice",
+      "question": "在使用 Word2Vec 时，若把窗口大小设置为 1，最可能的结果是？",
+      "options": [
+        "每个中心词只能看到紧邻的一个或两个上下文词，学到的共现范围很局部",
+        "模型会自动退化为 CBOW",
+        "词表会只保留相邻词",
+        "训练会立即报错，无法进行"
+      ],
+      "answer": 0,
+      "explanation": "窗口大小为 1 表示只考虑紧邻上下文，共现范围很局部；它不会自动切换模型、裁剪词表或导致训练必然失败。",
+      "error_tag": "窗口大小理解",
+      "variant_group": "word2vec_window_effect"
+    },
+    {
+      "kp": "ai.embed.word2vec",
+      "type": "single_choice",
+      "question": "关于 Word2Vec 生成的词向量，下列说法哪一项最符合其实际特性？",
+      "options": [
+        "语义相近的词在向量空间中距离通常较近",
+        "每个词向量的每一维都对应一个可解释的语义属性",
+        "词向量的维度必须等于训练语料的词表大小",
+        "词向量一经训练就与上下文完全无关，无法体现多义词"
+      ],
+      "answer": 0,
+      "explanation": "Word2Vec 的分布式假设使语义相近的词向量相近；每一维通常不可单独解释，维度不等于词表大小，且静态词向量确实难以处理多义词，但这不是“符合实际特性”的最佳正向描述。",
+      "error_tag": "词向量特性误解",
+      "variant_group": "word2vec_vector_properties"
+    },
+    {
+      "kp": "ai.embed.word2vec",
+      "type": "single_choice",
+      "question": "在训练 Word2Vec 时，若把向量维度由 100 改为 300，最可能发生什么？",
+      "options": [
+        "每个词向量的长度变为 300 个浮点数，模型参数量增加",
+        "词表会被截断为 300 个词",
+        "窗口大小会自动调整为 300",
+        "训练目标会从 Skip-gram 变为 CBOW"
+      ],
+      "answer": 0,
+      "explanation": "向量维度决定每个词向量的长度和模型参数量；它不影响词表大小、窗口大小或训练目标。",
+      "error_tag": "超参数作用误解",
+      "variant_group": "word2vec_dimension_effect"
+    },
+    {
+      "kp": "ai.embed.word2vec",
+      "type": "single_choice",
+      "question": "使用 Word2Vec 时，若训练语料中“苹果”既指水果又指公司，但训练后只得到一个静态向量，最可能的原因是？",
+      "options": [
+        "原始 Word2Vec 为每个词只学习一个固定向量，无法根据上下文区分多义词",
+        "训练语料中没有出现“苹果”这个词",
+        "窗口大小设置得太小，导致无法训练",
+        "向量维度设置得太大，导致多义词被合并"
+      ],
+      "answer": 0,
+      "explanation": "原始 Word2Vec 的词向量是静态的，同一个词只有一个向量；语料中出现与否、窗口和维度都不是该现象的根本原因。",
+      "error_tag": "静态词向量局限",
+      "variant_group": "word2vec_polysemy_limit"
+    },
+    {
+      "kp": "ai.embed.word2vec",
+      "type": "single_choice",
+      "question": "在使用 Word2Vec 时，下列哪种做法最可能导致训练出的词向量质量较差？",
+      "options": [
+        "使用规模很小且领域非常单一的语料进行训练",
+        "使用较大的语料并保留足够的迭代次数",
+        "根据任务调整窗口大小和向量维度",
+        "对语料进行基本的清洗和分词"
+      ],
+      "answer": 0,
+      "explanation": "Word2Vec 依赖大量共现统计，语料过小或过于单一会导致词向量覆盖不足、质量差；其余选项通常是提升质量的常规做法。",
+      "error_tag": "语料质量影响",
+      "variant_group": "word2vec_corpus_quality"
+    },
+    {
+      "kp": "ai.embed.word2vec",
+      "type": "single_choice",
+      "question": "在 Word2Vec 中，负采样（negative sampling）的主要作用是？",
+      "options": [
+        "通过只更新少量负样本，降低每次训练的计算量",
+        "把词表大小减少到原来的负样本数量",
+        "把 Skip-gram 自动转换为 CBOW",
+        "保证每个词向量都是单位向量"
+      ],
+      "answer": 0,
+      "explanation": "负采样通过随机抽取少量负样本近似原来的 softmax，从而降低计算开销；它不改变词表大小、模型方向，也不强制单位化。",
+      "error_tag": "训练技巧作用误解",
+      "variant_group": "word2vec_negative_sampling"
+    },
+    {
+      "kp": "ai.embed.word2vec",
+      "type": "single_choice",
+      "question": "关于 Word2Vec 的词向量相似度计算，下列哪一项最合理？",
+      "options": [
+        "常用余弦相似度衡量两个词向量在方向上的接近程度",
+        "必须使用欧氏距离，且值越大表示越相似",
+        "相似度只能通过查词表下标差值得到",
+        "相似度与训练语料无关，只由向量维度决定"
+      ],
+      "answer": 0,
+      "explanation": "余弦相似度是词向量相似度计算的常用方式；欧氏距离并非唯一选择，词表下标和维度都不能直接决定语义相似度。",
+      "error_tag": "相似度计算误解",
+      "variant_group": "word2vec_similarity_measure"
+    },
+    {
+      "kp": "ai.embed.word2vec",
+      "type": "single_choice",
+      "question": "在 Word2Vec 中，若把 min_count 设置为一个较大的值，最可能的结果是？",
+      "options": [
+        "低频词会被丢弃，词表变小",
+        "所有词都会被保留，但向量维度变大",
+        "窗口大小会自动增大",
+        "训练目标会改为预测句子顺序"
+      ],
+      "answer": 0,
+      "explanation": "min_count 用于过滤出现次数低于阈值的词，因此词表会变小；它不影响维度、窗口或训练目标。",
+      "error_tag": "超参数作用误解",
+      "variant_group": "word2vec_min_count_effect"
+    },
+    {
+      "kp": "ai.embed.sentence_transformer",
+      "type": "single_choice",
+      "question": "在使用 sentence-transformers 这类句向量模型时，若直接用两个句子的向量点积来衡量相似度，而模型训练时使用的是余弦相似度，最可能出现什么问题？",
+      "options": [
+        "点积与余弦相似度完全相同，不会有任何问题",
+        "点积会受向量模长影响，短向量或长向量会扭曲相似度排序",
+        "点积只能用于二分类，不能用于相似度比较",
+        "点积要求两个向量维度不同才能计算"
+      ],
+      "answer": 1,
+      "explanation": "余弦相似度会除以两个向量的模长，消除长度影响；而点积不归一化，当不同句子的向量模长差异较大时，点积值会被模长主导，从而扭曲相似度排序。若想用点积近似余弦相似度，通常需要先对向量做 L2 归一化。",
+      "error_tag": "概念混淆",
+      "variant_group": "相似度度量"
+    },
+    {
+      "kp": "ai.embed.sentence_transformer",
+      "type": "single_choice",
+      "question": "下列关于句向量模型对输入长度限制的描述，哪一项是正确的？",
+      "options": [
+        "句向量模型可以无限接收任意长度的文本，不需要截断",
+        "模型通常有最大序列长度限制，超长文本会被截断，可能导致语义信息丢失",
+        "只要文本是中文，就不会有长度限制",
+        "长度限制只影响训练，不影响推理"
+      ],
+      "answer": 1,
+      "explanation": "基于 Transformer 的句向量模型一般有最大序列长度（如 512 个 token）。超过该长度的输入会被截断，被截掉的部分信息不会参与编码，因此长文本的语义可能丢失。推理阶段同样受此限制，并非只影响训练。",
+      "error_tag": "边界错误",
+      "variant_group": "输入长度"
+    },
+    {
+      "kp": "ai.embed.sentence_transformer",
+      "type": "multi_choice",
+      "question": "在使用句向量模型做语义检索时，下列哪些做法有助于提升召回质量？（多选）",
+      "options": [
+        "对向量做 L2 归一化后使用内积/余弦相似度",
+        "根据业务数据对模型进行微调",
+        "使用适合该任务的池化方式（如平均池化或取 [CLS]）",
+        "把所有句子都截断到 1 个字符以节省空间",
+        "对 query 和 document 使用同一种编码模型与同一套预处理"
+      ],
+      "answer": [
+        0,
+        1,
+        2,
+        4
+      ],
+      "explanation": "归一化、任务相关微调、合适的池化、以及 query/document 编码方式一致，都有助于让相似度更可靠。把句子截断到 1 个字符会丢失几乎全部语义，严重损害召回。",
+      "error_tag": "工程取舍",
+      "variant_group": "检索质量"
+    },
+    {
+      "kp": "ai.embed.sentence_transformer",
+      "type": "multi_choice",
+      "question": "关于句向量模型的推理与训练差异，下列说法正确的有？（多选）",
+      "options": [
+        "推理时通常关闭 dropout，保证输出确定性",
+        "训练时可能会使用对比学习等目标来拉近正样本、推远负样本",
+        "推理时不需要标签，只要把文本编码成向量",
+        "推理时必须和训练一样进行反向传播"
+      ],
+      "answer": [
+        0,
+        1,
+        2
+      ],
+      "explanation": "推理阶段关闭 dropout 以保证稳定输出，不需要标签，也不进行反向传播；训练阶段常用对比学习类目标优化向量空间。推理时做反向传播既无必要也浪费计算。",
+      "error_tag": "概念混淆",
+      "variant_group": "训练与推理"
+    },
+    {
+      "kp": "ai.embed.sentence_transformer",
+      "type": "multi_choice",
+      "question": "下列哪些因素可能导致句向量相似度结果不合理？（多选）",
+      "options": [
+        "输入文本远超模型最大长度而被截断",
+        "query 与 document 使用了不同的编码模型",
+        "向量未归一化却用内积比较",
+        "把相似度阈值当成固定不变的通用常数",
+        "对输入文本做了与模型训练时一致的预处理"
+      ],
+      "answer": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "explanation": "截断丢信息、编码模型不一致、未归一化用内积、把阈值当通用常数，都会让相似度判断失真。与训练一致的预处理是正确做法，不会导致不合理结果。",
+      "error_tag": "边界错误",
+      "variant_group": "失败原因"
+    },
+    {
+      "kp": "ai.embed.sentence_transformer",
+      "type": "multi_choice",
+      "question": "在部署句向量服务时，下列哪些属于合理的工程考虑？（多选）",
+      "options": [
+        "对向量建立近似最近邻索引以加速大规模检索",
+        "对高频 query 的向量做缓存",
+        "监控编码延迟与召回指标",
+        "把模型输出向量维度随意改成任意值而不重新训练"
+      ],
+      "answer": [
+        0,
+        1,
+        2
+      ],
+      "explanation": "ANN 索引、缓存、监控都是常见的生产优化手段。随意改变输出维度会破坏与已训练模型的一致性，除非使用专门的降维/投影方法，否则不可取。",
+      "error_tag": "工程取舍",
+      "variant_group": "部署优化"
+    },
+    {
+      "kp": "ai.embed.sentence_transformer",
+      "type": "fill_blank",
+      "question": "为了让句向量的内积等价于余弦相似度，通常需要对每个向量做 ____ 归一化。",
+      "options": [],
+      "answer": [
+        "L2",
+        "l2",
+        "欧几里得",
+        "二范数"
+      ],
+      "explanation": "L2 归一化把向量缩放到单位长度，此时两向量内积等于余弦相似度。也有写「二范数归一化」「欧几里得归一化」的说法。",
+      "error_tag": "记忆缺失",
+      "variant_group": "相似度度量"
+    },
+    {
+      "kp": "ai.embed.sentence_transformer",
+      "type": "fill_blank",
+      "question": "句向量模型把每个 token 的表示聚合成一个句子向量，这一操作通常称为 ____（填一个中文术语）。",
+      "options": [],
+      "answer": [
+        "池化",
+        "pooling",
+        "汇聚"
+      ],
+      "explanation": "池化（pooling）是把变长的 token 序列表示聚合成固定维度句子向量的操作，常见形式有平均池化、最大池化和取 [CLS] 位置。",
+      "error_tag": "记忆缺失",
+      "variant_group": "池化"
+    },
+    {
+      "kp": "ai.embed.sentence_transformer",
+      "type": "code_reading",
+      "question": "阅读以下伪代码：\n\nfrom sentence_transformers import SentenceTransformer\nmodel = SentenceTransformer('some-model')\nemb = model.encode(['hello world', '你好世界'])\nsim = emb[0] @ emb[1]\n\n若未对向量做任何额外处理，这里用内积计算相似度可能存在什么问题？请简要说明。",
+      "options": [],
+      "answer": "未做 L2 归一化时，内积会受向量模长影响，不能等价于余弦相似度。若想与余弦相似度一致，应先对 emb 做 L2 归一化再计算内积。",
+      "explanation": "内积等于模长乘积乘以夹角余弦。未归一化时，模长差异会主导结果，使相似度排序被长度影响。归一化后内积才等于余弦相似度。",
+      "error_tag": "概念混淆",
+      "variant_group": "相似度度量"
+    },
+    {
+      "kp": "ai.embed.sentence_transformer",
+      "type": "code_reading",
+      "question": "阅读以下伪代码：\n\ntexts = ['doc1', 'doc2', 'doc3']\nemb = model.encode(texts, batch_size=1)\n\n与使用 batch_size=32 相比，上述写法在效果和性能上会有什么影响？请简要说明。",
+      "options": [],
+      "answer": "逐条编码（batch_size=1）通常不改变单条句子的语义表示，但吞吐量低、耗时更长；增大 batch 能利用并行提升吞吐，在不超显存的前提下一般不改变单条语义。",
+      "explanation": "batch size 主要影响编码效率，对单条句子的向量表示通常没有本质影响（前提是推理模式且无随机性）。batch_size=1 会显著降低吞吐。",
+      "error_tag": "工程取舍",
+      "variant_group": "编码效率"
+    },
+    {
+      "kp": "ai.embed.sentence_transformer",
+      "type": "scenario",
+      "question": "某电商团队用句向量模型构建「相似商品标题」检索。上线后发现「iPhone 15 手机壳」与「iPhone 15 手机」的相似度很高，导致推荐结果不精准。请分析可能的原因，并给出至少两条可落地的改进措施。",
+      "options": [],
+      "answer": null,
+      "explanation": "通用句向量模型在通用语料上训练，对领域内细粒度差异（如「手机壳」与「手机」）区分不足。可通过使用领域数据微调、构造困难负样本进行对比学习、调整相似度阈值、增加重排或关键词过滤等手段提高区分度。",
+      "error_tag": "领域适配",
+      "variant_group": "业务落地",
+      "required_keywords": [
+        "领域微调",
+        "困难负样本",
+        "对比学习",
+        "相似度阈值",
+        "重排"
+      ]
+    },
+    {
+      "kp": "ai.embed.sentence_transformer",
+      "type": "scenario",
+      "question": "某团队将句向量模型部署为线上检索服务，随着文档库增长到千万级，查询延迟从几十毫秒上升到数秒。请分析瓶颈并给出至少两条优化方案。",
+      "options": [],
+      "answer": null,
+      "explanation": "延迟随库规模上升通常是因为线性扫描全部向量。可构建近似最近邻（ANN）向量索引、对高频查询做向量缓存、使用批处理与 GPU 加速编码、必要时降低向量维度或做量化。",
+      "error_tag": "工程取舍",
+      "variant_group": "部署优化",
+      "required_keywords": [
+        "ANN",
+        "GPU",
+        "索引",
+        "缓存"
+      ]
+    },
+    {
+      "kp": "ai.embed.sentence_transformer",
+      "type": "single_choice",
+      "question": "某句向量模型在训练时以余弦相似度为目标，在推理时我们希望用向量内积快速检索。为了让内积检索结果与余弦相似度一致，通常应该怎么做？",
+      "options": [
+        "把向量维度降低到 1",
+        "对每个向量做 L2 归一化后再计算内积",
+        "把向量中所有负值置为 0",
+        "对向量做标准化使均值为 0、方差为 1"
+      ],
+      "answer": 1,
+      "explanation": "当两个向量都做了 L2 归一化（模长为 1）后，内积就等于余弦相似度。因此归一化是让内积检索与余弦相似度一致的标准做法。降维、ReLU 截断或按特征做标准化都不能保证模长为 1。",
+      "error_tag": "概念混淆",
+      "variant_group": "相似度度量"
+    },
+    {
+      "kp": "ai.embed.sentence_transformer",
+      "type": "single_choice",
+      "question": "在使用句向量模型时，观察到同一个句子每次编码得到的向量都完全相同，而不同句子的向量差异明显。这最可能说明什么？",
+      "options": [
+        "模型在推理时默认是确定性的，相同输入得到相同输出，这是正常现象",
+        "模型出错了，应该每次都有随机性",
+        "模型没有加载成功",
+        "模型的向量维度设置错了"
+      ],
+      "answer": 0,
+      "explanation": "在推理/编码阶段，模型通常关闭 dropout 等随机机制，且不采样，因此相同输入会稳定地得到相同输出。这是可复现性的正常表现，不代表模型出错或没加载成功。",
+      "error_tag": "概念混淆",
+      "variant_group": "推理确定性"
+    },
+    {
+      "kp": "ai.embed.sentence_transformer",
+      "type": "single_choice",
+      "question": "在对大规模语料用句向量模型做编码时，以下哪种做法最有助于提升吞吐量且不改变单条语义？",
+      "options": [
+        "把 batch size 设为 1，逐条编码",
+        "使用较大的 batch 并行编码，并视情况使用 GPU",
+        "把所有句子拼成一个超长字符串再编码",
+        "对每条句子多次编码后取平均"
+      ],
+      "answer": 1,
+      "explanation": "批量编码能充分利用硬件并行能力，提升吞吐量；在显存允许范围内增大 batch 通常不改变单条句子的语义表示。逐条编码效率低；拼接会破坏句子边界；多次编码取平均既慢又不必要。",
+      "error_tag": "工程取舍",
+      "variant_group": "编码效率"
+    },
+    {
+      "kp": "ai.embed.sentence_transformer",
+      "type": "single_choice",
+      "question": "某句向量模型是在「对称语义相似度」任务上训练的，现在要用于「给定问题从文档库中找答案」的非对称检索。最合理的做法是？",
+      "options": [
+        "直接使用，不需要考虑训练任务与使用场景是否匹配",
+        "换用或微调一个更适合非对称检索（query-document）的句向量模型",
+        "把问题和文档都截断到 10 个字符",
+        "对文档向量做随机打乱"
+      ],
+      "answer": 1,
+      "explanation": "对称相似度任务（如 STS）与非对称检索任务（query 短、document 长）的分布不同。在对称任务上训练的模型直接用于非对称检索，召回质量可能明显下降。更合理的做法是选用专门为非对称检索训练/微调的模型。",
+      "error_tag": "概念混淆",
+      "variant_group": "任务匹配"
+    },
+    {
+      "kp": "ai.embed.sentence_transformer",
+      "type": "single_choice",
+      "question": "关于句向量模型中「池化」操作的作用，下列说法正确的是？",
+      "options": [
+        "池化是为了把 token 级别的表示聚合成一个固定维度的句子向量",
+        "池化是为了增加向量的维度",
+        "池化是为了把句子翻译成另一种语言",
+        "池化是为了随机丢弃一半的 token"
+      ],
+      "answer": 0,
+      "explanation": "Transformer 输出的是每个 token 的向量，需要经过池化（如取 [CLS]、平均池化、最大池化）聚合成一个固定维度的句子级向量，才能用于句子相似度等任务。池化不改变模型设计的目标维度语义，也不是翻译或随机丢弃。",
+      "error_tag": "概念混淆",
+      "variant_group": "池化"
+    },
+    {
+      "kp": "ai.embed.sentence_transformer",
+      "type": "single_choice",
+      "question": "在相同硬件与相同模型下，把句向量维度从 768 降到 128 后，最可能出现的现象是？",
+      "options": [
+        "检索速度通常变快，存储变小，但语义区分能力可能有所下降",
+        "检索速度一定变慢，因为维度更少计算更复杂",
+        "语义区分能力一定提升，因为维度更低更紧凑",
+        "模型会直接报错，无法运行"
+      ],
+      "answer": 0,
+      "explanation": "降低向量维度通常减少存储与计算开销、提升检索速度，但会损失部分语义信息，导致区分能力下降。维度降低并不会让计算更复杂，也不能保证区分能力提升。",
+      "error_tag": "工程取舍",
+      "variant_group": "向量维度"
+    },
+    {
+      "kp": "ai.embed.sentence_transformer",
+      "type": "single_choice",
+      "question": "关于句向量模型的余弦相似度取值范围，下列说法正确的是？",
+      "options": [
+        "取值范围是 [0, 1]，不可能为负",
+        "取值范围是 [-1, 1]，1 表示方向完全相同，-1 表示方向完全相反",
+        "取值范围是 [0, 100]，用于表示百分比",
+        "取值范围是 (-∞, +∞)，没有上界"
+      ],
+      "answer": 1,
+      "explanation": "余弦相似度是两个向量夹角的余弦，取值范围为 [-1, 1]。1 表示方向一致，0 表示正交，-1 表示方向相反。它不是 [0,1]、不是百分比，也不是无界量。",
+      "error_tag": "概念混淆",
+      "variant_group": "相似度度量"
+    },
+    {
+      "kp": "ai.embed.sentence_transformer",
+      "type": "single_choice",
+      "question": "某团队直接使用句向量模型，把用户的中文问题和英文文档混在同一向量空间检索，效果很差。最可能的原因与改进方向是？",
+      "options": [
+        "中文和英文不能放在同一台机器上处理，应拆分服务器",
+        "普通单语模型未必把中英文映射到可比的空间，应换用多语言/跨语言句向量模型",
+        "应该把所有文本转成大写字母",
+        "应该把向量长度统一改成 1"
+      ],
+      "answer": 1,
+      "explanation": "单语句向量模型通常只在单一语言语料上训练，跨语言时向量空间可能不可比。跨语言检索应使用多语言模型，使不同语言的语义相近内容映射到相近位置。拆分服务器或大小写转换都不解决问题。",
+      "error_tag": "概念混淆",
+      "variant_group": "多语言"
+    }
+  ]
+}

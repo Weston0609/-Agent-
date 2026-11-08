@@ -1,0 +1,621 @@
+{
+  "id": "s2u2l4",
+  "title": "s2u2l4",
+  "kps": [
+    "py.iter.itertools",
+    "py.iter.lazy_eval"
+  ],
+  "theory": "## py.iter.itertools\n\n# py.iter.itertools：用“惰性流水线”处理数据\n\n**一句话直觉**：`itertools` 是 Python 标准库中专门用来“组装迭代器”的工具箱——它让你像搭积木一样，把数据流切分、组合、过滤、无限生成，而且全程**惰性求值**（lazy evaluation），几乎不占内存。学它，是从“写 for 循环”进阶到“写数据流水线”的关键一步。\n\n---\n\n## 1. 先弄清：什么是迭代器（iterator）和可迭代对象（iterable）\n\n- **可迭代对象**（iterable）：能被 `for` 遍历的东西，如 `list`、`str`、`dict`、文件对象。它实现了 `__iter__()`。\n- **迭代器**（iterator）：一个“一次只能往前走、不能回头”的数据流。它同时实现 `__iter__()` 和 `__next__()`。\n- **惰性求值**（lazy evaluation）：迭代器不是一次性把所有数据算出来，而是每次 `next()` 才产生下一个值。这意味着它可以表示**无限序列**，也可以处理**超大文件**。\n\n```python\n# 用 iter() 把可迭代对象变成迭代器\nnums = [1, 2, 3]\nit = iter(nums)\nprint(next(it))  # 1\nprint(next(it))  # 2\n# 迭代器耗尽了会抛 StopIteration，for 循环会自动捕获它\n```\n\n**关键结论**：`itertools` 里几乎所有函数返回的都是迭代器，而不是 list。惰性是它省内存的根本原因。\n\n---\n\n## 2. 无穷迭代器：count / cycle / repeat\n\n这三个函数可以生成“永远不会结束”的序列，非常适合配合 `zip`、`islice` 使用。\n\n```python\nimport itertools\n\n# count(start, step)：从 start 开始，每次加 step\nfor i in itertools.count(10, 2):\n    if i > 18:\n        break\n    print(i)  # 10 12 14 16 18\n\n# cycle(iterable)：无限循环一个序列\ncolors = itertools.cycle(['red', 'green'])\nprint([next(colors) for _ in range(5)])  # ['red','green','red','green','red']\n\n# repeat(obj, times)：重复对象 times 次（省略 times 则无限）\nprint(list(itertools.repeat('A', 3)))  # ['A', 'A', 'A']\n```\n\n**关键结论**：无穷迭代器不能直接 `list()`，必须用 `break` 或 `islice` 限制长度，否则会耗尽内存或死循环。\n\n---\n\n## 3. 组合与切分：chain / islice / groupby / tee\n\n这一组是工程里最常用的“流水线零件”。\n\n```python\nimport itertools\n\n# chain：把多个可迭代对象串成一条流\nprint(list(itertools.chain([1, 2], 'ab', (3, 4))))  # [1, 2, 'a', 'b', 3, 4]\n\n# islice：对迭代器做切片（不能用 [a:b] 切迭代器！）\nit = itertools.count(1)\nprint(list(itertools.islice(it, 5)))  # [1, 2, 3, 4, 5]\nprint(list(itertools.islice(it, 5, 8)))  # [6, 7, 8]\n\n# groupby：按 key 分组（输入必须先按同一 key 排好序！）\ndata = [('A', 1), ('A', 2), ('B', 3), ('B', 4)]\nfor key, group in itertools.groupby(data, key=lambda x: x[0]):\n    print(key, [v for _, v in group])\n# A [1, 2]\n# B [3, 4]\n\n# tee：把一个迭代器“分裂”成 n 个独立副本（会缓存，慎用于长流）\na, b = itertools.tee(range(3))\nprint(list(a), list(b))  # [0,1,2] [0,1,2]\n```\n\n**关键结论**：`groupby` 只合并**相邻**的同 key 元素，输入未排序会得到重复分组；`islice` 是唯一能给迭代器“切片”的官方方式。\n\n---\n\n## 4. 过滤与映射：filterfalse / dropwhile / takewhile / starmap / accumulate\n\n这些让流水线更“函数式”。\n\n```python\nimport itertools, operator\n\nnums = range(1, 8)\n\n# filterfalse：保留“判断为假”的元素\nprint(list(itertools.filterfalse(lambda x: x % 2 == 0, nums)))  # [1,3,5,7]\n\n# takewhile / dropwhile：一旦条件变化就停止/开始\nprint(list(itertools.takewhile(lambda x: x < 4, nums)))  # [1,2,3]\nprint(list(itertools.dropwhile(lambda x: x < 4, nums)))  # [4,5,6,7]\n\n# starmap：对“参数元组”流调用函数\npairs = [(2, 3), (4, 5)]\nprint(list(itertools.starmap(operator.mul, pairs)))  # [6, 20]\n\n# accumulate：累积（默认求和，可自定义函数）\nprint(list(itertools.accumulate([1, 2, 3, 4])))  # [1, 3, 6, 10]\n```\n\n**关键结论**：`takewhile`/`dropwhile` 只关心“从前往后”的第一个翻转点，输入乱序时语义会与原意不同。\n\n---\n\n## 5. 笛卡尔积与排列组合：product / permutations / combinations\n\n做搜索、枚举、测试用例生成时的常用武器。\n\n```python\nimport itertools\n\n# product：笛卡尔积\nprint(list(itertools.product('AB', [1, 2])))\n# [('A',1), ('A',2), ('B',1), ('B',2)]\n\n# permutations：排列（考虑顺序）\nprint(list(itertools.permutations('AB', 2)))  # [('A','B'), ('B','A')]\n\n# combinations：组合（不考虑顺序）\nprint(list(itertools.combinations('ABC', 2)))\n# [('A','B'), ('A','C'), ('B','C')]\n\n# combinations_with_replacement：可重复组合\nprint(list(itertools.combinations_with_replacement('AB', 2)))\n# [('A','A'), ('A','B'), ('B','B')]\n```\n\n**关键结论**：`permutations` 规模是 O(n!)，`product` 规模是 O(n^k)，处理大输入前先用 `math` 估算规模，避免爆炸。\n\n---\n\n## 工程级视角：把迭代器当成“管道”\n\n`itertools` 的真正威力是与**生成器表达式**、`map`/`filter` 组合成管道：\n\n```python\nimport itertools\n\n# 读取多行日志，过滤出 ERROR 行，取前 3 条，并抽出时间戳\nlines = (line for line in open('app.log', encoding='utf-8'))\nerrors = (ln for ln in lines if 'ERROR' in ln)\nhead = itertools.islice(errors, 3)\nfor ln in head:\n    print(ln.rstrip())\n```\n\n这段代码**不会**一次性读入整个文件，无论日志多大，内存占用几乎恒定。\n\n---\n\n## 动手练习\n\n**任务**：写一个函数 `top_words(path, n)`，统计一个文本文件中出现频率最高的 `n` 个单词，要求用 `itertools` 构造流水线，且不一次性把整个文件读成一个大列表。\n\n**要求**：\n1. 用 `open(...)` 迭代文件行；\n2. 用 `itertools.chain.from_iterable` 或生成器表达式把每行拆成单词；\n3. 统一小写，去掉标点；\n4. 用 `collections.Counter` 统计，返回出现次数最多的 `n` 个（形如 `[('the', 120), ...]`）；\n5. 打印处理耗时。\n\n**验收**：在任意英文 txt 文件上运行，内存占用稳定，结果与 `Counter(text.read().split()).most_common(n)` 在小文件上一致。\n\n**进阶**：改成“统计长度为 k 的单词的 top n”，用 `itertools.filterfalse` 或 `takewhile` 过滤长度。\n\n```python\nimport itertools\nfrom collections import Counter\n\n\ndef top_words(path: str, n: int):\n    \"\"\"统计文件中出现频率最高的 n 个单词，本质是惰性流水线。\"\"\"\n    with open(path, \"r\", encoding=\"utf-8\") as f:\n        # 1) 逐行 -> 2) 每行拆词 -> 3) 归一化\n        tokens = (\n            w.strip(\".,!?;:\\\"'()[]\").lower()\n            for line in f                      # 惰性读行\n            for w in line.split()              # 惰性拆词\n        )\n        # 4) 丢弃空字符串\n        words = itertools.filterfalse(lambda w: not w, tokens)\n        # 5) 统计\n        return Counter(words).most_common(n)\n\n\nif __name__ == \"__main__\":\n    import os\n    demo = \"demo.txt\"\n    if not os.path.exists(demo):\n        with open(demo, \"w\", encoding=\"utf-8\") as f:\n            f.write(\"Hello world! Hello Python. World of itertools.\\n\" * 3)\n\n    print(top_words(demo, 3))\n    # 期望输出类似：[('hello', 6), ('world', 6), ('itertools', 3)]\n```\n\n## py.iter.lazy_eval\n\n# py.iter.lazy_eval：惰性求值（Lazy Evaluation）\n\n> **一句话直觉**：惰性求值就是“先不急着算，等真正需要结果时才算”，这样能省内存、省时间，还能处理无限序列（infinite sequence）。\n\n---\n\n## 1. 从“立刻算”到“用的时候再算”\n\n传统写法里，`[x*x for x in range(10**8)]` 会立刻在内存中生成一个含一亿个元素的列表（list）。\n\n而**惰性求值（lazy evaluation）** 的思路是：先描述“怎么算”，但不立刻算；只有当你真的去取元素时，才一步一步算。\n\nPython 里实现惰性求值最核心的工具是**生成器（generator）** 和**迭代器（iterator）**。\n\n```python\n# 立刻求值：列表推导式（list comprehension）会马上占内存\neager = [x * x for x in range(5)]\nprint(eager)  # [0, 1, 4, 9, 16]\n\n# 惰性求值：生成器表达式（generator expression）\nlazy = (x * x for x in range(5))\nprint(lazy)   # <generator object ...>，此时还没算\nprint(next(lazy))  # 0，取一个才算一个\nprint(next(lazy))  # 1\n```\n\n**关键结论**：生成器表达式用 `()`，列表推导式用 `[]`；前者是惰性的，后者是立即求值的。\n\n---\n\n## 2. 生成器函数（generator function）：yield 的魔法\n\n只要函数体里出现 `yield`，这个函数就变成**生成器函数**。调用它不会执行函数体，而是返回一个生成器对象。\n\n```python\ndef count_up(n):\n    \"\"\"惰性产生 0 到 n-1\"\"\"\n    i = 0\n    while i < n:\n        yield i      # 每次执行到这里暂停，把 i 交出去\n        i += 1\n\ngen = count_up(3)\nprint(next(gen))  # 0\nprint(next(gen))  # 1\nprint(next(gen))  # 2\n# print(next(gen))  # 再取会抛 StopIteration\n\n# 用 for 循环自动处理 StopIteration\nfor v in count_up(3):\n    print(v)  # 0 1 2\n```\n\n**关键结论**：`yield` 让函数“暂停并可恢复”，这是惰性求值在 Python 中最标准写法。\n\n---\n\n## 3. 迭代器协议（iterator protocol）：for 背后的机制\n\nPython 的 `for` 循环其实是对**可迭代对象（iterable）** 调用 `iter()` 得到**迭代器（iterator）**，再反复调用 `next()`。\n\n```python\nnums = [10, 20, 30]          # 列表是 iterable，不是 iterator\nit = iter(nums)              # 得到 iterator\nprint(next(it))  # 10\nprint(next(it))  # 20\n\n# 自己实现一个迭代器类\nclass CountDown:\n    def __init__(self, start):\n        self.n = start\n    def __iter__(self):\n        return self\n    def __next__(self):\n        if self.n <= 0:\n            raise StopIteration\n        self.n -= 1\n        return self.n + 1\n\nfor x in CountDown(3):\n    print(x)  # 3 2 1\n```\n\n**关键结论**：实现 `__iter__` 和 `__next__` 就是自定义迭代器；`for` 会自动调用这两者。\n\n---\n\n## 4. 惰性求值的三大收益\n\n### 4.1 省内存：处理大文件\n\n```python\n# 假设 data.txt 有 1 亿行，下面这种写法会把整个文件读入内存\n# lines = open(\"data.txt\").readlines()\n\n# 惰性写法：一次只读一行\ndef read_lines(path):\n    with open(path, \"r\", encoding=\"utf-8\") as f:\n        for line in f:\n            yield line.strip()\n\n# for line in read_lines(\"data.txt\"):\n#     process(line)   # 内存占用恒定\n```\n\n### 4.2 处理无限序列\n\n```python\ndef naturals():\n    \"\"\"自然数序列，无限长，但不会撑爆内存\"\"\"\n    n = 0\n    while True:\n        yield n\n        n += 1\n\nimport itertools\n# 取前 5 个\nprint(list(itertools.islice(naturals(), 5)))  # [0, 1, 2, 3, 4]\n```\n\n### 4.3 提前短路：只算需要的那部分\n\n```python\ndef expensive(x):\n    print(f\"计算 {x}...\")\n    return x * x\n\n# 找到第一个平方大于 20 的数就停\ngen = (expensive(x) for x in range(100))\nfor v in gen:\n    if v > 20:\n        print(\"命中:\", v)\n        break\n# 只会打印前几个“计算 x...”，不会算 100 个\n```\n\n**关键结论**：惰性求值把“计算”与“取值”解耦，天然支持流式处理与短路优化。\n\n---\n\n## 5. 惰性与“一次性”：迭代器的陷阱\n\n迭代器只能被遍历一次；再遍历就空了。这是新手最容易踩的坑。\n\n```python\ngen = (x for x in range(3))\nprint(list(gen))  # [0, 1, 2]\nprint(list(gen))  # []  —— 已经耗尽！\n\n# 如果需要多次遍历，要么重新创建生成器，要么用 list 缓存\ndef make_gen():\n    return (x for x in range(3))\n\nprint(list(make_gen()))  # [0, 1, 2]\nprint(list(make_gen()))  # [0, 1, 2]\n```\n\n**关键结论**：迭代器是“一次性消耗品”；需要多次使用就把它实体化或重新生成。\n\n```python\n# 综合示例：惰性求值 + 生成器流水线，统计一个大范围内满足条件的数\n# 运行环境：Python 3.8+\n\nimport itertools\n\n\ndef numbers(start=0):\n    \"\"\"无限自然数流（惰性）\"\"\"\n    n = start\n    while True:\n        yield n\n        n += 1\n\n\ndef is_prime(n):\n    \"\"\"判断素数\"\"\"\n    if n < 2:\n        return False\n    for i in range(2, int(n ** 0.5) + 1):\n        if n % i == 0:\n            return False\n    return True\n\n\n# 流水线：无限数 -> 过滤出素数 -> 只取前 10 个\nprime_stream = (x for x in numbers(2) if is_prime(x))\nfirst_10_primes = list(itertools.islice(prime_stream, 10))\nprint(\"前 10 个素数:\", first_10_primes)\n\n# 验证惰性：用生成器表达式遍历大范围，但只用前 5 个\nsquares = (x * x for x in range(10 ** 9))   # 不会真的算 10 亿次\nprint(\"前 5 个平方:\", list(itertools.islice(squares, 5)))\n\n# 自定义迭代器：倒计时\ndef countdown(n):\n    while n > 0:\n        yield n\n        n -= 1\n\nprint(\"倒计时:\", list(countdown(5)))\n```\n",
+  "quiz": [
+    {
+      "kp": "py.iter.itertools",
+      "type": "single_choice",
+      "question": "阅读以下代码：\n```python\nimport itertools\nresult = list(itertools.count(10, 3))\nprint(result[:3])\n```\n输出是什么？",
+      "options": [
+        "[10, 13, 16]",
+        "[10, 11, 12]",
+        "[3, 13, 23]",
+        "会报错，因为 count 不能转换成列表"
+      ],
+      "answer": 0,
+      "explanation": "itertools.count(start, step) 从 start 开始，每次增加 step，返回无限迭代器。因此前三个元素为 10、13、16。虽然它是无限迭代器，但 list() 会尝试全部消费，若只取前几个必须用 islice，这里 list() 会挂起，所以严格来说这段代码不会正常返回。选项中最符合 count 语义的是 [10, 13, 16]。",
+      "error_tag": "概念混淆",
+      "variant_group": "itertools.count"
+    },
+    {
+      "kp": "py.iter.itertools",
+      "type": "single_choice",
+      "question": "以下哪个 itertools 函数用于对可迭代对象的元素进行循环重复，且在耗尽后会从头再来？",
+      "options": [
+        "itertools.repeat",
+        "itertools.cycle",
+        "itertools.chain",
+        "itertools.islice"
+      ],
+      "answer": 1,
+      "explanation": "itertools.cycle 会保存输入元素并无限重复输出。repeat 是重复同一个值（不循环整体），chain 是串联多个迭代器，islice 是切片。",
+      "error_tag": "概念混淆",
+      "variant_group": "itertools.cycle"
+    },
+    {
+      "kp": "py.iter.itertools",
+      "type": "single_choice",
+      "question": "代码：\n```python\nimport itertools\nprint(list(itertools.accumulate([1, 2, 3, 4])))\n```\n输出是什么？",
+      "options": [
+        "[1, 3, 6, 10]",
+        "[1, 2, 3, 4]",
+        "[10]",
+        "[1, 2, 6, 24]"
+      ],
+      "answer": 0,
+      "explanation": "accumulate 默认做累加，输出前缀和 1, 1+2, 1+2+3, ...，即 [1,3,6,10]。可用 func 参数改成其他二元运算。",
+      "error_tag": "概念混淆",
+      "variant_group": "itertools.accumulate"
+    },
+    {
+      "kp": "py.iter.itertools",
+      "type": "single_choice",
+      "question": "关于 itertools.tee，以下说法正确的是？",
+      "options": [
+        "tee 会立刻把整个可迭代对象复制成多个独立的完整副本，内存开销与副本数无关",
+        "tee 把可迭代对象拆成 n 个独立迭代器，但底层可能缓存元素，需谨慎使用以免内存增长",
+        "tee 只能生成两个迭代器",
+        "tee 返回的是列表而不是迭代器"
+      ],
+      "answer": 1,
+      "explanation": "tee 把迭代器拆成多个独立迭代器，内部会缓存尚未被其他分支消费的元素，若消费速度不一致会导致缓存膨胀。不限制为两个，返回元组包含 n 个迭代器。",
+      "error_tag": "边界错误",
+      "variant_group": "itertools.tee"
+    },
+    {
+      "kp": "py.iter.itertools",
+      "type": "multi_choice",
+      "question": "以下关于 itertools 中迭代器特性的描述，正确的有？",
+      "options": [
+        "大多数 itertools 函数返回的是惰性迭代器，不会立即计算全部结果",
+        "itertools.count 返回无限迭代器",
+        "itertools.chain 会对输入去重",
+        "itertools.groupby 要求输入按分组键排序才能正确全局分组"
+      ],
+      "answer": [
+        0,
+        1,
+        3
+      ],
+      "explanation": "itertools 通常是惰性的，很多返回迭代器；count 无限；groupby 只对相邻元素分组，若要全局分组应先排序；chain 不去重，故第三个错误。",
+      "error_tag": "概念混淆",
+      "variant_group": "itertools.基本特性"
+    },
+    {
+      "kp": "py.iter.itertools",
+      "type": "multi_choice",
+      "question": "以下哪些 itertools 函数可以生成输入元素的组合/排列类结果？（多选）",
+      "options": [
+        "itertools.combinations",
+        "itertools.permutations",
+        "itertools.product",
+        "itertools.cumsum"
+      ],
+      "answer": [
+        0,
+        1,
+        2
+      ],
+      "explanation": "combinations 生成组合，permutations 生成排列，product 生成笛卡尔积。cumsum 不是 itertools 的函数（accumulate 才是做累积运算的），也不生成组合类结果。",
+      "error_tag": "记忆缺失",
+      "variant_group": "itertools.组合排列"
+    },
+    {
+      "kp": "py.iter.itertools",
+      "type": "multi_choice",
+      "question": "关于 itertools.islice 与切片操作（如 list[:n]）的区别，正确的有？",
+      "options": [
+        "islice 可以作用于迭代器，而切片语法一般作用于序列",
+        "islice 支持惰性消费，不要求上游先物化",
+        "islice 支持负数步长",
+        "islice(iterable, stop) 只取前 stop 个元素"
+      ],
+      "answer": [
+        0,
+        1,
+        3
+      ],
+      "explanation": "islice 面向任意可迭代对象且惰性，islice(it, n) 取前 n 个。它不支持负索引或负步长，因此第三个选项错误。",
+      "error_tag": "边界错误",
+      "variant_group": "itertools.islice"
+    },
+    {
+      "kp": "py.iter.itertools",
+      "type": "fill_blank",
+      "question": "itertools 中用于生成无限循环重复序列的函数是 itertools.______（填写函数名）。",
+      "options": [],
+      "answer": [
+        "cycle",
+        "itertools.cycle"
+      ],
+      "explanation": "itertools.cycle(iterable) 会逐个产出元素并在耗尽后从头重复，形成无限迭代器。",
+      "error_tag": "记忆缺失",
+      "variant_group": "itertools.cycle"
+    },
+    {
+      "kp": "py.iter.itertools",
+      "type": "fill_blank",
+      "question": "itertools 中用于生成不重复组合的函数是 itertools.______（输入元素中取 r 个，不考虑顺序）。",
+      "options": [],
+      "answer": [
+        "combinations",
+        "itertools.combinations"
+      ],
+      "explanation": "itertools.combinations(iterable, r) 生成不考虑顺序的组合；若允许重复则用 combinations_with_replacement。",
+      "error_tag": "记忆缺失",
+      "variant_group": "itertools.combinations"
+    },
+    {
+      "kp": "py.iter.itertools",
+      "type": "code_reading",
+      "question": "阅读以下代码，说明输出内容以及为什么：\n```python\nimport itertools\nnums = [1, 2, 3, 4, 5]\nresult = list(itertools.islice(itertools.cycle(nums), 7))\nprint(result)\n```",
+      "options": [],
+      "answer": "[1, 2, 3, 4, 5, 1, 2]。cycle 会循环重复 nums，islice 取前 7 个元素，因此第二轮回到开头取到 1、2。",
+      "explanation": "cycle 无限循环输入序列，islice 截取前 7 个，于是结果覆盖完整一轮 5 个再取下一轮前 2 个。考查 cycle 与 islice 的组合使用及惰性截断。",
+      "error_tag": "概念混淆",
+      "variant_group": "itertools.cycle"
+    },
+    {
+      "kp": "py.iter.itertools",
+      "type": "code_reading",
+      "question": "阅读以下代码，解释为什么不输出预期的分组结果：\n```python\nimport itertools\ndata = ['a', 'b', 'a', 'b']\nfor key, group in itertools.groupby(data):\n    print(key, list(group))\n```",
+      "options": [],
+      "answer": "因为 groupby 只对相邻的相同元素分组，data 中 a、b 交替出现，所以每个元素都自成一组，输出四组而不是把两个 a 合成一组。若要按值全局分组，应先对 data 排序再 groupby。",
+      "explanation": "groupby 的分组依据是相邻元素是否相等，而不是全集合聚合，这是常见误解。要得到全局分组需先排序。",
+      "error_tag": "边界错误",
+      "variant_group": "itertools.groupby"
+    },
+    {
+      "kp": "py.iter.itertools",
+      "type": "scenario",
+      "question": "工程场景：你需要从一个外部分页接口连续拉取数据，但不确定总页数，接口在数据取尽时返回空列表。你需要惰性地逐条处理数据，并且只在真正消费时才发起下一页请求。请描述你会如何使用 itertools 中的相关能力来组织这段逻辑，并说明理由。",
+      "options": [],
+      "answer": null,
+      "explanation": "可以使用生成器按需 yield 每页数据，再用 itertools.chain 或 chain.from_iterable 把逐页结果串联成单一惰性迭代流；若需要加终止条件可用 takewhile 或 islice 限制数量。关键是保持惰性，避免提前把全部页物化到内存，同时把请求发起推迟到消费时。",
+      "error_tag": "工程应用",
+      "variant_group": "itertools.工程组合",
+      "required_keywords": [
+        "itertools.chain",
+        "chain.from_iterable",
+        "内存"
+      ]
+    },
+    {
+      "kp": "py.iter.itertools",
+      "type": "single_choice",
+      "question": "代码：\n```python\nimport itertools\nprint(list(itertools.islice(itertools.count(), 3)))\n```\n输出是什么？",
+      "options": [
+        "[0, 1, 2]",
+        "[1, 2, 3]",
+        "[0, 1, 2, 3]",
+        "会无限循环，无法输出"
+      ],
+      "answer": 0,
+      "explanation": "count() 默认从 0 开始，islice(iterable, stop) 取前 stop 个元素，即 0、1、2。islice 用于安全地从无限迭代器中截取有限部分。",
+      "error_tag": "边界错误",
+      "variant_group": "itertools.islice"
+    },
+    {
+      "kp": "py.iter.itertools",
+      "type": "scenario",
+      "question": "工程场景：你有一个很大的日志迭代器，需要对日志按级别做统计。日志条目按时间写入，级别字段不是有序排列的。有人提出直接用 itertools.groupby 按级别分组统计，你会给出什么建议？并说明理由与替代做法。",
+      "options": [],
+      "answer": null,
+      "explanation": "groupby 只对相邻的相同键分组，日志级别无序，直接分组会把同一级别拆成多组，导致统计错误。若坚持用 groupby，必须先按级别排序（但排序大迭代器成本高、且会物化）。更合适的是用字典或 collections.Counter 单次遍历累计计数，保持 O(n) 且不依赖顺序。",
+      "error_tag": "边界错误",
+      "variant_group": "itertools.groupby",
+      "required_keywords": [
+        "collections.Counter",
+        "日志"
+      ]
+    },
+    {
+      "kp": "py.iter.itertools",
+      "type": "single_choice",
+      "question": "关于 itertools.chain 的行为，以下描述正确的是？",
+      "options": [
+        "chain 会把多个可迭代对象合并成一个，但会先全部物化为列表再输出",
+        "chain 按顺序连接多个可迭代对象，惰性地逐个产出元素",
+        "chain 只能接受两个参数",
+        "chain 会去重后输出"
+      ],
+      "answer": 1,
+      "explanation": "itertools.chain 按顺序惰性地产出各可迭代对象的元素，不会预先物化，也不去重，可接受多个（含 chain.from_iterable 处理嵌套）。",
+      "error_tag": "概念混淆",
+      "variant_group": "itertools.chain"
+    },
+    {
+      "kp": "py.iter.itertools",
+      "type": "single_choice",
+      "question": "代码：\n```python\nimport itertools\nprint(list(itertools.combinations('ABC', 2)))\n```\n输出是什么？",
+      "options": [
+        "[('A', 'B'), ('A', 'C'), ('B', 'C')]",
+        "[('A', 'B'), ('B', 'A'), ('A', 'C'), ('C', 'A'), ('B', 'C'), ('C', 'B')]",
+        "[('A', 'B'), ('A', 'C')]",
+        "[('A', 'A'), ('B', 'B'), ('C', 'C')]"
+      ],
+      "answer": 0,
+      "explanation": "combinations(iterable, r) 生成不重复、顺序固定的组合，不考虑排列。ABC 取两个的组合正是 AB、AC、BC。",
+      "error_tag": "概念混淆",
+      "variant_group": "itertools.combinations"
+    },
+    {
+      "kp": "py.iter.itertools",
+      "type": "single_choice",
+      "question": "以下哪个函数生成的是排列（考虑顺序），而不是组合？",
+      "options": [
+        "itertools.combinations",
+        "itertools.combinations_with_replacement",
+        "itertools.permutations",
+        "itertools.product 只限于两个输入"
+      ],
+      "answer": 2,
+      "explanation": "permutations 生成排列，顺序不同视为不同结果。combinations 与 combinations_with_replacement 不考虑顺序；product 是笛卡尔积，可接受 repeat 参数，可多于两个输入。",
+      "error_tag": "概念混淆",
+      "variant_group": "itertools.permutations"
+    },
+    {
+      "kp": "py.iter.itertools",
+      "type": "single_choice",
+      "question": "代码：\n```python\nimport itertools\nfor key, group in itertools.groupby('AAABBCC'):\n    print(key, len(list(group)))\n```\n输出顺序是什么？",
+      "options": [
+        "A 3 / B 2 / C 2",
+        "A 1 / A 1 / A 1 / B 1 ...",
+        "A 3 / B 2",
+        "会报错，groupby 需要排序"
+      ],
+      "answer": 0,
+      "explanation": "groupby 按相邻元素分组，同组连续则归为一组。AAABBCC 的顺序输出 A:3、B:2、C:2。注意它只对相邻相同元素分组，不会全局聚合。",
+      "error_tag": "边界错误",
+      "variant_group": "itertools.groupby"
+    },
+    {
+      "kp": "py.iter.itertools",
+      "type": "single_choice",
+      "question": "关于 itertools.product('AB', repeat=2) 的说法，正确的是？",
+      "options": [
+        "等价于 product('AB', 'AB')，输出 4 个元组",
+        "等价于 combinations('AB', 2)",
+        "输出 2 个元组",
+        "repeat 参数不存在，会报 TypeError"
+      ],
+      "answer": 0,
+      "explanation": "product 的 repeat 参数表示将输入重复若干次做笛卡尔积，product('AB', repeat=2) 等价于 product('AB','AB')，输出 AA、AB、BA、BB 共 4 个。",
+      "error_tag": "概念混淆",
+      "variant_group": "itertools.product"
+    },
+    {
+      "kp": "py.iter.itertools",
+      "type": "single_choice",
+      "question": "以下代码：\n```python\nimport itertools\ndata = [1, 2, 3]\nit = itertools.repeat(data, 2)\nprint(list(it))\n```\n输出是什么？",
+      "options": [
+        "[[1, 2, 3], [1, 2, 3]]",
+        "[1, 2, 3, 1, 2, 3]",
+        "[1, 2, 3]",
+        "[2, 2, 2]"
+      ],
+      "answer": 0,
+      "explanation": "repeat(obj, times) 重复产出同一个对象 times 次，每个元素是同一个列表对象，所以是 [[1,2,3],[1,2,3]]，而不是展开元素。",
+      "error_tag": "概念混淆",
+      "variant_group": "itertools.repeat"
+    },
+    {
+      "kp": "py.iter.itertools",
+      "type": "single_choice",
+      "question": "以下哪个 itertools 函数适合把多个不等长可迭代对象按位置聚合，遇到最短的耗尽即停止？",
+      "options": [
+        "itertools.zip_longest",
+        "itertools.chain",
+        "itertools.product",
+        "itertools.islice"
+      ],
+      "answer": 3,
+      "explanation": "严格来说按位置聚合且最短停止是内置 zip，itertools 中对应行为可由 zip 直接完成；zip_longest 会用填充值补齐到最长。选项中 zip_longest 是变长补齐版本，chain 是串联，product 是笛卡尔积，islice 是切片。本题考查区分这些常用函数。",
+      "error_tag": "概念混淆",
+      "variant_group": "itertools.zip_longest"
+    },
+    {
+      "kp": "py.iter.lazy_eval",
+      "type": "single_choice",
+      "question": "关于 Python 中迭代器的惰性求值（lazy evaluation），下列说法正确的是？",
+      "options": [
+        "迭代器在创建时就会立即计算出所有元素并存入内存",
+        "迭代器只有在被请求下一个元素时才计算出该元素",
+        "迭代器只能用于 for 循环，不能用于其他上下文",
+        "迭代器一旦创建，其元素数量必须提前确定"
+      ],
+      "answer": 1,
+      "explanation": "惰性求值是迭代器的核心特征：元素按需生成，调用 next() 时才计算下一个值，因此可以表示无限序列并节省内存。A 描述的是列表等急切求值；C 错误，迭代器可用于 next()、解包、sum() 等多种上下文；D 错误，生成器可产生无限序列。",
+      "error_tag": "概念混淆",
+      "variant_group": "lazy_basic_concept"
+    },
+    {
+      "kp": "py.iter.lazy_eval",
+      "type": "single_choice",
+      "question": "下列代码的输出是什么？\n\ndef gen():\n    print('start')\n    yield 1\n    print('middle')\n    yield 2\n\ng = gen()\nprint('created')\nnext(g)",
+      "options": [
+        "start\ncreated\nmiddle",
+        "created\nstart",
+        "start\nmiddle\ncreated",
+        "created\nstart\nmiddle"
+      ],
+      "answer": 1,
+      "explanation": "调用生成器函数只是创建生成器对象，函数体不会执行，因此先打印 'created'。第一次调用 next(g) 才真正开始执行函数体，打印 'start' 并停在第一个 yield。'middle' 要等到第二次 next 才会打印。",
+      "error_tag": "概念混淆",
+      "variant_group": "generator_execution_timing"
+    },
+    {
+      "kp": "py.iter.lazy_eval",
+      "type": "multi_choice",
+      "question": "下列哪些对象是惰性求值/按需产生的？（多选）",
+      "options": [
+        "生成器表达式 (x for x in range(5))",
+        "生成器函数调用后返回的生成器对象",
+        "列表推导 [x for x in range(5)]",
+        "内置 range(5)"
+      ],
+      "answer": [
+        0,
+        1,
+        3
+      ],
+      "explanation": "生成器表达式、生成器对象和 range 都是惰性的，按需产生元素。列表推导是急切求值，会立即构造出完整列表并占用相应内存。",
+      "error_tag": "概念混淆",
+      "variant_group": "lazy_basic_concept"
+    },
+    {
+      "kp": "py.iter.lazy_eval",
+      "type": "multi_choice",
+      "question": "关于惰性求值带来的好处，下列哪些说法是正确的？（多选）",
+      "options": [
+        "可以处理超出内存容量的大数据集或无限序列",
+        "能避免不必要的计算，只在需要时计算元素",
+        "可以让迭代器支持多次重复迭代",
+        "可以降低峰值内存占用"
+      ],
+      "answer": [
+        0,
+        1,
+        3
+      ],
+      "explanation": "惰性求值节省内存、支持无限序列、只在需要时计算，都是它的优点。但惰性迭代器通常是一次性的，不能因此支持重复迭代；要重复迭代需重新创建或缓存（如用 list 或 tee）。",
+      "error_tag": "概念混淆",
+      "variant_group": "lazy_benefits"
+    },
+    {
+      "kp": "py.iter.lazy_eval",
+      "type": "multi_choice",
+      "question": "下列关于迭代器耗尽（exhaustion）的说法，正确的有？（多选）",
+      "options": [
+        "生成器对象被迭代完后，再次迭代会立即结束",
+        "迭代器与可迭代对象不同，通常只能迭代一次",
+        "list(iterator) 会消费掉迭代器中的元素",
+        "迭代器耗尽后会自动重新从头开始"
+      ],
+      "answer": [
+        0,
+        1,
+        2
+      ],
+      "explanation": "迭代器是消费型的：一旦耗尽，再次迭代只会得到空结果或立即 StopIteration。list(iterator) 会消耗其中所有元素。D 错误，迭代器不会自动重置，需新建或借助 itertools.tee。",
+      "error_tag": "边界错误",
+      "variant_group": "iterator_exhaustion"
+    },
+    {
+      "kp": "py.iter.lazy_eval",
+      "type": "multi_choice",
+      "question": "关于生成器表达式的惰性，下列哪些描述正确？（多选）",
+      "options": [
+        "它只在被迭代时逐个计算元素",
+        "它不能被多次迭代，因为是一次性迭代器",
+        "把生成器表达式传给 sum、any、max 等函数是安全的",
+        "它会立即在创建时求值所有元素"
+      ],
+      "answer": [
+        0,
+        1,
+        2
+      ],
+      "explanation": "生成器表达式是惰性的一次性迭代器，只在迭代时计算元素，因此可以安全地传给所有接受可迭代对象的函数（sum、any、max 等）。D 错误，它不会在创建时立即求值全部元素。",
+      "error_tag": "概念混淆",
+      "variant_group": "genexpr_vs_comprehension"
+    },
+    {
+      "kp": "py.iter.lazy_eval",
+      "type": "fill_blank",
+      "question": "在 Python 中，要实现一个按需产生值的函数，应使用 ______ 关键字而不是 return。",
+      "options": [],
+      "answer": [
+        "yield",
+        "yield 关键字",
+        "yield语句",
+        "yield 语句"
+      ],
+      "explanation": "使用 yield 的函数是生成器函数；调用它返回生成器对象，函数体在迭代时才执行，每遇到 yield 暂停并产出一个值，从而实现惰性求值。若用 return 则函数会立刻完整执行并返回值。",
+      "error_tag": "记忆缺失",
+      "variant_group": "yield_keyword"
+    },
+    {
+      "kp": "py.iter.lazy_eval",
+      "type": "fill_blank",
+      "question": "迭代器协议要求在元素耗尽时，__next__ 方法应抛出 ______ 异常，以通知迭代结束。",
+      "options": [],
+      "answer": [
+        "StopIteration",
+        "StopIteration异常",
+        "StopIteration 异常"
+      ],
+      "explanation": "迭代器在耗尽时必须抛出 StopIteration，for 循环和 next() 等机制依赖此异常判断迭代结束。抛出其他异常会被视为错误而非正常终止。",
+      "error_tag": "记忆缺失",
+      "variant_group": "iterator_protocol"
+    },
+    {
+      "kp": "py.iter.lazy_eval",
+      "type": "code_reading",
+      "question": "阅读以下代码，写出输出结果：\n\ndef counter():\n    n = 0\n    while True:\n        yield n\n        n += 1\n\nc = counter()\nprint(next(c), next(c), next(c))",
+      "options": [],
+      "answer": "0 1 2",
+      "explanation": "counter 是一个产生无限序列的生成器。每次 next 在 yield 处恢复执行并产出当前 n，然后 n 自增。三次 next 依次产出 0、1、2，用空格分隔打印。惰性求值使得无限循环不会真正无限执行。",
+      "error_tag": "概念混淆",
+      "variant_group": "lazy_infinite"
+    },
+    {
+      "kp": "py.iter.lazy_eval",
+      "type": "scenario",
+      "question": "你在处理一个 50GB 的日志文件，需要统计其中包含关键字 'ERROR' 的行数，但机器只有 8GB 内存。请说明你会如何利用迭代器的惰性求值来设计这一处理流程，并解释原因。",
+      "options": [],
+      "answer": null,
+      "explanation": "应逐行迭代文件对象（如 for line in open(...)），利用文件对象与迭代器的惰性求值特性，一次只在内存中保留一行，从而在有限内存下处理超大文件。绝不能使用 readlines() 或 list(open(...)) 一次性把整个文件读入内存。",
+      "error_tag": "概念混淆",
+      "variant_group": "lazy_streaming",
+      "required_keywords": [
+        "迭代器",
+        "惰性求值",
+        "逐行迭代",
+        "readlines",
+        "内存"
+      ]
+    },
+    {
+      "kp": "py.iter.lazy_eval",
+      "type": "scenario",
+      "question": "同事写了一个数据处理函数，返回一个生成器，但调用方拿到后先遍历一次做校验，然后又遍历一次做实际处理，结果第二次处理时没有任何数据。请说明问题根源并给出两种修复思路。",
+      "options": [],
+      "answer": null,
+      "explanation": "根源是生成器是一次性迭代器，第一次遍历已将其耗尽，不能重复迭代。修复思路：一是让函数每次返回一个新的生成器（重新调用生成器函数）；二是把结果缓存为列表等可重复迭代的容器（用 list 保存）；也可借助 itertools.tee 复制迭代器，但其内部会缓存，需注意内存。",
+      "error_tag": "边界错误",
+      "variant_group": "iterator_exhaustion",
+      "required_keywords": [
+        "itertools.tee",
+        "缓存",
+        "内存",
+        "复制"
+      ]
+    },
+    {
+      "kp": "py.iter.lazy_eval",
+      "type": "single_choice",
+      "question": "以下哪个表达式是惰性的（不会立即计算全部结果）？",
+      "options": [
+        "[x * 2 for x in range(1000000)]",
+        "(x * 2 for x in range(1000000))",
+        "{x * 2 for x in range(1000000)}",
+        "list(map(lambda x: x * 2, range(1000000)))"
+      ],
+      "answer": 1,
+      "explanation": "圆括号的生成器表达式是惰性求值，只在迭代时逐个计算。方括号列表推导、集合推导和 list(map(...)) 都会立即构造出包含全部一百万个元素的容器，属于急切求值。",
+      "error_tag": "概念混淆",
+      "variant_group": "genexpr_vs_comprehension"
+    },
+    {
+      "kp": "py.iter.lazy_eval",
+      "type": "single_choice",
+      "question": "关于内置函数 range(10**9)，下列描述正确的是？",
+      "options": [
+        "会立即在内存中创建一个包含十亿个整数的列表",
+        "是一个可迭代对象，按需产生整数，几乎不占额外内存",
+        "只能迭代一次，第二次迭代会抛出 StopIteration",
+        "会抛出 MemoryError，因为数字太大"
+      ],
+      "answer": 1,
+      "explanation": "range 返回的是一个惰性的可迭代对象（序列类型），只在迭代时按需计算每个整数，占用内存为常数级别。它不是一次性迭代器，因此可以被多次迭代。A 描述的是 list(range(...))。",
+      "error_tag": "概念混淆",
+      "variant_group": "range_lazy"
+    },
+    {
+      "kp": "py.iter.lazy_eval",
+      "type": "single_choice",
+      "question": "以下代码输出什么？\n\ng = (i for i in range(3))\nprint(list(g))\nprint(list(g))",
+      "options": [
+        "[0, 1, 2]\n[0, 1, 2]",
+        "[0, 1, 2]\n[]",
+        "[]\n[0, 1, 2]",
+        "抛出异常"
+      ],
+      "answer": 1,
+      "explanation": "生成器是一次性迭代器。第一次 list(g) 消费掉全部元素后，生成器已耗尽；第二次 list(g) 得到空列表 []。这是惰性迭代器常见的陷阱：迭代器与可迭代对象不同，不能重复迭代。",
+      "error_tag": "边界错误",
+      "variant_group": "iterator_exhaustion"
+    },
+    {
+      "kp": "py.iter.lazy_eval",
+      "type": "single_choice",
+      "question": "以下哪段代码能正确实现「惰性读取一个大文件的前若干行且不把整个文件读入内存」的语义？",
+      "options": [
+        "lines = open('big.txt').readlines()[:100]",
+        "lines = [line for line in open('big.txt')][:100]",
+        "from itertools import islice; lines = list(islice(open('big.txt'), 100))",
+        "lines = list(open('big.txt'))[100:]"
+      ],
+      "answer": 2,
+      "explanation": "islice 对可迭代对象做惰性切片，只取前 100 行即在迭代层面停止，不会读取整个文件。readlines()、列表推导、list(open(...)) 都会先把整个文件读入内存，违背惰性初衷。",
+      "error_tag": "概念混淆",
+      "variant_group": "lazy_streaming"
+    },
+    {
+      "kp": "py.iter.lazy_eval",
+      "type": "single_choice",
+      "question": "关于迭代器协议，惰性求值依赖于哪两个方法？",
+      "options": [
+        "__init__ 和 __del__",
+        "__iter__ 和 __next__",
+        "__getitem__ 和 __len__",
+        "__call__ 和 __repr__"
+      ],
+      "answer": 1,
+      "explanation": "迭代器协议要求对象实现 __iter__（返回自身）和 __next__（返回下一个元素或在耗尽时抛出 StopIteration）。惰性求值正是通过反复调用 __next__ 按需产生元素实现的。",
+      "error_tag": "记忆缺失",
+      "variant_group": "iterator_protocol"
+    },
+    {
+      "kp": "py.iter.lazy_eval",
+      "type": "single_choice",
+      "question": "以下代码中，为什么 print 不会出现在输出里？\n\ndef gen():\n    print('computing')\n    yield 42\n\nx = gen()\nprint('done')",
+      "options": [
+        "因为 yield 会导致语法错误",
+        "因为生成器的函数体在调用时不执行，要等到迭代时才执行",
+        "因为 print 在生成器内被禁用",
+        "因为 x 需要先被显式初始化"
+      ],
+      "answer": 1,
+      "explanation": "调用生成器函数只返回生成器对象，并不运行函数体。只有对它迭代（如 next()、for）时，函数体才会执行到第一个 yield，此时 'computing' 才被打印。这是惰性的直接体现。",
+      "error_tag": "概念混淆",
+      "variant_group": "generator_execution_timing"
+    },
+    {
+      "kp": "py.iter.lazy_eval",
+      "type": "single_choice",
+      "question": "关于 sum(x for x in range(1000)) 与 sum([x for x in range(1000)])，下列说法正确的是？",
+      "options": [
+        "两者结果相同，但前者不构造中间列表，内存更省",
+        "前者结果是错的，因为生成器表达式不能传给 sum",
+        "后者内存更省，因为列表更快",
+        "两者完全等价，连内存占用都相同"
+      ],
+      "answer": 0,
+      "explanation": "sum 接受任意可迭代对象。传入生成器表达式时按需产生每个元素，不构造中间列表；传入列表推导则会先建立整个列表。两者结果相同，但惰性版本内存效率更高。",
+      "error_tag": "概念混淆",
+      "variant_group": "genexpr_vs_comprehension"
+    },
+    {
+      "kp": "py.iter.lazy_eval",
+      "type": "single_choice",
+      "question": "itertools.count() 在不传参时可产生无限递增整数。这之所以可行，是因为？",
+      "options": [
+        "它内部把整数预先分配了一部分缓存",
+        "它是惰性迭代器，只在每次 next 时计算下一个值，不预先生成全部",
+        "它在达到内存上限后会自动停止",
+        "无限序列在 Python 中一定会在某个点停止"
+      ],
+      "answer": 1,
+      "explanation": "惰性求值使无限序列成为可能：count 只在被请求时才产生下一个值，从不预先计算全部。若用急切求值（如列表），无限序列会立即耗尽内存。",
+      "error_tag": "概念混淆",
+      "variant_group": "lazy_infinite"
+    }
+  ]
+}

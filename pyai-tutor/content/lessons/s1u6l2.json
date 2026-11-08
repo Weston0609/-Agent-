@@ -1,0 +1,614 @@
+{
+  "id": "s1u6l2",
+  "title": "s1u6l2",
+  "kps": [
+    "py.module.if_main",
+    "py.module.name"
+  ],
+  "theory": "## py.module.if_main\n\n# `if __name__ == \"__main__\":` 完全指南\n\n> **一句话直觉**：这段代码的意思是——\"如果我这个文件是被**直接运行**的，就执行下面的代码；如果我被别人 **import 导入**，就安静地当个工具库\"。\n\n学 Python 的第一周你就会看到别人这样写，但很多人写了三年也说不清它到底在做什么。这一节课我们把这件事彻底讲透。\n\n---\n\n## 一、Python 文件是怎么被执行的？\n\nPython 里有两种方式让一个 `.py` 文件\"跑起来\"：\n\n1. **直接运行**：`python foo.py`，此时 Python 把 `foo.py` 当作**主程序**（main script）。\n2. **被导入**：在别的文件里 `import foo`，此时 Python 把 `foo.py` 当作一个**模块**（module），只加载它、不主动执行它\"对外暴露逻辑\"。\n\n不管哪种方式，Python 在加载文件之前都会先给这个文件配置一个特殊变量 `__name__`（双下划线 name，读作 \"dunder name\"）。\n\n- 直接运行时：`__name__ == \"__main__\"`（固定字符串 `\"__main__\"`）。\n- 被导入时：`__name__` 等于模块名（不带 `.py` 的文件名）。\n\n所以 `if __name__ == \"__main__\":` 本质上就是一句\"运行方式判断\"。\n\n```python\n# file: greet.py\nprint(f\"我被加载了，此时 __name__ = {__name__!r}\")\n```\n\n- 执行 `python greet.py` → 输出 `__name__ = '__main__'`\n- 在别的文件里 `import greet` → 输出 `__name__ = 'greet'`\n\n---\n\n## 二、为什么需要它？——\"可导入\"与\"可运行\"的双重身份\n\n假设你写了一个模块 `math_utils.py`，里面同时有\"工具函数\"和\"演示代码\"：\n\n```python\n# 反例：没有 if __name__ 保护\n# file: math_utils.py\ndef add(a, b):\n    return a + b\n\n# 演示代码也放在顶层，导入时会被意外执行！\nprint(\"演示：1 + 2 =\", add(1, 2))\n```\n\n此时如果别人写 `from math_utils import add`，会**顺带在屏幕上打印一行无关的 \"演示：...\"**——这就是模块的**副作用**（side effect）。大型项目里，一个副作用可能触发数据库连接、写文件、启动服务，后果很严重。\n\n正确写法：把演示逻辑塞进 `if __name__ == \"__main__\":` 里面。\n\n```python\ndef add(a, b):\n    return a + b\n\nif __name__ == \"__main__\":\n    # 只在直接运行时执行，被 import 时跳过\n    print(\"演示：1 + 2 =\", add(1, 2))\n```\n\n这样 `math_utils.py` 就有了两种干净的身份：\n- **当作库**：只提供 `add`，零副作用。\n- **当作脚本**：`python math_utils.py` 时运行演示/CLI 逻辑。\n\n这是 Python 里最常用的\"一鱼两吃\"模式。\n\n---\n\n## 三、和 `import`、`__all__`、`__version__` 的配合\n\n官方推荐的模块头部通常会写元信息（metadata），并用 `__all__` 声明\"对外公开的名字\"：\n\n```python\n\"\"\"math_utils: 演示一个规整的模块头部。\"\"\"\n\n__all__ = [\"add\", \"sub\"]          # from math_utils import * 时只导出这两个\n__version__ = \"0.1.0\"\n__author__ = \"Your Name\"\n\ndef add(a, b): ...\ndef sub(a, b): ...\ndef _internal_helper(): ...        # 单下划线开头：约定为\"内部使用\"\n```\n\n要点：\n- `__all__` 只影响 `from m import *`，不禁止别人显式 `from m import _internal_helper`。\n- `__version__` / `__author__` 是社区惯例，工具（打包、日志、诊断）会读它。\n- 想要\"被执行\"的入口逻辑，全部放进 `if __name__ == \"__main__\":` 块里。\n\n---\n\n## 四、标准工程结构：把 `main()` 单拎出来\n\n当入口逻辑变长，最佳实践是：**定义 `main()` 函数**，然后在守卫块里调用它。这样 `main` 本身也可被测试、被复用。\n\n```python\nimport sys\n\ndef main(argv: list[str]) -> int:\n    print(\"参数：\", argv)\n    return 0\n\nif __name__ == \"__main__\":\n    raise SystemExit(main(sys.argv[1:]))  # 用返回值作为退出码\n```\n\n- `raise SystemExit(code)` 是比裸 `sys.exit(code)` 更\"库化\"的写法：它不依赖你 `import sys` 之外的任何东西。\n- 退出码 `0` = 成功，非 0 = 失败。这是 Linux/macOS 脚本的通用约定。\n- 单元测试可以直接 `from math_utils import main` 后调用 `main([...])`，无需真的 `subprocess` 起进程。\n\n---\n\n## 五、进阶：`TYPE_CHECKING`——同一个思想在类型注解上的延伸\n\n同一个\"只在某条件下执行\"的模式，在类型系统里还有一位哥哥：`typing.TYPE_CHECKING`。它的取值在**运行时是 `False`**，但在**静态类型检查器眼里是 `True`**。\n\n> 场景：某个模块**只用于类型标注**，但导入它很慢或很重（比如 `pandas`、`torch`）。用 `if TYPE_CHECKING:` 包起来，运行时就不会真去导入它。\n\n```python\nfrom typing import TYPE_CHECKING\n\nif TYPE_CHECKING:\n    import expensive_mod   # 运行时不会真的 import\n\ndef fun(arg: \"expensive_mod.SomeType\") -> None:\n    ...\n```\n\n注意注解里要写成**字符串**（或使用 `from __future__ import annotations`），因为在运行时 `expensive_mod` 这个名字并不存在。\n\n---\n\n## 六、总结：一张心法\n\n| 需求 | 写法 |\n|---|---|\n| 这个文件被直接跑时才执行 | `if __name__ == \"__main__\":` |\n| 被 import 时只提供能力 | 顶层只放 `def` / `class` / 常量 |\n| 暴露公开 API | `__all__ = [...]` |\n| 可测试的入口 | `def main(): ...` + 守卫块 |\n| 只在静态检查时导入的重模块 | `if TYPE_CHECKING:` |\n\n背下第一条，理解其余四条，你就掌握了 Python 模块系统的\"入口思维\"。\n\n```python\n\"\"\"\ndemo: 一个可运行、可导入、可测试的完整模块示例。\n运行：python demo.py Alice\n导入：from demo import greet\n\"\"\"\n\n__all__ = [\"greet\", \"main\"]\n__version__ = \"1.0.0\"\n__author__ = \"Tutor\"\n\nimport sys\n\n\ndef greet(name: str) -> str:\n    \"\"\"返回一句问候语。\"\"\"\n    return f\"Hello, {name}!\"\n\n\ndef main(argv: list[str]) -> int:\n    \"\"\"命令行入口：把 argv 里的名字逐个问候。\"\"\"\n    names = argv or [\"World\"]\n    for name in names:\n        print(greet(name))\n    return 0\n\n\n# 关键：只有被直接运行（__name__ == \"__main__\"）时才执行 main。\nif __name__ == \"__main__\":\n    raise SystemExit(main(sys.argv[1:]))\n```\n\n## py.module.name\n\n# py.module.name：模块的名字与身份\n\n> **一句话直觉**：模块（module）不是「一段代码文件」，而是一个**有名有姓、可被重新命名、可查询全名的对象**——`py.module.name` 就是问「我现在到底是谁、从哪来」。\n\n课程：`s1u6l2` · 前置：无（本知识点是全课程的起点之一）\n\n---\n\n## 1. 模块是什么：文件的「身份证」\n\nPython 里，任何一个 `.py` 文件被导入（import）后，都会变成一个 `module`（模块）对象。这个对象的身份里，最重要的两个属性就是：\n\n- `__name__`：模块的名字。作为脚本直接运行时是 `\"__main__\"`；被导入时是「包名.模块名」。\n- `__file__`：模块来自哪个文件（包 `__init__` 可能没有）。\n\n为什么先学这个？因为后面所有关于包（package）、导入路径、`if __name__ == \"__main__\"`、`from M import *` 的行为，都建立在这两个属性之上。\n\n```python\n# demo_name.py（一个普通模块）\nprint(\"我的 __name__ 是:\", __name__)\n\nif __name__ == \"__main__\":\n    # 只有「直接运行 python demo_name.py」时才执行\n    print(\"我是被当作脚本运行的\")\nelse:\n    # 被别的模块 import 时才执行\n    print(\"我是被导入的\")\n```\n\n运行 `python demo_name.py`：输出 `__main__`。  \n在另一个文件里 `import demo_name`：输出 `demo_name`。\n\n> 记住：`__name__` 是**运行时**决定的值，不是文件里写死的。\n\n---\n\n## 2. 模块名与「全名」：`__name__` vs `__qualname__`\n\n- `__name__`（模块层）：模块的导入名。\n- `__qualname__`（类 / 函数层）：带层级路径的「限定名」（qualified name），用于调试和反射。\n\n```python\nimport os  # 标准库模块\n\nprint(\"模块名:\", os.__name__)          # 'os'\nprint(\"来自文件:\", os.__file__)        # '/usr/lib/python3.x/os.py' 类似路径\n\nclass Outer:\n    class Inner:\n        def method(self): ...\n\nprint(\"类全名:\", Outer.Inner.__qualname__)       # 'Outer.Inner'\nprint(\"方法全名:\", Outer.Inner.method.__qualname__)  # 'Outer.Inner.method'\n```\n\n要点：\n- 模块只有 `__name__`（没有 `__qualname__`）。\n- 类和方法有 `__qualname__`，比 `__name__` 更适合在日志里打印「我是谁里面的谁」。\n\n---\n\n## 3. 名字冲突与「重命名」：`import as`\n\n模块名和变量名一样，可以绑定到任何名字上：\n\n```python\nimport numpy as np                # 常见的别名重命名\nfrom collections import OrderedDict as OD\n\nprint(np.__name__)   # 'numpy'\nprint(OD.__module__) # 'collections' —— 对象所在模块\n```\n\n注意一个容易混淆的点：**对象上的 `__module__`** 是「定义它的模块名」，而 `__name__` 是「这个模块本身的名字」。\n\n```python\ndef f():\n    pass\n\nprint(f.__module__)  # '__main__'（如果定义在脚本里）\nprint(f.__name__)    # 'f'\n```\n\n---\n\n## 4. 模块的「公开名字」：`__all__`\n\n按 PEP 8 风格：想让 `from M import *` 只导出你允许的名字，就设置模块级变量 `__all__`（一个字符串列表）。\n\n```python\n# mymod.py\n__all__ = [\"a\", \"b\", \"c\"]   # 只导出 a、b、c\n\na = 1\nb = 2\nc = 3\nd = 4                     # 不会被 `from mymod import *` 导出\n```\n\n```python\nfrom mymod import *\nprint(a, b, c)   # 1 2 3\nprint(d)         # NameError: name 'd' is not defined\n```\n\n- `__all__` 为空列表 `[]` 表示：这个模块**没有公开 API**。\n- 而非公开的全局变量按惯例用**单下划线**前缀（如 `_internal_cache`）。\n\n> 注意：`__all__` **只影响 `*` 导入**，用 `from mymod import d` 仍可显式拿到 `d`。\n\n---\n\n## 5. 模块的元信息：`__version__` / `__author__` / `__doc__`\n\n工程级代码会把「作者、版本、文档」作为模块的元数据放在顶部：\n\n```python\n# mypkg/mod.py\n\"\"\"这个模块做了一些有用的事情。\"\"\"\n\n__version__ = \"0.1\"\n__author__ = \"Cardinal Biggles\"\n__all__ = [\"a\", \"b\", \"c\"]\n\na = b = c = 1\n```\n\n用起来：\n\n```python\nimport mypkg.mod as m\nprint(m.__doc__)      # '这个模块做了一些有用的事情。'\nprint(m.__version__)  # '0.1'\nprint(m.__author__)   # 'Cardinal Biggles'\nprint(m.__name__)     # 'mypkg.mod'\n```\n\n工程习惯：\n- 包级别的身份也常用包的 `__init__.py` 里的 `__version__` 暴露出来。\n- 发布到 PyPI 时，`__version__` 常与 `pyproject.toml` 的版本保持一致。\n\n---\n\n## 6. 一段完整的记忆图\n\n| 名字 | 属于谁 | 含义 |\n|------|--------|------|\n| `__name__` | 模块 / 类 / 函数 | 名字（模块为导入名，脚本时为 `\"__main__\"`） |\n| `__qualname__` | 类 / 函数 | 带层级路径的限定名 |\n| `__module__` | 类 / 函数 | 定义它的模块名 |\n| `__file__` | 模块 | 源文件路径 |\n| `__doc__` | 模块 / 类 / 函数 | 文档字符串 |\n| `__all__` | 模块 | `from M import *` 的公开名单 |\n| `__version__` / `__author__` | 模块 | 元数据（约定，非解释器强制） |\n",
+  "quiz": [
+    {
+      "kp": "py.module.if_main",
+      "type": "single_choice",
+      "question": "阅读下面的代码：\\n\\n# tools.py\\ndef greet(name):\\n    return f\"Hello, {name}\"\\n\\nprint(greet(\"Alice\"))\\n\\n当另一个脚本执行 `import tools` 时，会发生什么？",
+      "options": [
+        "只会定义 greet 函数，不会输出任何内容",
+        "会输出 Hello, Alice，因为模块顶层的 print 在导入时也会执行",
+        "会抛出 ImportError，因为被导入的模块不能有顶层代码",
+        "会把 greet 变成内置函数，之后无需前缀即可调用"
+      ],
+      "answer": 1,
+      "explanation": "导入模块会执行该模块顶层的全部语句，因此顶层 print 会输出。A 是常见误解，认为 import 只做定义。C 错误，模块允许有顶层代码。D 混淆了导入与内置函数。",
+      "error_tag": "误解导入模块的执行行为",
+      "variant_group": "if_main_import_execution"
+    },
+    {
+      "kp": "py.module.if_main",
+      "type": "single_choice",
+      "question": "下面哪段代码能让模块在被直接运行时执行测试逻辑，而在被其他脚本导入时不执行该逻辑？",
+      "options": [
+        "def __main__():\\n    run_tests()",
+        "if __name__ == \"__main__\":\\n    run_tests()",
+        "if __main__ == True:\\n    run_tests()",
+        "while __name__ == \"main\":\\n    run_tests()"
+      ],
+      "answer": 1,
+      "explanation": "标准写法是判断 __name__ 是否等于 \"__main__\"。A 只是定义函数不会调用。C 非法，__main__ 不是变量。D 条件错误且用 while 不合适。",
+      "error_tag": "记错主模块判断写法",
+      "variant_group": "if_main_syntax"
+    },
+    {
+      "kp": "py.module.if_main",
+      "type": "single_choice",
+      "question": "一个模块中有如下代码：\\n\\nimport sys\\n\\ndef main():\\n    print(sys.argv)\\n\\nif __name__ == \"__main__\\\":\\n    main()\\n\\n这段代码存在什么问题？",
+      "options": [
+        "import sys 必须放在 if 块内部才能生效",
+        "字符串引号不匹配，__main__ 后缺一个引号，会导致语法错误",
+        "main 函数不能访问 sys.argv",
+        "if 块中不能调用函数，只能写 print"
+      ],
+      "answer": 1,
+      "explanation": "字符串 \"__main__ 缺少右侧引号，会引发 SyntaxError。A、C、D 都是常见误解，与 Python 规则不符。",
+      "error_tag": "字符串引号不匹配",
+      "variant_group": "if_main_syntax_error"
+    },
+    {
+      "kp": "py.module.if_main",
+      "type": "single_choice",
+      "question": "甲说：`if __name__ == \"__main__\":` 中的 `__name__` 在导入该模块时也会变成 `\"__main__\"`，所以导入时也会执行主逻辑。乙说：不会，导入时 `__name__` 是模块名。谁对？",
+      "options": [
+        "甲对，导入时 __name__ 就是 \"__main__\"",
+        "乙对，导入时 __name__ 是模块名，条件不成立",
+        "两人都对，取决于操作系统",
+        "两人都错，__name__ 在导入时不存在"
+      ],
+      "answer": 1,
+      "explanation": "导入模块时 __name__ 被设为模块名，而不是 \"__main__\"。A 与 C、D 都是对 __name__ 机制的错误理解。",
+      "error_tag": "导入时 __name__ 取值错误",
+      "variant_group": "if_main_import_name"
+    },
+    {
+      "kp": "py.module.if_main",
+      "type": "single_choice",
+      "question": "下面哪个条件判断与 `if __name__ == \"__main__\":` 表达的含义相反？",
+      "options": [
+        "if __name__ != \"__main__\":",
+        "if __name__ == \"__main__\":",
+        "if __name__ is \"__main__\":",
+        "if \"__main__\" == __name__:"
+      ],
+      "answer": 0,
+      "explanation": "!= 与 == 语义相反。B 相同。C 使用 is 比较字符串不是惯用写法但语义上仍为真时相同；D 是等价的交换顺序写法。",
+      "error_tag": "混淆相等与不等条件",
+      "variant_group": "if_main_negation"
+    },
+    {
+      "kp": "py.module.if_main",
+      "type": "single_choice",
+      "question": "运行 `python -m mypackage.mymodule` 时，mymodule 中的 `__name__` 值是什么？",
+      "options": [
+        "\"mymodule\"",
+        "\"mypackage.mymodule\"",
+        "\"__main__\"",
+        "\"mypackage\""
+      ],
+      "answer": 2,
+      "explanation": "以 -m 运行模块时，该模块作为主程序执行，__name__ 为 \"__main__\"。A、B、D 是把它当作普通导入时的模块名。",
+      "error_tag": "误判 -m 运行时的 __name__",
+      "variant_group": "if_main_m_flag"
+    },
+    {
+      "kp": "py.module.if_main",
+      "type": "single_choice",
+      "question": "一个模块顶部直接写了耗时操作，例如：\\n\\nprint(\"loading...\")\\nresult = do_heavy_work()\\n\\n其他脚本导入该模块时会发生什么？",
+      "options": [
+        "不会执行任何顶层代码，只有函数被导入",
+        "会执行 print 和 do_heavy_work，导致导入变慢",
+        "只会执行 print，不会执行 do_heavy_work",
+        "会报错，因为导入模块时不允许顶层语句"
+      ],
+      "answer": 1,
+      "explanation": "导入会执行顶层语句，因此 print 与耗时函数都会运行。A、C 误以为顶层代码被跳过。D 错误，顶层语句允许存在。",
+      "error_tag": "忽视导入副作用",
+      "variant_group": "if_main_side_effect"
+    },
+    {
+      "kp": "py.module.if_main",
+      "type": "single_choice",
+      "question": "关于 `if __name__ == \"__main__\":` 的缩进，下面哪个说法正确？",
+      "options": [
+        "里面的代码必须比 if 行多缩进一级，否则会抛出 IndentationError",
+        "里面的代码必须与 if 行完全对齐，Python 允许这样",
+        "里面的代码不能有缩进，否则会被当作注释",
+        "缩进层级可以随意变化，Python 不检查缩进"
+      ],
+      "answer": 0,
+      "explanation": "Python 使用缩进划分语句块，if 块内的语句必须多缩进一级。B、C、D 都违背 Python 缩进规则。",
+      "error_tag": "缩进规则理解错误",
+      "variant_group": "if_main_indent"
+    },
+    {
+      "kp": "py.module.if_main",
+      "type": "single_choice",
+      "question": "有代码：\\n\\n__name__ = \"something\"\\nif __name__ == \"__main__\":\\n    print(\"hi\")\\n\\n直接运行该文件时会输出 hi 吗？",
+      "options": [
+        "会，因为 print 总会执行",
+        "不会，因为 __name__ 被重新赋值为 \"something\"，条件不成立",
+        "会，因为解释器会忽略用户的赋值",
+        "不会，因为不能给 __name__ 赋值"
+      ],
+      "answer": 1,
+      "explanation": "虽然通常由解释器自动设置，但用户可重新赋值，之后条件不成立，print 不执行。A、C 误判执行行为。D 错误，赋值本身语法合法。",
+      "error_tag": "忽略对 __name__ 的重新赋值",
+      "variant_group": "if_main_reassign"
+    },
+    {
+      "kp": "py.module.if_main",
+      "type": "single_choice",
+      "question": "甲模块 `a.py` 中有 `if __name__ == \"__main__\":` 且其中调用 `print(\"A\")`。乙脚本 `b.py` 中写 `import a`。运行 `b.py` 时输出是什么？",
+      "options": [
+        "输出 A",
+        "不输出 A，但会执行 a.py 中 if 块之外的顶层代码",
+        "抛出 ImportError",
+        "输出两次 A"
+      ],
+      "answer": 1,
+      "explanation": "导入时 a 的 __name__ 为 \"a\"，if 块不执行；但其顶层其他语句会执行。A、D 误以为入口块会执行。C 不成立。",
+      "error_tag": "误认为导入会运行入口块",
+      "variant_group": "if_main_import_module"
+    },
+    {
+      "kp": "py.module.if_main",
+      "type": "single_choice",
+      "question": "下面哪段代码最符合「模块既可作为脚本直接运行，又可被其他模块安全导入」的实践？",
+      "options": [
+        "def process():\\n    ...\\n\\nprocess()",
+        "def process():\\n    ...\\n\\nif __name__ == \"__main__\":\\n    process()",
+        "if __name__ == \"process\":\\n    process()",
+        "process()\\n\\nif __name__ == \"__main__\":\\n    def process():\\n        ..."
+      ],
+      "answer": 1,
+      "explanation": "B 先定义函数，再在入口块中调用。A 导入时会执行。C 条件字符串错误。D 把函数定义放进入口块且顶层先调用，逻辑混乱且导入时可能报错。",
+      "error_tag": "入口块结构组织不当",
+      "variant_group": "if_main_best_practice"
+    },
+    {
+      "kp": "py.module.if_main",
+      "type": "single_choice",
+      "question": "关于 `__name__` 与 `__main__`，下面哪项正确？",
+      "options": [
+        "`__main__` 是一个模块名，表示程序入口模块；`__name__` 是当前模块的字符串名称",
+        "两者都是函数，可以调用",
+        "`__name__` 是模块名，`__main__` 是它的返回值",
+        "两者都由用户手动创建，不存在于标准运行时"
+      ],
+      "answer": 0,
+      "explanation": "__main__ 是入口模块的名称，__name__ 保存当前模块名称字符串。B 错，二者都不是函数。C 错，__main__ 不是返回值。D 错，由解释器自动设置。",
+      "error_tag": "混淆 __name__ 与 __main__ 概念",
+      "variant_group": "if_main_concept"
+    },
+    {
+      "kp": "py.module.if_main",
+      "type": "single_choice",
+      "question": "模块 utils.py 的内容如下：\\n\\nprint(__name__)\\n\\n如果直接运行 python utils.py，输出是什么？如果被其他模块导入，输出又是什么？",
+      "options": [
+        "直接运行输出 utils，导入时输出 __main__",
+        "两种情况都输出 utils",
+        "两种情况都输出 __main__",
+        "直接运行输出 __main__，导入时输出 utils"
+      ],
+      "answer": 3,
+      "explanation": "直接运行的文件其 __name__ 为 \"__main__\"；被导入时 __name__ 为模块名 utils。A 与实际情况相反。B、C 都对 __name__ 的取值机制理解错误。",
+      "error_tag": "混淆 __name__ 的取值规则",
+      "variant_group": "if_main_name_value"
+    },
+    {
+      "kp": "py.module.if_main",
+      "type": "single_choice",
+      "question": "如果一个模块希望在被导入时不打印任何内容，但直接运行时打印版本信息，正确的写法是？",
+      "options": [
+        "print(\"v1.0\")\\nif __name__ == \"__main__\":\\n    pass",
+        "if __name__ == \"__main__\":\\n    print(\"v1.0\")",
+        "if __name__ == \"v1.0\":\\n    print(\"v1.0\")",
+        "print(\"v1.0\") 放在函数内部但不调用"
+      ],
+      "answer": 1,
+      "explanation": "把打印放进入口块，导入时不执行。A 顶层就打印了。C 条件错误。D 若不调用函数则不打印，且未体现直接运行与导入的区别。",
+      "error_tag": "未正确使用入口块控制输出",
+      "variant_group": "if_main_version_print"
+    },
+    {
+      "kp": "py.module.if_main",
+      "type": "single_choice",
+      "question": "有同学说：只要模块里写了 `if __name__ == \"__main__\":`，这段代码在运行时永远不会被执行。这个说法为什么不对？",
+      "options": [
+        "因为 __name__ 在运行时总是 \"__main__\"，所以总会执行",
+        "因为该判断只在被导入时成立，所以总会执行",
+        "因为直接运行该文件时 __name__ 就是 \"__main__\"，判断成立，代码会执行",
+        "因为 Python 会忽略 if 语句，直接执行里面的内容"
+      ],
+      "answer": 2,
+      "explanation": "直接运行该文件时 __name__ 为 \"__main__\"，条件为真所以执行。A 错误地认为任何情况下都执行。B 说反了。D 违背 Python 语法规则。",
+      "error_tag": "否定主模块判断的执行条件",
+      "variant_group": "if_main_execution_condition"
+    },
+    {
+      "kp": "py.module.if_main",
+      "type": "single_choice",
+      "question": "下面哪个说法正确描述了这个代码块的作用？\\n\\nif __name__ == \"__main__\":\\n    main()",
+      "options": [
+        "确保 main() 只在模块作为程序入口运行时调用，被导入时不会自动调用",
+        "确保 main() 只在模块被导入时调用，直接运行时不调用",
+        "确保 main() 被调用两次，一次导入一次运行",
+        "定义了一个名为 __main__ 的函数"
+      ],
+      "answer": 0,
+      "explanation": "该判断用于区分「直接运行」与「被导入」两种场景，直接运行时调用 main()，导入时不调用。B 说反。C 臆造。D 把 __name__ 与函数定义混淆。",
+      "error_tag": "误解主入口块用途",
+      "variant_group": "if_main_purpose"
+    },
+    {
+      "kp": "py.module.if_main",
+      "type": "single_choice",
+      "question": "阅读代码：\\n\\n# math_utils.py\\ndef add(a, b):\\n    return a + b\\n\\nif __name__ == \"__main__\":\\n    print(add(1, 2))\\n\\n另一个文件执行 import math_utils 后调用 math_utils.add(3, 4)，结果是？",
+      "options": [
+        "先输出 3 再输出 7",
+        "只输出 3，不会输出 7",
+        "只返回 7，不会输出 3",
+        "会抛出错误，因为顶层有 if 语句"
+      ],
+      "answer": 2,
+      "explanation": "导入时 __name__ 为 math_utils，if 块不执行，所以不会输出 3；调用 add(3,4) 返回 7。A、B 误以为导入会执行 if 块。D 错误，if 语句合法。",
+      "error_tag": "误判导入时 if 块执行",
+      "variant_group": "if_main_import_no_run"
+    },
+    {
+      "kp": "py.module.if_main",
+      "type": "single_choice",
+      "question": "关于 __name__ 的说法，哪一项是正确的？",
+      "options": [
+        "它是用户必须手动定义的全局变量，否则程序无法运行",
+        "__name__ 的值在所有模块中都相同，都是文件名",
+        "它是 Python 自动设置的，直接运行时值为 \"__main__\"，被导入时为模块名",
+        "它只在类的内部存在，模块级别没有 __name__"
+      ],
+      "answer": 2,
+      "explanation": "__name__ 是解释器自动设置的模块级变量。A 错误，不需要手动定义。B 错误，取值随运行方式变化。D 错误，模块级同样存在。",
+      "error_tag": "误认 __name__ 来源或取值",
+      "variant_group": "if_main_name_semantics"
+    },
+    {
+      "kp": "py.module.if_main",
+      "type": "single_choice",
+      "question": "下面哪段代码在直接运行时会错误地执行两次 main()？",
+      "options": [
+        "def main():\\n    print(\"run\")\\n\\nif __name__ == \"__main__\":\\n    main()",
+        "def main():\\n    print(\"run\")\\n\\nmain()\\n\\nif __name__ == \"__main__\":\\n    main()",
+        "if __name__ == \"__main__\":\\n    main()\\n\\ndef main():\\n    print(\"run\")",
+        "def main():\\n    print(\"run\")\\n\\nif __name__ == \"__main__\":\\n    pass"
+      ],
+      "answer": 1,
+      "explanation": "B 在顶层先调用一次 main()，if 块中又调用一次，直接运行时会打印两次。A 正常一次。C 会因 main 未定义而报错。D 不会调用 main。",
+      "error_tag": "重复调用入口函数",
+      "variant_group": "if_main_double_call"
+    },
+    {
+      "kp": "py.module.if_main",
+      "type": "single_choice",
+      "question": "某脚本写成：\\n\\nif __name__ == \"main\":\\n    run()\\n\\n直接运行该脚本时，run() 会执行吗？",
+      "options": [
+        "会执行，因为 \"main\" 和 \"__main__\" 在 Python 中等价",
+        "会执行，因为字符串比较忽略下划线",
+        "不会执行，因为 __name__ 的值是 \"__main__\"，不等于 \"main\"",
+        "不会执行，因为 if 语句缺少 else 分支"
+      ],
+      "answer": 2,
+      "explanation": "条件应为 \"__main__\"，写成 \"main\" 时比较为假，run() 不执行。A、B 是对字符串比较的错误理解。D 与 else 无关。",
+      "error_tag": "拼写错误导致入口不执行",
+      "variant_group": "if_main_typo_main"
+    },
+    {
+      "kp": "py.module.if_main",
+      "type": "single_choice",
+      "question": "关于把主逻辑放进 `if __name__ == \"__main__\":` 块中的好处，哪个说法最准确？",
+      "options": [
+        "提高程序运行速度，减少导入时间到零",
+        "使模块既能作为脚本直接运行，又能被安全导入而不产生副作用",
+        "让模块中的函数自动变为私有，无法被外部调用",
+        "强制 Python 在导入时跳过整个模块的解析"
+      ],
+      "answer": 1,
+      "explanation": "该写法的核心价值是区分入口与库两种用法，避免导入时执行脚本逻辑。A 夸大性能作用。C 与访问控制无关。D 错误，导入仍需解析模块。",
+      "error_tag": "夸大主入口块的作用",
+      "variant_group": "if_main_benefit"
+    },
+    {
+      "kp": "py.module.name",
+      "type": "single_choice",
+      "question": "在 Python 中，一个模块的 __name__ 属性在主程序入口（即被直接运行的文件）中的值是什么？",
+      "options": [
+        "__main__",
+        "模块的文件名",
+        "None",
+        "模块所在包的名称"
+      ],
+      "answer": 0,
+      "explanation": "当一个文件被直接运行时，其 __name__ 被设为 '__main__'；只有被 import 导入时，__name__ 才是模块名。这是使用 if __name__ == '__main__' 保护入口代码的原理。",
+      "error_tag": "概念混淆",
+      "variant_group": "__name__ 属性"
+    },
+    {
+      "kp": "py.module.name",
+      "type": "single_choice",
+      "question": "下面这段代码运行后输出什么？\n\n# a.py\nprint(__name__)\n\n# b.py\nimport a",
+      "options": [
+        "b",
+        "a",
+        "__main__",
+        "什么都不输出"
+      ],
+      "answer": 1,
+      "explanation": "运行 b.py 时会导入模块 a，此时 a.py 中的 __name__ 为 'a'（模块名），而不是 '__main__'，因为 a.py 不是直接入口文件。",
+      "error_tag": "概念混淆",
+      "variant_group": "__name__ 属性"
+    },
+    {
+      "kp": "py.module.name",
+      "type": "multi_choice",
+      "question": "关于 Python 模块与包，下列哪些说法是正确的？（多选）",
+      "options": [
+        "一个 .py 文件本身就是一个模块",
+        "包是可以包含多个模块的目录，通常含有 __init__.py（常规包）",
+        "导入模块时，模块中的顶层语句会在首次导入时执行",
+        "模块一旦被导入，就永远无法被重新加载",
+        "命名空间包必须包含 __init__.py"
+      ],
+      "answer": [
+        0,
+        1,
+        2
+      ],
+      "explanation": ".py 文件即模块，含 __init__.py 的目录为常规包，导入时顶层语句执行一次。模块可以通过 importlib.reload 重新加载，所以 D 错；命名空间包不需要 __init__.py，所以 E 错。",
+      "error_tag": "概念混淆",
+      "variant_group": "包与 __init__.py"
+    },
+    {
+      "kp": "py.module.name",
+      "type": "multi_choice",
+      "question": "下列哪些情况会触发模块的顶层代码被再次执行（相对于首次导入）？（多选）",
+      "options": [
+        "在不同的 Python 进程中重新导入该模块",
+        "在同一进程中使用 importlib.reload(mod)",
+        "删除 sys.modules 中的条目后再 import 该模块",
+        "在同一进程中重复执行 import mod 语句"
+      ],
+      "answer": [
+        0,
+        1,
+        2
+      ],
+      "explanation": "模块顶层代码在首次导入时执行一次。不同进程有独立解释器，故会重新执行；reload 和先删除 sys.modules 缓存后重新导入也会触发执行。同一进程内重复 import 命中缓存，不再执行。",
+      "error_tag": "边界错误",
+      "variant_group": "import 搜索机制"
+    },
+    {
+      "kp": "py.module.name",
+      "type": "multi_choice",
+      "question": "关于相对导入与绝对导入，下列哪些说法正确？（多选）",
+      "options": [
+        "绝对导入从顶层包名开始书写，语义清晰，推荐使用",
+        "相对导入用前导点表示当前包及上层包",
+        "相对导入在直接运行脚本时可能失败",
+        "相对导入可以跨 Python 版本被任意重命名而不受影响"
+      ],
+      "answer": [
+        0,
+        1,
+        2
+      ],
+      "explanation": "绝对导入从顶层包名开始，推荐且清晰；相对导入用点号表示层级；直接运行脚本时缺少包上下文会导致相对导入失败。相对导入的路径随文件位置变动而变化，不能说「任意重命名不受影响」。",
+      "error_tag": "概念混淆",
+      "variant_group": "相对导入"
+    },
+    {
+      "kp": "py.module.name",
+      "type": "multi_choice",
+      "question": "以下关于 sys.modules 的描述，哪些正确？（多选）",
+      "options": [
+        "它是一个 dict，缓存已导入的模块对象",
+        "导入模块时会先检查其中是否已有目标模块",
+        "手工修改它会影响后续的导入行为",
+        "它是只读结构，不能被修改"
+      ],
+      "answer": [
+        0,
+        1,
+        2
+      ],
+      "explanation": "sys.modules 是记录已导入模块的字典，导入系统会先查它。它是可变的，删除或替换条目会影响后续导入，但通常不建议随意修改。",
+      "error_tag": "记忆缺失",
+      "variant_group": "import 搜索机制"
+    },
+    {
+      "kp": "py.module.name",
+      "type": "fill_blank",
+      "question": "在 Python 中，一个模块被直接作为程序入口运行时，其内置属性 __name__ 的值是 ____（填空，写字符串内容，不含引号）。",
+      "options": [],
+      "answer": [
+        "__main__",
+        "main"
+      ],
+      "explanation": "直接运行时 __name__ == '__main__'，这也是 if __name__ == '__main__': 惯用法的依据。",
+      "error_tag": "记忆缺失",
+      "variant_group": "__name__ 属性"
+    },
+    {
+      "kp": "py.module.name",
+      "type": "fill_blank",
+      "question": "在包中，为使目录被识别为常规包（而非命名空间包），通常需要在该目录下放置名为 ____ 的文件。",
+      "options": [],
+      "answer": [
+        "__init__.py",
+        "init.py"
+      ],
+      "explanation": "常规包要求目录内存在 __init__.py（可以为空），PEP 420 之后没有该文件也可作为命名空间包，但常规包习惯保留它以便初始化。",
+      "error_tag": "记忆缺失",
+      "variant_group": "包与 __init__.py"
+    },
+    {
+      "kp": "py.module.name",
+      "type": "code_reading",
+      "question": "阅读下面代码，回答问题。\n\n# pkg/__init__.py\nprint('init')\n\n# pkg/mod.py\nprint('mod')\n\n# main.py\nimport pkg.mod\nimport pkg.mod\n\n问：运行 main.py 时，标准输出依次是什么？",
+      "options": [],
+      "answer": "依次输出 init、mod，且各只输出一次",
+      "explanation": "首次导入 pkg.mod 时会先导入父包 pkg，执行 pkg/__init__.py 输出 init，再执行 pkg/mod.py 输出 mod。第二次 import pkg.mod 命中 sys.modules 缓存，不再重复执行，因此不再输出。",
+      "error_tag": "概念混淆",
+      "variant_group": "import 搜索机制"
+    },
+    {
+      "kp": "py.module.name",
+      "type": "code_reading",
+      "question": "阅读下面代码，回答问题。\n\n# mod.py\nx = [1, 2]\n\n# main.py\nfrom mod import x\nx.append(3)\nprint(__import__('mod').x)\n\n问：这段代码输出什么？为什么？",
+      "options": [],
+      "answer": "输出 [1, 2, 3]。原因：from mod import x 让 main 中的名字 x 与 mod.x 引用同一个列表对象，x.append(3) 原地修改该对象，因此 mod 中的 x 也被改变。",
+      "explanation": "from ... import 绑定的是对象的引用；对可变对象的原地修改（append）会同时反映到两个名称看到的同一个对象。若改为 x = x + [3] 重新绑定则不会影响 mod.x。注意：用 __import__('mod') 只是取出已经导入的 mod 模块对象。",
+      "error_tag": "概念混淆",
+      "variant_group": "from-import 绑定"
+    },
+    {
+      "kp": "py.module.name",
+      "type": "scenario",
+      "question": "你的项目结构如下：\n\nproject/\n  app/\n    __init__.py\n    main.py\n    service.py\n\nmain.py 中写了 from . import service，但你在命令行用 python app/main.py 运行时却报 ImportError: attempted relative import with no known parent package。请说明原因，并给出至少一种推荐的运行或修改方式。",
+      "options": [],
+      "answer": null,
+      "explanation": "直接以脚本路径运行 main.py 时，该模块的 __name__ 为 '__main__'，没有所属包的信息，相对导入无法确定父包，故抛出该错误。推荐用 python -m app.main 从项目根目录以包成员方式运行，这样模块具有包上下文，相对导入有效；或将相对导入改为绝对导入（如 from app import service / import app.service）并确保项目根在 sys.path 上。",
+      "error_tag": "场景误判",
+      "variant_group": "相对导入",
+      "required_keywords": [
+        "app.main",
+        "app.service",
+        "sys.path"
+      ]
+    },
+    {
+      "kp": "py.module.name",
+      "type": "single_choice",
+      "question": "关于命名空间包（namespace package，PEP 420），下列说法正确的是？",
+      "options": [
+        "命名空间包必须显式包含 __init__.py 文件",
+        "命名空间包不需要 __init__.py，可以跨多个目录共同组成同一个包",
+        "命名空间包只能在 Python 2 中使用",
+        "命名空间包不能被 import 语句导入"
+      ],
+      "answer": 1,
+      "explanation": "PEP 420 引入隐式命名空间包：当一个目录中没有 __init__.py 但其子目录被作为包搜索路径的一部分时，可组成命名空间包。它让同一个顶层包分散在多个 site-packages 目录成为可能。",
+      "error_tag": "记忆缺失",
+      "variant_group": "包与 __init__.py"
+    },
+    {
+      "kp": "py.module.name",
+      "type": "single_choice",
+      "question": "在包 mypkg 中，模块内部使用相对导入 from . import utils，下列说法正确的是？",
+      "options": [
+        "可以把它当作脚本直接运行时相对导入仍然有效",
+        "相对导入基于当前模块的 __name__ 确定其所属包，所以只有当模块被作为包的一部分导入时才有效",
+        "相对导入中的点号代表当前工作目录",
+        "相对导入只能导入函数，不能导入模块"
+      ],
+      "answer": 1,
+      "explanation": "相对导入依赖模块的 __package__ / __name__ 来定位包。直接以脚本方式运行时模块没有包上下文，相对导入会报 ImportError，因此推荐用 -m 方式运行或保持包导入方式。",
+      "error_tag": "概念混淆",
+      "variant_group": "相对导入"
+    },
+    {
+      "kp": "py.module.name",
+      "type": "single_choice",
+      "question": "关于 import 的搜索顺序，下列说法正确的是？",
+      "options": [
+        "Python 总是先搜索内置模块，再搜索 sys.path 中的路径",
+        "Python 先搜索 sys.path 中的路径，找不到再搜索内置模块",
+        "Python 按字母顺序搜索所有已安装包",
+        "Python 只搜索当前工作目录"
+      ],
+      "answer": 0,
+      "explanation": "导入时解释器会先查找内建模块（built-ins），然后按 sys.path 顺序查找已安装模块与文件。sys.path 的顺序会影响同名模块的优先选择，这也是本地模块可能覆盖第三方模块的原因。",
+      "error_tag": "记忆缺失",
+      "variant_group": "import 搜索机制"
+    },
+    {
+      "kp": "py.module.name",
+      "type": "single_choice",
+      "question": "以下哪种情况最可能导致 ImportError: attempted relative import with no known parent package？",
+      "options": [
+        "在包内的模块里写了 from ..sibling import x，但该模块被以顶层脚本方式直接运行",
+        "包的 __init__.py 文件为空",
+        "使用了 importlib.import_module",
+        "模块的 __name__ 是 '__main__'"
+      ],
+      "answer": 0,
+      "explanation": "当模块没有已知的父包上下文（例如以脚本直接运行）时，相对导入无法确定包层级，会抛出该错误。这与 __init__.py 是否为空无关，importlib 也不直接造成该错误（它只是改变了导入方式）。",
+      "error_tag": "边界错误",
+      "variant_group": "相对导入"
+    },
+    {
+      "kp": "py.module.name",
+      "type": "single_choice",
+      "question": "关于 __init__.py 文件，下列说法正确的是？",
+      "options": [
+        "它必须包含至少一行可执行代码，否则包无法导入",
+        "它可以用来初始化包的命名空间，例如控制 from pkg import * 的行为（__all__）",
+        "它的存在会使包内所有模块都在导入包时被自动导入",
+        "它只能包含 import 语句"
+      ],
+      "answer": 1,
+      "explanation": "__init__.py 在包被导入时执行，可定义 __all__、版本号或便捷子模块导入。它可以是空文件，子模块也不会因为你没有显式导入而自动加载（除非在 __init__ 中写了导入）。",
+      "error_tag": "概念混淆",
+      "variant_group": "包与 __init__.py"
+    },
+    {
+      "kp": "py.module.name",
+      "type": "single_choice",
+      "question": "下面代码中，从 mod 中导入的 name 在调用方被重新赋值，会影响 mod 内部的 name 吗？\n\n# mod.py\nname = 'orig'\n\n# main.py\nfrom mod import name\nname = 'new'",
+      "options": [
+        "会，因为 mod.name 也被改为 'new'",
+        "不会，因为 from ... import name 把值绑定到调用方的名字，与 mod 内的名字相互独立",
+        "会，因为字符串是可变对象",
+        "取决于是否在 mod 中定义了 __all__"
+      ],
+      "answer": 1,
+      "explanation": "from mod import name 相当于把 mod 中 name 当前引用的对象绑定到调用方的名字上，二者是两个独立的名称绑定。重新赋值调用方的名字不会改变 mod 模块中的 name。",
+      "error_tag": "概念混淆",
+      "variant_group": "from-import 绑定"
+    },
+    {
+      "kp": "py.module.name",
+      "type": "single_choice",
+      "question": "关于 import 语句的执行时机，下列说法正确的是？",
+      "options": [
+        "import 每次执行都会重新从头运行被导入模块的代码",
+        "被导入模块的顶层代码在首次导入时执行一次，之后从 sys.modules 缓存中取用",
+        "import 只读取文件不执行任何代码",
+        "只有使用 from ... import 时才会执行模块代码"
+      ],
+      "answer": 1,
+      "explanation": "模块在第一次导入时被编译并执行顶层代码，执行结果放入 sys.modules；后续重复导入直接复用缓存中的模块对象。若要强制重新加载可用 importlib.reload。",
+      "error_tag": "概念混淆",
+      "variant_group": "import 搜索机制"
+    },
+    {
+      "kp": "py.module.name",
+      "type": "single_choice",
+      "question": "下面哪种做法最可能导致循环导入（circular import）问题？",
+      "options": [
+        "模块 A 在顶层 import B，而模块 B 在顶层 import A",
+        "模块 A 使用 importlib.import_module 延迟导入 B",
+        "模块 A 在函数内部导入 B",
+        "模块 A 只导入标准库"
+      ],
+      "answer": 0,
+      "explanation": "A 顶层导入 B、B 顶层又导入 A 时，两者都在对方尚未初始化完成时就引用对方，容易得到半成品模块或报 ImportError。常见缓解方式是延迟导入（函数内导入）或调整依赖结构。",
+      "error_tag": "场景误判",
+      "variant_group": "循环导入"
+    }
+  ]
+}

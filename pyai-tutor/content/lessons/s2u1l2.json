@@ -1,0 +1,924 @@
+{
+  "id": "s2u1l2",
+  "title": "s2u1l2",
+  "kps": [
+    "py.oop.method",
+    "py.oop.classmethod",
+    "py.oop.staticmethod"
+  ],
+  "theory": "## py.oop.method\n\n# py.oop.method：面向对象里的“方法”到底是什么\n\n> **一句话直觉**：方法（method）就是“绑定在类里的函数”，它让数据（属性）和行为（操作）住在一起，从而把复杂系统拆成一个个能独立思考和复用的小对象。\n\n---\n\n## 1. 从函数到方法：为什么要 `self`？\n\n普通函数是“谁调用都一样”；方法的核心区别是**它会自动接收调用它的实例**。\n\n在 Python 中，定义在类（class）里的函数就是方法。第一个参数通常命名为 `self`（英文：self，指“这个实例”），Python 会在通过实例调用时自动把它传进去。\n\n```python\nclass Counter:\n    def __init__(self):          # 初始化方法（initializer），构造实例时自动调用\n        self.value = 0           # 实例属性（instance attribute）\n\n    def add(self, n):            # 实例方法（instance method）\n        self.value += n\n        return self.value\n\nc = Counter()\nc.add(3)\nprint(c.add(4))  # 输出 7\n```\n\n**关键结论**：`c.add(4)` 等价于 `Counter.add(c, 4)`。`self` 不是关键字，只是约定俗成的名字。\n\n---\n\n## 2. 三种方法：实例方法、类方法、静态方法\n\n- **实例方法（instance method）**：第一个参数是 `self`，能访问实例属性和类属性。\n- **类方法（class method）**：用 `@classmethod` 装饰，第一个参数是 `cls`（class），常做“替代构造器”。\n- **静态方法（static method）**：用 `@staticmethod` 装饰，不接收 `self` 或 `cls`，只是放在类命名空间里的普通函数。\n\n```python\nclass Temperature:\n    unit = \"C\"  # 类属性（class attribute）\n\n    def __init__(self, celsius):\n        self.celsius = celsius\n\n    @classmethod\n    def from_fahrenheit(cls, f):\n        # 不需要实例，只用类本身\n        return cls((f - 32) * 5 / 9)\n\n    @staticmethod\n    def is_freezing(celsius):\n        # 逻辑上属于这个类，但不依赖实例或类\n        return celsius <= 0\n\nprint(Temperature.from_fahrenheit(32).celsius)  # 0.0\nprint(Temperature.is_freezing(-1))              # True\n```\n\n**关键结论**：\n- 需要“读写实例数据” → 实例方法。\n- 需要“根据类来构造/配置” → 类方法。\n- 只是“把这个函数放在类里组织起来” → 静态方法。\n\n---\n\n## 3. 特殊方法（dunder）：让对象“像内置类型一样工作”\n\nPython 里以双下划线开头和结尾的方法叫**特殊方法（special method / dunder method）**。它们由语言在特定语法下自动调用，而不是你手动写名字去调。\n\n最常见的几个：\n\n- `__init__`：实例初始化。\n- `__repr__` / `__str__`：打印与调试显示。\n- `__len__`：支持 `len(obj)`。\n- `__eq__`：支持 `==`。\n- `__iter__`：支持 `for ... in obj`。\n- `__getitem__`：支持 `obj[key]`。\n\n```python\nclass Playlist:\n    def __init__(self, songs):\n        self.songs = list(songs)\n\n    def __len__(self):\n        return len(self.songs)\n\n    def __getitem__(self, i):\n        return self.songs[i]\n\n    def __repr__(self):\n        return f\"Playlist({self.songs!r})\"\n\np = Playlist([\"A\", \"B\", \"C\"])\nprint(len(p))     # 3\nprint(p[1])       # B\nprint(p)          # Playlist(['A', 'B', 'C'])\n```\n\n**关键结论**：写特殊方法，本质是让自定义对象参与 Python 的“协议（protocol）”。你不需要继承某个固定基类，只要实现对应方法，就支持对应语法。\n\n---\n\n## 4. 从“协议”看方法：对象能力由方法定义\n\nPython 的许多能力不是“类型声明”，而是“有没有实现某个方法”。\n\n例如：\n- 实现 `__iter__` → 可被 `for` 迭代。\n- 实现 `__len__` → 可被 `len()` 调用。\n- 实现 `__bytes__` / `__int__` / `__float__` → 可被 `bytes()` / `int()` / `float()` 转换。\n- 实现 `__str__` → 可被 `str()` 友好输出。\n\n这就是**鸭子类型（duck typing）**：看起来像鸭子、叫起来像鸭子，那就是鸭子。方法签名，就是“叫声”。\n\n```python\nclass Money:\n    def __init__(self, amount):\n        self.amount = amount\n\n    def __str__(self):\n        return f\"{self.amount} 元\"\n\n    def __add__(self, other):\n        return Money(self.amount + other.amount)\n\nprint(str(Money(10) + Money(5)))  # 15 元\n```\n\n**关键结论**：一个对象“能做什么”，取决于它实现了哪些方法，而不是它继承自哪个类。\n\n---\n\n## 5. 工程级视角：方法的设计原则\n\n1. **单一职责（single responsibility）**：一个方法只做一件事，名字说清楚做什么。\n2. **高内聚（high cohesion）**：与数据强相关的操作放在类里；纯工具函数用静态方法或模块函数。\n3. **避免 God Object**：方法过多、职责过杂的类会难以测试和维护。\n4. **优先组合与协议**：不要为了“复用”滥用继承；先看对象是否实现了所需方法。\n5. **特殊方法保持一致语义**：`__eq__` 若重写，通常还要重写 `__hash__` 以保持一致性。\n\n```python\nclass InvalidAmount(ValueError):\n    pass\n\nclass Wallet:\n    def __init__(self):\n        self._balance = 0\n\n    def deposit(self, amount):\n        if amount <= 0:\n            raise InvalidAmount(\"存款金额必须为正数\")\n        self._balance += amount\n        return self._balance\n\n    @property\n    def balance(self):\n        return self._balance\n\nw = Wallet()\nw.deposit(100)\nprint(w.balance)  # 100\n```\n\n**关键结论**：好的方法设计让对象“自己管好自己的状态”，外部只通过清晰接口交互。\n\n---\n\n## 动手练习：做一个可迭代的“成绩册”\n\n**任务**：实现 `ScoreBook` 类，满足以下要求：\n\n1. `__init__(self, scores)` 保存一个成绩列表。\n2. `__len__` 返回成绩数量。\n3. `__getitem__` 支持 `book[0]` 取第一个成绩。\n4. `__iter__` 支持 `for s in book` 遍历成绩。\n5. `__repr__` 返回类似 `ScoreBook([90, 80, 70])`。\n6. 加一个实例方法 `average(self)` 返回平均分；空列表返回 `0`。\n7. 加一个类方法 `from_str(cls, text)`，把 `\"90,80,70\"` 转成 `ScoreBook`。\n\n**验收示例**：\n\n```python\nbook = ScoreBook.from_str(\"90,80,70\")\nassert len(book) == 3\nassert book[0] == 90\nassert list(book) == [90, 80, 70]\nassert book.average() == 80.0\nprint(book)\n```\n\n**进阶**：重写 `__add__`，让两个 `ScoreBook` 可以直接相加合并成绩。\n\n```python\nclass ScoreBook:\n    def __init__(self, scores):\n        # 保存成绩副本，避免外部列表被修改影响内部状态\n        self.scores = list(scores)\n\n    def __len__(self):\n        # 支持 len(book)\n        return len(self.scores)\n\n    def __getitem__(self, i):\n        # 支持 book[0]\n        return self.scores[i]\n\n    def __iter__(self):\n        # 支持 for s in book\n        return iter(self.scores)\n\n    def __repr__(self):\n        # 支持 print(book) 时显示可读内容\n        return f\"ScoreBook({self.scores!r})\"\n\n    def average(self):\n        # 实例方法：计算平均分\n        if not self.scores:\n            return 0\n        return sum(self.scores) / len(self.scores)\n\n    @classmethod\n    def from_str(cls, text):\n        # 类方法：从字符串构造实例\n        parts = text.split(\",\")\n        scores = [int(x) for x in parts if x.strip()]\n        return cls(scores)\n\n\nif __name__ == \"__main__\":\n    book = ScoreBook.from_str(\"90,80,70\")\n    assert len(book) == 3\n    assert book[0] == 90\n    assert list(book) == [90, 80, 70]\n    assert book.average() == 80.0\n    print(book)\n```\n\n## py.oop.classmethod\n\n# 类方法 `@classmethod`：让实例创建方式更优雅\n\n## 一句话直觉\n\n**`@classmethod`（类方法）** 让你在不需要“先造出一个对象”的前提下，就能调用类里的函数；它最典型的用途是写“替代构造函数”（alternative constructor），用一个更直观的方式创建实例。\n\n---\n\n## 1. 先回忆：普通实例方法长什么样\n\n在 Python 里，类（class）定义对象（instance/object）的模板。普通方法第一个参数是 `self`，代表“调用这个方法的实例”。\n\n```python\nclass User:\n    def __init__(self, name: str, age: int):\n        self.name = name\n        self.age = age\n\n    def greet(self) -> str:\n        # self 指向具体实例\n        return f\"Hi, I am {self.name}, {self.age} years old.\"\n\n# 普通方法必须通过实例调用\nu = User(\"Alice\", 30)\nprint(u.greet())   # Hi, I am Alice, 30 years old.\n```\n\n**关键结论**：普通实例方法依赖 `self`，所以必须先有实例。\n\n---\n\n## 2. 类方法是什么：第一个参数是 `cls`\n\n用 `@classmethod` 装饰器（decorator）标记后，方法的第一个参数自动变成 **类本身**，习惯叫 `cls`（class 的缩写）。\n\n```python\nclass User:\n    def __init__(self, name: str, age: int):\n        self.name = name\n        self.age = age\n\n    @classmethod\n    def species(cls) -> str:\n        # cls 就是 User 这个类本身，而不是某个实例\n        return cls.__name__\n\n# 直接用类调用，不需要实例\nprint(User.species())   # User\n```\n\n**关键结论**：类方法绑定的是“类”，不是“实例”，所以可以直接用 `ClassName.method()` 调用。\n\n---\n\n## 3. 为什么需要它：替代构造函数\n\n假设用户信息有时以 `\"Alice,30\"` 这样的字符串传来。如果每次都写 `User(*s.split(\",\"))` 很难读，也容易出错。用类方法可以把它变成清晰的构造函数。\n\n```python\nclass User:\n    def __init__(self, name: str, age: int):\n        self.name = name\n        self.age = age\n\n    @classmethod\n    def from_string(cls, raw: str) -> \"User\":\n        # cls(...) 会调用当前类的构造函数，支持子类继承\n        name, age_str = raw.split(\",\")\n        return cls(name.strip(), int(age_str))\n\nu = User.from_string(\"Bob, 25\")\nprint(u.name, u.age)   # Bob 25\n```\n\n**关键结论**：`cls(...)` 就是“用当前类来创建实例”，这是替代构造函数的标准写法。\n\n---\n\n## 4. 类方法与继承：`cls` 会跟随子类变化\n\n子类继承父类时，通过 `cls` 创建的实例会是子类的类型，而不是硬编码的父类。\n\n```python\nclass User:\n    def __init__(self, name: str, age: int):\n        self.name = name\n        self.age = age\n\n    @classmethod\n    def from_string(cls, raw: str) -> \"User\":\n        name, age_str = raw.split(\",\")\n        return cls(name.strip(), int(age_str))\n\nclass Admin(User):\n    def __init__(self, name: str, age: int, level: int = 9):\n        super().__init__(name, age)\n        self.level = level\n\n# cls 是 Admin，因此构造出的是 Admin 实例\na = Admin.from_string(\"Carol, 40\")\nprint(type(a).__name__, a.level)   # Admin 9\n```\n\n**关键结论**：在类方法里用 `cls(...)` 而不是写死 `User(...)`，可以让子类自动获得正确的构造行为。这也是官方推荐用 `Self` 作为返回注解的原因：\n\n```python\nfrom typing import Self\n\nclass User:\n    @classmethod\n    def from_string(cls, raw: str) -> Self:\n        ...\n```\n\n这样类型检查器（type checker，如 mypy/pyright）就知道：`Admin.from_string(...)` 返回的是 `Admin`，而不是 `User`。\n\n---\n\n## 5. 类方法 vs 实例方法 vs 静态方法\n\n| 类型 | 第一个参数 | 绑定对象 | 典型用途 |\n|---|---|---|---|\n| 实例方法 | `self` | 实例 | 访问/修改实例数据 |\n| 类方法 | `cls` | 类 | 替代构造函数、需要知道“当前类”的逻辑 |\n| 静态方法 | 无 | 都不绑定 | 与类相关但不依赖类或实例的工具函数 |\n\n```python\nclass MathUtil:\n    factor = 2\n\n    def scale_instance(self, x: int) -> int:\n        return x * self.factor          # 依赖实例\n\n    @classmethod\n    def scale_class(cls, x: int) -> int:\n        return x * cls.factor            # 依赖类属性\n\n    @staticmethod\n    def add(a: int, b: int) -> int:\n        return a + b                     # 与类/实例都无关\n\nprint(MathUtil.scale_class(3))   # 6\nprint(MathUtil.add(1, 2))        # 3\n```\n\n---\n\n## 6. 工程级用法：工厂模式与配置\n\n实际项目中，`@classmethod` 常用来做“工厂”（factory）：根据不同的输入来源（文件、字典、环境变量）统一构造对象。\n\n```python\nimport json\nfrom typing import Self\n\nclass Config:\n    def __init__(self, debug: bool, port: int):\n        self.debug = debug\n        self.port = port\n\n    @classmethod\n    def from_json(cls, text: str) -> Self:\n        data = json.loads(text)\n        return cls(data[\"debug\"], data[\"port\"])\n\n    @classmethod\n    def default(cls) -> Self:\n        return cls(debug=False, port=8080)\n\nc1 = Config.from_json('{\"debug\": true, \"port\": 9000}')\nc2 = Config.default()\nprint(c1.debug, c1.port)   # True 9000\nprint(c2.debug, c2.port)   # False 8080\n```\n\n---\n\n## 结尾：动手练习\n\n**任务**：实现一个 `Point` 类，支持三种创建方式。\n\n1. `Point(x, y)`：普通构造。\n2. `Point.origin()`：类方法，返回原点 `(0, 0)`。\n3. `Point.from_string(\"3,4\")`：类方法，从字符串解析出坐标。\n4. 再定义一个子类 `Point3D`，验证 `Point3D.origin()` 返回的实例类型是 `Point3D`。\n\n**提示**：类方法里返回实例时使用 `cls(...)`，返回类型注解可用 `Self`。\n\n```python\nfrom typing import Self\n\nclass Point:\n    def __init__(self, x: float, y: float):\n        self.x = x\n        self.y = y\n\n    @classmethod\n    def origin(cls) -> Self:\n        return cls(0, 0)\n\n    @classmethod\n    def from_string(cls, raw: str) -> Self:\n        x, y = raw.split(\",\")\n        return cls(float(x), float(y))\n\nclass Point3D(Point):\n    def __init__(self, x: float, y: float, z: float = 0.0):\n        super().__init__(x, y)\n        self.z = z\n\n# 请自行补全并打印类型验证\n```\n\n```python\nfrom typing import Self\n\nclass Temperature:\n    \"\"\"温度值，支持多种构造方式。\"\"\"\n\n    def __init__(self, celsius: float):\n        self.celsius = celsius\n\n    @classmethod\n    def from_fahrenheit(cls, value: float) -> Self:\n        # 替代构造函数：从华氏度创建实例\n        return cls((value - 32) * 5 / 9)\n\n    @classmethod\n    def from_kelvin(cls, value: float) -> Self:\n        return cls(value - 273.15)\n\n    def __repr__(self) -> str:\n        return f\"Temperature(celsius={self.celsius:.2f})\"\n\n\nclass FahrenheitTemperature(Temperature):\n    \"\"\"子类：返回类型会自动跟随 cls。\"\"\"\n    pass\n\n\nif __name__ == \"__main__\":\n    t1 = Temperature.from_fahrenheit(212)\n    t2 = Temperature.from_kelvin(300)\n    print(t1)                              # Temperature(celsius=100.00)\n    print(t2)                              # Temperature(celsius=26.85)\n\n    t3 = FahrenheitTemperature.from_fahrenheit(32)\n    print(type(t3).__name__, t3)           # FahrenheitTemperature Temperature(celsius=0.00)\n```\n\n## py.oop.staticmethod\n\n# py.oop.staticmethod：一节课搞懂静态方法\n\n## 一句话直觉\n\n`@staticmethod`（静态方法）就是「写在类里、但不依赖实例和类状态的普通函数」——它只是**逻辑上归属**这个类，调用时不用先 `self` 或 `cls`。\n\n---\n\n## 1. 为什么需要它？\n\n你写了一个 `Circle` 类，需要计算圆的面积。这个公式只和「半径」有关，和某个具体实例、和整个类的统计信息都无关——它就是一个数学工具函数。\n\n你希望它「住」在 `Circle` 里，方便别人一看就知道「这是圆相关的工具」：\n\n```python\nimport math\n\nclass Circle:\n    def __init__(self, radius: float) -> None:\n        self.radius = radius\n\n    @staticmethod\n    def area(radius: float) -> float:\n        # 不需要 self，也不需要 cls\n        return math.pi * radius ** 2\n\n# 可以直接通过类调用，不创建实例\nprint(Circle.area(2))        # 12.566...\n```\n\n关键点：**不需要 `self`，也不需要 `cls`**。这是它和普通方法、类方法最本质的区别。\n\n---\n\n## 2. 三种方法对比：instance / class / static\n\n在 Python 里，类里面的方法有三种「绑定方式」：\n\n| 类型 | 第一个参数 | 访问的对象 | 装饰器 |\n|------|-----------|-----------|--------|\n| 实例方法 instance method | `self` | 实例 | 无 |\n| 类方法 class method | `cls` | 类 | `@classmethod` |\n| 静态方法 static method | 无 | 都不访问 | `@staticmethod` |\n\n```python\nclass Demo:\n    class_attr = \"I am class-level\"\n\n    def instance_m(self):\n        return f\"instance sees {self.class_attr}\"\n\n    @classmethod\n    def class_m(cls):\n        return f\"class sees {cls.class_attr}\"\n\n    @staticmethod\n    def static_m():\n        return \"I don't see anything automatically\"\n\nd = Demo()\nprint(d.instance_m())   # instance sees I am class-level\nprint(Demo.class_m())   # class sees I am class-level\nprint(Demo.static_m())  # I don't see anything automatically\n```\n\n记忆口诀：\n- `self` = 我（当前实例）\n- `cls` = 我们（类本身）\n- 静态方法 = **谁也不**，就是一段纯函数\n\n---\n\n## 3. 它和「模块级普通函数」有什么区别？\n\n从执行角度看，`Circle.area(2)` 和把 `area` 单独写在模块里几乎没有区别。差异主要在**代码组织和语义**：\n\n1. **命名空间归属**：看到 `Circle.area` 就知道它服务于 `Circle` 这个领域。\n2. **可被继承/覆写**：子类可以覆盖 `area`，调用方代码不用改。\n3. **工具发现性**：IDE 中打 `Circle.` 就能列出所有相关工具。\n\n```python\nclass Circle:\n    @staticmethod\n    def area(r: float) -> float:\n        return 3.14159 * r * r\n\nclass UnitCircle(Circle):\n    @staticmethod\n    def area(r: float = 1.0) -> float:\n        # 子类可以替换实现\n        return super(UnitCircle, UnitCircle).area(r)\n\nprint(UnitCircle.area(2))  # 12.56636\n```\n\n结论：**需要「归属感」和「可被覆写」，但不需要实例/类状态**时，用 `@staticmethod`。\n\n---\n\n## 4. 什么时候该用（和不该用）\n\n**该用**：\n- 纯工具函数：字符串转换、校验、数学计算、格式解析。\n- 工厂辅助：类的构造函数里调用的、不需要状态的辅助逻辑。\n- 明确表达「这个功能属于这个类」的语义。\n\n**不该用**：\n- 需要访问 `self.xxx` 时 → 必须用实例方法。\n- 需要访问 `cls.xxx` 或创建 `cls(...)` 时 → 用 `@classmethod`。\n- 确实只是模块内工具、跟类毫无关系 → 直接写模块级函数更简单。\n\n```python\nclass Temperature:\n    def __init__(self, celsius: float) -> None:\n        self.celsius = celsius\n\n    @staticmethod\n    def c_to_f(c: float) -> float:\n        # 纯工具函数：不访问 self，也不访问 cls\n        return c * 9 / 5 + 32\n\n    def fahrenheit(self) -> float:\n        # 需要 self.celsius，必须是实例方法\n        return self.c_to_f(self.celsius)\n\nt = Temperature(25)\nprint(t.fahrenheit())            # 77.0\nprint(Temperature.c_to_f(25))    # 77.0\n```\n\n---\n\n## 5. 常见误区速查\n\n1. **误加 `self`**：`@staticmethod` 下的函数如果还写 `self`，会报 `TypeError: ... takes 1 positional argument but 2 were given`。\n2. **以为不能通过实例调用**：其实 `t.c_to_f(25)` 也能跑，只是不会自动传 `self`。\n3. **该用 `@classmethod` 时误用**：需要访问 `cls`（比如返回子类实例）时，`@staticmethod` 做不到多态。\n4. **滥用**：把所有函数都塞进类里当静态方法，会让模块级工具函数变得啰嗦。\n\n---\n\n## 动手练习\n\n写一个 `Validator` 类，包含：\n\n1. 一个 `@staticmethod` 方法 `is_email(text: str) -> bool`，用简单的规则判断（包含 `@`，`@` 后面有 `.`，且非空）。\n2. 一个 `@staticmethod` 方法 `normalize(text: str) -> str`，返回去掉首尾空格并转小写的结果。\n3. 一个实例方法 `check(self, text: str) -> bool`，先 `normalize` 再 `is_email`。\n\n测试要求：\n- 用 `Validator.is_email(\"a@b.com\")` 直接调用，返回 `True`。\n- 用 `v = Validator(); v.check(\"  A@B.COM \")` 返回 `True`。\n- 尝试给 `is_email` 加上 `self` 参数，观察报错，理解为什么静态方法不能要 `self`。\n\n提示：`normalize` 里可以用 `text.strip().lower()`。\n\n```python\nimport math\n\nclass Circle:\n    def __init__(self, radius: float) -> None:\n        self.radius = radius\n\n    @staticmethod\n    def area(radius: float) -> float:\n        \"\"\"纯函数：与实例、类状态无关\"\"\"\n        return math.pi * radius ** 2\n\n    def area_of_self(self) -> float:\n        \"\"\"实例方法可以复用静态方法\"\"\"\n        return Circle.area(self.radius)\n\n\nclass Temperature:\n    def __init__(self, celsius: float) -> None:\n        self.celsius = celsius\n\n    @staticmethod\n    def c_to_f(c: float) -> float:\n        return c * 9 / 5 + 32\n\n    def fahrenheit(self) -> float:\n        return self.c_to_f(self.celsius)\n\n\nif __name__ == \"__main__\":\n    # 1) 直接通过类调用静态方法，不需要实例\n    print(Circle.area(2))                      # 12.566370614359172\n\n    # 2) 通过实例调用静态方法（也会工作，但不会自动传 self）\n    c = Circle(2)\n    print(c.area(3))                           # 28.274333882308138\n    print(c.area_of_self())                    # 12.566370614359172\n\n    # 3) 静态方法 vs 实例方法对比\n    t = Temperature(25)\n    print(Temperature.c_to_f(25))              # 77.0\n    print(t.fahrenheit())                      # 77.0\n```\n",
+  "quiz": [
+    {
+      "kp": "py.oop.method",
+      "type": "single_choice",
+      "question": "在 Python 中，定义在类内部的普通函数（第一个参数为 self），一般通过什么方式调用？",
+      "options": [
+        "只能通过实例调用，不能通过类调用",
+        "可以通过实例调用，也可以通过类调用（需显式传入实例）",
+        "只能通过类调用，不能通过实例调用",
+        "必须使用 @staticmethod 装饰后才能调用"
+      ],
+      "answer": 1,
+      "explanation": "实例方法既可通过实例调用（自动传入 self），也可通过类调用，但需要显式传入实例对象作为第一个参数。",
+      "error_tag": "概念混淆",
+      "variant_group": "py.oop.method_01"
+    },
+    {
+      "kp": "py.oop.method",
+      "type": "single_choice",
+      "question": "以下代码的输出是什么？\n\nclass A:\n    def f(self):\n        return 'A.f'\n\na = A()\nprint(a.f())",
+      "options": [
+        "报错：缺少参数 self",
+        "A.f",
+        "None",
+        "打印函数对象地址"
+      ],
+      "answer": 1,
+      "explanation": "通过实例调用 f() 时，Python 会自动将 a 作为 self 传入，返回 'A.f'。",
+      "error_tag": "调用方式误解",
+      "variant_group": "py.oop.method_02"
+    },
+    {
+      "kp": "py.oop.method",
+      "type": "single_choice",
+      "question": "类方法（使用 @classmethod 装饰）的第一个参数通常是什么？",
+      "options": [
+        "self",
+        "cls，代表类本身",
+        "instance",
+        "没有参数"
+      ],
+      "answer": 1,
+      "explanation": "类方法自动接收类对象作为第一个参数，通常命名为 cls，用于操作类级别的属性或构造实例。",
+      "error_tag": "类方法参数误解",
+      "variant_group": "py.oop.method_11"
+    },
+    {
+      "kp": "py.oop.method",
+      "type": "single_choice",
+      "question": "以下代码的输出是什么？\n\nclass A:\n    @staticmethod\n    def f(x):\n        return x * 2\n\nprint(A.f(3))",
+      "options": [
+        "6",
+        "报错：f 需要 self",
+        "None",
+        "3"
+      ],
+      "answer": 0,
+      "explanation": "静态方法可以直接通过类调用，传入参数 3，返回 6，不需要实例。",
+      "error_tag": "静态方法调用误解",
+      "variant_group": "py.oop.method_12"
+    },
+    {
+      "kp": "py.oop.method",
+      "type": "single_choice",
+      "question": "以下代码的输出是什么？\n\nclass A:\n    @classmethod\n    def f(cls):\n        return cls.__name__\n\nclass B(A):\n    pass\n\nprint(B.f())",
+      "options": [
+        "A",
+        "B",
+        "报错",
+        "None"
+      ],
+      "answer": 1,
+      "explanation": "类方法通过子类 B 调用时，cls 是 B，因此返回 B 的类名 'B'。",
+      "error_tag": "类方法多态误解",
+      "variant_group": "py.oop.method_13"
+    },
+    {
+      "kp": "py.oop.method",
+      "type": "single_choice",
+      "question": "以下代码中，调用 a.f() 会发生什么？\n\nclass A:\n    def f(self):\n        return self.x\n\na = A()\nprint(a.f())",
+      "options": [
+        "返回 None",
+        "报错：AttributeError，A 没有属性 x",
+        "返回 0",
+        "自动创建 x 并返回"
+      ],
+      "answer": 1,
+      "explanation": "A 类没有定义实例属性 x，访问 self.x 会引发 AttributeError。",
+      "error_tag": "属性访问错误",
+      "variant_group": "py.oop.method_14"
+    },
+    {
+      "kp": "py.oop.method",
+      "type": "single_choice",
+      "question": "以下代码的输出是什么？\n\nclass A:\n    def __init__(self):\n        self.x = 1\n    def f(self):\n        self.x += 1\n        return self.x\n\na = A()\nprint(a.f(), a.f())",
+      "options": [
+        "2 2",
+        "2 3",
+        "1 2",
+        "报错"
+      ],
+      "answer": 1,
+      "explanation": "每次调用 f 都会修改实例属性 self.x，第一次返回 2，第二次返回 3。",
+      "error_tag": "状态变化忽略",
+      "variant_group": "py.oop.method_15"
+    },
+    {
+      "kp": "py.oop.method",
+      "type": "single_choice",
+      "question": "如果方法名以双下划线开头且不以双下划线结尾（如 __f），则该方法通常？",
+      "options": [
+        "是公开方法，任何地方都能直接访问",
+        "名称会被改写为 _类名__f，起到一定私有化作用",
+        "是魔术方法，会自动被调用",
+        "必须通过 super 调用"
+      ],
+      "answer": 1,
+      "explanation": "Python 的名称改写机制会将 __f 改写为 _类名__f，这是一种弱私有化，防止意外覆盖。",
+      "error_tag": "名称改写误解",
+      "variant_group": "py.oop.method_16"
+    },
+    {
+      "kp": "py.oop.method",
+      "type": "single_choice",
+      "question": "以下代码的输出是什么？\n\nclass A:\n    def f(self):\n        return 'A'\n    def g(self):\n        return self.f()\n\nclass B(A):\n    def f(self):\n        return 'B'\n\nprint(B().g())",
+      "options": [
+        "A",
+        "B",
+        "AB",
+        "报错"
+      ],
+      "answer": 1,
+      "explanation": "g 中调用 self.f()，由于多态，self 是 B 的实例，因此调用 B 重写的 f，返回 'B'。",
+      "error_tag": "多态理解错误",
+      "variant_group": "py.oop.method_17"
+    },
+    {
+      "kp": "py.oop.method",
+      "type": "single_choice",
+      "question": "关于实例方法的绑定，以下说法正确的是？",
+      "options": [
+        "实例方法在定义时就绑定到具体实例",
+        "实例方法在通过实例访问时才会绑定，返回绑定方法对象",
+        "实例方法通过类访问时也自动绑定到类",
+        "实例方法无法作为普通函数对象传递"
+      ],
+      "answer": 1,
+      "explanation": "实例方法在通过实例访问时发生绑定，生成绑定方法对象；通过类访问时得到函数对象，需要手动传实例。",
+      "error_tag": "绑定时机混淆",
+      "variant_group": "py.oop.method_18"
+    },
+    {
+      "kp": "py.oop.method",
+      "type": "single_choice",
+      "question": "以下代码的输出是什么？\n\nclass A:\n    def f(self):\n        return 'A'\n\na = A()\nm = a.f\nprint(m())",
+      "options": [
+        "A",
+        "报错：m 需要 self",
+        "None",
+        "打印方法对象"
+      ],
+      "answer": 0,
+      "explanation": "a.f 是绑定方法，已绑定实例 a，赋值给 m 后调用 m() 不需要再传 self，返回 'A'。",
+      "error_tag": "绑定方法误解",
+      "variant_group": "py.oop.method_19"
+    },
+    {
+      "kp": "py.oop.method",
+      "type": "single_choice",
+      "question": "以下代码的输出是什么？\n\nclass A:\n    def f(self):\n        return 'A'\n\nm = A.f\nprint(m(A()))",
+      "options": [
+        "A",
+        "报错：m 需要 self",
+        "None",
+        "打印函数对象"
+      ],
+      "answer": 0,
+      "explanation": "A.f 是未绑定的函数对象，赋值给 m 后调用需要显式传入实例，这里传入 A()，返回 'A'。",
+      "error_tag": "未绑定函数误解",
+      "variant_group": "py.oop.method_20"
+    },
+    {
+      "kp": "py.oop.method",
+      "type": "single_choice",
+      "question": "以下代码的输出是什么？\n\nclass A:\n    def f(self):\n        return 'A.f'\n\nprint(A.f(A()))",
+      "options": [
+        "A.f",
+        "报错：f 需要 0 个参数但传入了 1 个",
+        "报错：self 未定义",
+        "None"
+      ],
+      "answer": 0,
+      "explanation": "通过类调用实例方法时，不会自动绑定实例，必须手动传入一个实例作为 self，这里传入了 A()，返回 'A.f'。",
+      "error_tag": "绑定机制误解",
+      "variant_group": "py.oop.method_03"
+    },
+    {
+      "kp": "py.oop.method",
+      "type": "single_choice",
+      "question": "关于实例方法中 self 参数，以下说法正确的是？",
+      "options": [
+        "self 是 Python 关键字，必须命名为 self",
+        "self 是约定俗成的名字，可以改成其他名字，但必须是第一个参数",
+        "self 只存在于 __init__ 中，其他方法不能有",
+        "self 是自动传入的，方法定义时不能写 self"
+      ],
+      "answer": 1,
+      "explanation": "self 不是关键字，只是约定名称；它代表调用该方法的实例，必须是定义的第一个参数。",
+      "error_tag": "关键字误解",
+      "variant_group": "py.oop.method_04"
+    },
+    {
+      "kp": "py.oop.method",
+      "type": "single_choice",
+      "question": "以下代码中，g 方法的调用结果是什么？\n\nclass A:\n    def f(self, x):\n        return x + 1\n    def g(self):\n        return self.f(2)\n\na = A()\nprint(a.g())",
+      "options": [
+        "3",
+        "报错：f 未定义",
+        "2",
+        "None"
+      ],
+      "answer": 0,
+      "explanation": "在 g 中通过 self.f(2) 调用同一实例的 f 方法，传入 2 返回 3。",
+      "error_tag": "方法间调用错误",
+      "variant_group": "py.oop.method_05"
+    },
+    {
+      "kp": "py.oop.method",
+      "type": "single_choice",
+      "question": "以下代码的输出是什么？\n\nclass A:\n    def f(self):\n        return 'A'\n\nclass B(A):\n    def f(self):\n        return 'B'\n\nb = B()\nprint(b.f())",
+      "options": [
+        "A",
+        "B",
+        "AB",
+        "报错"
+      ],
+      "answer": 1,
+      "explanation": "B 重写了父类 A 的 f 方法，实例 b 调用的是 B 中定义的 f，返回 'B'。",
+      "error_tag": "继承覆盖误解",
+      "variant_group": "py.oop.method_06"
+    },
+    {
+      "kp": "py.oop.method",
+      "type": "single_choice",
+      "question": "在子类方法中，如果想调用父类的同名方法，应该使用什么？",
+      "options": [
+        "self.super().f()",
+        "super().f()",
+        "parent.f()",
+        "super.f()"
+      ],
+      "answer": 1,
+      "explanation": "super() 返回父类代理对象，通过 super().f() 可调用父类方法；self.super() 和 super.f() 均不存在。",
+      "error_tag": "super 用法错误",
+      "variant_group": "py.oop.method_07"
+    },
+    {
+      "kp": "py.oop.method",
+      "type": "single_choice",
+      "question": "以下代码的输出是什么？\n\nclass A:\n    def f(self):\n        return 'A'\n\nclass B(A):\n    def f(self):\n        return super().f() + 'B'\n\nprint(B().f())",
+      "options": [
+        "AB",
+        "BA",
+        "A",
+        "B"
+      ],
+      "answer": 0,
+      "explanation": "B.f 先通过 super().f() 调用父类 A.f 得到 'A'，再拼接 'B' 得到 'AB'。",
+      "error_tag": "super 返回值误解",
+      "variant_group": "py.oop.method_08"
+    },
+    {
+      "kp": "py.oop.method",
+      "type": "single_choice",
+      "question": "以下代码的输出是什么？\n\nclass A:\n    def f(self):\n        return 'A'\n\nclass B(A):\n    def f(self):\n        return 'B'\n\nprint(A.f(B()))",
+      "options": [
+        "A",
+        "B",
+        "报错：B 不是 A 的实例",
+        "None"
+      ],
+      "answer": 0,
+      "explanation": "B 继承自 A，B() 是 A 的实例；通过 A.f 调用时传入 B() 作为 self，执行的是 A 中定义的 f，返回 'A'。",
+      "error_tag": "绑定调用误解",
+      "variant_group": "py.oop.method_09"
+    },
+    {
+      "kp": "py.oop.method",
+      "type": "single_choice",
+      "question": "静态方法（使用 @staticmethod 装饰）与实例方法的主要区别是？",
+      "options": [
+        "静态方法不能有返回值",
+        "静态方法不会自动接收 self 或 cls 参数",
+        "静态方法只能通过类调用",
+        "静态方法不能访问类的任何属性"
+      ],
+      "answer": 1,
+      "explanation": "静态方法不需要 self 或 cls 参数，它只是放在类命名空间中的普通函数，可通过类或实例调用。",
+      "error_tag": "装饰器功能混淆",
+      "variant_group": "py.oop.method_10"
+    },
+    {
+      "kp": "py.oop.classmethod",
+      "type": "single_choice",
+      "question": "在一个类中定义了如下方法：\n\nclass Circle:\n    pi = 3.14\n\n    def __init__(self, r):\n        self.r = r\n\n    @classmethod\n    def from_diameter(cls, d):\n        return cls(d / 2)\n\n关于 from_diameter 的调用方式，下列说法正确的是？",
+      "options": [
+        "只能通过实例调用，如 Circle(2).from_diameter(10)",
+        "可以通过类调用，如 Circle.from_diameter(10)，此时 cls 自动绑定为 Circle",
+        "必须显式传入类作为第一个参数，如 Circle.from_diameter(Circle, 10)",
+        "只能通过子类调用，父类无法调用类方法"
+      ],
+      "answer": 1,
+      "explanation": "classmethod 会把类本身作为第一个参数自动传入（惯例命名为 cls），因此既可用类名调用，也可用实例调用；用类名调用时 cls 就是该类，且子类调用时 cls 会是子类。显式传类会导致参数重复。",
+      "error_tag": "概念混淆",
+      "variant_group": "classmethod_binding"
+    },
+    {
+      "kp": "py.oop.classmethod",
+      "type": "single_choice",
+      "question": "下面代码中哪个方法能在不创建实例的情况下被调用，并且能感知到子类的类型？\n\nclass Base:\n    @classmethod\n    def create(cls):\n        return cls()\n\n    @staticmethod\n    def info():\n        return \"info\"",
+      "options": [
+        "只有 create，因为 cls 会绑定实际调用的类",
+        "只有 info，因为 staticmethod 不依赖实例",
+        "create 和 info 都能感知子类类型",
+        "都不能，必须创建实例后才能调用"
+      ],
+      "answer": 0,
+      "explanation": "classmethod 的 cls 参数会绑定到实际调用该方法的类（含子类），因此子类调用 create 时会构造子类实例；staticmethod 不接收 cls 或 self，无法感知调用者的类型。",
+      "error_tag": "概念混淆",
+      "variant_group": "classmethod_vs_staticmethod"
+    },
+    {
+      "kp": "py.oop.classmethod",
+      "type": "multi_choice",
+      "question": "下面代码中，关于 cls 的理解正确的有？\n\nclass Registry:\n    _items = []\n\n    @classmethod\n    def register(cls, item):\n        cls._items.append(item)\n        return cls",
+      "options": [
+        "cls 指向实际调用 register 的类",
+        "cls._items 在子类未覆盖 _items 时与父类共享同一列表对象",
+        "每次调用 cls._items.append(item) 会原地修改共享列表",
+        "cls 是实例，等价于 self",
+        "cls 必须显式作为参数传入"
+      ],
+      "answer": [
+        0,
+        1,
+        2
+      ],
+      "explanation": "cls 是调用者所属的类而非实例。子类若不重新定义 _items，就沿用父类属性，两者指向同一个可变列表，所以 append 会影响两边的视图。",
+      "error_tag": "概念混淆",
+      "variant_group": "classmethod_inheritance"
+    },
+    {
+      "kp": "py.oop.classmethod",
+      "type": "fill_blank",
+      "question": "请补全装饰器，使下面的方法在调用时自动接收类对象作为第一个参数：\n\nclass Foo:\n    @_____\n    def bar(cls):\n        return cls.__name__",
+      "options": [],
+      "answer": [
+        "classmethod"
+      ],
+      "explanation": "classmethod 是内置装饰器，用来声明类方法，它的第一个参数通常命名为 cls，由解释器自动传入调用类。",
+      "error_tag": "记忆缺失",
+      "variant_group": "classmethod_syntax"
+    },
+    {
+      "kp": "py.oop.classmethod",
+      "type": "fill_blank",
+      "question": "下面代码中，调用 Shape.create(3) 时，create 内的参数 cls 会被绑定为_____。\n\nclass Shape:\n    def __init__(self, n):\n        self.n = n\n\n    @classmethod\n    def create(cls, n):\n        return cls(n)",
+      "options": [],
+      "answer": [
+        "Shape",
+        "Shape 类",
+        "Shape类"
+      ],
+      "explanation": "通过 Shape.create(3) 调用时，解释器自动把 Shape 类绑定给 cls，所以 cls 就是 Shape。",
+      "error_tag": "概念混淆",
+      "variant_group": "classmethod_binding"
+    },
+    {
+      "kp": "py.oop.classmethod",
+      "type": "fill_blank",
+      "question": "阅读代码并填出输出：\n\nclass Base:\n    @classmethod\n    def who(cls):\n        return cls.__name__\n\nclass Sub(Base):\n    pass\n\nprint(Base.who(), Sub.who())\n\n输出为_____",
+      "options": [],
+      "answer": [
+        "Base Sub",
+        "Base Sub "
+      ],
+      "explanation": "cls 分别绑定 Base 和 Sub，因此 cls.__name__ 分别为 'Base' 和 'Sub'，打印结果为 'Base Sub'。",
+      "error_tag": "边界错误",
+      "variant_group": "classmethod_inheritance"
+    },
+    {
+      "kp": "py.oop.classmethod",
+      "type": "code_reading",
+      "question": "阅读下面代码，写出输出并说明理由：\n\nclass Counter:\n    count = 0\n\n    @classmethod\n    def inc(cls):\n        cls.count += 1\n        return cls.count\n\nprint(Counter.inc())\nprint(Counter.inc())\nprint(Counter.count)",
+      "options": [],
+      "answer": "输出依次为 1、2、2。cls.count += 1 读取类属性 count 并加一后写回类属性，因此三次打印分别为 1、2、2。",
+      "explanation": "cls.count 访问的是类属性；+= 会读值、加一、再赋值回类属性。类方法通过 cls 修改的是类的属性而不是实例属性，因此 Counter.count 最终为 2。",
+      "error_tag": "概念混淆",
+      "variant_group": "classmethod_modify_class_attr"
+    },
+    {
+      "kp": "py.oop.classmethod",
+      "type": "code_reading",
+      "question": "阅读代码，说明输出并解释原因：\n\nclass Factory:\n    kind = \"base\"\n\n    @classmethod\n    def make(cls):\n        return cls()\n\nclass Special(Factory):\n    kind = \"special\"\n\nobj = Special.make()\nprint(type(obj).__name__, obj.kind)",
+      "options": [],
+      "answer": "输出为 'Special special'。cls 绑定的是 Special，因此 cls() 构造的是 Special 实例，实例上读到的 kind 是子类覆盖后的 'special'。",
+      "explanation": "类方法的 cls 指向实际调用的类，Special.make() 时 cls 即 Special，所以返回 Special 实例；子类重新定义了 kind，属性查找优先命中子类值。",
+      "error_tag": "概念混淆",
+      "variant_group": "classmethod_alternative_constructor"
+    },
+    {
+      "kp": "py.oop.classmethod",
+      "type": "code_reading",
+      "question": "下面代码能正常运行吗？为什么？\n\nclass A:\n    @classmethod\n    def f(self):\n        return self\n\nprint(A.f().__name__)",
+      "options": [],
+      "answer": "能运行，输出 'A'。虽然参数命名为 self，但类方法依然会传入类对象，类对象也有 __name__ 属性，因此输出类名 'A'。",
+      "explanation": "参数名称不影响绑定规则，类方法始终自动传入调用类。把参数命名为 self 只是容易误导读者，并不是语法错误。",
+      "error_tag": "概念混淆",
+      "variant_group": "classmethod_binding"
+    },
+    {
+      "kp": "py.oop.classmethod",
+      "type": "scenario",
+      "question": "工程场景：你需要为 Temperature 类提供一个 from_json 入口，从形如 {\"celsius\": 25} 的字典创建实例。业务要求：以后可能派生出 FahrenheitTemperature 等子类，希望 from_json 在子类上调用时自动构造对应子类实例，而不是父类。请说明你会选择哪种方法类型以及为什么。",
+      "options": [],
+      "answer": null,
+      "explanation": "用 classmethod 并接收 cls，在方法体内返回 cls(...)，这样通过子类调用时能构造子类实例，符合多态与可扩展要求。",
+      "error_tag": "概念混淆",
+      "variant_group": "classmethod_use_cases",
+      "required_keywords": [
+        "classmethod",
+        "cls",
+        "多态",
+        "子类实例",
+        "可扩展"
+      ]
+    },
+    {
+      "kp": "py.oop.classmethod",
+      "type": "scenario",
+      "question": "工程场景：团队里有同事把某个不需要实例状态、也不依赖调用类信息的辅助函数写成了类方法（带 cls 但从未使用 cls）。评审时你建议改成静态方法。请说明为什么，以及改成静态方法会带来什么好处。",
+      "options": [],
+      "answer": null,
+      "explanation": "若方法既不使用 self 也不使用 cls，说明它不依赖实例或调用类，写成 staticmethod 更准确地表达意图，避免误导调用者以为它依赖类信息，也减少与子类绑定的隐含语义。",
+      "error_tag": "概念混淆",
+      "variant_group": "classmethod_vs_staticmethod",
+      "required_keywords": [
+        "staticmethod",
+        "cls",
+        "self",
+        "类方法",
+        "静态方法"
+      ]
+    },
+    {
+      "kp": "py.oop.classmethod",
+      "type": "single_choice",
+      "question": "阅读代码：\n\nclass Temperature:\n    def __init__(self, celsius):\n        self.celsius = celsius\n\n    @classmethod\n    def from_fahrenheit(cls, f):\n        return cls((f - 32) * 5 / 9)\n\nt = Temperature.from_fahrenheit(212)\nprint(round(t.celsius, 1))\n\n输出最接近下列哪一项？",
+      "options": [
+        "100.0",
+        "212.0",
+        "32.0",
+        "180.0"
+      ],
+      "answer": 0,
+      "explanation": "from_fahrenheit 是类方法，调用时 cls 绑定为 Temperature，构造出实例并设置 celsius 为 (212-32)*5/9 = 100.0。",
+      "error_tag": "计算错误",
+      "variant_group": "classmethod_alternative_constructor"
+    },
+    {
+      "kp": "py.oop.classmethod",
+      "type": "single_choice",
+      "question": "下面哪种说法正确描述了 classmethod 的继承行为？\n\nclass Animal:\n    @classmethod\n    def name(cls):\n        return cls.__name__\n\nclass Dog(Animal):\n    pass",
+      "options": [
+        "Dog.name() 返回 'Animal'，因为 cls 总是指向定义该方法的类",
+        "Dog.name() 返回 'Dog'，因为调用时 cls 绑定为实际调用的子类",
+        "Dog.name() 会报错，因为子类没有重新定义 name",
+        "Dog.name() 返回 'Dog'，因为 classmethod 会自动创建子类实例"
+      ],
+      "answer": 1,
+      "explanation": "classmethod 的 cls 绑定的是实际被调用的类对象，所以通过子类调用时 cls 是子类，cls.__name__ 即为 'Dog'。",
+      "error_tag": "概念混淆",
+      "variant_group": "classmethod_inheritance"
+    },
+    {
+      "kp": "py.oop.classmethod",
+      "type": "single_choice",
+      "question": "若要用类方法实现一个「替代构造器」（如从字符串解析创建对象），下面哪种写法最合适？",
+      "options": [
+        "@staticmethod\ndef parse(s):\n    return MyClass(...)",
+        "@classmethod\ndef parse(cls, s):\n    return cls(...)",
+        "def parse(self, s):\n    return MyClass(...)",
+        "@property\ndef parse(self):\n    return ..."
+      ],
+      "answer": 1,
+      "explanation": "替代构造器需要能构造调用者所属的类（便于被继承扩展），所以用 classmethod 接收 cls，并返回 cls(...) 而非硬编码类名。staticmethod 无法感知调用类，实例方法需要先有实例。",
+      "error_tag": "概念混淆",
+      "variant_group": "classmethod_alternative_constructor"
+    },
+    {
+      "kp": "py.oop.classmethod",
+      "type": "single_choice",
+      "question": "关于 classmethod 与普通方法的参数约定，下列说法正确的是？",
+      "options": [
+        "classmethod 的第一个参数惯例是 self",
+        "classmethod 的第一个参数惯例是 cls，代表调用该方法的类",
+        "classmethod 不需要任何参数",
+        "classmethod 的第一个参数名字必须叫 cls，否则语法错误"
+      ],
+      "answer": 1,
+      "explanation": "classmethod 自动接收调用类作为第一个参数，惯例命名为 cls；名字本身不是强制的，但约定用 cls 以免混淆。用 self 命名会引发可读性问题但不会直接报错。",
+      "error_tag": "概念混淆",
+      "variant_group": "classmethod_binding"
+    },
+    {
+      "kp": "py.oop.classmethod",
+      "type": "single_choice",
+      "question": "在模块顶层想提供一个根据配置生成实例的入口，同时又希望子类能定制，下面哪种选择更合理？",
+      "options": [
+        "用普通实例方法，先创建空实例再修改属性",
+        "用类方法接收 cls，并返回 cls(...)",
+        "用静态方法，在内部硬编码类名",
+        "用私有名称改写，强行规定只能由父类创建"
+      ],
+      "answer": 1,
+      "explanation": "类方法通过 cls 能感知调用的具体子类，便于被继承和多态扩展；硬编码类名的静态方法会失去这种灵活性，实例方法需要先有实例。",
+      "error_tag": "概念混淆",
+      "variant_group": "classmethod_alternative_constructor"
+    },
+    {
+      "kp": "py.oop.classmethod",
+      "type": "multi_choice",
+      "question": "关于 classmethod，以下说法正确的有？",
+      "options": [
+        "classmethod 可以通过类名直接调用",
+        "classmethod 可以通过实例调用，此时 cls 绑定该实例所属的类",
+        "classmethod 的第一个参数是调用该方法时自动传入的类对象",
+        "classmethod 内部不能访问类属性",
+        "classmethod 只能用于构造函数场景"
+      ],
+      "answer": [
+        0,
+        1,
+        2
+      ],
+      "explanation": "类方法既可通过类调用也可通过实例调用；无论哪种方式，cls 都是调用者所属的类。它也可以访问类属性（cls.attr），用途也不限于构造，比如工厂、注册、替代构造器等。",
+      "error_tag": "概念混淆",
+      "variant_group": "classmethod_binding"
+    },
+    {
+      "kp": "py.oop.classmethod",
+      "type": "multi_choice",
+      "question": "下列哪些需求场景适合使用 classmethod？",
+      "options": [
+        "从 JSON 字符串解析并创建对象（替代构造器）",
+        "在类级别维护并返回注册表（比如子类自动登记）",
+        "需要获取调用者所属子类信息并据此构造实例",
+        "仅对单个实例的私有属性做一次性修改",
+        "在实例内部修改 self 的某个属性"
+      ],
+      "answer": [
+        0,
+        1,
+        2
+      ],
+      "explanation": "替代构造器、类级别注册/统计、利用 cls 感知子类，都是 classmethod 的典型用途。仅操作某个实例的状态用普通实例方法更合适。",
+      "error_tag": "概念混淆",
+      "variant_group": "classmethod_use_cases"
+    },
+    {
+      "kp": "py.oop.classmethod",
+      "type": "multi_choice",
+      "question": "关于 classmethod 与 staticmethod 的差异，正确的有？",
+      "options": [
+        "classmethod 的第一参数是 cls，staticmethod 不接收隐式参数",
+        "classmethod 能感知调用它的类，staticmethod 不能",
+        "两者都可以通过类名或实例调用",
+        "staticmethod 必须先创建实例才能调用",
+        "classmethod 不能被子类继承"
+      ],
+      "answer": [
+        0,
+        1,
+        2
+      ],
+      "explanation": "classmethod 接收自动绑定的 cls，能感知调用类；staticmethod 不接收隐式参数，退化为普通函数。两者都可通过类名或实例调用。staticmethod 不需要实例，类方法也可继承。",
+      "error_tag": "概念混淆",
+      "variant_group": "classmethod_vs_staticmethod"
+    },
+    {
+      "kp": "py.oop.staticmethod",
+      "type": "single_choice",
+      "question": "在类中定义了一个不接收 self 参数的方法并用 @staticmethod 装饰，关于它的调用方式，下列说法正确的是？",
+      "options": [
+        "只能通过实例调用，不能通过类调用",
+        "只能通过类调用，不能通过实例调用",
+        "既可以通过类名调用，也可以通过实例调用",
+        "必须显式传入 self 才能调用"
+      ],
+      "answer": 2,
+      "explanation": "静态方法与普通函数类似，不绑定实例或类，因此通过类名和实例都能调用，且不会自动传入 self 或 cls。",
+      "error_tag": "概念混淆",
+      "variant_group": "staticmethod_basic_call"
+    },
+    {
+      "kp": "py.oop.staticmethod",
+      "type": "single_choice",
+      "question": "以下代码中，调用 MathUtil.double(5) 的输出是什么？\n\nclass MathUtil:\n    @staticmethod\n    def double(x):\n        return x * 2",
+      "options": [
+        "10",
+        "5",
+        "会报错，缺少 self 参数",
+        "会报错，staticmethod 不能这样用"
+      ],
+      "answer": 0,
+      "explanation": "静态方法 double 接收一个参数 x，通过类名传入 5，返回 5*2=10，不涉及 self。",
+      "error_tag": "概念混淆",
+      "variant_group": "staticmethod_basic_call"
+    },
+    {
+      "kp": "py.oop.staticmethod",
+      "type": "multi_choice",
+      "question": "下列哪些关于静态方法（@staticmethod）的说法是正确的？（多选）",
+      "options": [
+        "静态方法不会自动接收 self 参数",
+        "静态方法不会自动接收 cls 参数",
+        "静态方法可以通过实例对象调用",
+        "静态方法必须定义在模块顶层，不能放在类中",
+        "静态方法可以用子类或父类名调用"
+      ],
+      "answer": [
+        0,
+        1,
+        2,
+        4
+      ],
+      "explanation": "静态方法不绑定 self 或 cls，可通过类名或实例调用，也可被继承后调用。它必须定义在类中（或用 staticmethod 包装后赋值给类），不能放在类外作为类方法。",
+      "error_tag": "概念混淆",
+      "variant_group": "staticmethod_properties"
+    },
+    {
+      "kp": "py.oop.staticmethod",
+      "type": "multi_choice",
+      "question": "以下哪些场景适合使用静态方法？（多选）",
+      "options": [
+        "实现一个与实例状态无关的字符串格式化工具函数",
+        "进行数据校验，只依赖传入的参数",
+        "需要修改类级别的计数器",
+        "实现与类相关的纯计算逻辑，方便归类管理",
+        "需要访问实例的私有属性"
+      ],
+      "answer": [
+        0,
+        1,
+        3
+      ],
+      "explanation": "静态方法适合与实例、类状态无关的纯逻辑。修改类级别状态应使用类方法；访问实例私有属性需要实例方法。",
+      "error_tag": "概念混淆",
+      "variant_group": "staticmethod_when_to_use"
+    },
+    {
+      "kp": "py.oop.staticmethod",
+      "type": "multi_choice",
+      "question": "关于 @staticmethod 和普通函数的关系，下列说法正确的是？（多选）",
+      "options": [
+        "静态方法本质上是一个定义在类命名空间中的普通函数",
+        "静态方法在被调用时不会发生自动的参数绑定",
+        "静态方法可以直接访问所在类的类属性，无需通过类名",
+        "staticmethod 是一个内置的描述符类型",
+        "静态方法只能通过类名访问"
+      ],
+      "answer": [
+        0,
+        1,
+        3
+      ],
+      "explanation": "静态方法定义在类命名空间中，行为类似普通函数，无自动绑定，staticmethod 是内置描述符。访问类属性需要通过类名显式引用。静态方法也可通过实例访问。",
+      "error_tag": "概念混淆",
+      "variant_group": "staticmethod_descriptor"
+    },
+    {
+      "kp": "py.oop.staticmethod",
+      "type": "multi_choice",
+      "question": "关于静态方法在继承体系中的表现，下列说法正确的有？（多选）",
+      "options": [
+        "子类可以直接调用继承来的静态方法",
+        "子类可以重写父类的静态方法",
+        "在子类中重写静态方法后，通过子类调用的是子类的版本",
+        "静态方法会自动绑定到子类，传入 cls",
+        "父类中定义的静态方法，子类无法访问"
+      ],
+      "answer": [
+        0,
+        1,
+        2
+      ],
+      "explanation": "静态方法能被继承、重写和覆盖，且不会自动接收 cls。子类可以访问父类静态方法。",
+      "error_tag": "记忆缺失",
+      "variant_group": "staticmethod_inheritance"
+    },
+    {
+      "kp": "py.oop.staticmethod",
+      "type": "fill_blank",
+      "question": "请填写让以下代码正确输出 'ok' 的装饰器名称：\n\nclass T:\n    @________\n    def show():\n        return 'ok'\n\nprint(T.show())",
+      "options": [],
+      "answer": [
+        "staticmethod",
+        "staticmethod"
+      ],
+      "explanation": "不接收 self 或 cls 的方法需要 @staticmethod 装饰，才能通过类或实例调用不报错。",
+      "error_tag": "记忆缺失",
+      "variant_group": "staticmethod_decorator_name"
+    },
+    {
+      "kp": "py.oop.staticmethod",
+      "type": "fill_blank",
+      "question": "使用 @staticmethod 装饰的方法在通过实例调用时，Python 会自动传入的第一个参数是________（填“实例本身”或“无”或“类本身”）。",
+      "options": [],
+      "answer": [
+        "无",
+        "无参数",
+        "不传",
+        "不会传入",
+        "none"
+      ],
+      "explanation": "静态方法调用时不进行参数绑定，实例调用也不会自动传入实例或类。",
+      "error_tag": "概念混淆",
+      "variant_group": "staticmethod_basic_call"
+    },
+    {
+      "kp": "py.oop.staticmethod",
+      "type": "code_reading",
+      "question": "阅读以下代码，写出运行后的输出：\n\nclass Config:\n    prefix = 'APP_'\n\n    @staticmethod\n    def make(key):\n        return Config.prefix + key\n\nprint(Config.make('debug'))",
+      "options": [],
+      "answer": "APP_debug",
+      "explanation": "静态方法内部通过类名 Config 显式访问类属性 prefix，拼接 'debug' 得到 'APP_debug'。静态方法本身不会自动获得类引用，必须显式通过类名访问。",
+      "error_tag": "概念混淆",
+      "variant_group": "staticmethod_access_class_attr"
+    },
+    {
+      "kp": "py.oop.staticmethod",
+      "type": "code_reading",
+      "question": "阅读以下代码，写出运行后的输出或说明报错原因：\n\nclass Counter:\n    count = 0\n\n    @staticmethod\n    def inc():\n        count += 1\n        return count\n\nprint(Counter.inc())",
+      "options": [],
+      "answer": "报错，NameError: name 'count' is not defined（或 UnboundLocalError）。静态方法没有 self/cls，也无法直接访问类属性 count，必须写成 Counter.count。",
+      "explanation": "静态方法内部作用域不包含自动传入的类或实例引用，直接用 count 会被当作局部变量，导致未定义错误。应显式使用 Counter.count。",
+      "error_tag": "边界错误",
+      "variant_group": "staticmethod_access_class_attr"
+    },
+    {
+      "kp": "py.oop.staticmethod",
+      "type": "code_reading",
+      "question": "阅读以下代码，写出运行后的输出：\n\nclass Shape:\n    @staticmethod\n    def area_of_square(side):\n        return side ** 2\n\nclass Square(Shape):\n    @staticmethod\n    def area_of_square(side):\n        return side * side * 1.0\n\nprint(Shape.area_of_square(3), Square.area_of_square(3))",
+      "options": [],
+      "answer": "9 9.0",
+      "explanation": "子类重写了父类的静态方法，通过 Shape 调用得到整数 9，通过 Square 调用得到浮点 9.0。静态方法支持重写且不涉及参数绑定。",
+      "error_tag": "边界错误",
+      "variant_group": "staticmethod_inheritance"
+    },
+    {
+      "kp": "py.oop.staticmethod",
+      "type": "scenario",
+      "question": "工程场景：你在开发一个订单系统，Order 类中需要一个方法 validate_id(order_id)，它只根据传入的字符串做格式校验，不依赖任何订单实例数据，也不需要访问或修改类级别状态。同事建议你把它写成实例方法，你更倾向写成静态方法。请说明理由，并说明加入 @staticmethod 后，通过实例调用与通过类调用是否有区别。",
+      "options": [],
+      "answer": null,
+      "explanation": "该方法不依赖实例属性和类属性，只是纯校验逻辑，属于类命名空间下的工具方法，适合用 @staticmethod。静态方法不自动绑定 self 或 cls，因此实例调用和类调用都不会自动多传参数，行为一致。",
+      "error_tag": "概念混淆",
+      "variant_group": "staticmethod_when_to_use",
+      "required_keywords": [
+        "静态方法",
+        "@staticmethod",
+        "self",
+        "cls",
+        "实例调用"
+      ]
+    },
+    {
+      "kp": "py.oop.staticmethod",
+      "type": "single_choice",
+      "question": "关于 @staticmethod 与 @classmethod 的区别，下列说法正确的是？",
+      "options": [
+        "两者都会自动接收第一个参数",
+        "静态方法自动接收 cls，类方法自动接收 self",
+        "静态方法不自动接收任何参数，类方法自动接收 cls",
+        "两者都不自动接收参数"
+      ],
+      "answer": 2,
+      "explanation": "静态方法本质上就是普通函数，不自动传参；类方法会自动把类本身作为第一个参数 cls 传入。",
+      "error_tag": "概念混淆",
+      "variant_group": "staticmethod_vs_classmethod"
+    },
+    {
+      "kp": "py.oop.staticmethod",
+      "type": "scenario",
+      "question": "工程场景：团队评审代码时，有人写出如下方法并加了 @staticmethod：\n\nclass User:\n    @staticmethod\n    def get_display_name(self):\n        return self.first_name + ' ' + self.last_name\n\n调用 User.get_display_name(user) 时能拼接出正确结果。但评审认为这个设计有问题，建议直接写成实例方法去掉 @staticmethod。请说明为什么实例方法是更合适的选择。",
+      "options": [],
+      "answer": null,
+      "explanation": "该方法依赖实例属性 first_name 和 last_name，本质上是实例行为，写成实例方法后 self 会自动传入，调用更自然；用静态方法却接收名为 self 的参数，只是把实例显式当普通参数传，违背了静态方法只处理与实例无关逻辑的定位。",
+      "error_tag": "概念混淆",
+      "variant_group": "staticmethod_when_to_use",
+      "required_keywords": [
+        "实例方法",
+        "静态方法",
+        "实例属性",
+        "self",
+        "实例行为"
+      ]
+    },
+    {
+      "kp": "py.oop.staticmethod",
+      "type": "single_choice",
+      "question": "以下代码运行后会输出什么？\n\nclass A:\n    @staticmethod\n    def greet(name):\n        return 'Hello, ' + name\n\na = A()\nprint(a.greet('World'))",
+      "options": [
+        "Hello, World",
+        "TypeError: greet() missing 1 required positional argument",
+        "Hello, a",
+        "会报错，因为静态方法不能用实例调用"
+      ],
+      "answer": 0,
+      "explanation": "实例调用静态方法时不会把实例作为第一个参数传入，name 被赋值为 'World'，正常输出 Hello, World。",
+      "error_tag": "边界错误",
+      "variant_group": "staticmethod_basic_call"
+    },
+    {
+      "kp": "py.oop.staticmethod",
+      "type": "single_choice",
+      "question": "下面哪种情况最适合把方法定义为静态方法？",
+      "options": [
+        "方法需要访问实例属性",
+        "方法需要访问类属性并可能修改类状态",
+        "方法只依赖传入的参数完成计算，与实例和类都无关",
+        "方法需要被子类重写以改变多态行为"
+      ],
+      "answer": 2,
+      "explanation": "静态方法适用于不与实例状态、类状态交互的纯工具型逻辑，只是逻辑上归属于该类。",
+      "error_tag": "概念混淆",
+      "variant_group": "staticmethod_when_to_use"
+    },
+    {
+      "kp": "py.oop.staticmethod",
+      "type": "single_choice",
+      "question": "以下关于静态方法被继承的描述，正确的是？\n\nclass Base:\n    @staticmethod\n    def util():\n        return 'base'\n\nclass Child(Base):\n    pass\n\nprint(Child.util())",
+      "options": [
+        "打印 base",
+        "报错，静态方法不能被继承",
+        "打印 Child",
+        "报错，Child 没有定义 util"
+      ],
+      "answer": 0,
+      "explanation": "静态方法像普通属性一样可以被子类继承，Child.util() 直接调用父类定义的静态方法，返回 'base'。",
+      "error_tag": "记忆缺失",
+      "variant_group": "staticmethod_inheritance"
+    },
+    {
+      "kp": "py.oop.staticmethod",
+      "type": "single_choice",
+      "question": "在类中定义静态方法时，忘记加 @staticmethod，会发生什么？\n\nclass B:\n    def calc(x):\n        return x + 1\n\nprint(B.calc(3))",
+      "options": [
+        "正常输出 4",
+        "报错，因为缺少 self 参数",
+        "输出 3",
+        "输出 NotImplemented"
+      ],
+      "answer": 0,
+      "explanation": "通过类名调用未加装饰器的普通方法时，相当于调用普通函数，Python 不会自动传 self，所以 B.calc(3) 正常返回 4。但通过实例调用就会出错。",
+      "error_tag": "边界错误",
+      "variant_group": "staticmethod_decorator_missing"
+    },
+    {
+      "kp": "py.oop.staticmethod",
+      "type": "single_choice",
+      "question": "以下代码执行后输出是什么？\n\nclass C:\n    @staticmethod\n    def add(a, b=10):\n        return a + b\n\nprint(C.add(5), C.add(5, 20))",
+      "options": [
+        "15 25",
+        "5 20",
+        "报错，默认参数不能与静态方法一起用",
+        "15 20"
+      ],
+      "answer": 0,
+      "explanation": "静态方法支持默认参数，C.add(5) 使用默认 b=10 返回 15；C.add(5,20) 返回 25。",
+      "error_tag": "边界错误",
+      "variant_group": "staticmethod_basic_call"
+    },
+    {
+      "kp": "py.oop.staticmethod",
+      "type": "single_choice",
+      "question": "下列说法中，哪一项对 staticmethod 的描述是错误的？",
+      "options": [
+        "静态方法不能访问实例属性",
+        "静态方法不能访问类属性（需要通过类名显式访问）",
+        "静态方法定义时必须包含 self 参数",
+        "静态方法可以在不创建实例的情况下调用"
+      ],
+      "answer": 2,
+      "explanation": "静态方法不需要 self 参数，也不会自动接收任何绑定参数。若需要访问类属性可显式通过类名访问。",
+      "error_tag": "概念混淆",
+      "variant_group": "staticmethod_definition_rules"
+    },
+    {
+      "kp": "py.oop.staticmethod",
+      "type": "single_choice",
+      "question": "以下哪种写法可以将一个普通函数在运行时转换为类的静态方法？",
+      "options": [
+        "setattr(MyClass, 'foo', staticmethod(func))",
+        "setattr(MyClass, 'foo', func)",
+        "MyClass.foo = classmethod(func)",
+        "MyClass.foo = property(func)"
+      ],
+      "answer": 0,
+      "explanation": "staticmethod 是一个描述符，可以在赋值时显式包装函数，将函数作为静态方法绑定到类上。直接赋值普通函数会变成普通方法，通过实例调用时会自动传 self。",
+      "error_tag": "概念混淆",
+      "variant_group": "staticmethod_descriptor"
+    }
+  ]
+}

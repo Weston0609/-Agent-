@@ -1,0 +1,639 @@
+{
+  "id": "s7u6l2",
+  "title": "s7u6l2",
+  "kps": [
+    "agent.mem.vector_store",
+    "agent.mem.knowledge_graph"
+  ],
+  "theory": "## agent.mem.vector_store\n\n## 一句话直觉\n\n**向量存储（Vector Store）** 就是给 AI 装上一个“按意思搜索”的长期记忆硬盘：你问的不是关键词，而是“语义上最像的内容”。\n\n---\n\n## 1. 为什么需要向量存储？\n\n传统数据库擅长精确匹配：`WHERE name = 'Alice'`。但 Agent（智能体）的记忆常常是模糊的、语义化的：\n\n- 用户三个月前说“我讨厌早起”，今天说“帮我安排会议”。\n- 你希望 Agent 想起“用户偏好下午开会”，而不是只匹配“会议”两个字。\n\n这就需要把文本变成 **向量（Vector）**——一串数字，让“意思相近”的文本在数学空间里距离更近。\n\n**核心结论：** 向量存储 = 向量化 + 相似度检索 + 持久化。\n\n```python\n# 极简直觉：把两句话变成向量，再算距离\nimport numpy as np\n\n# 假装这是 embedding 模型输出的 3 维向量\na = np.array([0.9, 0.1, 0.0])   # “我喜欢猫”\nb = np.array([0.8, 0.2, 0.0])   # “我爱猫咪”\nc = np.array([0.0, 0.1, 0.9])   # “今天天气如何”\n\ndef cosine(x, y):\n    return float(x @ y / (np.linalg.norm(x) * np.linalg.norm(y)))\n\nprint(cosine(a, b))  # 接近 1，语义相似\nprint(cosine(a, c))  # 接近 0，语义无关\n```\n\n---\n\n## 2. 向量存储的最小构成\n\n一个可用的向量存储通常包含四件事：\n\n1. **Embedding（嵌入）模型**：把文本转成向量。\n2. **索引（Index）**：加速最近邻搜索。\n3. **元数据（Metadata）**：存原文、时间、用户 ID 等。\n4. **相似度度量（Similarity Metric）**：余弦相似度、点积、欧氏距离。\n\n**核心结论：** 向量不是目的，能按语义找回原文才是目的。\n\n```python\n# 用字典模拟一个最小向量存储\nimport numpy as np\n\nclass MiniVectorStore:\n    def __init__(self):\n        self.vectors = []   # 向量列表\n        self.texts = []     # 原文\n        self.metas = []     # 元数据\n\n    def add(self, vector, text, meta=None):\n        self.vectors.append(np.array(vector, dtype=float))\n        self.texts.append(text)\n        self.metas.append(meta or {})\n\n    def search(self, query_vector, top_k=2):\n        q = np.array(query_vector, dtype=float)\n        scores = []\n        for i, v in enumerate(self.vectors):\n            score = float(q @ v / (np.linalg.norm(q) * np.linalg.norm(v) + 1e-9))\n            scores.append((score, i))\n        scores.sort(reverse=True)\n        return [(self.texts[i], self.metas[i], s) for s, i in scores[:top_k]]\n\nstore = MiniVectorStore()\nstore.add([0.9, 0.1, 0.0], \"我喜欢猫\", {\"user\": \"u1\"})\nstore.add([0.0, 0.1, 0.9], \"今天天气如何\", {\"user\": \"u1\"})\n\nprint(store.search([0.8, 0.2, 0.0], top_k=1))\n# 输出：[('我喜欢猫', {'user': 'u1'}, 0.998...)]\n```\n\n---\n\n## 3. 真实工程里用什么？\n\n零基础先用上面的 `MiniVectorStore` 理解原理；工程级常用：\n\n- **FAISS**：Facebook 开源，本地高性能。\n- **Chroma**：轻量、易用，适合原型。\n- **Milvus / Qdrant / Weaviate / Pinecone**：生产级向量数据库。\n\n它们都提供：`add`、`search`、`delete`、`persist` 等接口。\n\n**核心结论：** 先掌握“嵌入 → 索引 → 检索”三步，换库只是换 API。\n\n```python\n# 用 Chroma 的伪代码结构示意（本地需先 pip install chromadb）\n# import chromadb\n# client = chromadb.Client()\n# collection = client.create_collection(\"agent_memory\")\n# collection.add(\n#     documents=[\"我喜欢猫\", \"今天天气如何\"],\n#     metadatas=[{\"user\": \"u1\"}, {\"user\": \"u1\"}],\n#     ids=[\"m1\", \"m2\"]\n# )\n# result = collection.query(query_texts=[\"我爱猫咪\"], n_results=1)\n# print(result[\"documents\"])\n```\n\n---\n\n## 4. 在 Agent 记忆中的位置\n\nAgent 记忆常分三层：\n\n- **短期记忆（Short-term Memory）**：当前对话上下文。\n- **长期记忆（Long-term Memory）**：跨会话事实、偏好。\n- **向量存储（Vector Store）**：长期记忆的检索层。\n\n流程：\n\n1. 用户说话 → 生成 embedding。\n2. 去向量库检索相关记忆。\n3. 把检索结果拼进 Prompt。\n4. LLM 生成回答。\n5. 新事实写回向量库。\n\n**核心结论：** 向量存储让 Agent 从“无状态函数”变成“有记忆的助手”。\n\n```python\n# Agent 记忆读写示意（不依赖真实 LLM）\ndef build_prompt(user_input, store, embed_fn):\n    q_vec = embed_fn(user_input)\n    memories = store.search(q_vec, top_k=2)\n    memory_text = \"\\n\".join([m[0] for m in memories])\n    return f\"已知记忆：\\n{memory_text}\\n\\n用户：{user_input}\\n助手：\"\n\n# 假装 embedding 函数\ndef fake_embed(text):\n    if \"猫\" in text:\n        return [0.9, 0.1, 0.0]\n    return [0.0, 0.1, 0.9]\n\nprint(build_prompt(\"我爱猫咪\", store, fake_embed))\n```\n\n---\n\n## 5. 工程落地要点\n\n- **分块（Chunking）**：长文本切成小段再嵌入。\n- **元数据过滤**：先按 `user_id` 过滤，再做向量检索。\n- **持久化（Persistence）**：进程重启后记忆不丢。\n- **更新与删除**：用户说“我改主意了”，要能覆盖旧记忆。\n- **评估（Evaluation）**：用召回率（Recall@K）衡量检索质量。\n\n**核心结论：** 向量存储不是“存进去就行”，而是一套可维护的记忆系统。\n\n```python\n# 元数据过滤 + 检索的简易实现\ndef search_by_user(store, query_vector, user_id, top_k=2):\n    q = np.array(query_vector, dtype=float)\n    candidates = []\n    for i, v in enumerate(store.vectors):\n        if store.metas[i].get(\"user\") != user_id:\n            continue\n        score = float(q @ v / (np.linalg.norm(q) * np.linalg.norm(v) + 1e-9))\n        candidates.append((score, i))\n    candidates.sort(reverse=True)\n    return [(store.texts[i], s) for s, i in candidates[:top_k]]\n\nprint(search_by_user(store, [0.8, 0.2, 0.0], \"u1\"))\n```\n\n```python\nimport numpy as np\n\nclass MiniVectorStore:\n    def __init__(self):\n        self.vectors = []\n        self.texts = []\n        self.metas = []\n\n    def add(self, vector, text, meta=None):\n        self.vectors.append(np.array(vector, dtype=float))\n        self.texts.append(text)\n        self.metas.append(meta or {})\n\n    def search(self, query_vector, top_k=2, user_id=None):\n        q = np.array(query_vector, dtype=float)\n        scores = []\n        for i, v in enumerate(self.vectors):\n            if user_id is not None and self.metas[i].get(\"user\") != user_id:\n                continue\n            score = float(q @ v / (np.linalg.norm(q) * np.linalg.norm(v) + 1e-9))\n            scores.append((score, i))\n        scores.sort(reverse=True)\n        return [(self.texts[i], self.metas[i], s) for s, i in scores[:top_k]]\n\nstore = MiniVectorStore()\nstore.add([0.9, 0.1, 0.0], \"我喜欢猫\", {\"user\": \"u1\"})\nstore.add([0.0, 0.1, 0.9], \"今天天气如何\", {\"user\": \"u1\"})\nstore.add([0.8, 0.2, 0.1], \"我爱猫咪\", {\"user\": \"u2\"})\n\nprint(store.search([0.85, 0.15, 0.0], top_k=2, user_id=\"u1\"))\n```\n\n## agent.mem.knowledge_graph\n\n## 一句话直觉\n\n**知识图谱（Knowledge Graph）**就是给 AI Agent 的一张“关系地图”：它把世界里的实体（人、地点、事件、概念）和它们之间的关系，用图结构存起来，让 Agent 能像人一样“顺着关系推理”，而不是只靠向量相似度瞎猜。\n\n为什么学它？因为大模型虽然能说会道，但它的记忆是**隐式的、模糊的、不可控的**。当你需要 Agent 准确回答“张三的老板的妻子的公司在哪里上市”这类多跳问题时，向量数据库（Vector Database）只能给你“看起来像”的片段，而知识图谱能给你**可验证、可追溯、可推理**的答案。\n\n---\n\n## 第 1 节：什么是知识图谱？——从三元组开始\n\n知识图谱的最小单元是**三元组（Triple）**：`(头实体, 关系, 尾实体)`，英文叫 `(subject, predicate, object)`。\n\n例如：\n- `(张三, 就职于, 字节跳动)`\n- `(字节跳动, 位于, 北京)`\n- `(李四, 是张三的老板)`\n\n把这些三元组连起来，就形成了一张图。实体是节点（Node），关系是边（Edge）。\n\n**关键结论**：知识图谱 = 实体集合 + 关系集合 + 三元组集合。它天然支持**多跳推理**：顺着边走就能回答问题。\n\n```python\n# 用 Python 字典表示一个极简知识图谱（三元组列表）\ntriples = [\n    (\"张三\", \"就职于\", \"字节跳动\"),\n    (\"字节跳动\", \"位于\", \"北京\"),\n    (\"李四\", \"是老板\", \"张三\"),\n]\n\n# 查询：张三在哪里工作？\nfor s, p, o in triples:\n    if s == \"张三\" and p == \"就职于\":\n        print(f\"张三就职于：{o}\")  # 输出：字节跳动\n```\n\n---\n\n## 第 2 节：为什么 Agent 需要知识图谱？——从向量记忆到结构化记忆\n\nAgent 的**记忆（Memory）**通常分两种：\n1. **非结构化记忆**：把对话、文档切块后存入向量数据库，靠相似度检索。\n2. **结构化记忆**：把事实抽成三元组，存入知识图谱，靠图查询和推理检索。\n\n向量记忆的问题：\n- 它不知道“张三的老板是谁”，只能返回包含“张三”“老板”字样的文本块。\n- 它无法保证事实一致性，容易产生**幻觉（Hallucination）**。\n\n知识图谱的优势：\n- **精确**：查询 `(张三, 是老板, ?)` 直接命中。\n- **可推理**：从 `(张三, 就职于, 字节跳动)` 和 `(字节跳动, 位于, 北京)` 推出“张三在北京工作”。\n- **可更新**：改一条边就更新了知识，不用重新训练模型。\n\n**关键结论**：知识图谱让 Agent 的记忆从“模糊匹配”升级为“精确推理”，是构建可信 Agent 的核心组件。\n\n```python\n# 用 networkx 构建并查询一个小型知识图谱\nimport networkx as nx\n\nG = nx.DiGraph()  # 有向图\nG.add_edge(\"张三\", \"字节跳动\", relation=\"就职于\")\nG.add_edge(\"字节跳动\", \"北京\", relation=\"位于\")\nG.add_edge(\"李四\", \"张三\", relation=\"是老板\")\n\n# 多跳推理：张三的老板在哪里工作？\nboss = None\nfor u, v, d in G.edges(data=True):\n    if v == \"张三\" and d[\"relation\"] == \"是老板\":\n        boss = u\n        break\n\nif boss:\n    for u, v, d in G.edges(data=True):\n        if u == boss and d[\"relation\"] == \"就职于\":\n            print(f\"张三的老板 {boss} 就职于 {v}\")\n            break\n```\n\n---\n\n## 第 3 节：用 Python 从零实现一个迷你知识图谱\n\n工程上我们不会手写遍历，而是用图数据库或图库。这里用 `networkx` 演示核心操作：**增删改查 + 多跳路径**。\n\n```python\nimport networkx as nx\n\nclass MiniKG:\n    def __init__(self):\n        self.g = nx.MultiDiGraph()  # 支持多重边\n\n    def add(self, s, p, o):\n        self.g.add_edge(s, o, relation=p)\n\n    def query(self, s=None, p=None, o=None):\n        \"\"\"按任意模式查询三元组\"\"\"\n        results = []\n        for u, v, d in self.g.edges(data=True):\n            if (s is None or u == s) and (p is None or d[\"relation\"] == p) and (o is None or v == o):\n                results.append((u, d[\"relation\"], v))\n        return results\n\n    def multi_hop(self, start, hops=2):\n        \"\"\"从起点出发，返回所有 hops 跳内的路径\"\"\"\n        paths = []\n        for target in self.g.nodes:\n            if target == start:\n                continue\n            try:\n                for path in nx.all_simple_paths(self.g, start, target, cutoff=hops):\n                    paths.append(path)\n            except nx.NetworkXNoPath:\n                pass\n        return paths\n\n# 使用\nkg = MiniKG()\nkg.add(\"张三\", \"就职于\", \"字节跳动\")\nkg.add(\"字节跳动\", \"位于\", \"北京\")\nkg.add(\"李四\", \"是老板\", \"张三\")\n\nprint(kg.query(s=\"张三\"))          # [('张三', '就职于', '字节跳动')]\nprint(kg.multi_hop(\"李四\", hops=3)) # [['李四', '张三', '字节跳动', '北京']]\n```\n\n**关键结论**：知识图谱的工程实现 = 图存储 + 三元组查询 + 路径遍历。`networkx` 适合原型，生产可用 Neo4j、NebulaGraph 等。\n\n---\n\n## 第 4 节：Agent 如何用知识图谱做记忆？——写入与读取\n\nAgent 使用知识图谱的典型流程：\n\n1. **抽取（Extraction）**：从对话或文档中，用 LLM 抽取三元组。\n2. **写入（Ingestion）**：把三元组存入图数据库，做实体对齐（Entity Resolution）。\n3. **检索（Retrieval）**：用户提问时，把问题转成图查询，或把相关子图喂给 LLM。\n4. **推理（Reasoning）**：多跳查询、路径排序，生成答案。\n\n**关键结论**：知识图谱不是替代向量库，而是与向量库互补——向量库负责“找相关”，知识图谱负责“说准确”。\n\n```python\n# 模拟 Agent 从对话中抽取三元组并写入知识图谱\nimport re\n\ndef extract_triples(text):\n    \"\"\"极简规则抽取：匹配 'X是Y的Z' 这类句式\"\"\"\n    triples = []\n    # 示例：张三的老板是李四\n    pattern = r\"(.+?)的(.+?)是(.+)\"\n    m = re.match(pattern, text)\n    if m:\n        triples.append((m.group(3), m.group(2), m.group(1)))\n    return triples\n\ntext = \"张三的老板是李四\"\nprint(extract_triples(text))  # [('李四', '老板', '张三')]\n\n# 实际工程中会用 LLM 做抽取：\n# prompt = f\"从以下文本抽取三元组，输出 (头, 关系, 尾)：{text}\"\n```\n\n---\n\n## 第 5 节：工程级考量——从原型到生产\n\n当你把知识图谱用于真实 Agent 时，要关注：\n\n| 维度 | 问题 | 方案 |\n|------|------|------|\n| 存储 | 图太大，内存放不下 | Neo4j / NebulaGraph / ArangoDB |\n| 抽取 | LLM 抽取不稳定 | 多次采样 + 一致性投票 |\n| 对齐 | 同一实体多种写法 | 实体消歧（Entity Disambiguation） |\n| 更新 | 知识过期 | 带时间戳的边（Temporal KG） |\n| 检索 | 子图太大 | 图嵌入（Graph Embedding）+ 向量检索 |\n| 评估 | 怎么知道图谱好用 | 多跳问答准确率、召回率 |\n\n**关键结论**：知识图谱的工程核心是“可扩展的存储 + 可靠的抽取 + 高效的子图检索”。\n\n```python\n# 带时间戳的边，支持时序知识图谱\nimport datetime\n\ng = nx.MultiDiGraph()\ng.add_edge(\"张三\", \"字节跳动\", relation=\"就职于\", start=\"2020-01-01\", end=None)\n\n# 查询当前有效的关系\nnow = datetime.date.today().isoformat()\nfor u, v, d in g.edges(data=True):\n    if d[\"relation\"] == \"就职于\" and (d[\"end\"] is None or d[\"end\"] > now):\n        print(f\"{u} 当前就职于 {v}\")\n```\n\n---\n\n## 动手练习\n\n**任务**：构建一个“我的人际关系”迷你知识图谱。\n\n1. 定义至少 5 个实体（你自己、家人、朋友、同事、公司、城市等）。\n2. 定义至少 8 条三元组，关系包括：`是朋友`、`就职于`、`居住在`、`是家人`。\n3. 用 `networkx` 实现一个 `MiniKG` 类，支持：\n   - `add(s, p, o)` 添加三元组\n   - `query(s=None, p=None, o=None)` 查询\n   - `multi_hop(start, hops=2)` 返回多跳路径\n4. 回答以下问题并打印结果：\n   - 我的朋友都在哪些城市？\n   - 我的同事就职于哪些公司？\n   - 从“我”出发，2 跳内能到达哪些实体？\n\n**提交形式**：一个 `.py` 文件，运行后打印出所有查询结果。\n\n**进阶（可选）**：用 LLM 从一段自我介绍文本中自动抽取三元组，写入你的知识图谱。\n",
+  "quiz": [
+    {
+      "kp": "agent.mem.vector_store",
+      "type": "single_choice",
+      "question": "在构建一个智能体的长期记忆系统时，你希望存储大量文本片段，并能根据查询语句的语义相似度快速找到最相关的片段。以下哪种做法最符合向量存储的设计目的？",
+      "options": [
+        "使用关系数据库，并在文本字段上建立全文索引，通过关键词匹配检索片段",
+        "将文本片段转换为向量并存入向量存储，检索时计算查询向量与存储向量的相似度",
+        "把原始文本按时间顺序存入列表，检索时倒序返回最新的若干条记录",
+        "使用键值存储，以文本片段的哈希值作为键，检索时通过哈希查找精确匹配"
+      ],
+      "answer": 1,
+      "explanation": "向量存储的核心是将文本映射为高维向量，通过向量相似度（如余弦相似度或点积）进行语义检索。关键词索引是词法匹配，倒序列表是时间顺序检索，哈希查找只能精确匹配，均无法完成语义相似度检索。",
+      "error_tag": "概念理解错误",
+      "variant_group": "vector_store_purpose"
+    },
+    {
+      "kp": "agent.mem.vector_store",
+      "type": "single_choice",
+      "question": "某系统使用向量数据库存储智能体的对话记忆。用户提问：“推荐一部类似《星际穿越》的电影。”系统将问题编码为查询向量后，在向量库中执行相似度检索。以下关于该检索过程的描述，哪一项是正确的？",
+      "options": [
+        "检索结果一定包含与查询语句字面完全相同的记录",
+        "检索依据的是向量在高维空间中的距离或相似度，可能返回字面不同但语义相近的记录",
+        "检索过程会逐条读取磁盘上的原始文本并与查询语句做字符串匹配",
+        "相似度检索必须先对所有向量进行降维到二维才能计算距离"
+      ],
+      "answer": 1,
+      "explanation": "向量检索基于嵌入向量之间的相似度（距离），因此可以召回语义相近但用词不同的内容。字面完全相同并非必要条件；向量检索通常使用近似最近邻算法而非字符串匹配；降维到二维不是相似度计算的前提。",
+      "error_tag": "概念理解错误",
+      "variant_group": "similarity_search_mechanism"
+    },
+    {
+      "kp": "agent.mem.vector_store",
+      "type": "single_choice",
+      "question": "以下关于向量存储与关系型数据库在智能体记忆场景下差异的描述，哪一项是正确的？",
+      "options": [
+        "关系型数据库无法存储向量，因此不能用于任何记忆场景",
+        "向量存储更适合语义相似度检索，关系型数据库更适合结构化精确查询",
+        "向量存储只能存储向量，不能附带任何元数据",
+        "关系型数据库的查询结果一定比向量存储更相关"
+      ],
+      "answer": 1,
+      "explanation": "向量存储擅长语义相似度检索，关系型数据库擅长结构化字段的精确查询与事务。关系型数据库也可通过扩展支持向量；向量存储通常支持附加元数据；相关性取决于检索方式而非数据库类型。",
+      "error_tag": "对比理解错误",
+      "variant_group": "comparison_with_rdbms"
+    },
+    {
+      "kp": "agent.mem.vector_store",
+      "type": "single_choice",
+      "question": "在智能体记忆系统中，将一段对话写入向量存储前，通常需要做“分块”。以下哪项最可能是分块的主要目的？",
+      "options": [
+        "让嵌入模型无法处理长文本，所以必须切成单字",
+        "将长文本切成语义相对完整的片段，便于嵌入和召回时粒度合适",
+        "分块是为了对文本进行加密",
+        "分块是为了减少向量存储的磁盘占用，与检索无关"
+      ],
+      "answer": 1,
+      "explanation": "分块把长文本切成语义相对完整、长度适中的片段，使嵌入能更好地表达局部语义，召回时也能提供更精确的上下文。分块不是加密，也不是因为模型只能处理单字；虽然会影响存储，但主要目的是检索质量。",
+      "error_tag": "概念理解错误",
+      "variant_group": "chunking_purpose"
+    },
+    {
+      "kp": "agent.mem.vector_store",
+      "type": "single_choice",
+      "question": "某智能体使用向量存储保存知识片段。用户查询“如何重置密码”，系统返回了三条记忆，分别关于“修改账户设置”“找回登录凭证”“重置密码步骤”。以下哪种排序最符合向量相似度检索的预期？",
+      "options": [
+        "与查询语义最接近的“重置密码步骤”排在最前",
+        "按写入时间从早到晚排序，与查询无关",
+        "按文本长度从短到长排序",
+        "随机排序，因为向量检索不提供顺序"
+      ],
+      "answer": 0,
+      "explanation": "向量相似度检索会按相似度得分排序，语义最接近的片段通常排在最前。时间、长度或随机排序都不是相似度检索的默认行为。",
+      "error_tag": "排序机制误解",
+      "variant_group": "ranking_by_similarity"
+    },
+    {
+      "kp": "agent.mem.vector_store",
+      "type": "single_choice",
+      "question": "以下关于向量存储中“元数据过滤”的用法，哪一项最恰当？",
+      "options": [
+        "元数据过滤用于替换向量相似度计算，只按元数据返回结果",
+        "可以在向量相似度检索的基础上，用元数据（如时间、用户 ID）限定候选范围",
+        "元数据过滤要求元数据必须是向量格式",
+        "元数据过滤只能用于删除记录，不能用于检索"
+      ],
+      "answer": 1,
+      "explanation": "元数据过滤通常与向量相似度检索结合使用，先用元数据缩小候选范围（如仅检索某用户或某时间段的记忆），再按相似度排序。它不替代相似度计算，元数据也不必须是向量，且可用于检索。",
+      "error_tag": "功能理解错误",
+      "variant_group": "metadata_filter"
+    },
+    {
+      "kp": "agent.mem.vector_store",
+      "type": "single_choice",
+      "question": "在智能体记忆系统中，如果嵌入模型被更换为另一个不同维度的模型，最可能发生以下哪种情况？",
+      "options": [
+        "旧向量与新向量可以直接混合比较，因为维度不同不影响相似度",
+        "旧向量需要重新嵌入，否则新旧向量无法在同一空间中进行有意义的相似度比较",
+        "向量存储会自动把旧向量转换为新维度，无需重新嵌入",
+        "更换嵌入模型只影响写入速度，不影响检索结果"
+      ],
+      "answer": 1,
+      "explanation": "不同嵌入模型产生的向量位于不同的语义空间，维度和含义都可能不同，直接混合比较没有意义。通常需要重新嵌入旧数据或使用兼容模型。自动转换和“不影响检索”都是常见误解。",
+      "error_tag": "模型更换误解",
+      "variant_group": "embedding_model_change"
+    },
+    {
+      "kp": "agent.mem.vector_store",
+      "type": "single_choice",
+      "question": "关于向量存储中“召回率”和“精确率”在记忆检索场景下的含义，以下哪项正确？",
+      "options": [
+        "召回率指返回结果中相关结果的比例，精确率指所有相关结果被返回的比例",
+        "召回率指所有相关结果中被返回的比例，精确率指返回结果中相关结果的比例",
+        "召回率和精确率都只与存储容量有关",
+        "召回率越高，精确率一定越高"
+      ],
+      "answer": 1,
+      "explanation": "召回率衡量所有相关结果中被检索到的比例，精确率衡量返回结果中真正相关的比例。两者定义不可互换，也不只与容量有关，且召回率与精确率之间通常存在权衡，并非一定同向变化。",
+      "error_tag": "评估指标混淆",
+      "variant_group": "recall_precision"
+    },
+    {
+      "kp": "agent.mem.vector_store",
+      "type": "single_choice",
+      "question": "某智能体把用户每轮对话都作为独立记录写入向量存储。用户问“我之前说的那个旅行计划是什么”，系统检索后返回了多条零散对话片段，但缺少完整上下文。以下哪种改进最直接？",
+      "options": [
+        "降低相似度阈值，让更多片段被召回",
+        "在写入时对同一主题的对话进行适当合并或按会话分块，保留更完整的上下文",
+        "把嵌入模型换成更大的模型，忽略分块问题",
+        "关闭向量检索，改为按时间倒序返回全部记录"
+      ],
+      "answer": 1,
+      "explanation": "问题在于写入粒度太细导致上下文碎片化，改进方向是调整写入时的分块/合并策略以保留完整上下文。降低阈值会引入更多噪声；换更大模型不解决碎片问题；关闭检索会丧失语义召回。",
+      "error_tag": "优化策略错误",
+      "variant_group": "context_fragmentation"
+    },
+    {
+      "kp": "agent.mem.vector_store",
+      "type": "single_choice",
+      "question": "以下哪种情况最适合使用向量存储而不是关键词索引来支撑智能体的记忆检索？",
+      "options": [
+        "用户需要按订单号精确查找一条订单记录",
+        "用户用自然语言描述模糊需求，需要找回语义相关但用词不同的历史记忆",
+        "需要保证写入操作的强事务一致性",
+        "需要按照固定字段范围做数值区间查询"
+      ],
+      "answer": 1,
+      "explanation": "自然语言模糊需求、语义相关但用词不同的场景正是向量存储的强项。按订单号精确查找、强事务一致性、数值区间查询更适合关系型数据库或关键词索引。",
+      "error_tag": "适用场景判断错误",
+      "variant_group": "when_to_use_vector_store"
+    },
+    {
+      "kp": "agent.mem.vector_store",
+      "type": "single_choice",
+      "question": "在智能体记忆系统中，写入向量存储的文本通常会先经过嵌入模型。如果嵌入模型对中文支持较差，最可能出现的现象是？",
+      "options": [
+        "向量存储无法写入任何中文文本",
+        "中文查询与中文记忆之间的语义相似度计算不准确，导致召回质量下降",
+        "向量存储会自动把中文翻译成英文再检索",
+        "中文文本的向量维度会变成 0"
+      ],
+      "answer": 1,
+      "explanation": "嵌入模型对某语言支持差会使其向量表示质量下降，进而影响相似度计算的准确性，导致召回不相关或漏召回。写入通常仍可进行，不会自动翻译，维度也不会变成 0。",
+      "error_tag": "模型能力影响",
+      "variant_group": "embedding_quality_effect"
+    },
+    {
+      "kp": "agent.mem.vector_store",
+      "type": "single_choice",
+      "question": "关于向量存储中“Top-K 检索”的含义，以下哪项正确？",
+      "options": [
+        "返回相似度最高的 K 个结果",
+        "返回相似度最低的 K 个结果",
+        "返回存储中最新的 K 条记录",
+        "返回维度为 K 的向量"
+      ],
+      "answer": 0,
+      "explanation": "Top-K 检索指按相似度排序后返回得分最高的 K 个候选。它不是返回最低分、最新记录或固定维度向量。",
+      "error_tag": "参数含义误解",
+      "variant_group": "top_k_meaning"
+    },
+    {
+      "kp": "agent.mem.vector_store",
+      "type": "single_choice",
+      "question": "你在为一个客服智能体设计记忆模块。用户说“我想把上次买的鞋子退掉”，而历史记录中有一条“客户咨询了运动鞋的退货政策”。系统需要将这条历史记录召回，以便智能体结合上下文回答。以下哪种存储与检索方案最有可能实现该目标？",
+      "options": [
+        "将历史记录以 JSON 文件形式保存，每次检索时用正则表达式匹配“退货”关键词",
+        "将历史记录存入向量存储，对查询和记录分别做嵌入后按相似度召回",
+        "将历史记录按用户 ID 分桶存入字典，检索时返回该用户最近一条记录",
+        "将历史记录写入日志文件，检索时按时间戳范围过滤并顺序扫描"
+      ],
+      "answer": 1,
+      "explanation": "查询“退掉鞋子”与历史记录“运动鞋的退货政策”在字面上不完全重合，但语义相关，适合通过嵌入向量相似度召回。正则匹配依赖关键词，分桶取最近一条忽略语义，顺序扫描效率低且无相似度排序。",
+      "error_tag": "场景应用错误",
+      "variant_group": "semantic_recall_scenario"
+    },
+    {
+      "kp": "agent.mem.vector_store",
+      "type": "single_choice",
+      "question": "某团队为智能体构建向量记忆库，发现检索结果经常包含大量与当前问题无关的记忆，导致语言模型回答被干扰。以下哪种做法最可能缓解该问题？",
+      "options": [
+        "提高相似度阈值或减少 Top-K，只保留高相关记忆",
+        "取消嵌入步骤，直接把原始文本交给语言模型",
+        "把所有记忆一次性全部返回给语言模型",
+        "降低嵌入向量的维度到 1"
+      ],
+      "answer": 0,
+      "explanation": "无关记忆过多通常是因为召回范围过宽，可通过提高相似度阈值或减少 Top-K 来控制。取消嵌入会失去语义检索；返回全部记忆会加剧干扰；把维度降到 1 会破坏语义表示。",
+      "error_tag": "优化策略错误",
+      "variant_group": "noise_control"
+    },
+    {
+      "kp": "agent.mem.vector_store",
+      "type": "single_choice",
+      "question": "关于向量存储中“嵌入（embedding）”的作用，以下说法正确的是？",
+      "options": [
+        "嵌入是一种压缩算法，用于无损还原原始文本",
+        "嵌入将文本映射为数值向量，使语义相近的文本在向量空间中距离较近",
+        "嵌入是数据库事务机制，用于保证向量写入的原子性",
+        "嵌入是一种加密方法，确保向量存储中的内容不可被读取"
+      ],
+      "answer": 1,
+      "explanation": "嵌入把文本转换为稠密数值向量，其关键性质是语义相近的文本对应的向量在空间中彼此接近。它不是无损压缩、事务机制或加密方法。",
+      "error_tag": "概念混淆",
+      "variant_group": "embedding_role"
+    },
+    {
+      "kp": "agent.mem.vector_store",
+      "type": "single_choice",
+      "question": "在智能体记忆系统中，向量存储通常与“检索增强生成”配合使用。以下哪项最准确地描述了向量存储在其中的角色？",
+      "options": [
+        "向量存储负责生成最终回答，语言模型只做格式化输出",
+        "向量存储根据查询召回相关记忆片段，语言模型基于这些片段生成回答",
+        "向量存储直接修改语言模型的权重，使模型记住新知识",
+        "向量存储替代语言模型进行推理，因为它能计算向量相似度"
+      ],
+      "answer": 1,
+      "explanation": "在检索增强生成中，向量存储承担检索职责，根据查询召回相关片段，语言模型利用这些片段作为上下文生成回答。向量存储不生成回答、不修改模型权重、也不替代推理。",
+      "error_tag": "架构理解错误",
+      "variant_group": "vector_store_in_rag"
+    },
+    {
+      "kp": "agent.mem.vector_store",
+      "type": "single_choice",
+      "question": "以下是一段伪代码，描述智能体写入记忆的过程：\n\n文本 = 用户输入\n向量 = 嵌入模型.encode(文本)\n向量存储.add(向量, 文本)\n\n关于这段代码，以下哪项描述是正确的？",
+      "options": [
+        "向量存储.add 方法要求传入的向量必须是字符串类型",
+        "写入时同时保存了向量及其对应的原始文本，便于后续召回后使用",
+        "嵌入模型.encode 返回的是文本的哈希值，用于去重",
+        "向量存储.add 会自动忽略原始文本，只保留向量"
+      ],
+      "answer": 1,
+      "explanation": "在典型的向量存储写入流程中，通常同时保存向量和原始文本（或文本的引用），这样检索命中后可以把原始内容提供给语言模型。嵌入返回的是语义向量而非哈希；向量是数值类型；原始文本一般需要保留。",
+      "error_tag": "代码理解错误",
+      "variant_group": "write_flow"
+    },
+    {
+      "kp": "agent.mem.vector_store",
+      "type": "single_choice",
+      "question": "某智能体使用向量存储保存用户偏好。当用户说“我最近更喜欢清淡的食物”时，系统将其更新写入向量存储。一段时间后用户问“晚餐吃什么好”。系统检索到“偏好清淡食物”这条记忆。以下关于该过程的说法，哪一项最合理？",
+      "options": [
+        "因为“晚餐”和“清淡食物”字面不同，向量检索不可能关联到该记忆",
+        "查询和记忆都经过嵌入后，语义上的相关使得该记忆被召回",
+        "只有完全相同的句子才能被向量存储召回",
+        "向量存储按时间顺序返回所有记忆，与语义无关"
+      ],
+      "answer": 1,
+      "explanation": "向量检索依赖语义相似度，查询“晚餐吃什么”可能与“偏好清淡食物”在语义上相关，因此可被召回。字面不同不妨碍语义召回；向量存储不是按时间顺序返回；完全相同并非召回条件。",
+      "error_tag": "场景应用错误",
+      "variant_group": "semantic_recall_scenario"
+    },
+    {
+      "kp": "agent.mem.vector_store",
+      "type": "single_choice",
+      "question": "在设计智能体记忆的向量存储时，以下哪个因素最直接影响检索结果的相关性？",
+      "options": [
+        "向量存储所在磁盘的读写速度",
+        "所选嵌入模型的质量以及相似度度量方式",
+        "向量存储中记录的插入顺序",
+        "原始文本文件名的命名规则"
+      ],
+      "answer": 1,
+      "explanation": "检索相关性主要由嵌入模型能否捕捉语义以及相似度度量（如余弦相似度、点积、欧氏距离）是否合适决定。磁盘速度影响性能而非相关性；插入顺序和文件名不影响语义匹配。",
+      "error_tag": "因素判断错误",
+      "variant_group": "relevance_factors"
+    },
+    {
+      "kp": "agent.mem.vector_store",
+      "type": "single_choice",
+      "question": "关于向量存储中“相似度阈值”的作用，以下描述正确的是？",
+      "options": [
+        "阈值用于限制向量存储的总容量",
+        "阈值用于过滤掉相似度低于该值的候选结果，避免召回不相关记忆",
+        "阈值决定了嵌入向量的维度",
+        "阈值是数据库连接的超时时间"
+      ],
+      "answer": 1,
+      "explanation": "相似度阈值用于在检索时过滤低相关性的候选，只有相似度达到阈值的记录才会被返回。它与存储容量、嵌入维度、连接超时无关。",
+      "error_tag": "概念理解错误",
+      "variant_group": "threshold_usage"
+    },
+    {
+      "kp": "agent.mem.vector_store",
+      "type": "single_choice",
+      "question": "智能体在多次对话中不断向向量存储追加记忆。随着记忆数量增长，检索速度开始下降。以下哪种做法最有助于在保持语义检索能力的同时提升检索效率？",
+      "options": [
+        "删除所有旧记忆，只保留最近 10 条",
+        "使用近似最近邻索引（如 HNSW）来加速向量检索",
+        "把向量全部转换成字符串后再比较",
+        "改用精确字符串匹配代替向量检索"
+      ],
+      "answer": 1,
+      "explanation": "近似最近邻索引（如 HNSW、IVF）可以在大规模向量集合上显著加速相似度检索，同时保持较高的召回质量。删除旧记忆会丢失信息；转成字符串比较失去语义；字符串匹配不是向量检索的替代。",
+      "error_tag": "性能优化误解",
+      "variant_group": "index_acceleration"
+    },
+    {
+      "kp": "agent.mem.knowledge_graph",
+      "type": "single_choice",
+      "question": "在智能体记忆系统中，与「把记忆组织成实体与关系、支持多跳推理」最贴近的知识表示方式是下列哪一种？",
+      "options": [
+        "按时间顺序追加的纯文本日志",
+        "由节点（实体/概念）和边（关系）构成的有向图结构",
+        "定长向量的稠密嵌入索引",
+        "键值对形式的会话缓存"
+      ],
+      "answer": 1,
+      "explanation": "知识图谱的核心特征是用节点表示实体或概念、用边表示它们之间的关系，从而支持沿边进行多跳查询与推理；纯文本日志、稠密向量索引和键值缓存都不显式表达实体间关系。",
+      "error_tag": "概念混淆",
+      "variant_group": "kg.definition"
+    },
+    {
+      "kp": "agent.mem.knowledge_graph",
+      "type": "single_choice",
+      "question": "某智能体需要回答「张三所在公司的CEO毕业于哪所大学」这类需要串联多个事实的问题。相比把所有历史对话原文塞进上下文，使用知识图谱的主要优势是什么？",
+      "options": [
+        "可以大幅降低模型的参数量",
+        "能沿实体—关系链路聚合分散的事实，支持多跳检索并减少无关上下文",
+        "可以完全替代大语言模型进行自然语言生成",
+        "能保证所有事实绝对正确无需校验"
+      ],
+      "answer": 1,
+      "explanation": "知识图谱把事实结构化为（头实体，关系，尾实体）三元组，检索时可沿关系边逐步跳转到相关实体，因此能在多跳问答中聚合零散事实并显著压缩无关上下文；它不能减少模型参数，也不能取代语言模型或免除事实校验。",
+      "error_tag": "概念混淆",
+      "variant_group": "kg.definition"
+    },
+    {
+      "kp": "agent.mem.knowledge_graph",
+      "type": "single_choice",
+      "question": "某智能体需要从长文档中构建知识图谱记忆，下列哪一步最可能被遗漏从而导致检索效果差？",
+      "options": [
+        "把文档切块后抽取实体与关系，并把指代（如「他」「该公司」）解析为具体实体",
+        "对文档做UTF-8编码转换",
+        "把文档压缩成zip存储",
+        "统计文档字数"
+      ],
+      "answer": 0,
+      "explanation": "抽取实体与关系时必须做指代消解，否则「他」「该公司」这类代词会变成无信息的节点，多跳链路断裂。编码转换、压缩、字数统计与图谱质量无关。",
+      "error_tag": "边界错误",
+      "variant_group": "kg.extraction"
+    },
+    {
+      "kp": "agent.mem.knowledge_graph",
+      "type": "multi_choice",
+      "question": "在智能体记忆中使用知识图谱，可能带来哪些实际收益？（多选）",
+      "options": [
+        "支持基于关系路径的可解释推理，能给出推理依据",
+        "能显式表达实体间关系，便于做多跳关联检索",
+        "可以保证抽取的事实100%正确无需任何校验",
+        "支持对事实做结构化去重与更新",
+        "能够自动提升底层大语言模型的语言理解能力"
+      ],
+      "answer": [
+        0,
+        1,
+        3
+      ],
+      "explanation": "图谱的价值在于可解释的关系推理、显式的多跳检索与结构化的去重/更新；它不能保证抽取事实绝对正确（抽取仍需校验），也不会改变或提升底层模型的语言理解能力。",
+      "error_tag": "概念混淆",
+      "variant_group": "kg.definition"
+    },
+    {
+      "kp": "agent.mem.knowledge_graph",
+      "type": "multi_choice",
+      "question": "构建知识图谱记忆时，下列哪些属于提升图谱质量的关键工作？（多选）",
+      "options": [
+        "定义实体类型与关系模式的约束（schema）",
+        "实体消歧与实体合并",
+        "为每条事实记录来源与时间戳以便追溯和冲突处理",
+        "把所有关系都改成同一种类型，简化检索",
+        "对关系做规范化命名，避免同义异名"
+      ],
+      "answer": [
+        0,
+        1,
+        2,
+        4
+      ],
+      "explanation": "模式约束、实体消歧、来源与时间戳、关系规范化都是保证图谱一致性与可维护性的关键工作；把所有关系归为一种类型会丢失语义，反而破坏检索能力。",
+      "error_tag": "概念混淆",
+      "variant_group": "kg.schema"
+    },
+    {
+      "kp": "agent.mem.knowledge_graph",
+      "type": "multi_choice",
+      "question": "下列关于知识图谱节点与关系设计的说法，哪些是合理的？（多选）",
+      "options": [
+        "同一个现实对象应尽量对应一个实体节点，通过别名/同义词维护指称",
+        "关系方向应保持语义一致，避免同一关系出现相反方向",
+        "允许同一对实体间存在多种不同关系类型",
+        "为了省事，实体统一用自增整数命名而不用可读标识",
+        "关系必须无歧义，例如区分「居住于」与「出生于」"
+      ],
+      "answer": [
+        0,
+        1,
+        2,
+        4
+      ],
+      "explanation": "实体唯一化、关系方向一致且语义无歧义、支持一对实体多种关系都是良好建模实践；用自增整数命名会让人难以理解与调试，且不利于消歧和人工核验。",
+      "error_tag": "概念混淆",
+      "variant_group": "kg.schema"
+    },
+    {
+      "kp": "agent.mem.knowledge_graph",
+      "type": "multi_choice",
+      "question": "某智能体需要基于知识图谱记忆回答用户问题，下列哪些策略有助于提高回答准确率？（多选）",
+      "options": [
+        "先用语义检索定位相关实体，再在图上做多跳扩展",
+        "对图谱检索结果做过滤，只保留与问题相关的子图",
+        "允许图谱推理结果与原始文档不一致时不需要任何核对",
+        "把检索得到的子图结构化描述后交给语言模型生成答案，并附上推理路径",
+        "对多跳路径设置合理的跳数上限，避免噪声累积"
+      ],
+      "answer": [
+        0,
+        1,
+        3,
+        4
+      ],
+      "explanation": "混合检索+子图过滤+带推理路径的生成+跳数上限都是提升准确率的常用手段；不核对图谱与原文的一致性会引入错误传播，因此该选项不合理。",
+      "error_tag": "边界错误",
+      "variant_group": "kg.query"
+    },
+    {
+      "kp": "agent.mem.knowledge_graph",
+      "type": "fill_blank",
+      "question": "知识图谱存储事实的基本单位是由头实体、关系和尾实体组成的三元组，英文常称为 ______。",
+      "options": [],
+      "answer": [
+        "triple",
+        "三元组",
+        "triple(s)"
+      ],
+      "explanation": "三元组（triple）是知识图谱的最小事实表达形式，通常写作（头实体，关系，尾实体）。",
+      "error_tag": "记忆缺失",
+      "variant_group": "kg.triple"
+    },
+    {
+      "kp": "agent.mem.knowledge_graph",
+      "type": "fill_blank",
+      "question": "在知识图谱中，把多条指向同一现实对象的指称归并到同一节点的过程，通常称为 ______（中文术语）。",
+      "options": [],
+      "answer": [
+        "实体消歧",
+        "实体链接",
+        "实体对齐"
+      ],
+      "explanation": "实体消歧（或实体链接/实体对齐）用于解决同名不同指、同指不同名的问题，是把碎片化提法合并为唯一实体的关键步骤。",
+      "error_tag": "记忆缺失",
+      "variant_group": "kg.entity_resolution"
+    },
+    {
+      "kp": "agent.mem.knowledge_graph",
+      "type": "code_reading",
+      "question": "阅读下列伪代码：\n\n```python\ntriples = [\n    (\"张三\", \"就职于\", \"A公司\"),\n    (\"A公司\", \"总部位于\", \"北京\"),\n    (\"张三\", \"居住于\", \"上海\"),\n]\n\ndef query(start, target, max_hops=3):\n    # 从 start 沿关系边做广度优先搜索，返回到达 target 的路径\n    ...\n\nprint(query(\"张三\", \"北京\"))\n```\n\n问：如果 query 正确实现了多跳图遍历，输出路径最可能是什么？请简述理由。",
+      "options": [],
+      "answer": "最可能的路径是 [(\"张三\",\"就职于\",\"A公司\"), (\"A公司\",\"总部位于\",\"北京\")]，因为张三与北京之间没有直接关系，需要先通过「就职于」到达A公司，再通过「总部位于」到达北京，路径长度为两跳。",
+      "explanation": "此题考察多跳查询。图中从张三到北京的最短有关系路径需经由A公司中转，属于典型的两跳推理；同图中「张三—居住于—上海」与目标北京无关，不应作为路径。",
+      "error_tag": "概念混淆",
+      "variant_group": "kg.query"
+    },
+    {
+      "kp": "agent.mem.knowledge_graph",
+      "type": "code_reading",
+      "question": "阅读下列伪代码：\n\n```python\ngraph = {}\n\ndef add_fact(s, r, o):\n    if s not in graph:\n        graph[s] = []\n    graph[s].append((r, o))\n\nadd_fact(\"用户\", \"对...过敏\", \"花生\")\nadd_fact(\"花生\", \"属于\", \"坚果\")\n\ndef reason(subject, relation, depth=1):\n    ...\n```\n\n问：基于上述图谱，如果要推断「用户可能对哪些食物过敏」，reason 函数至少需要沿几跳？为什么？",
+      "options": [],
+      "answer": "至少需要两跳：第一跳从「用户」经「对...过敏」到「花生」，第二跳从「花生」经「属于」到「坚果」，从而推断出用户对花生所在的坚果类可能存在过敏风险。",
+      "explanation": "这是典型的沿关系路径推理：过敏风险的食物类别不是与用户直接相连，而是通过食物→类别的属于关系间接建立，因此至少需要两跳才能从个体事实推断到类别层面的结论。",
+      "error_tag": "概念混淆",
+      "variant_group": "kg.query"
+    },
+    {
+      "kp": "agent.mem.knowledge_graph",
+      "type": "scenario",
+      "question": "场景：你所在的团队正在为一个企业知识助手构建长期记忆。它需要回答诸如「去年负责X项目的人现在在哪个部门、汇报给谁」这类问题。目前已把所有对话原文用向量库存起来，但多跳类问题准确率很低。请给出改进方案并说明理由。",
+      "options": [],
+      "answer": "建议在向量检索之上引入知识图谱记忆：从对话和文档中抽取实体（人、项目、部门）与关系（负责、就职于、汇报给、属于），做实体消歧与关系规范化，形成可多跳遍历的图结构；检索时先用语义检索定位入口实体（如X项目），再在图上做多跳扩展（项目→负责人→部门、负责人→汇报对象），把相关子图交给语言模型生成答案。理由是向量检索擅长语义相似但难以保证跨实体关系链路的精确连接，而图谱显式表达关系并支持多跳推理，二者互补。",
+      "explanation": "本题考察在真实工程中把知识图谱作为智能体记忆的诊断与设计能力。关键点是识别向量检索在多跳关系推理上的局限，提出抽取实体关系、构建图谱、做实体消歧、以图遍历补充多跳检索的改进路径。",
+      "error_tag": "概念混淆",
+      "variant_group": "kg.application",
+      "required_keywords": [
+        "知识图谱",
+        "实体关系抽取",
+        "实体消歧",
+        "图遍历",
+        "多跳推理"
+      ]
+    },
+    {
+      "kp": "agent.mem.knowledge_graph",
+      "type": "single_choice",
+      "question": "下列哪一项最准确地描述了知识图谱中「三元组」的组成？",
+      "options": [
+        "输入、输出、损失",
+        "头实体、关系、尾实体",
+        "键、值、过期时间",
+        "问题、答案、置信度"
+      ],
+      "answer": 1,
+      "explanation": "三元组通常写成（头实体，关系，尾实体）或 (subject, predicate, object)，是知识图谱存储事实的基本单位；其余选项是别处的概念。",
+      "error_tag": "记忆缺失",
+      "variant_group": "kg.triple"
+    },
+    {
+      "kp": "agent.mem.knowledge_graph",
+      "type": "single_choice",
+      "question": "在把智能体的对话记忆写入知识图谱时，关于「实体消歧」的作用，下列说法正确的是？",
+      "options": [
+        "把同义的不同写法（如「北京」与「北京市」）归并到同一个实体节点，避免图谱碎片化",
+        "删除所有低频实体以减少存储",
+        "把自然语言问题翻译成SQL",
+        "对实体名做词向量平均"
+      ],
+      "answer": 0,
+      "explanation": "实体消歧/实体链接的目标是识别指向同一现实对象的多个指称并合并到同一节点，否则同名不同指、同指不同名会造成图谱碎片化和多跳链断裂；它与删除低频实体、SQL翻译或向量平均无关。",
+      "error_tag": "概念混淆",
+      "variant_group": "kg.entity_resolution"
+    },
+    {
+      "kp": "agent.mem.knowledge_graph",
+      "type": "single_choice",
+      "question": "某智能体从对话中抽取出三元组时，把「用户对花生过敏」记成了「用户 过敏 花生」。下列哪种修正最符合知识图谱建模的常见做法？",
+      "options": [
+        "直接删除这条三元组",
+        "把关系方向写反了没关系，检索时靠模糊匹配即可",
+        "规范为（用户，对…过敏，花生）这类方向正确、语义明确的关系表达",
+        "改成把「过敏」作为一个实体节点而用户作为关系"
+      ],
+      "answer": 2,
+      "explanation": "关系方向与语义必须正确表达主谓宾，否则沿边检索会得到错误结论；知识图谱关系表通常会定义一组规范化的关系类型来保证一致性与可查询性。",
+      "error_tag": "边界错误",
+      "variant_group": "kg.triple"
+    },
+    {
+      "kp": "agent.mem.knowledge_graph",
+      "type": "single_choice",
+      "question": "下列哪项最可能是知识图谱在智能体记忆中的典型应用场景？",
+      "options": [
+        "在推理时根据「用户—偏好—品类」链路推荐相关商品",
+        "压缩模型权重以加快前向计算",
+        "对图片做卷积特征提取",
+        "为训练数据做数据增强"
+      ],
+      "answer": 0,
+      "explanation": "图谱擅长基于实体关系路径做关联推理，例如推荐、关系问答、根因分析等；权重压缩、卷积特征提取、数据增强都不依赖图谱的关系结构。",
+      "error_tag": "概念混淆",
+      "variant_group": "kg.application"
+    },
+    {
+      "kp": "agent.mem.knowledge_graph",
+      "type": "single_choice",
+      "question": "关于知识图谱的记忆更新，下列做法最合理的是？",
+      "options": [
+        "新事实与旧事实冲突时，直接保留两条不再处理，检索时随机取一条",
+        "对新事实做冲突检测（如同一关系出现不同尾实体），按时间/来源置信度做版本化或覆盖，并记录来源",
+        "把所有旧事实删除再重建整个图谱",
+        "只要是大模型抽取的事实就一定正确，无需校验"
+      ],
+      "answer": 1,
+      "explanation": "知识图谱随时间变化会出现事实冲突，成熟做法是保留来源与时间戳、做冲突检测与置信度比较，再决定覆盖或保留版本；随机取一条、全量重建、无条件信任抽取结果都会破坏图谱可信度。",
+      "error_tag": "边界错误",
+      "variant_group": "kg.update"
+    },
+    {
+      "kp": "agent.mem.knowledge_graph",
+      "type": "single_choice",
+      "question": "某团队把用户每一次提问都作为新实体加入图谱，导致节点数爆炸且几乎无法有效查询。最可能的原因是？",
+      "options": [
+        "缺少对实体类型和关系的规范化与去重（如实体消歧、关系约束），把非结构化文本直接当节点写入",
+        "图谱数据库版本太低",
+        "没有使用GPU加速",
+        "没有为图谱设置缓存"
+      ],
+      "answer": 0,
+      "explanation": "知识图谱要求实体和关系遵循明确模式（schema），并进行实体消歧和去重。把每句话都当节点是把图谱退化成了文本存储，节点爆炸且多跳查询失去意义；性能与硬件/缓存不是根因。",
+      "error_tag": "概念混淆",
+      "variant_group": "kg.schema"
+    },
+    {
+      "kp": "agent.mem.knowledge_graph",
+      "type": "single_choice",
+      "question": "在图谱查询中，「多跳查询」通常指的是？",
+      "options": [
+        "一次请求中并发访问多个数据库",
+        "从一个实体出发沿多条关系边逐步扩展，经过若干中间实体到达目标实体",
+        "把问题拆成多个子问题分别问模型",
+        "在多个GPU上并行推理"
+      ],
+      "answer": 1,
+      "explanation": "多跳查询是指在图上按路径长度大于1的方式遍历，例如 用户→就职于→公司→总部在→城市，逐步扩展得到答案；它描述的是图的遍历语义，与并发数据库、问题拆解或并行推理无关。",
+      "error_tag": "概念混淆",
+      "variant_group": "kg.query"
+    },
+    {
+      "kp": "agent.mem.knowledge_graph",
+      "type": "single_choice",
+      "question": "关于知识图谱与向量检索在智能体记忆中的关系，下列说法正确的是？",
+      "options": [
+        "二者互斥，选了一个就不能用另一个",
+        "两者常互补：向量检索擅长语义相似匹配，图谱擅长精确关系推理，可组合成混合检索",
+        "向量检索是知识图谱的一个子集",
+        "知识图谱只能存储向量"
+      ],
+      "answer": 1,
+      "explanation": "向量召回擅长开放语义匹配，图谱擅长结构化、多跳的关系推理与精确性，工程中常先用向量召回定位相关实体，再在图上做多跳推理，二者互补而非互斥。",
+      "error_tag": "概念混淆",
+      "variant_group": "kg.vs_vector"
+    }
+  ]
+}

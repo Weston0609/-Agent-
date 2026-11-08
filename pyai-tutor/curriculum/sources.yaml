@@ -1,0 +1,39 @@
+# 权威源白名单 —— 知识层 claim_verifier / ingest 依据此表判定引用可信度。
+# 白名单外的来源默认降级为"低可信"，不用于知识点正文生成。
+domains:
+  - docs.python.org
+  - python.org
+  - peps.python.org
+  - devguide.python.org
+  - docs.pydantic.dev
+  - fastapi.tiangolo.com
+  - docs.sqlalchemy.org
+  - pytorch.org
+  - huggingface.co
+  - arxiv.org
+  - kubernetes.io
+  - cncf.io
+  - langchain.com
+  - python.langchain.com
+  - langgraph.com
+  - deepseek.com
+  - api-docs.deepseek.com
+  - ollama.com
+  - github.com
+
+# 抓取种子：crawl_whitelisted 只抓这些页面（域名必须在上面的白名单内）。
+# 增量：请求带 If-Modified-Since，页面 304 或 Last-Modified 早于窗口则跳过。
+seeds:
+  - https://docs.python.org/3/tutorial/index.html
+  - https://docs.python.org/3/reference/index.html
+  - https://docs.python.org/3/library/asyncio.html
+  - https://docs.python.org/3/library/typing.html
+  - https://peps.python.org/pep-0008/
+  - https://pytorch.org/tutorials/beginner/basics/intro.html
+
+# 每个知识点允许引用的最大来源数
+max_sources_per_kp: 3
+
+# 引用缺失时的策略：reject（拒绝生成）/ warn（生成但标注低可信）
+# 取 warn：无网络/未抓取时 KP 仍能生成（离线优先），但 verified=0，UI 会标注"未核验"。
+missing_citation_policy: warn

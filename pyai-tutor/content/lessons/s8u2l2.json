@@ -1,0 +1,674 @@
+{
+  "id": "s8u2l2",
+  "title": "s8u2l2",
+  "kps": [
+    "arch.serve.kv_cache",
+    "arch.serve.paged_attention"
+  ],
+  "theory": "## arch.serve.kv_cache\n\n# KV Cache（键值缓存）：让大模型推理从「龟速」变「飞驰」\n\n---\n\n## 一句话直觉\n\n大模型生成文本时，每吐出一个新词都要把「前文所有词」重新算一遍注意力——**KV Cache 就是把这份重复计算的结果存下来，让每一步只算「新词」对「老词」的注意力，把生成速度提升几倍到几十倍**。\n\n---\n\n## 1. 为什么需要 KV Cache？先看「没有它会发生什么」\n\n### 1.1 自回归生成（Autoregressive Generation）的本质\n\n大语言模型（LLM, Large Language Model）是**自回归**的：给它一段提示词（prompt），它预测下一个 token（词元），然后把预测出的 token 拼回输入，再预测下一个……直到生成结束。\n\n```python\n# 伪代码：没有 KV Cache 的推理循环\ninput_ids = tokenize(\"今天天气\")        # [今天, 天气]\nfor step in range(5):\n    logits = model(input_ids)          # 每次都把全部历史重新送进模型\n    next_token = argmax(logits[-1])\n    input_ids = input_ids + [next_token]\n```\n\n问题在于：**第 t 步输入的序列长度是 t，模型要为这 t 个 token 都计算 Key 和 Value**。而第 t+1 步，前 t 个 token 的 Key/Value 其实和上一步完全一样——白白重算。\n\n### 1.2 注意力中的 K 和 V 分别是什么\n\nTransformer 的**自注意力（Self-Attention）**里，每个 token 会产生三个向量：\n\n- **Query（Q，查询）**：当前 token「想找什么信息」\n- **Key（K，键）**：每个 token「能提供什么信息」\n- **Value（V，值）**：每个 token「实际携带的信息内容」\n\n注意力计算：`softmax(Q · Kᵀ / √d) · V`。\n\n关键洞察：**生成第 t+1 个 token 时，只有新 token 的 Q 是新的；所有历史 token 的 K、V 都没有变**。所以只要把历史 K、V 缓存起来，每步计算量从 O(t²) 降到 O(t)。\n\n---\n\n## 2. KV Cache 的核心机制：用「缓存」换「时间」\n\n### 2.1 直观类比\n\n想象你在写一封长信，每次加一句话都要把整封信从头读一遍才能接上下文。有了 KV Cache，就像你把前文合上做成「索引卡」，每写一句只翻索引卡 + 看新写的那句。\n\n### 2.2 两种阶段：Prefill（预填充）和 Decode（解码）\n\n| 阶段 | 干什么 | 是否用 KV Cache |\n|------|--------|-----------------|\n| **Prefill** | 一次性处理整段 prompt，写入所有 K/V 到缓存 | 缓存**被写入** |\n| **Decode** | 一步步生成新 token，每步追加一组新 K/V | 缓存**被读取并追加** |\n\n```python\nimport torch\nimport torch.nn.functional as F\n\nclass SimpleKVCacheAttention(torch.nn.Module):\n    def __init__(self, d_model=64, n_heads=8):\n        super().__init__()\n        self.d_model = d_model\n        self.n_heads = n_heads\n        self.head_dim = d_model // n_heads\n        # Q/K/V 投影\n        self.q_proj = torch.nn.Linear(d_model, d_model)\n        self.k_proj = torch.nn.Linear(d_model, d_model)\n        self.v_proj = torch.nn.Linear(d_model, d_model)\n\n    def forward(self, x, past_kv=None):\n        # x: [batch, seq_len, d_model]\n        B, T, _ = x.shape\n        q = self.q_proj(x).view(B, T, self.n_heads, self.head_dim).transpose(1, 2)\n        k = self.k_proj(x).view(B, T, self.n_heads, self.head_dim).transpose(1, 2)\n        v = self.v_proj(x).view(B, T, self.n_heads, self.head_dim).transpose(1, 2)\n\n        # 关键：如果有历史缓存，把新的 K、V 追加进去\n        if past_kv is not None:\n            past_k, past_v = past_kv\n            k = torch.cat([past_k, k], dim=2)   # 沿序列维度拼接\n            v = torch.cat([past_v, v], dim=2)\n\n        # 注意力：Q 只用当前 step 的，K/V 用全部历史的\n        scores = torch.matmul(q, k.transpose(-2, -1)) / (self.head_dim ** 0.5)\n        attn = F.softmax(scores, dim=-1)\n        out = torch.matmul(attn, v)\n        out = out.transpose(1, 2).reshape(B, T, self.d_model)\n\n        return out, (k, v)   # 返回新的缓存\n\n# 演示：prefill 一次，之后每步只传 1 个 token\nmodel = SimpleKVCacheAttention()\nprompt = torch.randn(1, 5, 64)              # 5 个 token 的 prompt\n_, cache = model(prompt)                     # Prefill：写入缓存\nfor _ in range(3):\n    new_token = torch.randn(1, 1, 64)        # Decode：每次 1 个 token\n    _, cache = model(new_token, past_kv=cache)\n    print('cache K shape:', cache[0].shape)  # 序列长度逐步增长\n```\n\n运行上面的代码你会看到缓存 K 的序列长度从 5 → 6 → 7 → 8，而每步输入只有 1 个 token。\n\n### 2.3 时间与显存的权衡\n\n- **省时间**：Decode 阶段每步只算 1 个 token 的 Q，K/V 直接读缓存。\n- **费显存**：缓存大小 = `2 × batch × n_layers × seq_len × n_heads × head_dim × dtype_bytes`。\n  - 例如 LLaMA-7B（32 层、32 头、head_dim=128、fp16），seq_len=2048，batch=1：约 **2 × 32 × 2048 × 32 × 128 × 2 ≈ 1.07 GB**。\n  - 序列越长、层数越多，KV Cache 越吃显存，所以才有 **MQA（Multi-Query Attention）**、**GQA（Grouped-Query Attention）**、**PagedAttention（vLLM 的核心）** 等优化。\n\n---\n\n## 3. 工程视角：在生产推理框架里长什么样\n\n### 3.1 形状与布局\n\n生产级 KV Cache 一般预分配一个大张量：\n\n```\n[ 2,               # K 和 V\n  num_layers,\n  batch_size,\n  num_kv_heads,    # 注意：GQA 里 kv_heads < q_heads\n  max_seq_len,     # 预分配的「最大长度」\n  head_dim ]\n```\n\n每个 decode step 用 `cache_position` 写入到对应位置，无需 cat，避免内存碎片。\n\n### 3.2 常见策略\n\n- **静态分配**：预留 max_seq_len，简单但浪费显存。\n- **动态分配 / PagedAttention**：像操作系统分页一样按块（block）管理 KV，显存利用率可达 90%+。\n- **量化 KV Cache**：把 fp16 缓存放成 int8/int4，用少量精度换大幅显存节省。\n- **Sliding Window（滑动窗口）**：只保留最近 N 个 token 的 KV（如 Mistral 的 SWA），适合长文但上下文有限。\n- **Prefix Caching（前缀缓存）**：多个请求共享相同 system prompt 时复用 KV，极大提速。\n\n---\n\n## 4. 从零写一个最小可用的 KV Cache 推理器\n\n上面小节已经看到 attention 层面的 KV Cache。下面用一个「玩具语言模型」把它串起来，演示完整推理循环中缓存的**生命周期**：\n\n```python\nimport torch\n\nclass ToyLM(torch.nn.Module):\n    \"\"\"极简语言模型：embedding + 单层 attention + lm_head\"\"\"\n    def __init__(self, vocab=100, d_model=64, n_heads=4):\n        super().__init__()\n        self.embed = torch.nn.Embedding(vocab, d_model)\n        self.attn = SimpleKVCacheAttention(d_model, n_heads)\n        self.lm_head = torch.nn.Linear(d_model, vocab)\n\n    def forward(self, ids, past_kv=None):\n        x = self.embed(ids)                     # [B, T, d]\n        h, new_kv = self.attn(x, past_kv)       # 消费/产生缓存\n        logits = self.lm_head(h)                # [B, T, vocab]\n        return logits, new_kv\n\n@torch.no_grad()\ndef generate(model, prompt_ids, max_new=8):\n    # 1) Prefill：整段 prompt 一次送入，建立初始缓存\n    logits, cache = model(prompt_ids)\n    out = prompt_ids.tolist()[0]\n    next_id = logits[:, -1, :].argmax(-1, keepdim=True)\n    out.append(next_id.item())\n\n    # 2) Decode：每步只喂 1 个 token，缓存持续增长\n    for _ in range(max_new - 1):\n        logits, cache = model(next_id, past_kv=cache)\n        next_id = logits[:, -1, :].argmax(-1, keepdim=True)\n        out.append(next_id.item())\n    return out\n\n# 试跑：prompt 长度 4，再生成 8 个 token\nmodel = ToyLM()\nprompt = torch.randint(0, 100, (1, 4))\nresult = generate(model, prompt, max_new=8)\nprint('生成的 token id 序列：', result)\nprint('总长度：', len(result))\n```\n\n观察重点：`generate` 里 Prefill 只调用一次模型，之后每步传入的是长度为 1 的 `next_id`，缓存自动增长。\n\n---\n\n## 5. 关键结论速查\n\n1. **KV Cache 缓存的是每层注意力的 Key 和 Value**，不是 Query。\n2. **Prefill 阶段写入缓存，Decode 阶段读取并追加**，把每步复杂度从 O(t²) 降到 O(t)。\n3. **代价是显存**，随 `batch × layers × seq_len × kv_heads × head_dim` 线性增长。\n4. **工业优化三件套**：GQA 减少 kv_heads、PagedAttention 按块分配、KV 量化省显存。\n5. **判断是否需要 KV Cache 的准则**：只要是**自回归**生成（token 逐个出），就必须用；遇到并行编码任务（如 BERT 类）则不需要。\n\n---\n\n## 6. 动手练习\n\n**任务：给下面的 mini attention 加一个「缓存命中率」打印，并对比开/关 KV Cache 的耗时差异。**\n\n要求：\n1. 修改 `SimpleKVCacheAttention.forward`，当 `past_kv is None` 时打印 `[prefill] cache miss, 建立缓存`；否则打印 `[decode] cache hit, 序列长度 = X`。\n2. 构造一个 prompt 长度 128，连续 decode 32 步。\n3. 用 `time.perf_counter()` 分别测量「带缓存」和「每步重跑整段序列（不带缓存）」的总耗时，输出对比。\n4. 用 matplotlib 画一条柱状图，横轴是方案（with cache / without cache），纵轴是耗时（ms）。\n5. 提交一份简短结论：在你的机器上，加速比大约是多少？\n\n提示：不带缓存的实现方式——每步都把 `prompt + 已生成的所有 token` 作为输入喂给 `forward(x, past_kv=None)`，只取最后一个位置的输出。\n\n完成后你就能直观感受到为什么所有主流推理框架（vLLM、TGI、TensorRT-LLM、SGLang）都把 KV Cache 当作头等大事。\n\n## arch.serve.paged_attention\n\n# PagedAttention：让大模型推理的 KV Cache 不再浪费显存\n\n> **一句话直觉**：大模型（LLM, Large Language Model）推理时，每个 token 都要缓存 Key/Value 向量（KV Cache），传统方式按“最大长度”预分配连续显存，浪费高达 60%–80%；PagedAttention 借鉴操作系统虚拟内存分页（paging）思想，把 KV Cache 切成固定大小的“页”（block）按需分配、非连续存储，从而让显存利用率接近 100%，吞吐量提升 2–4 倍。\n\n---\n\n## 1. 为什么需要 PagedAttention：从 KV Cache 说起\n\n自回归（autoregressive）生成时，每生成一个新 token，模型都要“看”之前所有 token 的 Key 和 Value。为了避免重复计算，推理引擎会把历史 K/V 缓存下来，这就是 **KV Cache**。\n\n问题在于：**请求的长度事先未知**。传统做法是按 `max_seq_len`（比如 2048）一次性预留连续显存。可是实际很多请求只用了 100 个 token，剩下的 1948 个位置就白白空着——这部分叫 **内部碎片（internal fragmentation）**。还有**外部碎片（external fragmentation）**：不同请求大小不一，连续内存块难以复用。\n\n一句话：**KV Cache 不是缺显存，而是显存被“预留但没用”的方式浪费掉了。**\n\n---\n\n## 2. 核心思想：把 KV Cache 当“虚拟内存”来管\n\nPagedAttention 的灵感来自操作系统的虚拟内存分页机制：\n\n1. 把每个序列的 KV Cache 切分为固定大小的 **块（block）**，例如每块存 16 个 token 的 K/V。\n2. 显存被预先划分成许多物理块，块与块之间**不需要连续**。\n3. 每个序列维护一张 **块表（block table）**，记录“逻辑块 i → 物理块 j”的映射。\n4. 生成新 token 时，只在块表末尾追加；块用满才分配新物理块。\n\n这样，**内部碎片最多只剩一个块**（≤16 token），显存浪费从 60%+ 降到 <4%。\n\n---\n\n## 3. 注意力计算如何跨块完成\n\n注意力（attention）需要在序列维度上做 softmax(QKᵀ)V。既然 K/V 分散在多个非连续块里，计算就需要“按块表收集”：\n\n- 对每个 query 位置，遍历它的块表；\n- 逐块加载 K、V，计算局部的 QKᵀ；\n- 用 online softmax 技巧合并多块的结果，得到最终输出。\n\n这正是 PagedAttention **kernel** 做的事：它在 GPU 上把非连续的物理块“拼”成逻辑上连续的 KV，做分块注意力（block-wise attention）。对上层模型来说，看到的仍是一个完整序列。\n\n---\n\n## 4. 附赠红利：前缀共享与写时复制\n\n分页带来的不止是省显存，还有两个“免费”的能力：\n\n- **前缀共享（prefix sharing）**：多个请求如果有相同的 prompt 前缀（如系统提示、few-shot 示例），可以让它们的块表指向同一批物理块，显存只存一份。这在并行采样（n 选 1）、多轮对话中极其常见。\n- **写时复制（Copy-on-Write, CoW）**：当某个序列要修改共享块时，才复制出一份私有块，其余共享块继续复用。\n\n结果是：**显存节省越多，能同时并发的请求就越多，吞吐量自然上去。**\n\n---\n\n## 5. 工程视角：它在哪里、怎么用\n\nPagedAttention 最早由 vLLM 提出（Kwon et al., SOSP 2023），现已成为主流推理引擎的标配：\n\n- **vLLM**：`enable_prefix_caching=True` 开启前缀共享；`gpu_memory_utilization` 控制显存水位。\n- **TensorRT-LLM**：`paged_kv_cache` 选项。\n- **SGLang / LMDeploy**：同样内置分页 KV 管理。\n\n调参时最常碰的两个旋钮：\n- `block_size`：通常 8/16/32。太大→内部碎片回升；太小→块表管理开销上升。\n- `max_num_seqs` / `max_num_batched_tokens`：决定并发上限，直接受分页效率影响。\n\n---\n\n## 小结\n\n| 维度 | 传统连续 KV Cache | PagedAttention |\n|---|---|---|\n| 存储方式 | 按 max_len 连续预留 | 按需分配、非连续块 |\n| 内部碎片 | 高（可达 60%–80%） | 低（<4%，至多一块） |\n| 前缀共享 | 难 | 原生支持（块表指向） |\n| 写时复制 | 无 | 支持 |\n| 吞吐提升 | 基线 | 2–4× |\n\n一句话记住它：**把 KV Cache 从“整块预订的酒店房间”改造成“按页分配的虚拟内存”，显存不再空置，吞吐自然起飞。**\n\n```python\nfrom dataclasses import dataclass, field\n\n# ============================================================\n# 用纯 Python 模拟 PagedAttention 的块分配与块表逻辑\n# 无需 GPU，零基础也能跑起来看到核心机制\n# ============================================================\n\nBLOCK_SIZE = 4          # 每个物理块存 4 个 token 的 K/V\nNUM_PHYSICAL_BLOCKS = 16  # 模拟显存中的物理块总数\n\n\n@dataclass\nclass PhysicalBlock:\n    \"\"\"一个物理块：存放若干 token 的 KV 占位（这里用整数示意）。\"\"\"\n    block_id: int\n    slots: list = field(default_factory=list)  # 已写入的 token 数\n\n    def is_full(self) -> bool:\n        return len(self.slots) >= BLOCK_SIZE\n\n    def append(self, token_id: int):\n        self.slots.append(token_id)\n\n\nclass BlockAllocator:\n    \"\"\"负责物理块的分配 / 释放（模拟分页内存分配器）。\"\"\"\n    def __init__(self, num_blocks: int):\n        self.free_blocks = list(range(num_blocks))\n        self.blocks = {i: PhysicalBlock(i) for i in range(num_blocks)}\n\n    def allocate(self) -> PhysicalBlock:\n        if not self.free_blocks:\n            raise MemoryError(\"显存不足：没有空闲物理块\")\n        bid = self.free_blocks.pop(0)\n        block = self.blocks[bid]\n        block.slots.clear()\n        return block\n\n    def free(self, block_id: int):\n        self.free_blocks.append(block_id)\n\n\nclass Sequence:\n    \"\"\"一个推理请求（序列）：维护逻辑块到物理块的映射（块表）。\"\"\"\n    def __init__(self, seq_id: int, allocator: BlockAllocator):\n        self.seq_id = seq_id\n        self.allocator = allocator\n        self.block_table: list[int] = []   # 逻辑块 i -> 物理块 id\n        self.num_tokens = 0\n\n    def append_token(self, token_id: int):\n        \"\"\"追加一个新 token：只在新逻辑块开始时申请物理块。\"\"\"\n        # 当前是否要开一个新逻辑块？\n        if self.num_tokens % BLOCK_SIZE == 0:\n            phys = self.allocator.allocate()\n            self.block_table.append(phys.block_id)\n        # 定位到最后一个逻辑块对应的物理块\n        phys_id = self.block_table[-1]\n        self.allocator.blocks[phys_id].append(token_id)\n        self.num_tokens += 1\n\n    def free(self):\n        \"\"\"序列结束后释放所有物理块。\"\"\"\n        for bid in self.block_table:\n            self.allocator.free(bid)\n        self.block_table.clear()\n        self.num_tokens = 0\n\n    def __repr__(self):\n        return (f\"Seq(id={self.seq_id}, tokens={self.num_tokens}, \"\n                f\"block_table={self.block_table})\")\n\n\n# ============================ 演示 ============================\nif __name__ == \"__main__\":\n    alloc = BlockAllocator(NUM_PHYSICAL_BLOCKS)\n    seq = Sequence(seq_id=1, allocator=alloc)\n\n    # 生成 6 个 token：需要 2 个物理块（4 + 2）\n    for t in range(6):\n        seq.append_token(token_id=t)\n        print(f\"  写入 token {t} -> {seq}\")\n\n    print(\"\\n序列实际的物理块占用情况：\")\n    for bid in seq.block_table:\n        print(f\"  physical block {bid}: {alloc.blocks[bid].slots}\")\n\n    # 剩余可用物理块（空闲显存）\n    print(f\"\\n剩余空闲物理块数: {len(alloc.free_blocks)} / {NUM_PHYSICAL_BLOCKS}\")\n\n    # 释放序列\n    seq.free()\n    print(f\"释放后空闲物理块数: {len(alloc.free_blocks)} / {NUM_PHYSICAL_BLOCKS}\")\n```\n",
+  "quiz": [
+    {
+      "kp": "arch.serve.kv_cache",
+      "type": "single_choice",
+      "question": "在大语言模型推理服务中，KV 缓存（key/value cache）的主要作用是：",
+      "options": [
+        "存储模型权重以减少显存占用",
+        "缓存历史 token 的注意力键值，避免每步重复计算",
+        "保存用户请求日志以便审计",
+        "对输入做分词并缓存词表"
+      ],
+      "answer": 1,
+      "explanation": "自回归生成时每一步都要对全部历史位置计算注意力，缓存已算好的 key/value 可以避免重复前向计算，从而显著加速解码。权重存储、日志、分词缓存都是别的机制。",
+      "error_tag": "概念混淆",
+      "variant_group": "kv_cache_purpose"
+    },
+    {
+      "kp": "arch.serve.kv_cache",
+      "type": "single_choice",
+      "question": "某服务在生成第 100 个 token 时，如果完全没有 KV 缓存，计算量与有缓存相比会如何变化？",
+      "options": [
+        "与有缓存相同",
+        "仅需要计算新增 token，与有缓存等价",
+        "需要对全部 100 个历史位置重新计算注意力",
+        "计算量减半，因为只算一半历史"
+      ],
+      "answer": 2,
+      "explanation": "无缓存时每一步都要对全部历史序列重新做注意力计算，复杂度随序列长度增长；有缓存时只增量计算新 token 的 key/value。",
+      "error_tag": "复杂度理解错误",
+      "variant_group": "kv_cache_purpose"
+    },
+    {
+      "kp": "arch.serve.kv_cache",
+      "type": "single_choice",
+      "question": "关于 KV 缓存的释放时机，正确的做法是：",
+      "options": [
+        "请求结束后及时释放，避免长期占用显存",
+        "永久保留以便下次任意请求复用",
+        "只在进程退出时释放",
+        "从不释放，靠操作系统交换"
+      ],
+      "answer": 0,
+      "explanation": "请求完成后其 KV 缓存通常不再需要（除非有明确的复用策略），应及时回收；否则并发一多就会挤占显存。",
+      "error_tag": "资源管理错误",
+      "variant_group": "kv_cache_memory"
+    },
+    {
+      "kp": "arch.serve.kv_cache",
+      "type": "single_choice",
+      "question": "在多轮对话中直接复用上一轮的 KV 缓存，前提条件通常是：",
+      "options": [
+        "新一轮输入的 token 前缀与之前完全一致",
+        "模型参数被重新加载",
+        "batch 大小必须为 1",
+        "必须关闭注意力机制"
+      ],
+      "answer": 0,
+      "explanation": "只有前缀 token 序列一致，历史 KV 才与新计算的前缀对应；若历史被改写或截断，缓存就不再有效。",
+      "error_tag": "前提条件遗漏",
+      "variant_group": "kv_cache_prefix"
+    },
+    {
+      "kp": "arch.serve.kv_cache",
+      "type": "single_choice",
+      "question": "下列哪项不是 KV 缓存的常见优化方向？",
+      "options": [
+        "分页管理以减少显存碎片",
+        "量化 KV 到更低精度",
+        "跨请求共享公共前缀的 KV",
+        "增大模型词表以压缩缓存"
+      ],
+      "answer": 3,
+      "explanation": "词表大小与 KV 缓存无关；分页、量化、前缀共享都是常见优化手段。",
+      "error_tag": "概念混淆",
+      "variant_group": "kv_cache_opt"
+    },
+    {
+      "kp": "arch.serve.kv_cache",
+      "type": "single_choice",
+      "question": "如果一个请求的输入是 2000 个 token、输出是 50 个 token，KV 缓存的最大长度大致是：",
+      "options": [
+        "50",
+        "2000",
+        "2050",
+        "100"
+      ],
+      "answer": 2,
+      "explanation": "缓存需要覆盖输入 prompt 加上已生成的输出，因此最大约 2000+50=2050 个位置。",
+      "error_tag": "长度估算错误",
+      "variant_group": "kv_cache_memory"
+    },
+    {
+      "kp": "arch.serve.kv_cache",
+      "type": "single_choice",
+      "question": "关于 KV 缓存与注意力复杂度，正确的说法是：",
+      "options": [
+        "有缓存后每步计算与历史长度无关",
+        "有缓存后每步仍需与全部历史 key/value 做注意力，只是省去重算 key/value",
+        "有缓存后注意力变成线性且与长度无关",
+        "缓存只影响显存不影响计算"
+      ],
+      "answer": 1,
+      "explanation": "缓存省去了重复的 key/value 投影与部分计算，但当前 query 仍要与所有历史 key 做点积，单步注意力仍随历史长度增长。",
+      "error_tag": "复杂度理解错误",
+      "variant_group": "kv_cache_purpose"
+    },
+    {
+      "kp": "arch.serve.kv_cache",
+      "type": "single_choice",
+      "question": "服务端发现随着输出变长，每生成一个 token 的耗时逐渐增加，最可能的原因是：",
+      "options": [
+        "KV 缓存使注意力计算随历史长度增长",
+        "分词器越来越慢",
+        "模型权重被修改",
+        "batch 大小自动变为 0"
+      ],
+      "answer": 0,
+      "explanation": "解码第 t 步需要与 t 个历史位置做注意力，随输出增长单步耗时上升；不过其增长速度远小于无缓存时的重算。",
+      "error_tag": "性能诊断错误",
+      "variant_group": "kv_cache_purpose"
+    },
+    {
+      "kp": "arch.serve.kv_cache",
+      "type": "single_choice",
+      "question": "关于 KV 缓存的 batch 维度，正确的描述是：",
+      "options": [
+        "缓存只有序列维度，没有 batch 维度",
+        "每个 batch 中的请求各自拥有独立的 KV 缓存",
+        "整个 batch 共享同一份 KV 缓存",
+        "batch 维度会被自动平均掉"
+      ],
+      "answer": 1,
+      "explanation": "每个序列有自己的历史，因此 KV 缓存按 batch/请求分别存储；不同请求的 KV 不能混用（除非共享前缀且做了专门复用）。",
+      "error_tag": "维度混淆",
+      "variant_group": "kv_cache_content"
+    },
+    {
+      "kp": "arch.serve.kv_cache",
+      "type": "single_choice",
+      "question": "若把某请求的 KV 缓存误分配给另一个不同前缀的请求使用，会产生什么结果？",
+      "options": [
+        "生成结果会基于错误的历史上下文，质量严重下降",
+        "完全没有影响，因为 KV 可通用",
+        "只会影响速度",
+        "模型会自动纠正"
+      ],
+      "answer": 0,
+      "explanation": "KV 与具体前缀强绑定，错配会让注意力看到不相关历史，导致输出错误；这不是速度问题。",
+      "error_tag": "正确性误解",
+      "variant_group": "kv_cache_prefix"
+    },
+    {
+      "kp": "arch.serve.kv_cache",
+      "type": "single_choice",
+      "question": "在显存受限时，下列哪种权衡最合理？",
+      "options": [
+        "限制最大并发与最大序列长度，或对 KV 做量化/分页",
+        "直接关闭注意力",
+        "把 batch 设为极大值",
+        "把 KV 缓存写入用户浏览器"
+      ],
+      "answer": 0,
+      "explanation": "显存受限时通常通过限制并发与长度、量化 KV、分页管理等手段在吞吐与显存间权衡；关闭注意力会破坏模型。",
+      "error_tag": "方案选择错误",
+      "variant_group": "kv_cache_opt"
+    },
+    {
+      "kp": "arch.serve.kv_cache",
+      "type": "single_choice",
+      "question": "关于首次 prefill 与后续 decode 阶段的 KV 缓存，正确的说法是：",
+      "options": [
+        "prefill 阶段为整个输入序列计算并写入 KV，decode 阶段逐 token 追加",
+        "prefill 阶段不写 KV，decode 阶段才写",
+        "两阶段都不需要 KV",
+        "decode 阶段会重写全部历史 KV"
+      ],
+      "answer": 0,
+      "explanation": "prefill 一次性为输入 prompt 计算 key/value 并存入缓存；decode 每步只计算新 token 的 key/value 并追加，同时用其 query 读取全部历史。",
+      "error_tag": "阶段混淆",
+      "variant_group": "kv_cache_purpose"
+    },
+    {
+      "kp": "arch.serve.kv_cache",
+      "type": "single_choice",
+      "question": "KV 缓存占用的显存大小主要由什么决定？",
+      "options": [
+        "模型权重的参数量",
+        "批大小、序列长度、层数、注意力头数与头维度",
+        "输入文本的字符数",
+        "输出 token 的数量"
+      ],
+      "answer": 1,
+      "explanation": "KV 缓存大小 ≈ 2 × 层数 × 头数 × 头维 × 序列长度 × 批大小 × 精度字节数。参数量影响的是权重显存，字符数不等于 token 数，输出 token 数只是序列长度的一部分来源。",
+      "error_tag": "维度混淆",
+      "variant_group": "kv_cache_memory"
+    },
+    {
+      "kp": "arch.serve.kv_cache",
+      "type": "single_choice",
+      "question": "关于 KV 缓存中存的张量，下列说法正确的是：",
+      "options": [
+        "只缓存 query",
+        "缓存 key 和 value，不缓存 query",
+        "同时缓存 query、key、value",
+        "只缓存 attention 的输出"
+      ],
+      "answer": 1,
+      "explanation": "生成新 token 时只需要新的 query 与历史 key/value 做注意力，历史 query 不再需要，所以只缓存 key 和 value。",
+      "error_tag": "对象混淆",
+      "variant_group": "kv_cache_content"
+    },
+    {
+      "kp": "arch.serve.kv_cache",
+      "type": "single_choice",
+      "question": "在多轮对话服务中，若每轮对话都从头重新计算，会造成什么后果？",
+      "options": [
+        "结果完全错误",
+        "首 token 延迟随对话历史增长而显著增加",
+        "显存占用降低",
+        "模型输出会改变语义"
+      ],
+      "answer": 1,
+      "explanation": "重复计算历史前缀导致 prefill 阶段开销随对话轮次增长，首 token 延迟上升；结果本身不一定错，显存不会因此降低。",
+      "error_tag": "性能误解",
+      "variant_group": "kv_cache_prefix"
+    },
+    {
+      "kp": "arch.serve.kv_cache",
+      "type": "single_choice",
+      "question": "prefix caching（前缀缓存）在服务中的典型收益是：",
+      "options": [
+        "降低模型精度以加速推理",
+        "多个请求共享相同前缀时复用已算好的 KV，减少重复 prefill",
+        "把模型权重放到磁盘",
+        "对输出做采样加速"
+      ],
+      "answer": 1,
+      "explanation": "前缀缓存复用相同系统提示、few-shot 示例等公共前缀的 KV，避免重复 prefill；它不改变精度，也不涉及权重存放或采样。",
+      "error_tag": "概念混淆",
+      "variant_group": "kv_cache_prefix"
+    },
+    {
+      "kp": "arch.serve.kv_cache",
+      "type": "single_choice",
+      "question": "当服务采用连续批处理（continuous batching）时，KV 缓存的管理难点主要在于：",
+      "options": [
+        "不同请求序列长度不同，缓存需要动态分配与回收",
+        "无法并行计算",
+        "必须把 batch 大小固定为 1",
+        "缓存内容会变成只读"
+      ],
+      "answer": 0,
+      "explanation": "连续批处理下请求动态进出，序列长度差异大，需要按页或按块动态分配、碎片整理与回收 KV 缓存空间，这是 PagedAttention 等方案要解决的问题。",
+      "error_tag": "机制误解",
+      "variant_group": "kv_cache_memory"
+    },
+    {
+      "kp": "arch.serve.kv_cache",
+      "type": "single_choice",
+      "question": "若把 KV 缓存由 FP16 改为 INT8 存储，最可能的影响是：",
+      "options": [
+        "显存占用下降，但可能带来一定精度损失",
+        "显存占用上升",
+        "序列长度上限自动翻倍且无任何副作用",
+        "模型权重也会自动量化"
+      ],
+      "answer": 0,
+      "explanation": "量化 KV 缓存可减少显存带宽与容量压力，但引入量化误差，可能影响生成质量；权重量化是独立的事。",
+      "error_tag": "量化理解偏差",
+      "variant_group": "kv_cache_quant"
+    },
+    {
+      "kp": "arch.serve.kv_cache",
+      "type": "single_choice",
+      "question": "在自回归解码中，第 t 步使用 KV 缓存时，参与注意力计算的 query 数量是：",
+      "options": [
+        "t 个",
+        "1 个（当前步的新 token）",
+        "0 个",
+        "取决于 batch 大小且恒等于历史长度"
+      ],
+      "answer": 1,
+      "explanation": "解码阶段每次只处理一个新 token，因此 query 只有一个（忽略 batch 维度），而 key/value 来自历史缓存加上当前 token。",
+      "error_tag": "形状混淆",
+      "variant_group": "kv_cache_content"
+    },
+    {
+      "kp": "arch.serve.kv_cache",
+      "type": "single_choice",
+      "question": "以下哪种情况最可能导致 KV 缓存显存不足（OOM）？",
+      "options": [
+        "并发请求数很小且序列很短",
+        "长上下文请求且高并发同时进行",
+        "使用较小的模型",
+        "只做单条推理且长度固定"
+      ],
+      "answer": 1,
+      "explanation": "KV 缓存随序列长度和批大小线性增长，长上下文加高并发会迅速耗尽显存；小并发、短序列、小模型都会减轻压力。",
+      "error_tag": "容量估算错误",
+      "variant_group": "kv_cache_memory"
+    },
+    {
+      "kp": "arch.serve.paged_attention",
+      "type": "single_choice",
+      "question": "在分页注意力（PagedAttention）机制中，键值缓存（KV Cache）被划分成固定大小的「块」。相比传统的连续内存分配方式，这样做最核心的好处是什么？",
+      "options": [
+        "减少了注意力计算所需的浮点运算次数",
+        "避免了因序列长度不定而造成的内存碎片与过度预留",
+        "使模型权重可以被多个请求共享",
+        "消除了对 GPU 显存的依赖"
+      ],
+      "answer": 1,
+      "explanation": "传统做法按最大可能长度预分配连续显存，短序列会浪费、长序列要重分配，产生碎片。分页把 KV 缓存切成固定大小的块并按需分配，显著降低内部/外部碎片和预留浪费。它不减少计算量，模型权重共享是另一回事，也无法摆脱对显存的需求。",
+      "error_tag": "概念混淆",
+      "variant_group": "paged_attention_motivation"
+    },
+    {
+      "kp": "arch.serve.paged_attention",
+      "type": "single_choice",
+      "question": "分页注意力中，逻辑块到物理块的映射通常由什么结构维护？",
+      "options": [
+        "一张块表（block table），保存每个序列的逻辑块对应的物理块编号",
+        "矩阵乘法得到的注意力分数",
+        "Transformer 的层归一化参数",
+        "优化器的动量缓冲区"
+      ],
+      "answer": 0,
+      "explanation": "分页机制借用操作系统虚拟内存的思想，用块表记录某序列第 i 个逻辑块实际落在哪个物理块上，从而无需连续显存。注意力分数、归一化参数、优化器状态都与该映射无关。",
+      "error_tag": "记忆缺失",
+      "variant_group": "block_table_structure"
+    },
+    {
+      "kp": "arch.serve.paged_attention",
+      "type": "multi_choice",
+      "question": "下列哪些是分页注意力相对「按最大长度预分配连续 KV 缓存」的优势？（多选）",
+      "options": [
+        "显著减少显存碎片和预留浪费",
+        "支持不同序列的相同前缀共享物理块",
+        "使序列可以按需增长而不必事先预留最大长度",
+        "降低注意力计算的浮点运算量",
+        "完全不需要块表等额外元数据开销"
+      ],
+      "answer": [
+        0,
+        1,
+        2
+      ],
+      "explanation": "分页的核心优势是省显存、可共享前缀、按需增长。它并不减少注意力计算量；同时引入了块表等元数据开销，所以「完全不需要元数据」是错的。",
+      "error_tag": "概念混淆",
+      "variant_group": "paged_attention_benefit"
+    },
+    {
+      "kp": "arch.serve.paged_attention",
+      "type": "multi_choice",
+      "question": "关于分页注意力中的块表，下列说法正确的有？（多选）",
+      "options": [
+        "它把序列的逻辑块映射到物理块编号",
+        "它允许逻辑上连续的块在物理上不连续",
+        "它使多个序列可以共享同一物理块",
+        "它存储了模型的权重参数",
+        "它取代了注意力分数计算"
+      ],
+      "answer": [
+        0,
+        1,
+        2
+      ],
+      "explanation": "块表负责逻辑到物理的映射，允许物理不连续并支持共享。它不存储模型权重，也不能替代注意力分数的计算。",
+      "error_tag": "概念混淆",
+      "variant_group": "block_table_structure"
+    },
+    {
+      "kp": "arch.serve.paged_attention",
+      "type": "multi_choice",
+      "question": "在选择分页注意力的块大小时，需要权衡的因素包括哪些？（多选）",
+      "options": [
+        "块越大，块表条目越少，管理和查表开销越低",
+        "块越大，序列末尾不满一块时的内部碎片越多",
+        "块越小，碎片越少但映射开销相对更高",
+        "块大小对显存和性能没有任何影响",
+        "块大小必须等于注意力头数"
+      ],
+      "answer": [
+        0,
+        1,
+        2
+      ],
+      "explanation": "块大小是性能与碎片的权衡：大块省管理开销但碎片多，小块碎片少但管理开销高。它与显存/性能当然有关，也不要求等于注意力头数。",
+      "error_tag": "边界错误",
+      "variant_group": "block_size_tradeoff"
+    },
+    {
+      "kp": "arch.serve.paged_attention",
+      "type": "multi_choice",
+      "question": "以下哪些场景能从分页注意力的前缀共享中受益？（多选）",
+      "options": [
+        "多个用户使用内容相同、很长的系统提示词",
+        "同一请求在一次对话中携带很长的历史上下文",
+        "批量推理中大量请求共享相同的少样本示例前缀",
+        "每个请求的提示词都完全不同且无公共前缀",
+        "每个请求都只包含一个随机生成的 token"
+      ],
+      "answer": [
+        0,
+        1,
+        2
+      ],
+      "explanation": "前缀共享在有公共前缀时获益明显，如共享系统提示词、长上下文复用、共享少样本示例。前缀完全不同的请求，或只有一个 token 的请求，无公共前缀可共享，收益有限。",
+      "error_tag": "概念混淆",
+      "variant_group": "prefix_sharing"
+    },
+    {
+      "kp": "arch.serve.paged_attention",
+      "type": "multi_choice",
+      "question": "在分页注意力的实现里，为了使内核能在不连续块上正确计算注意力，通常需要哪些信息？（多选）",
+      "options": [
+        "每个序列的块表，指明逻辑块对应的物理块",
+        "每个序列的有效长度，以确定读取哪些 token 位置",
+        "块大小",
+        "优化器的学习率",
+        "训练数据集的路径"
+      ],
+      "answer": [
+        0,
+        1,
+        2
+      ],
+      "explanation": "内核需要块表做间接寻址、需要有效长度来避免读取无效槽位、需要块大小来定位块内偏移。学习率和数据集路径属于训练侧，与推理内核无关。",
+      "error_tag": "概念混淆",
+      "variant_group": "kernel_indirection"
+    },
+    {
+      "kp": "arch.serve.paged_attention",
+      "type": "fill_blank",
+      "question": "在分页注意力中，用于记录序列的逻辑块与物理块对应关系的元数据结构通常称为 ______ 表（请填中文或英文关键词）。",
+      "options": [],
+      "answer": [
+        "块",
+        "block",
+        "block table",
+        "块表",
+        "页表",
+        "page table"
+      ],
+      "explanation": "该结构把逻辑块映射到物理块，借用操作系统页表思想，因此常被称为（逻辑块/物理块）映射表，即块表或页表。",
+      "error_tag": "记忆缺失",
+      "variant_group": "block_table_structure"
+    },
+    {
+      "kp": "arch.serve.paged_attention",
+      "type": "fill_blank",
+      "question": "当多个序列共享同一段前缀的物理块，而某个序列需要修改共享块中的内容时，为避免影响其他序列，通常采用 ______ 机制（填一个经典术语）。",
+      "options": [],
+      "answer": [
+        "写时复制",
+        "copy-on-write",
+        "Copy-on-Write",
+        "cow",
+        "COW"
+      ],
+      "explanation": "写时复制（copy-on-write）会在修改前把共享块复制成私有副本，从而保证共享者的数据不被破坏，这是分页注意力实现前缀共享的关键机制。",
+      "error_tag": "记忆缺失",
+      "variant_group": "copy_on_write"
+    },
+    {
+      "kp": "arch.serve.paged_attention",
+      "type": "fill_blank",
+      "question": "某序列长度为 33，块大小为 16。它最少需要 ______ 个块来存储其键值缓存，其中最后一个块内有 ______ 个槽位被浪费（两个数字用逗号分隔，例如 1,2）。",
+      "options": [],
+      "answer": [
+        "3,15",
+        "3, 15",
+        "3，15"
+      ],
+      "explanation": "33 个 token 按每块 16 个切分：16+16+1，共需 3 个块。最后一块用了 1 个槽位，浪费 15 个，即内部碎片。",
+      "error_tag": "边界错误",
+      "variant_group": "block_size_tradeoff"
+    },
+    {
+      "kp": "arch.serve.paged_attention",
+      "type": "code_reading",
+      "question": "阅读下面示意代码（伪代码，关注逻辑而非语言细节）：\n\nblock_size = 16\nseq_len = 40\nnum_blocks = ceil(seq_len / block_size)\nused_in_last = seq_len % block_size\n\n请问 num_blocks 和 used_in_last 分别是多少？并说明最后一块里有多少个空槽位被浪费。",
+      "options": [],
+      "answer": "num_blocks = 3（ceil(40/16)=3）；used_in_last = 8（40%16=8）；最后一块浪费 16-8=8 个槽位。",
+      "explanation": "40 个 token 分块：16+16+8，共 3 块，最后一块用了 8 个位置，因此浪费 8 个内部碎片槽位。这体现了分页中最后一块通常不满的特性。",
+      "error_tag": "边界错误",
+      "variant_group": "block_size_tradeoff"
+    },
+    {
+      "kp": "arch.serve.paged_attention",
+      "type": "code_reading",
+      "question": "阅读下面示意代码（伪代码，表示块表映射）：\n\n# seq A 的逻辑块 -> 物理块\nblock_table = {0: 5, 1: 9, 2: 2}\n# 另有 seq B 复用 seq A 的前两个块\nblock_table_B = {0: 5, 1: 9}\n# 现在 seq B 要写入第 2 个逻辑块\n\n问：如果直接写物理块 2，可能带来什么问题？正确的做法是什么？",
+      "options": [],
+      "answer": "物理块 2 是 seq A 的块，直接写会破坏 seq A 的数据（两个序列本应在写入后分离）。正确做法是采用写时复制：为 seq B 的第 2 个逻辑块分配一个新的物理块，先复制原内容再写入，并把 block_table_B[2] 指向新块。",
+      "explanation": "seq A 与 seq B 共享物理块 5 和 9，但物理块 2 属于 seq A。如果 seq B 直接写物理块 2，会污染 seq A 的内容。写时复制保证修改前先私有化。",
+      "error_tag": "概念混淆",
+      "variant_group": "copy_on_write"
+    },
+    {
+      "kp": "arch.serve.paged_attention",
+      "type": "single_choice",
+      "question": "关于分页注意力里「块」大小的选择，下列说法正确的是？",
+      "options": [
+        "块越大，映射开销越低，但内部碎片越多",
+        "块越小，一定能在所有场景下获得最快速度",
+        "块大小必须等于模型隐藏层维度",
+        "块大小必须等于批大小"
+      ],
+      "answer": 0,
+      "explanation": "块大小是权衡：块越大，块表条目越少、调度和管理开销越低，但序列末尾不满一块时浪费的内部碎片越多；块越小碎片越少但管理开销上升。它与隐藏层维度、批大小没有强制相等关系。",
+      "error_tag": "边界错误",
+      "variant_group": "block_size_tradeoff"
+    },
+    {
+      "kp": "arch.serve.paged_attention",
+      "type": "scenario",
+      "question": "工程场景：你负责一个基于 Transformer 的在线推理服务。目前每个请求都按「最大序列长度」预分配一段连续的 KV 缓存。上线后发现：并发一高显存就爆，而监控显示平均实际序列长度只有最大长度的大约四分之一；同时长短请求混在一起时显存利用率忽高忽低。团队讨论要把 KV 缓存管理改为分页方案。请说明分页方案为什么能缓解这个问题，并指出它会引入哪些新的开销或复杂度。",
+      "options": [],
+      "answer": null,
+      "explanation": "分页把 KV 缓存切成固定大小的块，按需分配并利用块表做逻辑到物理的映射，避免按最大长度预分配导致的碎片和预留浪费，从而支持更高并发。代价是引入块表等元数据、查表与间接寻址的开销，调度与内存管理更复杂，块大小需要权衡。",
+      "error_tag": "概念混淆",
+      "variant_group": "paged_attention_motivation",
+      "required_keywords": [
+        "缓存",
+        "并发",
+        "内存"
+      ]
+    },
+    {
+      "kp": "arch.serve.paged_attention",
+      "type": "scenario",
+      "question": "工程场景：你们的推理服务大量请求共享相同且很长的系统提示词。产品希望降低这部分重复显存占用并提升并发。有同学提议「把共享前缀的 KV 直接放进一个全局字典，让所有请求都引用同一份内存，需要修改时直接原地改」，理由是省事。请评价这个提议，并说明分页注意力下正确的共享方式及其风险点。",
+      "options": [],
+      "answer": null,
+      "explanation": "正确做法是让不同请求的逻辑块指向同一物理块实现前缀共享，并在需要写入时用写时复制为请求分配私有块，避免互相污染。提议中提到「原地改」会导致一个请求的更新破坏其他请求的 KV，破坏隔离和输出正确性，是危险的。",
+      "error_tag": "概念混淆",
+      "variant_group": "prefix_sharing",
+      "required_keywords": [
+        "隔离",
+        "复制"
+      ]
+    },
+    {
+      "kp": "arch.serve.paged_attention",
+      "type": "scenario",
+      "question": "工程场景：团队在实现分页注意力内核时，需要在一个 GPU 内核调用里对不同请求、不同长度的 KV 块做注意力计算。有工程师建议：「先把所有请求的 KV 缓存拷贝到一段连续的临时缓冲区，再按传统方式计算，这样内核最好写」。请分析这个建议的利弊，并给出更合适的做法。",
+      "options": [],
+      "answer": null,
+      "explanation": "拷贝成连续缓冲会引入大量额外显存带宽和时间开销，抵消分页节省显存的收益，并且需要额外缓冲区。更合适的做法是让内核通过块表对物理上不连续的块做间接寻址，逐块读取并结合每个序列的有效长度累积注意力结果。",
+      "error_tag": "概念混淆",
+      "variant_group": "kernel_indirection",
+      "required_keywords": [
+        "分页注意力",
+        "块表",
+        "间接寻址",
+        "非连续KV块",
+        "有效长度"
+      ]
+    },
+    {
+      "kp": "arch.serve.paged_attention",
+      "type": "single_choice",
+      "question": "两个请求如果提示词前缀相同，分页注意力可以通过什么方式节省显存？",
+      "options": [
+        "让两个请求的对应逻辑块指向同一个物理块（写时复制/共享前缀）",
+        "把两个请求合并成一个序列",
+        "对其中一个请求关闭注意力计算",
+        "只缓存其中一个请求的 KV"
+      ],
+      "answer": 0,
+      "explanation": "块表允许不同序列的逻辑块映射到相同物理块，因此相同前缀可共享同一份 KV 存储，只在需要写入新内容时复制（写时复制）。合并序列、关闭计算、丢弃缓存都会破坏语义或输出正确性。",
+      "error_tag": "概念混淆",
+      "variant_group": "prefix_sharing"
+    },
+    {
+      "kp": "arch.serve.paged_attention",
+      "type": "single_choice",
+      "question": "在分页注意力中，为了在一次内核调用里处理多个不一定连续的块，常见的做法是什么？",
+      "options": [
+        "先把所有 KV 拷贝回一段连续显存再计算",
+        "让内核根据块表间接寻址，逐块读取 KV 并累积注意力结果",
+        "把批大小固定为 1 逐个处理",
+        "预先按最长序列长度填充到等长"
+      ],
+      "answer": 1,
+      "explanation": "分页注意力的关键就在于注意力内核能通过块表间接访问分散的物理块，边读边累积（如在线 softmax），无需先整理成连续内存。拷贝成连续会抵消分页的收益；固定批大小或等长填充属于另一种思路。",
+      "error_tag": "概念混淆",
+      "variant_group": "kernel_indirection"
+    },
+    {
+      "kp": "arch.serve.paged_attention",
+      "type": "single_choice",
+      "question": "某推理服务在显存中为每个请求预分配了足以容纳最大序列长度的连续 KV 空间。随着并发请求增多，显存很快耗尽，但实际平均序列长度远小于最大值。最可能的原因是？",
+      "options": [
+        "注意力计算复杂度过高",
+        "预分配策略导致大量显存被预留却未被真正使用",
+        "模型参数量太大",
+        "网络传输带宽不足"
+      ],
+      "answer": 1,
+      "explanation": "按最大长度预分配会让绝大部分空间长期闲置，造成严重浪费，这是分页注意力要解决的核心痛点。计算复杂度、参数量、带宽都与「预留却闲置」这一现象没有直接因果关系。",
+      "error_tag": "概念混淆",
+      "variant_group": "paged_attention_motivation"
+    },
+    {
+      "kp": "arch.serve.paged_attention",
+      "type": "single_choice",
+      "question": "关于分页注意力对吞吐量的影响，下列描述最准确的是？",
+      "options": [
+        "它通过提高单请求的计算速度来提升吞吐",
+        "它通过减少显存浪费、支持更多并发请求同时驻留来提升吞吐",
+        "它通过降低模型精度来提升吞吐",
+        "它对吞吐量没有任何影响"
+      ],
+      "answer": 1,
+      "explanation": "分页注意力的主要收益是显存利用率的提升，从而能同时容纳更多序列（更大的有效批），提高整体吞吐。它不直接加速单个请求的计算，也不改变精度。",
+      "error_tag": "概念混淆",
+      "variant_group": "paged_attention_benefit"
+    },
+    {
+      "kp": "arch.serve.paged_attention",
+      "type": "single_choice",
+      "question": "在分页注意力的调度中，「块」通常指的是什么？",
+      "options": [
+        "一组键和值向量，对应序列中连续的若干 token",
+        "模型的某一层",
+        "一个批次里的全部请求",
+        "一次梯度更新的单位"
+      ],
+      "answer": 0,
+      "explanation": "块是 KV 缓存的分配与映射单位，包含若干连续 token 对应的 key/value 向量。它与网络层、请求批次、优化步无关。",
+      "error_tag": "概念混淆",
+      "variant_group": "block_definition"
+    },
+    {
+      "kp": "arch.serve.paged_attention",
+      "type": "single_choice",
+      "question": "某序列只有长度 5，而块大小为 16。关于它的 KV 缓存使用，下列说法正确的是？",
+      "options": [
+        "必须申请 5 个块",
+        "申请 1 个块即可，最后 11 个位置是内部碎片",
+        "无法存储，必须把块大小改为 5",
+        "必须按 16 长度填充输入"
+      ],
+      "answer": 1,
+      "explanation": "长度 5 只需一个块即可容纳，块内未用的 11 个槽位是内部碎片。分页允许最后一个块不满，这正是它比按最大长度预分配更省显存的原因。填充输入并非必要。",
+      "error_tag": "边界错误",
+      "variant_group": "block_size_tradeoff"
+    },
+    {
+      "kp": "arch.serve.paged_attention",
+      "type": "single_choice",
+      "question": "在「写时复制」用于前缀共享的场景中，当某个共享前缀的请求要写入新的 token 时，会发生什么？",
+      "options": [
+        "直接覆盖共享的物理块，影响其他请求",
+        "为该请求分配新的物理块并把需要修改的部分复制过去",
+        "拒绝该请求的写入",
+        "清空所有请求的 KV 缓存"
+      ],
+      "answer": 1,
+      "explanation": "写时复制保证共享块在被修改前先私有化：为新内容分配新块并复制原内容，避免影响其他仍指向旧块的请求。直接覆盖会破坏共享者的数据。",
+      "error_tag": "概念混淆",
+      "variant_group": "copy_on_write"
+    }
+  ]
+}

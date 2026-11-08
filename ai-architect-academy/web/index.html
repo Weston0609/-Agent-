@@ -1,0 +1,261 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Python & AI 架构师离线学习系统</title>
+<style>
+  :root {
+    --bg: #0f1220; --panel: #1a1f36; --card: #232a4a; --accent: #5b8cff;
+    --ok: #3ddc84; --warn: #ffb84d; --lock: #6a7191; --text: #e8eaf6; --muted: #9aa0c0;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: var(--bg); color: var(--text); font-family: "Segoe UI", "Microsoft YaHei", sans-serif; line-height: 1.6; }
+  header { display: flex; align-items: center; justify-content: space-between; padding: 16px 24px; background: var(--panel); border-bottom: 1px solid #2c3358; position: sticky; top: 0; z-index: 10; }
+  header h1 { font-size: 20px; font-weight: 600; }
+  header .clock { font-family: "Consolas", monospace; font-size: 22px; color: var(--accent); }
+  main { max-width: 1000px; margin: 0 auto; padding: 24px 16px 80px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 14px; margin-bottom: 24px; }
+  .stat { background: var(--card); border-radius: 12px; padding: 16px; }
+  .stat .label { color: var(--muted); font-size: 13px; }
+  .stat .value { font-size: 26px; font-weight: 700; margin-top: 4px; }
+  .stat .value.ok { color: var(--ok); } .stat .value.accent { color: var(--accent); }
+  .panel { background: var(--panel); border-radius: 12px; padding: 20px; margin-bottom: 20px; border: 1px solid #2c3358; }
+  .panel h2 { font-size: 17px; margin-bottom: 14px; color: var(--accent); }
+  button { background: var(--accent); color: #fff; border: none; border-radius: 8px; padding: 10px 20px; font-size: 15px; cursor: pointer; }
+  button:hover { filter: brightness(1.1); }
+  button.secondary { background: #313a66; }
+  button:disabled { background: var(--lock); cursor: not-allowed; }
+  .sem { display: flex; align-items: center; gap: 12px; padding: 10px 0; border-bottom: 1px solid #2c3358; }
+  .sem:last-child { border-bottom: none; }
+  .sem .name { width: 210px; flex-shrink: 0; }
+  .bar { flex: 1; height: 10px; background: #2c3358; border-radius: 5px; overflow: hidden; }
+  .bar .fill { height: 100%; background: var(--ok); transition: width .4s; }
+  .sem .pct { width: 90px; text-align: right; font-family: monospace; }
+  .schedule-item { display: flex; gap: 16px; padding: 8px 0; font-family: monospace; }
+  .schedule-item .time { color: var(--accent); width: 130px; }
+  .theory { white-space: normal; font-size: 15px; }
+  .theory h1,.theory h2,.theory h3 { margin: 14px 0 6px; }
+  .theory h1 { font-size: 22px; } .theory h2 { font-size: 19px; } .theory h3 { font-size: 16px; }
+  .theory p { margin: 8px 0; }
+  .theory ul,.theory ol { margin: 8px 0 8px 22px; }
+  .theory code { background: #2c3358; padding: 1px 6px; border-radius: 4px; font-family: Consolas, monospace; }
+  .theory pre { background: #0a0d18; border: 1px solid #2c3358; border-radius: 8px; padding: 12px; overflow-x: auto; margin: 10px 0; }
+  .theory pre code { background: none; padding: 0; }
+  .quiz-q { background: var(--card); border-radius: 10px; padding: 14px; margin-bottom: 14px; }
+  .quiz-q .q { font-weight: 600; margin-bottom: 10px; }
+  .opt { display: block; padding: 8px 12px; margin: 4px 0; background: #1a1f36; border: 1px solid #2c3358; border-radius: 6px; cursor: pointer; }
+  .opt:hover { border-color: var(--accent); }
+  .opt.selected { border-color: var(--accent); background: #26305c; }
+  .result { font-size: 18px; font-weight: 700; padding: 12px; border-radius: 8px; text-align: center; margin-top: 12px; }
+  .result.pass { color: var(--ok); background: #12351f; }
+  .result.fail { color: var(--warn); background: #3a2a10; }
+  .hidden { display: none; }
+  .hint { color: var(--muted); font-size: 13px; }
+  .locked { color: var(--lock); }
+</style>
+</head>
+<body>
+<header>
+  <h1>🐍 Python &amp; AI 架构师 · 离线学习系统</h1>
+  <div class="clock" id="clock">--:--:--</div>
+</header>
+<main>
+  <div class="grid" id="stats"></div>
+
+  <div class="panel" id="schedulePanel">
+    <h2>📅 今日排课（每节 40 分钟）</h2>
+    <div id="schedule"></div>
+  </div>
+
+  <div class="panel">
+    <h2>🗺️ 八大阶段闯关进度</h2>
+    <div id="semesters"></div>
+  </div>
+
+  <div class="panel">
+    <h2>📖 开始学习</h2>
+    <div id="lessonArea">
+      <p class="hint">点击下方按钮开始下一节解锁的课程。</p>
+      <button id="startBtn" onclick="startLesson()">开始学习</button>
+    </div>
+    <div id="quizArea" class="hidden"></div>
+    <div id="examArea" class="hidden"></div>
+  </div>
+
+  <div class="panel">
+    <h2>📝 单元 / 期末考试</h2>
+    <p class="hint" id="examHint">完成一个单元的全部课程后，可参加该单元考试。</p>
+    <div id="examBtns"></div>
+  </div>
+</main>
+
+<script>
+const $ = (id) => document.getElementById(id);
+
+// ---------- 实时时钟（硬约束：实时知道时间与日期）----------
+function tick() {
+  const d = new Date();
+  const pad = (n) => String(n).padStart(2, '0');
+  $('clock').textContent = `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+}
+setInterval(tick, 1000); tick();
+
+// ---------- 最小 markdown 渲染（安全转义后简单格式化）----------
+function escapeHtml(s) {
+  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+function renderMarkdown(md) {
+  let lines = md.split('\n');
+  let html = '', inCode = false, codeBuf = [];
+  for (let line of lines) {
+    if (line.startsWith('```')) {
+      if (inCode) { html += '<pre><code>' + escapeHtml(codeBuf.join('\n')) + '</code></pre>'; codeBuf = []; inCode = false; }
+      else inCode = true;
+      continue;
+    }
+    if (inCode) { codeBuf.push(line); continue; }
+    line = escapeHtml(line);
+    if (line.startsWith('# ')) html += '<h1>' + line.slice(2) + '</h1>';
+    else if (line.startsWith('## ')) html += '<h2>' + line.slice(3) + '</h2>';
+    else if (line.startsWith('### ')) html += '<h3>' + line.slice(4) + '</h3>';
+    else if (/^\s*[-*]\s/.test(line)) html += '<li>' + line.replace(/^\s*[-*]\s/, '') + '</li>';
+    else if (/^\s*\d+\.\s/.test(line)) html += '<li>' + line.replace(/^\s*\d+\.\s/, '') + '</li>';
+    else if (line.trim() === '') html += '';
+    else html += '<p>' + line.replace(/\*\*(.+?)\*\*/g, '<b>$1</b>').replace(/`([^`]+)`/g, '<code>$1</code>') + '</p>';
+  }
+  if (inCode) html += '<pre><code>' + escapeHtml(codeBuf.join('\n')) + '</code></pre>';
+  return html;
+}
+
+// ---------- 状态总览 ----------
+async function refreshStatus() {
+  const r = await fetch('/api/status');
+  const s = await r.json();
+  $('stats').innerHTML = `
+    <div class="stat"><div class="label">总进度</div><div class="value ok">${s.passed}/${s.total_lessons}</div><div class="hint">知识点 ${s.total_kps} 个</div></div>
+    <div class="stat"><div class="label">通过率</div><div class="value accent">${(s.passed/s.total_lessons*100).toFixed(1)}%</div><div class="hint">及格线 ${s.pass_threshold*100}%</div></div>
+    <div class="stat"><div class="label">下一节课</div><div class="value accent">${s.next_lesson || '—'}</div><div class="hint">当前 ${s.current_lesson || '无'}</div></div>
+    <div class="stat"><div class="label">当前时间</div><div class="value">${s.now.slice(11,19)}</div><div class="hint">${s.now.slice(0,10)}</div></div>
+  `;
+
+  $('schedule').innerHTML = s.schedule.length
+    ? s.schedule.map(e => `<div class="schedule-item"><span class="time">${e.start} - ${e.end}</span><span>${e.lesson_id}</span></div>`).join('')
+    : `<p class="hint">${s.schedule_note}</p>`;
+
+  $('semesters').innerHTML = s.semesters.map(sem => `
+    <div class="sem">
+      <div class="name">${sem.id} ${sem.name}</div>
+      <div class="bar"><div class="fill" style="width:${(sem.passed/sem.total*100).toFixed(0)}%"></div></div>
+      <div class="pct">${sem.passed}/${sem.total}</div>
+    </div>`).join('');
+
+  // 考试入口：有可参加的考试就渲染按钮，否则提示
+  const exams = s.available_exams || [];
+  if (exams.length) {
+    $('examBtns').innerHTML = exams.map(e => `
+      <button style="margin:6px 8px 6px 0" onclick="loadExam('${e.id}')">${e.kind === 'final' ? '🎓' : '📝'} ${e.title}（${e.id}）</button>
+    `).join('');
+    $('examHint').textContent = '以下考试已解锁，点击参加：';
+  } else {
+    $('examBtns').innerHTML = '';
+    $('examHint').textContent = '完成一个单元的全部课程后，可参加该单元考试；学完整个学期的课程并通过全部单元考后，可参加期末考试。';
+  }
+}
+
+// ---------- 开始学习 ----------
+async function startLesson() {
+  const r = await fetch('/api/status');
+  const s = await r.json();
+  if (!s.next_lesson) { alert('没有可学习的课（可能全部通过）。'); return; }
+  await loadLesson(s.next_lesson);
+}
+
+async function loadLesson(id) {
+  const r = await fetch('/api/lesson/' + id);
+  const l = await r.json();
+  if (l.error) { alert(l.error); return; }
+  $('lessonArea').innerHTML = `
+    <h2>${l.title} <span class="hint">(${l.id})</span></h2>
+    <p class="hint">知识点：${l.kps.join(', ')}</p>
+    <div class="theory">${renderMarkdown(l.theory)}</div>`;
+  $('quizArea').classList.remove('hidden');
+  renderQuiz(l.quiz, l.id);
+}
+
+function renderQuiz(quiz, lessonId) {
+  let html = '<h3>随堂测验（通过需 75%）</h3>';
+  quiz.forEach((q, qi) => {
+    html += `<div class="quiz-q"><div class="q">${qi+1}. ${escapeHtml(q.question)}</div>`;
+    q.options.forEach((opt, oi) => {
+      html += `<label class="opt" id="opt-${qi}-${oi}" onclick="selectOpt(${qi},${oi})"><input type="radio" name="q${qi}" value="${oi}" hidden> ${escapeHtml(opt)}</label>`;
+    });
+    html += '</div>';
+  });
+  html += `<button onclick="submitQuiz('${lessonId}')">提交测验</button><div id="quizResult"></div>`;
+  $('quizArea').innerHTML = html;
+}
+
+let quizAnswers = [];
+function selectOpt(qi, oi) {
+  quizAnswers[qi] = oi;
+  for (let i = 0; i < 4; i++) {
+    const el = $('opt-' + qi + '-' + i);
+    if (el) el.classList.toggle('selected', i === oi);
+  }
+}
+
+async function submitQuiz(lessonId) {
+  const r = await fetch('/api/quiz/' + lessonId, {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({answers: quizAnswers})
+  });
+  const res = await r.json();
+  $('quizResult').innerHTML = `<div class="result ${res.passed ? 'pass' : 'fail'}">得分 ${(res.score*100).toFixed(0)}% · ${res.passed ? '✅ 通过！' : '❌ 未通过，请复习后重试'}</div>`;
+  quizAnswers = [];
+  refreshStatus();
+}
+
+// ---------- 考试 ----------
+async function loadExam(id) {
+  const r = await fetch('/api/exam/' + id);
+  const e = await r.json();
+  if (e.error) { alert(e.error); return; }
+  $('examArea').classList.remove('hidden');
+  let html = `<h3>${e.title}（${e.id}）</h3>`;
+  e.questions.forEach((q, qi) => {
+    html += `<div class="quiz-q"><div class="q">${qi+1}. ${escapeHtml(q.question)}</div>`;
+    q.options.forEach((opt, oi) => {
+      html += `<label class="opt" id="eopt-${qi}-${oi}" onclick="selectExamOpt(${qi},${oi})"><input type="radio" name="eq${qi}" value="${oi}" hidden> ${escapeHtml(opt)}</label>`;
+    });
+    html += '</div>';
+  });
+  html += `<button onclick="submitExam('${id}')">交卷</button><div id="examResult"></div>`;
+  $('examArea').innerHTML = html;
+}
+
+let examAnswers = [];
+function selectExamOpt(qi, oi) {
+  examAnswers[qi] = oi;
+  for (let i = 0; i < 8; i++) {
+    const el = $('eopt-' + qi + '-' + i);
+    if (el) el.classList.toggle('selected', i === oi);
+  }
+}
+
+async function submitExam(id) {
+  const r = await fetch('/api/exam/' + id, {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({answers: examAnswers})
+  });
+  const res = await r.json();
+  $('examResult').innerHTML = `<div class="result ${res.passed ? 'pass' : 'fail'}">得分 ${(res.score*100).toFixed(0)}% · ${res.passed ? '✅ 通过！' : '❌ 未通过'}</div>`;
+  examAnswers = [];
+  refreshStatus();
+}
+
+refreshStatus();
+setInterval(refreshStatus, 30000); // 每 30s 自动刷新进度
+</script>
+</body>
+</html>

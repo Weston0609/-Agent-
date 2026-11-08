@@ -1,0 +1,4 @@
+# 零第三方运行时依赖 —— 核心学习路径只用 Python 标准库。
+# （sqlite3 存进度、http.server 做 Web 面板、urllib 调 DeepSeek）
+#
+# 本文件保留为空，表示无需安装任何包即可运行。

@@ -1,0 +1,601 @@
+{
+  "id": "s7u4l2",
+  "title": "s7u4l2",
+  "kps": [
+    "agent.fw.langgraph_state",
+    "agent.fw.langgraph_checkpoint"
+  ],
+  "theory": "## agent.fw.langgraph_state\n\n# LangGraph State：状态驱动的智能体编排\n\n> 一句话直觉：LangGraph 的 State（状态）就像一张“共享记事本”，图上每个节点都能读它、改它，最终由它决定智能体（Agent）下一步做什么。\n\n---\n\n## 一、为什么要学 LangGraph State？\n\n传统写 LLM（Large Language Model，大语言模型）应用时，我们常用一段段 Python 代码把“调用模型 → 解析 → 再调用”串起来。代码越写越长，分支越来越多，最后难以维护。LangGraph 把这种流程抽象成**图（Graph）**：节点（Node）是执行单元，边（Edge）是跳转逻辑，而贯穿整张图的“数据总线”就是 **State**。\n\n理解 State，是理解 LangGraph 的第一步，也是起点。\n\n---\n\n## 二、State 是什么：一张可被所有节点读写的共享数据\n\nState 是一个**类型化字典（TypedDict / Pydantic 模型）**。每个节点接收当前 State，返回一个“补丁”（partial update），LangGraph 负责把它合并进全局 State。\n\n```python\nfrom typing import TypedDict\n\n# 定义状态结构：必须继承 TypedDict\nclass MyState(TypedDict):\n    question: str      # 用户的问题\n    answer: str        # 模型生成的答案\n```\n\n结论：**State 的字段结构由你定义，LangGraph 只负责传递与合并。**\n\n---\n\n## 三、Reducer：解决“多个节点同时改一个字段”的问题\n\n默认情况下，后写入的值会**覆盖**前一个。但很多场景想“追加”而不是“覆盖”，比如对话历史。这时需要给字段指定**归约函数（Reducer）**，最常用的是 `operator.add`。\n\n```python\nimport operator\nfrom typing import Annotated, TypedDict\n\nclass ChatState(TypedDict):\n    # Annotated 的第一个参数是类型，第二个是 Reducer\n    messages: Annotated[list, operator.add]\n```\n\n结论：**用 `Annotated[..., reducer]` 声明合并策略，是 LangGraph State 的核心机制。**\n\n---\n\n## 四、StateGraph：把 State 用到图上\n\n有了 State，就可以创建 `StateGraph`，添加节点和边，最后 `compile()` 成可执行对象。\n\n```python\nfrom langgraph.graph import StateGraph, START, END\n\ndef node_a(state: ChatState):\n    return {\"messages\": [\"hello from A\"]}   # 返回 partial update\n\ngraph = StateGraph(ChatState)\ngraph.add_node(\"a\", node_a)\ngraph.add_edge(START, \"a\")\ngraph.add_edge(\"a\", END)\napp = graph.compile()\n\nprint(app.invoke({\"messages\": []}))\n```\n\n结论：**节点只负责生成“增量”，State 的合并由 LangGraph 统一完成。**\n\n---\n\n## 五、在智能体里的典型用法\n\n智能体通常需要跟踪：用户输入、模型回复、工具调用结果。用 `messages` 列表 + `add_messages` 归约函数是 LangGraph 官方推荐写法，它能自动处理消息 ID 去重与追加。\n\n```python\nfrom langgraph.graph.message import add_messages\nfrom typing import Annotated, TypedDict\n\nclass AgentState(TypedDict):\n    # add_messages 是 LangGraph 内置的消息合并策略\n    messages: Annotated[list, add_messages]\n```\n\n结论：**State 不只是数据容器，它决定了整个智能体的“记忆”如何增长。**\n\n---\n\n## 结尾：动手练习\n\n**任务：写一个两节点的 LangGraph 应用。**\n\n1. 定义 `CounterState`，字段 `nums: Annotated[list, operator.add]`。\n2. 写两个节点：`node1` 返回 `{\"nums\": [1, 2]}`，`node2` 返回 `{\"nums\": [3]}`。\n3. 用 `START → node1 → node2 → END` 连起来，编译并 `invoke({\"nums\": []})`。\n4. 观察输出，然后把 Reducer 去掉再跑一次，对比差异，并解释为什么。\n\n## agent.fw.langgraph_checkpoint\n\n# LangGraph Checkpoint：给 AI 工作流装上「存档读档」能力\\n\\n## 一句话直觉\\n\\n**Checkpoint（检查点）就是让 LangGraph 的 Agent（智能体）在工作流的每一步自动保存状态，这样即使程序崩溃、网络中断，甚至你主动暂停，都能从上次停下的地方无缝继续。**\\n\\n打个比方：玩单机游戏时，你不可能每次都从头打到尾。Checkpoint 就是游戏里的「存档点」——每通过一个关卡就自动存一次，死了可以读档重来，不用重打。LangGraph 的 Checkpoint 就是给 AI 工作流装上了这个能力。\\n\\n---\\n\\n## 1. 为什么需要 Checkpoint？\\n\\n### 1.1 没有 Checkpoint 的世界\\n\\n想象你写了一个 AI 客服 Agent（智能体），流程是：\\n\\n1. 接收用户问题\\n2. 调用 LLM（Large Language Model，大语言模型）理解意图\\n3. 查询数据库\\n4. 调用另一个 LLM 生成回答\\n5. 返回结果\\n\\n如果第 4 步时程序崩了，前面的 1-3 步全部白做。用户重新提问，你又得从头调用 LLM、查数据库，既浪费钱又浪费时间。\\n\\n### 1.2 有 Checkpoint 的世界\\n\\nLangGraph 的 Checkpoint 机制会在**每个节点（Node）执行后**自动保存当前状态到持久化存储（内存、SQLite、Postgres 等）。程序恢复时，直接从最后一个成功的节点继续。\\n\\n**核心结论：Checkpoint 把「一次性执行」变成了「可中断、可恢复、可回溯」的持久化工作流。**\\n\\n```python\\n# 演示：没有 checkpoint 时，状态无法跨执行保留\\n# 这里用最简单的字典模拟「状态」\\nstate = {\"step\": 0, \"data\": None}\\n\\n# 模拟节点执行\\nstate[\"step\"] = 1\\nstate[\"data\"] = \"从数据库查到的结果\"\\n\\n# 如果此时程序崩溃，state 丢失，下次要从头再来\\nprint(\"没有 checkpoint：崩溃后状态丢失\")  # 输出提示\\n```\\n\\n---\\n\\n## 2. LangGraph 中 Checkpoint 的核心概念\\n\\n### 2.1 StateGraph（状态图）\\n\\nLangGraph 用 `StateGraph` 描述工作流：节点是函数，边是跳转逻辑，整个图共享一个「状态」（State）。状态通常是一个字典或 TypedDict。\\n\\n### 2.2 Checkpointer（检查点存储器）\\n\\n`Checkpointer` 是负责保存和读取状态的组件。LangGraph 提供多种实现：\\n\\n- `MemorySaver`：保存在内存中，适合开发和测试\\n- `SqliteSaver`：保存到 SQLite 文件，适合本地持久化\\n- `PostgresSaver`：保存到 PostgreSQL，适合生产环境\\n\\n### 2.3 Thread ID（线程标识）\\n\\n每个工作流执行实例用一个 `thread_id` 标识。同一个 `thread_id` 的多次调用会共享状态，实现「继续对话」或「断点续传」。\\n\\n**核心结论：Checkpointer + thread_id = 可持久化、可恢复的工作流实例。**\\n\\n```python\\n# 演示：用 MemorySaver 作为 checkpointer 的最小示例\\nfrom langgraph.graph import StateGraph, END\\nfrom langgraph.checkpoint.memory import MemorySaver\\nfrom typing import TypedDict\\n\\n# 定义状态结构\\nclass State(TypedDict):\\n    count: int\\n    message: str\\n\\n# 定义一个简单节点：每次调用 count 加 1\\ndef increment(state: State):\\n    return {\"count\": state[\"count\"] + 1, \"message\": f\"已执行 {state['count'] + 1} 次\"}\\n\\n# 构建图\\nbuilder = StateGraph(State)\\nbuilder.add_node(\"increment\", increment)\\nbuilder.set_entry_point(\"increment\")\\nbuilder.add_edge(\"increment\", END)\\n\\n# 绑定 checkpointer\\nmemory = MemorySaver()\\ngraph = builder.compile(checkpointer=memory)\\n\\n# 用同一个 thread_id 调用两次\\nconfig = {\"configurable\": {\"thread_id\": \"demo-1\"}}\\nresult1 = graph.invoke({\"count\": 0, \"message\": \"\"}, config)\\nprint(\"第一次:\", result1)  # count: 1\\n\\n# 第二次调用：会从上次保存的状态继续\\nresult2 = graph.invoke({\"count\": 0, \"message\": \"\"}, config)\\nprint(\"第二次:\", result2)  # count: 2（因为 checkpoint 保存了 count=1）\\n```\\n\\n---\\n\\n## 3. Checkpoint 的工作机制：每一步都存档\\n\\n### 3.1 保存时机\\n\\nLangGraph 在以下时机自动保存 checkpoint：\\n\\n- 每个节点执行完成后\\n- 每次状态更新后\\n- 遇到中断（interrupt）时\\n\\n### 3.2 状态版本与回溯\\n\\n每个 checkpoint 都有一个唯一 ID（`checkpoint_id`），你可以：\\n\\n- 获取最新状态\\n- 列出所有历史 checkpoint\\n- 从任意历史 checkpoint 恢复\\n\\n这相当于游戏里的「多存档位」，可以回到任意一关。\\n\\n### 3.3 与 interrupt 配合实现人机协作\\n\\n`interrupt` 是 LangGraph 的中断机制，可以在某个节点前暂停，等待人类输入。Checkpoint 保证暂停期间状态不丢失，人类输入后从断点继续。\\n\\n**核心结论：Checkpoint 不仅用于容错，还是「人机协作」和「时间旅行调试」的基础设施。**\\n\\n```python\\n# 演示：查看历史 checkpoint\\nfrom langgraph.graph import StateGraph, END\\nfrom langgraph.checkpoint.memory import MemorySaver\\nfrom typing import TypedDict\\n\\nclass State(TypedDict):\\n    value: int\\n\\ndef add_one(state: State):\\n    return {\"value\": state[\"value\"] + 1}\\n\\nbuilder = StateGraph(State)\\nbuilder.add_node(\"add_one\", add_one)\\nbuilder.set_entry_point(\"add_one\")\\nbuilder.add_edge(\"add_one\", END)\\n\\nmemory = MemorySaver()\\ngraph = builder.compile(checkpointer=memory)\\nconfig = {\"configurable\": {\"thread_id\": \"history-demo\"}}\\n\\ngraph.invoke({\"value\": 0}, config)\\ngraph.invoke({\"value\": 0}, config)\\n\\n# 列出该 thread 的所有 checkpoint\\ncheckpoints = list(memory.list(config))\\nprint(f\"共有 {len(checkpoints)} 个 checkpoint\")\\nfor cp in checkpoints:\\n    print(\"checkpoint_id:\", cp.checkpoint[\"id\"], \"| value:\", cp.checkpoint[\"channel_values\"])\\n```\\n\\n---\\n\\n## 4. 实战：带 Checkpoint 的对话 Agent\\n\\n下面构建一个多轮对话 Agent，用 `MemorySaver` 保存对话历史，同一个 `thread_id` 可以持续对话。\\n\\n```python\\n# 完整示例：带 checkpoint 的多轮对话 Agent\\nfrom langgraph.graph import StateGraph, END\\nfrom langgraph.checkpoint.memory import MemorySaver\\nfrom typing import TypedDict, Annotated\\nimport operator\\n\\n# 状态：messages 用 operator.add 实现追加\\nclass ChatState(TypedDict):\\n    messages: Annotated[list, operator.add]\\n\\n# 模拟一个「AI 回复」节点（实际项目替换为 LLM 调用）\\ndef ai_reply(state: ChatState):\\n    last_user_msg = state[\"messages\"][-1]\\n    reply = f\"AI 收到：{last_user_msg}。这是第 {len(state['messages'])} 条消息。\"\\n    return {\"messages\": [reply]}\\n\\nbuilder = StateGraph(ChatState)\\nbuilder.add_node(\"ai_reply\", ai_reply)\\nbuilder.set_entry_point(\"ai_reply\")\\nbuilder.add_edge(\"ai_reply\", END)\\n\\nmemory = MemorySaver()\\ngraph = builder.compile(checkpointer=memory)\\n\\nconfig = {\"configurable\": {\"thread_id\": \"chat-001\"}}\\n\\n# 第一轮\\nr1 = graph.invoke({\"messages\": [\"你好\"]}, config)\\nprint(\"第1轮:\", r1[\"messages\"])\\n\\n# 第二轮：同一 thread_id，历史自动累积\\nr2 = graph.invoke({\"messages\": [\"今天天气如何\"]}, config)\\nprint(\"第2轮:\", r2[\"messages\"])\\n\\n# 第三轮\\nr3 = graph.invoke({\"messages\": [\"谢谢\"]}, config)\\nprint(\"第3轮:\", r3[\"messages\"])\\n```\\n\\n运行结果会看到 `messages` 不断累积，证明 checkpoint 确实在跨调用保存状态。\\n\\n---\\n\\n## 5. 常见 Checkpointer 选型与生产建议\\n\\n| Checkpointer | 存储位置 | 适用场景 |\\n|---|---|---|\\n| `MemorySaver` | 内存 | 开发、单元测试 |\\n| `SqliteSaver` | 本地文件 | 单机小规模持久化 |\\n| `PostgresSaver` | PostgreSQL | 生产环境、多实例 |\\n\\n**选型原则：**\\n\\n- 开发阶段用 `MemorySaver`，零配置\\n- 需要重启后恢复用 `SqliteSaver`\\n- 生产环境用 `PostgresSaver`，支持并发和事务\\n\\n**核心结论：Checkpoint 的存储层可替换，业务代码不用改，这是 LangGraph 架构上的关键解耦。**\\n\\n```python\\n# 演示：切换到 SqliteSaver 实现持久化\\n# 需要安装：pip install langgraph-checkpoint-sqlite\\nimport sqlite3\\nfrom langgraph.graph import StateGraph, END\\nfrom langgraph.checkpoint.sqlite import SqliteSaver\\nfrom typing import TypedDict\\n\\nclass State(TypedDict):\\n    n: int\\n\\ndef inc(state: State):\\n    return {\"n\": state[\"n\"] + 1}\\n\\nbuilder = StateGraph(State)\\nbuilder.add_node(\"inc\", inc)\\nbuilder.set_entry_point(\"inc\")\\nbuilder.add_edge(\"inc\", END)\\n\\n# 用 SQLite 文件保存 checkpoint\\nconn = sqlite3.connect(\"checkpoints.db\", check_same_thread=False)\\nmemory = SqliteSaver(conn)\\ngraph = builder.compile(checkpointer=memory)\\n\\nconfig = {\"configurable\": {\"thread_id\": \"sqlite-demo\"}}\\nprint(graph.invoke({\"n\": 0}, config))\\nprint(graph.invoke({\"n\": 0}, config))\\n# 即使程序重启，只要 checkpoints.db 还在，状态就能恢复\\n```\\n\\n---\\n\\n## 总结\\n\\n- Checkpoint 让 LangGraph 工作流可持久化、可恢复、可回溯\\n- 核心三要素：`StateGraph` + `Checkpointer` + `thread_id`\\n- 每个节点执行后自动存档，支持中断续跑和人机协作\\n- 存储层可替换：Memory → SQLite → Postgres\\n\\n记住：**Checkpoint 是 Agent 从「玩具」走向「生产级」的关键一步。**\n",
+  "quiz": [
+    {
+      "kp": "agent.fw.langgraph_state",
+      "type": "single_choice",
+      "question": "在使用 LangGraph 构建对话代理时，状态对象需要存储多轮对话历史。以下关于状态定义和更新的说法，哪一项最准确？",
+      "options": [
+        "状态定义中每个字段的默认值必须显式写在 TypedDict 中，否则运行时一定报错",
+        "状态字段使用 reducer 决定如何合并节点返回的更新，若未指定 reducer 则默认覆盖旧值",
+        "状态字段只能追加消息，不能覆盖，因为 LangGraph 强制所有字段都是累积型",
+        "状态对象在每次节点执行后会被自动重置为空字典，因此必须重新传入完整历史"
+      ],
+      "answer": 1,
+      "explanation": "LangGraph 通过 reducer（如 operator.add 或 add_messages）控制字段更新方式；默认行为是覆盖旧值，只有配置了累积型 reducer 的字段才会合并，因此选项 B 正确。A 错误，TypedDict 默认值并非必须；C 错误，字段是否累积取决于 reducer，并非强制所有字段累积；D 错误，状态不会自动重置。",
+      "error_tag": "状态更新机制理解错误",
+      "variant_group": "langgraph_state_reducer"
+    },
+    {
+      "kp": "agent.fw.langgraph_state",
+      "type": "single_choice",
+      "question": "某开发者定义了如下状态：class State(TypedDict): messages: Annotated[list, add_messages]。一个节点返回 {\"messages\": [new_msg]}。关于运行结果，下列哪项描述正确？",
+      "options": [
+        "new_msg 会替换掉 messages 中已有的全部消息",
+        "new_msg 会被追加到 messages 列表末尾，原有消息保留",
+        "add_messages 会把 new_msg 与已有消息按 id 去重后覆盖整个列表",
+        "运行时会报错，因为节点只能返回完整的状态对象而非部分字段"
+      ],
+      "answer": 1,
+      "explanation": "add_messages 是消息列表的累积 reducer，节点返回的增量消息会被追加到现有列表中。选项 A 是默认覆盖行为的误解；C 混淆了去重与追加；D 错误，LangGraph 允许节点返回部分状态更新。",
+      "error_tag": "add_messages 行为误解",
+      "variant_group": "langgraph_state_add_messages"
+    },
+    {
+      "kp": "agent.fw.langgraph_state",
+      "type": "single_choice",
+      "question": "关于 LangGraph 状态中的消息清理或删除操作，以下说法正确的是？",
+      "options": [
+        "add_messages 无法表达删除，消息只能追加不能删除",
+        "可以通过返回 RemoveMessage 对象来请求删除特定 id 的消息",
+        "删除消息必须重建整个状态，无法在节点中增量处理",
+        "删除操作只能通过外部调用 update_state 完成，节点内不允许"
+      ],
+      "answer": 1,
+      "explanation": "add_messages 支持通过返回 RemoveMessage 来删除指定 id 的消息。A 错误；C 和 D 与实际能力不符。",
+      "error_tag": "消息删除机制误解",
+      "variant_group": "langgraph_state_add_messages"
+    },
+    {
+      "kp": "agent.fw.langgraph_state",
+      "type": "single_choice",
+      "question": "一个节点函数签名定义为 def node(state: State) -> dict，其中 State 是 TypedDict。关于返回值类型，以下哪项最合适？",
+      "options": [
+        "必须返回完整的 State 字典，包含所有字段",
+        "可以返回包含部分字段的字典，用于增量更新状态",
+        "必须返回一个 State 实例，不能是普通字典",
+        "返回值会被忽略，状态更新只能通过副作用完成"
+      ],
+      "answer": 1,
+      "explanation": "LangGraph 节点可以返回部分字段的字典作为增量更新。A 过于严格；C 错误，TypedDict 的状态实际就是字典结构；D 错误，返回值是标准的状态更新方式。",
+      "error_tag": "节点返回值理解错误",
+      "variant_group": "langgraph_state_partial_update"
+    },
+    {
+      "kp": "agent.fw.langgraph_state",
+      "type": "single_choice",
+      "question": "在 LangGraph 中，如果要让某个状态字段在并行分支执行时安全地累积多个分支的结果，应当？",
+      "options": [
+        "将该字段声明为不可变，避免冲突",
+        "为该字段指定一个可合并的 reducer，例如 operator.add 或自定义 reducer",
+        "禁止在该字段上使用并行分支",
+        "在每个分支中手动读取并写回完整状态"
+      ],
+      "answer": 1,
+      "explanation": "指定可合并的 reducer 能保证并行分支的更新被正确合并。A 不能解决累积问题；C 是回避而非解决；D 手动写回容易丢失更新，不是推荐做法。",
+      "error_tag": "并行更新处理错误",
+      "variant_group": "langgraph_state_parallel"
+    },
+    {
+      "kp": "agent.fw.langgraph_state",
+      "type": "single_choice",
+      "question": "关于 LangGraph 状态与检查点（checkpoint）的关系，以下哪项描述正确？",
+      "options": [
+        "检查点保存的是状态在某一时刻的快照，可用于恢复执行",
+        "检查点只保存图的拓扑结构，不保存状态数据",
+        "状态与检查点无关，检查点仅用于日志记录",
+        "检查点会阻止状态更新，确保状态不可变"
+      ],
+      "answer": 0,
+      "explanation": "检查点机制会保存状态快照，使得图可以从某个时间点恢复。B 错误，检查点包含状态；C 错误，检查点用于持久化和恢复；D 错误，检查点不阻止更新。",
+      "error_tag": "检查点与状态关系误解",
+      "variant_group": "langgraph_state_checkpoint"
+    },
+    {
+      "kp": "agent.fw.langgraph_state",
+      "type": "single_choice",
+      "question": "以下关于 Annotated 在 LangGraph 状态定义中的作用的描述，哪项正确？",
+      "options": [
+        "Annotated 仅用于类型检查，运行时会被完全忽略",
+        "Annotated 的第二个参数可以携带 reducer，用于指导状态字段的合并方式",
+        "Annotated 只能用于字符串类型的字段",
+        "Annotated 会强制字段变为只读，不能更新"
+      ],
+      "answer": 1,
+      "explanation": "在 LangGraph 中，Annotated 的元数据可携带 reducer 函数，从而影响字段的合并行为。A 忽略了运行时语义；C 和 D 与事实不符。",
+      "error_tag": "Annotated 用途误解",
+      "variant_group": "langgraph_state_schema"
+    },
+    {
+      "kp": "agent.fw.langgraph_state",
+      "type": "single_choice",
+      "question": "某节点需要读取状态中的 messages 列表并生成新消息。以下哪项操作最符合 LangGraph 状态使用习惯？",
+      "options": [
+        "直接修改 state[\"messages\"] 列表并返回 None",
+        "读取 state[\"messages\"]，构造新消息列表并作为返回值的一部分返回",
+        "使用全局变量保存消息，绕开状态传递",
+        "在节点内重新初始化整个状态字典并返回"
+      ],
+      "answer": 1,
+      "explanation": "推荐做法是读取状态、构造更新并返回，由 reducer 负责合并。A 原地修改并返回 None 可能绕过 reducer 的合并语义；C 破坏状态管理；D 会丢弃其他字段的更新。",
+      "error_tag": "状态更新方式不当",
+      "variant_group": "langgraph_state_partial_update"
+    },
+    {
+      "kp": "agent.fw.langgraph_state",
+      "type": "single_choice",
+      "question": "关于 LangGraph 中状态字段的默认值，以下说法正确的是？",
+      "options": [
+        "所有字段都必须有默认值，否则图无法启动",
+        "字段可以没有默认值，首次访问时可能不存在，需要节点自行处理",
+        "TypedDict 会自动为所有字段提供 None 默认值",
+        "默认值只能通过 reducer 提供，不能直接写在类型定义中"
+      ],
+      "answer": 1,
+      "explanation": "TypedDict 不会自动填充默认值，字段可能未初始化，节点需要处理缺失情况。A 过于绝对；C 错误，TypedDict 不提供自动默认值；D 错误，默认值可在状态初始化时提供。",
+      "error_tag": "状态默认值误解",
+      "variant_group": "langgraph_state_defaults"
+    },
+    {
+      "kp": "agent.fw.langgraph_state",
+      "type": "single_choice",
+      "question": "若要在运行图之前预先设置某些状态字段的初始值，以下哪种方式最直接？",
+      "options": [
+        "在第一个节点中硬编码初始值",
+        "调用图对象的 invoke 时传入包含初始状态的字典",
+        "通过修改状态类的类属性来设置全局默认值",
+        "在图的编译阶段使用装饰器注入初始值"
+      ],
+      "answer": 1,
+      "explanation": "调用 invoke 时传入初始状态字典是设置初始值最直接的方式。A 可行但不够灵活；C 不是推荐做法；D 无此标准用法。",
+      "error_tag": "初始状态设置方式错误",
+      "variant_group": "langgraph_state_init"
+    },
+    {
+      "kp": "agent.fw.langgraph_state",
+      "type": "single_choice",
+      "question": "在 LangGraph 中，一个节点返回了状态中不存在的字段，通常会发生什么？",
+      "options": [
+        "该字段会被自动添加到状态中，即使 schema 未声明",
+        "通常会抛出错误或产生未定义行为，因为 schema 未声明该字段",
+        "该字段会被静默忽略，不影响状态",
+        "运行时会将字段名转换为合法标识符后添加"
+      ],
+      "answer": 1,
+      "explanation": "状态 schema 定义了合法字段，返回未声明字段通常会导致错误或未定义行为。A 与实现不符；C 不一定忽略，可能报错；D 无此机制。",
+      "error_tag": "状态 schema 约束误解",
+      "variant_group": "langgraph_state_schema"
+    },
+    {
+      "kp": "agent.fw.langgraph_state",
+      "type": "single_choice",
+      "question": "关于 LangGraph 状态在设计代理时的作用，以下哪项最准确？",
+      "options": [
+        "状态仅用于存储最终输出，中间过程不写入状态",
+        "状态充当代理的记忆和上下文载体，在各节点间共享并累积信息",
+        "状态应当尽量小，只保留最后一个节点的输出",
+        "状态一旦写入就不能再被后续节点修改"
+      ],
+      "answer": 1,
+      "explanation": "状态是代理的共享记忆，承载上下文并在节点间传递和累积。A 和 C 低估了状态的作用；D 错误，状态可以按 reducer 更新。",
+      "error_tag": "状态作用理解偏差",
+      "variant_group": "langgraph_state_concept"
+    },
+    {
+      "kp": "agent.fw.langgraph_state",
+      "type": "single_choice",
+      "question": "在 LangGraph 的图执行过程中，某个节点函数只返回了状态中的部分字段。关于其余字段的值，下列说法正确的是？",
+      "options": [
+        "其余字段会被自动清空，因为节点返回代表了完整的新状态",
+        "其余字段保持不变，LangGraph 会基于 reducer 合并节点返回的部分更新",
+        "只有被声明为 reducible 的字段会被保留，其他字段一律丢失",
+        "运行时抛出异常，要求节点必须返回与输入状态相同键的字典"
+      ],
+      "answer": 1,
+      "explanation": "LangGraph 支持部分状态更新，未被返回的字段会保留原值（或按已有 reducer 合并），并不会清空。A 和 C 是常见误解，D 错误，部分更新是合法用法。",
+      "error_tag": "部分状态更新理解错误",
+      "variant_group": "langgraph_state_partial_update"
+    },
+    {
+      "kp": "agent.fw.langgraph_state",
+      "type": "single_choice",
+      "question": "关于 LangGraph 中状态 schema 的定义方式，以下哪项说法是正确的？",
+      "options": [
+        "状态必须使用 Pydantic BaseModel 定义，不能使用 TypedDict",
+        "状态可以使用 TypedDict 或 Pydantic BaseModel 定义，两者都受支持",
+        "状态只能定义为普通 dict，使用类型注解会导致运行时错误",
+        "状态必须继承自 LangGraph 提供的 State 基类，否则无法编译图"
+      ],
+      "answer": 1,
+      "explanation": "LangGraph 支持 TypedDict 和 Pydantic BaseModel 两种状态定义方式，也接受其他兼容的结构。A 和 D 过于绝对；C 错误，类型注解是推荐做法而非错误来源。",
+      "error_tag": "状态定义方式误解",
+      "variant_group": "langgraph_state_schema"
+    },
+    {
+      "kp": "agent.fw.langgraph_state",
+      "type": "single_choice",
+      "question": "当图的一个节点需要根据状态中的某个数值字段进行累加更新时，最合适的 reducer 是？",
+      "options": [
+        "add_messages，因为它能处理所有类型的累积",
+        "operator.add，它可以对数值或列表执行相加操作",
+        "一个返回 None 的函数，表示保留旧值",
+        "不需要 reducer，直接返回新数值即可自动累加"
+      ],
+      "answer": 1,
+      "explanation": "operator.add 可作为数值或列表的累积 reducer，实现加法合并。A 错误，add_messages 专用于消息列表；C 错误，返回 None 并不表示保留旧值；D 错误，默认是覆盖而非累加。",
+      "error_tag": "reducer 选择错误",
+      "variant_group": "langgraph_state_reducer_choice"
+    },
+    {
+      "kp": "agent.fw.langgraph_state",
+      "type": "single_choice",
+      "question": "以下代码片段：\nfrom typing import Annotated\nfrom operator import add\nclass State(TypedDict):\n    count: Annotated[int, add]\n\n一个节点返回 {\"count\": 3}，之前 count 为 10。执行后 count 的值是？",
+      "options": [
+        "3",
+        "10",
+        "13",
+        "运行时错误，因为 int 不能与 reducer 一起使用"
+      ],
+      "answer": 2,
+      "explanation": "使用 add 作为 reducer 时，count 的新值等于旧值 10 加上节点返回的 3，得到 13。A 是覆盖行为的误解；B 是忽略更新的误解；D 错误，int 支持加法。",
+      "error_tag": "reducer 合并计算错误",
+      "variant_group": "langgraph_state_reducer_choice"
+    },
+    {
+      "kp": "agent.fw.langgraph_state",
+      "type": "single_choice",
+      "question": "关于 LangGraph 中状态在节点之间的传递方式，以下哪项描述正确？",
+      "options": [
+        "每个节点接收到的是上游节点返回的原始字典，不做任何合并",
+        "每个节点接收到的是根据 reducer 合并后的当前完整状态",
+        "状态只在图的入口处传递一次，之后节点之间不共享",
+        "状态传递需要手动调用 update_state 方法才能在节点间生效"
+      ],
+      "answer": 1,
+      "explanation": "LangGraph 会在执行每个节点前，把节点返回的更新按 reducer 合并到当前状态，并将完整状态传给下一个节点。A 忽略了合并；C 错误，状态在整个图执行中持续传递；D 错误，update_state 用于外部注入，不是节点间传递的必要条件。",
+      "error_tag": "状态传递机制理解错误",
+      "variant_group": "langgraph_state_propagation"
+    },
+    {
+      "kp": "agent.fw.langgraph_state",
+      "type": "single_choice",
+      "question": "某代理使用 LangGraph 状态存储对话消息，并配置了 add_messages reducer。若同一节点在一次执行中返回两条具有相同 id 的消息，会发生什么？",
+      "options": [
+        "两条消息都会被追加，产生重复 id 的记录",
+        "后一条消息会替换前一条具有相同 id 的消息",
+        "运行时抛出异常，禁止重复 id",
+        "只有第一条消息会被保留，第二条被静默丢弃"
+      ],
+      "answer": 1,
+      "explanation": "add_messages 支持按 id 进行更新或替换：相同 id 的消息会以最新返回的为准，不会产生重复。A 错误；C 和 D 不符合其设计行为。",
+      "error_tag": "add_messages 去重理解错误",
+      "variant_group": "langgraph_state_add_messages"
+    },
+    {
+      "kp": "agent.fw.langgraph_state",
+      "type": "single_choice",
+      "question": "在定义 LangGraph 状态时，若某个字段没有使用 Annotated 包裹 reducer，那么当多个并行分支同时更新该字段时，通常会出现什么结果？",
+      "options": [
+        "所有分支的更新会自动合并为一个列表",
+        "最后完成的那个分支的更新会覆盖其他分支的更新",
+        "运行时一定会抛出异常，因为并行更新需要显式 reducer",
+        "该字段会被忽略，不会出现在最终状态中"
+      ],
+      "answer": 1,
+      "explanation": "未指定 reducer 时字段采用默认覆盖语义，并行更新时后写覆盖先写。A 是累积 reducer 的行为；C 并非一定，取决于具体实现和版本；D 错误，字段仍会存在。",
+      "error_tag": "默认覆盖语义误解",
+      "variant_group": "langgraph_state_reducer"
+    },
+    {
+      "kp": "agent.fw.langgraph_state",
+      "type": "single_choice",
+      "question": "以下哪种场景最适合使用自定义 reducer 而不是内置的 add_messages 或 operator.add？",
+      "options": [
+        "把所有消息拼接成一个字符串",
+        "对状态中的字典字段进行深度合并，而不是整体覆盖",
+        "对数值字段做简单的加法累加",
+        "对列表字段做简单的追加操作"
+      ],
+      "answer": 1,
+      "explanation": "当需要合并字典的键值而非覆盖整个字典时，需要自定义 reducer。A 是字符串拼接，可用 operator.add；C 可用 operator.add；D 可用 operator.add 或 add_messages（对消息列表），因此 B 最合适。",
+      "error_tag": "自定义 reducer 适用场景误判",
+      "variant_group": "langgraph_state_custom_reducer"
+    },
+    {
+      "kp": "agent.fw.langgraph_checkpoint",
+      "type": "single_choice",
+      "question": "在使用 LangGraph 构建对话式 Agent 时，图中的状态默认会被保存在哪里？",
+      "options": [
+        "自动持久化到磁盘文件，无需任何配置",
+        "仅保存在内存中，进程结束后即丢失（除非显式配置 checkpointer）",
+        "自动同步到远程数据库",
+        "由 LangGraph 随机选择存储位置"
+      ],
+      "answer": 1,
+      "explanation": "LangGraph 默认使用内存中的状态，图执行结束后状态不会保留。要实现跨调用的持久化，必须显式传入 checkpointer（如内存 saver 或数据库 saver），否则多轮对话的上下文无法在多次 invoke 之间延续。",
+      "error_tag": "概念混淆",
+      "variant_group": "checkpoint_default_persistence"
+    },
+    {
+      "kp": "agent.fw.langgraph_checkpoint",
+      "type": "single_choice",
+      "question": "在某 Agent 中，你希望用户用同一个 session/thread 名多次调用图时能延续之前的对话历史。下面哪种做法最关键？",
+      "options": [
+        "每次调用时把历史消息手动拼接进输入",
+        "为图配置一个 checkpointer，并在每次调用时传入相同的 thread_id",
+        "把图编译成同步版本",
+        "增大节点的 recursion_limit"
+      ],
+      "answer": 1,
+      "explanation": "checkpointer 负责把每一步的状态按 thread_id 保存，配置好 checkpointer 且调用时传入一致的 thread_id，后续调用才能读取到该线程的历史状态，从而延续对话。手动拼接历史虽然可行，但不是 LangGraph 的持久化机制核心。",
+      "error_tag": "概念混淆",
+      "variant_group": "thread_id_resume"
+    },
+    {
+      "kp": "agent.fw.langgraph_checkpoint",
+      "type": "fill_blank",
+      "question": "在 LangGraph 中，要让同一会话的多次调用共享状态，调用时通常需要传入一个稳定的 ______ 来标识这条会话线程。",
+      "options": [],
+      "answer": [
+        "thread_id",
+        "thread id",
+        "threadId"
+      ],
+      "explanation": "thread_id 是标识一次会话/执行链的键。配置 checkpointer 后，同一 thread_id 的多次调用会读写同一份状态，从而实现跨调用的延续。",
+      "error_tag": "记忆缺失",
+      "variant_group": "thread_id_resume"
+    },
+    {
+      "kp": "agent.fw.langgraph_checkpoint",
+      "type": "fill_blank",
+      "question": "LangGraph 中，负责把图的状态按步骤持久化保存、从而支持中断恢复和历史回溯的组件，通常称为 ______。",
+      "options": [],
+      "answer": [
+        "checkpointer",
+        "checkpoint saver",
+        "checkpoint_saver",
+        "检查点保存器"
+      ],
+      "explanation": "checkpointer（检查点保存器）负责在每一步保存状态快照，是持久化、中断恢复与时间旅行能力的基础。没有它，状态默认只存在于内存中。",
+      "error_tag": "记忆缺失",
+      "variant_group": "checkpoint_default_persistence"
+    },
+    {
+      "kp": "agent.fw.langgraph_checkpoint",
+      "type": "fill_blank",
+      "question": "当图为'人工审批'而在某节点中断后，要让它从该中断点继续执行，需要基于已保存的 ______ 恢复，而不是从头重新运行。",
+      "options": [],
+      "answer": [
+        "检查点",
+        "checkpoint",
+        "状态快照",
+        "checkpoint 状态"
+      ],
+      "explanation": "中断恢复依赖已保存的检查点（checkpoint）。基于该检查点恢复执行，才能从中断处继续，避免重复已经完成的步骤。",
+      "error_tag": "记忆缺失",
+      "variant_group": "checkpoint_human_in_loop"
+    },
+    {
+      "kp": "agent.fw.langgraph_checkpoint",
+      "type": "code_reading",
+      "question": "阅读下面这段使用 LangGraph 的伪代码，回答问题：\n\n```python\nbuilder = StateGraph(State)\nbuilder.add_node(\"chat\", chat_node)\nbuilder.add_edge(START, \"chat\")\nbuilder.add_edge(\"chat\", END)\n\ngraph = builder.compile()  # 未传入 checkpointer\n\nr1 = graph.invoke({\"messages\": [\"你好\"]}, config={\"configurable\": {\"thread_id\": \"u1\"}})\nr2 = graph.invoke({\"messages\": [\"刚才我说了什么？\"]}, config={\"configurable\": {\"thread_id\": \"u1\"}})\n```\n\n第二次调用时，图能读到第一次调用保存的状态吗？为什么？",
+      "options": [],
+      "answer": "不能。因为 compile() 时没有传入 checkpointer，图默认只在内存中保存状态且不会跨调用持久化，两次 invoke 是相互独立的，thread_id 也不会带来状态延续。要能读到上次状态，需要在 compile 时配置 checkpointer（并使用可持久的存储）。",
+      "explanation": "thread_id 只有在配置了 checkpointer 并真正保存了状态时才能发挥作用。此处 compile 未配置 checkpointer，状态不会被跨调用保留，所以第二次调用无法看到第一次的消息历史。",
+      "error_tag": "概念混淆",
+      "variant_group": "checkpoint_default_persistence"
+    },
+    {
+      "kp": "agent.fw.langgraph_checkpoint",
+      "type": "code_reading",
+      "question": "阅读下面这段描述图执行的伪代码，回答问题：\n\n```python\n# 假设已用某个内存 checkpointer 编译了图\ncfg = {\"configurable\": {\"thread_id\": \"session-42\"}}\n\ngraph.invoke({\"messages\": [\"订一张去北京的票\"]}, config=cfg)\n# ... 中间某节点因等待人工确认而中断 ...\ngraph.invoke({\"messages\": [\"确认\"]}, config=cfg)\n```\n\n第二次调用使用相同的 thread_id，图将如何开始执行？为什么？",
+      "options": [],
+      "answer": "它将基于该 thread_id 上次保存的检查点状态继续执行，而不是从入口节点重新开始。因为配置了 checkpointer 且两次使用相同的 thread_id，第二次调用会加载已有状态并从中断处恢复，从而接着完成等待人工确认之后的步骤。",
+      "explanation": "checkpointer 按 thread_id 保存每一步状态。相同 thread_id 的再次调用会读取该线程的最新检查点并恢复，因此中断后的续跑得以实现，而不会重复之前的步骤。",
+      "error_tag": "概念混淆",
+      "variant_group": "thread_id_resume"
+    },
+    {
+      "kp": "agent.fw.langgraph_checkpoint",
+      "type": "code_reading",
+      "question": "阅读下面这段伪代码并回答问题：\n\n```python\n# 情景：使用同一个持久化的 checkpointer\ngraph.invoke({\"messages\": [\"A\"]}, config={\"configurable\": {\"thread_id\": \"t1\"}})\ngraph.invoke({\"messages\": [\"B\"]}, config={\"configurable\": {\"thread_id\": \"t2\"}})\n```\n\n第二次调用（thread_id 为 t2）能读到 thread_id 为 t1 时保存的状态吗？请说明理由。",
+      "options": [],
+      "answer": "不能。状态与 thread_id 绑定，t2 是另一条会话线程，只能读取属于 t2 的检查点；t1 保存的状态只对 thread_id 为 t1 的调用可见。要实现跨会话共享，需使用同一 thread_id 或另行把数据写入共享存储。",
+      "explanation": "thread_id 是状态隔离的键。不同 thread_id 各自维护独立的检查点序列，因此第二次调用无法读到他线程的状态，这正是 checkpointer 用来隔离多个会话/用户的机制。",
+      "error_tag": "边界错误",
+      "variant_group": "checkpoint_thread_relation"
+    },
+    {
+      "kp": "agent.fw.langgraph_checkpoint",
+      "type": "scenario",
+      "question": "场景：你正在开发一个带多轮对话的客服 Agent。测试时发现，用户连续发两条消息，第二条消息的回复完全无视第一条的内容，好像每次都是新会话。你已经为图配置了 checkpointer。请分析最可能的原因，并给出修复方向。",
+      "options": [],
+      "answer": null,
+      "explanation": "配置了 checkpointer 却仍像新会话，常见原因是每次调用使用了不同的 thread_id（例如每次生成随机 ID），导致状态落在不同的线程中，无法延续。修复方向是让同一用户会话使用稳定一致的 thread_id，确保每次调用都读写同一份检查点状态。",
+      "error_tag": "边界错误",
+      "variant_group": "thread_id_resume",
+      "required_keywords": [
+        "thread_id",
+        "checkpointer",
+        "会话状态",
+        "状态延续",
+        "稳定一致"
+      ]
+    },
+    {
+      "kp": "agent.fw.langgraph_checkpoint",
+      "type": "scenario",
+      "question": "场景：某流程 Agent 在执行到'发送邮件'节点前需要人工审批。你希望审批前图能停下、保存进度，审批通过后再从该点继续，而不是从头重跑。请说明应该依赖 checkpointer 的哪些能力，以及为什么需要它。",
+      "options": [],
+      "answer": null,
+      "explanation": "需要依赖 checkpointer 在中断点保存状态快照（检查点）的能力，以及基于该检查点恢复执行的能力。没有 checkpointer，中断后状态无法保留，也就无法从该点继续，只能从头重跑；同时需要用一致的 thread_id 来定位并恢复同一会话的状态。",
+      "error_tag": "概念混淆",
+      "variant_group": "checkpoint_human_in_loop",
+      "required_keywords": [
+        "检查点",
+        "状态快照",
+        "恢复执行",
+        "thread_id",
+        "会话状态"
+      ]
+    },
+    {
+      "kp": "agent.fw.langgraph_checkpoint",
+      "type": "scenario",
+      "question": "场景：线上 Agent 在多台机器上以多进程方式部署，用户反馈同一会话在不同机器之间的上下文会丢。你已确认代码里用了相同的 thread_id。请分析可能的原因并给出改进方向。",
+      "options": [],
+      "answer": null,
+      "explanation": "最可能的原因是把状态保存在了进程内的内存 checkpointer 中，各进程/各机器之间彼此隔离，因此同一 thread_id 也无法共享状态。改进方向是改用可跨进程访问的持久化存储（如数据库）作为 checkpointer 的后端，让不同实例都能读取同一 thread_id 的状态。",
+      "error_tag": "边界错误",
+      "variant_group": "checkpoint_persistence_backend",
+      "required_keywords": [
+        "隔离",
+        "内存"
+      ]
+    },
+    {
+      "kp": "agent.fw.langgraph_checkpoint",
+      "type": "single_choice",
+      "question": "配置 checkpointer 后，若同一 thread_id 发起一次新的调用，默认情况下图的执行会如何开始？",
+      "options": [
+        "忽略已有状态，完全从入口节点重新开始",
+        "从上次保存的状态继续，除非输入中显式将状态重置",
+        "直接抛出异常，提示 thread 已存在",
+        "随机选择一个历史检查点恢复"
+      ],
+      "answer": 1,
+      "explanation": "checkpointer 的核心作用就是支持从上次保存的状态恢复执行，因此同一 thread_id 的后续调用会基于已有状态继续，而不是从零开始。若想重新开始，通常需要新建 thread_id 或显式覆盖状态。",
+      "error_tag": "概念混淆",
+      "variant_group": "thread_id_resume"
+    },
+    {
+      "kp": "agent.fw.langgraph_checkpoint",
+      "type": "single_choice",
+      "question": "关于 checkpointer 保存状态的粒度，下列描述正确的是？",
+      "options": [
+        "只在整张图执行结束时保存一次完整状态",
+        "在每个节点执行后按步骤保存状态快照，形成检查点序列",
+        "只在出现异常时才保存",
+        "只在人工输入的节点保存"
+      ],
+      "answer": 1,
+      "explanation": "checkpointer 会在图的执行过程中按步骤（通常在每个节点执行之后）保存状态快照，从而形成一条可回溯的检查点链。这种细粒度保存是支持断点续跑、时间旅行和人工审批的基础。",
+      "error_tag": "记忆缺失",
+      "variant_group": "checkpoint_granularity"
+    },
+    {
+      "kp": "agent.fw.langgraph_checkpoint",
+      "type": "single_choice",
+      "question": "你希望图在某个节点执行到一半需要人工审批时能暂停，审批后再继续。这主要依赖 checkpointer 的哪项能力？",
+      "options": [
+        "压缩历史消息以节省 token",
+        "保存中间状态，使图能够中断后从该检查点恢复",
+        "自动重试失败的节点",
+        "把状态导出为 JSON 供前端展示"
+      ],
+      "answer": 1,
+      "explanation": "人工审批（human-in-the-loop）要求图在指定点中断、把当前状态保存下来，等待外部输入后再恢复。这正是 checkpointer 保存中间状态并支持从检查点恢复的用途。",
+      "error_tag": "概念混淆",
+      "variant_group": "checkpoint_human_in_loop"
+    },
+    {
+      "kp": "agent.fw.langgraph_checkpoint",
+      "type": "single_choice",
+      "question": "在 LangGraph 中，一个'检查点（checkpoint）'与一条'thread（线程）'的关系，下列哪种说法最准确？",
+      "options": [
+        "一个 thread 只对应一个检查点，之后被覆盖",
+        "一个 thread 下可以有多个检查点，按执行步骤顺序排列",
+        "检查点与 thread 完全无关",
+        "每个检查点必须属于多个 thread"
+      ],
+      "answer": 1,
+      "explanation": "thread 标识一次完整的会话/执行链，而在该 thread 内，每次状态保存都会产生一个新的检查点，多个检查点按时间/步骤排列，从而可以回溯到任意一步。",
+      "error_tag": "概念混淆",
+      "variant_group": "checkpoint_thread_relation"
+    },
+    {
+      "kp": "agent.fw.langgraph_checkpoint",
+      "type": "multi_choice",
+      "question": "下列哪些场景适合为 LangGraph 图配置 checkpointer？（多选）",
+      "options": [
+        "多轮对话中需要保留之前的消息历史",
+        "需要在某节点中断等待人工审批后再继续",
+        "需要能回溯到之前的某一步状态进行调试或重放",
+        "希望减少图中节点数量以简化拓扑",
+        "希望让单个无状态的一次性计算更快"
+      ],
+      "answer": [
+        0,
+        1,
+        2
+      ],
+      "explanation": "checkpointer 的主要价值在于跨调用的状态持久化（多轮对话）、中断与恢复（人工审批）以及检查点回溯（调试/时间旅行）。它不减少节点数量，也不会让无状态一次性计算变快，后两者与持久化能力无关。",
+      "error_tag": "概念混淆",
+      "variant_group": "checkpoint_use_cases"
+    },
+    {
+      "kp": "agent.fw.langgraph_checkpoint",
+      "type": "multi_choice",
+      "question": "关于 LangGraph 中检查点的作用，下列说法正确的有？（多选）",
+      "options": [
+        "可以基于某个历史检查点重新执行后续步骤",
+        "可以把状态保存到外部存储（如数据库）以支持跨进程恢复",
+        "检查点会自动修改图中的业务逻辑",
+        "同一 thread_id 可在多次调用间共享状态",
+        "检查点机制会替代节点内的所有异常处理"
+      ],
+      "answer": [
+        0,
+        1,
+        3
+      ],
+      "explanation": "检查点支持从历史点重放、可持久化到外部存储以跨进程恢复、并让同一 thread_id 在多次调用间共享状态。它不会改写业务逻辑，也不能替代节点内的异常处理，这两项是常见误解。",
+      "error_tag": "概念混淆",
+      "variant_group": "checkpoint_capabilities"
+    },
+    {
+      "kp": "agent.fw.langgraph_checkpoint",
+      "type": "multi_choice",
+      "question": "以下哪些做法有助于'让同一用户的多次请求延续同一段对话状态'？（多选）",
+      "options": [
+        "为编译后的图提供 checkpointer",
+        "调用时传入稳定一致的 thread_id（例如用用户会话 ID）",
+        "每次调用都生成新的随机 thread_id",
+        "把状态保存到可跨请求访问的存储中",
+        "在每次调用前清空 checkpointer"
+      ],
+      "answer": [
+        0,
+        1,
+        3
+      ],
+      "explanation": "延续对话需要：配置 checkpointer、使用稳定一致的 thread_id、并将状态存放在可跨请求访问的存储中。每次都换随机 thread_id 或清空 checkpointer 都会导致状态丢失，无法延续。",
+      "error_tag": "边界错误",
+      "variant_group": "thread_id_resume"
+    },
+    {
+      "kp": "agent.fw.langgraph_checkpoint",
+      "type": "multi_choice",
+      "question": "关于 LangGraph 的检查点与状态图，下列说法错误的有？（多选，选出错误的说法）",
+      "options": [
+        "没有 checkpointer 就无法运行任何 LangGraph 图",
+        "checkpointer 的保存完全依赖图内节点手动调用 save()",
+        "thread_id 只在有 checkpointer 时才有意义",
+        "检查点可以让图从中断处恢复执行"
+      ],
+      "answer": [
+        0,
+        1
+      ],
+      "explanation": "没有 checkpointer 图依然可以运行，只是不持久化状态，因此说法一错误；检查点的保存由图执行机制自动完成，无需节点手动调用 save()，因此说法二错误。thread_id 在配置 checkpointer 的环境下用于区分会话是有意义的说法，检查点支持恢复执行也是正确的。",
+      "error_tag": "概念混淆",
+      "variant_group": "checkpoint_misconceptions"
+    }
+  ]
+}

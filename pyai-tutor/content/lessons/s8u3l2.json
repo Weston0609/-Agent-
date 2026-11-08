@@ -1,0 +1,618 @@
+{
+  "id": "s8u3l2",
+  "title": "s8u3l2",
+  "kps": [
+    "arch.mlops.model_registry",
+    "arch.mlops.ab_test"
+  ],
+  "theory": "## arch.mlops.model_registry\n\n# 模型注册表（Model Registry）\n\n> **一句话直觉**：模型注册表就像“模型们的 GitHub + 版本仓库 + 说明书”，让训练出来的模型不再散落在个人电脑里，而是能被团队发现、追踪、审批、上线和回滚。\n\n---\n\n## 1. 为什么需要模型注册表？\n\n在机器学习项目里，模型不是只训练一次就结束。你会遇到：\n\n- 今天调了超参数，效果 +0.5%；\n- 下周换了数据，效果又变了；\n- 线上要回滚到上周版本；\n- 同事问你：“这个模型是谁训练的？用了哪份数据？指标是多少？”\n\n如果模型文件叫 `model_final_v2_真的最终版.pkl`，这些问题会非常难回答。\n\n模型注册表（Model Registry）是 MLOps（Machine Learning Operations，机器学习运维）中的核心组件，用来统一管理模型的**版本、元数据、阶段和血统**。\n\n---\n\n## 2. 核心概念：模型版本、阶段与元数据\n\n一个模型注册表通常管理三类信息：\n\n1. **模型版本（Model Version）**：每次训练产生一个新版本，例如 v1、v2、v3。\n2. **阶段（Stage）**：模型当前处于什么状态，例如 `Staging`（预发布）、`Production`（生产）、`Archived`（归档）。\n3. **元数据（Metadata）**：训练参数、数据集、评估指标、创建人、创建时间、代码提交号等。\n\n可以把它想成一张“模型身份证”：\n\n| 字段 | 示例 |\n|---|---|\n| 模型名 | iris-classifier |\n| 版本 | 3 |\n| 阶段 | Production |\n| 准确率 | 0.96 |\n| 数据集 | iris-v2 |\n| 创建人 | alice |\n\n下面用纯 Python 模拟一个最小注册表：\n\n```python\n# 一个极简模型注册表：用字典保存模型版本与元数据\nregistry = {}\n\ndef register_model(name, version, stage, metrics, metadata=None):\n    \"\"\"注册一个模型版本\"\"\"\n    key = f\"{name}:{version}\"\n    registry[key] = {\n        \"name\": name,\n        \"version\": version,\n        \"stage\": stage,\n        \"metrics\": metrics,\n        \"metadata\": metadata or {},\n    }\n    return key\n\n# 注册两个版本\nregister_model(\"iris-clf\", 1, \"Staging\", {\"accuracy\": 0.91})\nregister_model(\"iris-clf\", 2, \"Production\", {\"accuracy\": 0.96}, {\"dataset\": \"iris-v2\"})\n\nprint(registry)\n```\n\n---\n\n## 3. 模型注册表如何融入 MLOps 流程？\n\n典型流程是：\n\n1. **训练**：产生模型文件和指标。\n2. **注册**：把模型登记到注册表，生成新版本。\n3. **审批/评估**：模型从 `Staging` 进入 `Production` 前，通常要人工或自动审批。\n4. **部署**：推理服务按注册表里 `Production` 阶段的模型加载。\n5. **监控与回滚**：发现效果下降时，把旧版本重新设为 `Production`。\n\n下面模拟“上线”和“回滚”：\n\n```python\n# 阶段流转：把某个版本推进到 Production，并归档旧版本\ndef promote_to_production(name, version):\n    target_key = f\"{name}:{version}\"\n    for key, info in registry.items():\n        if info[\"name\"] == name and info[\"stage\"] == \"Production\":\n            info[\"stage\"] = \"Archived\"  # 旧生产版本归档\n    registry[target_key][\"stage\"] = \"Production\"\n\npromote_to_production(\"iris-clf\", 1)  # 回滚到 v1\nprint({k: v[\"stage\"] for k, v in registry.items()})\n```\n\n---\n\n## 4. 工程级注册表通常长什么样？\n\n真实系统里，模型注册表通常由专门平台提供，例如 MLflow Model Registry、Weights & Biases、SageMaker Model Registry、Azure ML Registry 等。它们一般提供：\n\n- REST API / Python SDK：程序化注册和查询；\n- 版本对比：指标、参数、图表；\n- 权限控制：谁能审批、谁能部署；\n- 模型血缘：关联数据集、代码 commit、实验 ID；\n- 与 CI/CD（Continuous Integration / Continuous Delivery，持续集成/持续交付）集成。\n\n下面用伪代码展示“按阶段加载生产模型”的工程思路：\n\n```python\n# 伪代码：推理服务从注册表加载当前 Production 模型\ndef load_production_model(name):\n    for key, info in registry.items():\n        if info[\"name\"] == name and info[\"stage\"] == \"Production\":\n            # 真实系统会从对象存储下载模型文件\n            return f\"loading model {key} with accuracy={info['metrics']['accuracy']}\"\n    raise ValueError(f\"No production model found for {name}\")\n\nprint(load_production_model(\"iris-clf\"))\n```\n\n---\n\n## 5. 零基础到工程级的关键认知\n\n学完这一节，你至少要记住：\n\n- 模型注册表解决的是**模型资产管理**问题，不是训练算法问题；\n- 核心是**版本 + 阶段 + 元数据**；\n- 没有注册表，模型就无法可靠地复现、审批、部署和回滚；\n- 工程实践中，优先使用成熟平台，而不是自己维护 Excel 或文件夹命名规范。\n\n> 一句话总结：模型注册表让模型从“个人文件”变成“可治理的团队资产”。\n\n```python\nimport hashlib\nimport json\nfrom datetime import datetime\n\n# ---------- 最小模型注册表实现 ----------\nclass SimpleModelRegistry:\n    def __init__(self):\n        self._store = {}\n\n    def _key(self, name, version):\n        return f\"{name}:{version}\"\n\n    def register(self, name, version, stage, metrics, metadata=None):\n        \"\"\"注册模型版本\"\"\"\n        key = self._key(name, version)\n        record = {\n            \"name\": name,\n            \"version\": version,\n            \"stage\": stage,\n            \"metrics\": metrics,\n            \"metadata\": metadata or {},\n            \"created_at\": datetime.utcnow().isoformat(),\n        }\n        self._store[key] = record\n        return key\n\n    def promote(self, name, version, stage):\n        \"\"\"推进模型阶段；若设为 Production，旧 Production 自动归档\"\"\"\n        target = self._key(name, version)\n        if target not in self._store:\n            raise KeyError(f\"模型不存在: {target}\")\n        if stage == \"Production\":\n            for key, info in self._store.items():\n                if info[\"name\"] == name and info[\"stage\"] == \"Production\":\n                    info[\"stage\"] = \"Archived\"\n        self._store[target][\"stage\"] = stage\n\n    def get_production(self, name):\n        \"\"\"获取当前生产模型\"\"\"\n        for key, info in self._store.items():\n            if info[\"name\"] == name and info[\"stage\"] == \"Production\":\n                return key, info\n        raise ValueError(f\"没有生产模型: {name}\")\n\n    def snapshot_hash(self):\n        \"\"\"生成注册表内容哈希，便于审计\"\"\"\n        raw = json.dumps(self._store, sort_keys=True, default=str).encode()\n        return hashlib.sha256(raw).hexdigest()\n\n\n# ---------- 使用示例 ----------\nif __name__ == \"__main__\":\n    reg = SimpleModelRegistry()\n\n    reg.register(\"iris-clf\", 1, \"Staging\", {\"accuracy\": 0.91})\n    reg.register(\"iris-clf\", 2, \"Staging\", {\"accuracy\": 0.96}, {\"dataset\": \"iris-v2\"})\n\n    reg.promote(\"iris-clf\", 1, \"Production\")\n    key, info = reg.get_production(\"iris-clf\")\n    print(\"当前生产模型:\", key, info[\"metrics\"])\n\n    # 回滚：把 v2 推为 Production，v1 自动归档\n    reg.promote(\"iris-clf\", 2, \"Production\")\n    key, info = reg.get_production(\"iris-clf\")\n    print(\"回滚后生产模型:\", key, info[\"metadata\"])\n\n    print(\"注册表哈希:\", reg.snapshot_hash()[:16], \"...\")\n```\n\n## arch.mlops.ab_test\n\n# 一堂 40 分钟的 MLOps A/B 测试讲义\\n\\n## 一句话直觉\\nA/B 测试（A/B testing）就是让线上真实用户随机分成两组，分别体验新旧两个模型或策略，用数据判断新版本是否真的更好——没有它，模型上线只能靠拍脑袋。\\n\\n---\\n\\n## 1. 为什么 MLOps 必须做 A/B 测试\\n\\n离线指标（offline metric）提升，不等于线上业务指标（online metric）提升。原因包括分布偏移（distribution shift）、反馈回路（feedback loop）、延迟约束（latency constraint）和用户体验差异。A/B 测试是唯一能在生产环境中建立因果关系的工程手段。\\n\\n**关键结论：** 离线评估回答“模型准不准”，A/B 测试回答“用户满不满意、业务涨不涨”。\\n\\n```python\\n# 示例：离线 AUC 提升了，但线上未必更好\\n# 这只是一个示意，说明离线/线上指标可能背离\\nimport random\\n\\n# 模拟：离线 AUC 从 0.80 提到 0.82\\noffline_auc_old = 0.80\\noffline_auc_new = 0.82\\n\\n# 模拟：线上转化率反而下降\\nonline_cvr_old = 0.050\\nonline_cvr_new = 0.048\\n\\nprint(f\\\"离线 AUC: {offline_auc_old} -> {offline_auc_new}\\\")\\nprint(f\\\"线上 CVR: {online_cvr_old} -> {online_cvr_new}\\\")\\n# 离线提升不代表线上提升，必须做在线实验\\n```\\n\\n---\\n\\n## 2. A/B 测试的核心要素：分流、指标、显著性\\n\\n要做一次可信的 A/B 测试，至少需要三件事：\\n\\n1. **随机分流（random assignment）**：确保两组用户在统计上可比，避免辛普森悖论（Simpson's paradox）。\\n2. **明确指标（metric）**：一个主指标（primary metric）+ 若干护栏指标（guardrail metric）。\\n3. **显著性检验（significance test）**：判断差异是真实效果还是随机波动。\\n\\n**关键结论：** 没有随机化，就没有因果；没有预注册指标，就没有可信结论。\\n\\n```python\\n# 示例：用哈希做稳定的用户分流\\nimport hashlib\\n\\ndef assign_group(user_id: str, salt: str = \\\"exp_2025_01\\\") -> str:\\n    \\\"\\\"\\\"根据 user_id 稳定分流到 A/B 组，保证同一用户多次请求结果一致。\\\"\\\"\\\"\\n    key = f\\\"{salt}:{user_id}\\\".encode(\\\"utf-8\\\")\\n    h = int(hashlib.md5(key).hexdigest(), 16)\\n    return \\\"A\\\" if h % 100 < 50 else \\\"B\\\"\\n\\n# 同一用户始终进入同一组\\nprint(assign_group(\\\"user_123\\\"))\\nprint(assign_group(\\\"user_123\\\"))\\nprint(assign_group(\\\"user_456\\\"))\\n```\\n\\n---\\n\\n## 3. 最小可运行 A/B 测试：从数据到结论\\n\\n真实场景中，我们通常会统计两组的转化次数和样本量，然后用双样本比例检验（two-proportion z-test）判断差异是否显著。\\n\\n**关键结论：** p 值（p-value）小不等于效果大，要同时看置信区间（confidence interval）和业务收益。\\n\\n```python\\n# 示例：用 statsmodels 做双样本比例检验\\nimport numpy as np\\nfrom statsmodels.stats.proportion import proportions_ztest\\n\\n# 假设：A 组 10000 人，转化 500；B 组 10000 人，转化 550\\nconversions = np.array([500, 550])\\nnobs = np.array([10000, 10000])\\n\\nz_stat, p_value = proportions_ztest(conversions, nobs)\\nprint(f\\\"z = {z_stat:.4f}, p = {p_value:.4f}\\\")\\n\\nif p_value < 0.05:\\n    print(\\\"差异统计显著，B 组可能更好\\\")\\nelse:\\n    print(\\\"差异不显著，不能下结论\\\")\\n```\\n\\n---\\n\\n## 4. MLOps 中的工程化落地：实验平台与模型切换\\n\\n在生产环境，A/B 测试通常由实验平台（experimentation platform）支撑，核心包括：\\n\\n- **配置中心（config center）**：管理实验开关、流量比例、模型版本。\\n- **特征/模型路由（model routing）**：按分流结果调用不同模型。\\n- **日志与指标管道（logging & metric pipeline）**：实时收集曝光、转化、延迟。\\n- **自动回滚（auto rollback）**：护栏指标恶化时自动停止实验。\\n\\n**关键结论：** 实验平台的目标是让“开实验、看指标、做决策、回滚”变成自助化、可审计的流程。\\n\\n```python\\n# 示例：简化的模型路由 + 实验配置\\nimport random\\n\\n# 实验配置：A 组用旧模型，B 组用新模型，各 50% 流量\\nEXPERIMENT = {\\n    \\\"name\\\": \\\"rec_model_v2\\\",\\n    \\\"traffic\\\": {\\\"A\\\": 0.5, \\\"B\\\": 0.5},\\n    \\\"models\\\": {\\\"A\\\": \\\"model_v1\\\", \\\"B\\\": \\\"model_v2\\\"},\\n}\\n\\ndef route_model(user_id: str) -> str:\\n    # 简化：用随机数代替哈希分流，仅用于演示\\n    group = \\\"A\\\" if random.random() < EXPERIMENT[\\\"traffic\\\"][\\\"A\\\"] else \\\"B\\\"\\n    return EXPERIMENT[\\\"models\\\"][group]\\n\\nfor uid in [\\\"u1\\\", \\\"u2\\\", \\\"u3\\\"]:\\n    print(uid, \\\"->\\\", route_model(uid))\\n```\\n\\n---\\n\\n## 5. 从入门到工程级：常见坑与最佳实践\\n\\n- **样本量不足**：实验前用功效分析（power analysis）估算所需样本。\\n- **多重比较（multiple comparisons）**：同时看太多指标会假阳性，需校正。\\n- **网络效应（network effect）**：用户之间互相影响时，随机化单元要调整。\\n- **新奇效应（novelty effect）**：新模型初期可能虚高，需观察长期指标。\\n- **指标污染**：日志丢失、延迟、重复上报都会破坏实验。\\n\\n**关键结论：** A/B 测试是工程 + 统计 + 产品的交叉学科，单靠算法无法保证线上收益。\\n\\n```python\\n# 示例：用功效分析估算样本量（简化版）\\nfrom statsmodels.stats.power import NormalIndPower\\nfrom statsmodels.stats.proportion import proportion_effectsize\\n\\n# 基线转化率 5%，希望检测到提升到 5.5%\\np1, p2 = 0.05, 0.055\\neffect_size = proportion_effectsize(p2, p1)\\npower_analysis = NormalIndPower()\\n\\n# alpha=0.05, power=0.8\\nn = power_analysis.solve_power(\\n    effect_size=effect_size, alpha=0.05, power=0.8, ratio=1.0\\n)\\nprint(f\\\"每组至少需要样本量: {int(n) + 1}\\\")\\n```\\n\\n---\\n\\n## 动手练习\\n\\n**任务：** 在本地实现一个最小的 A/B 测试模拟器。\\n\\n1. 生成 20000 个用户 ID。\\n2. 用哈希分流函数把它们稳定分成 A/B 两组（各 50%）。\\n3. 假设 A 组真实转化率为 5%，B 组为 5.5%，模拟每组的转化结果。\\n4. 用 `proportions_ztest` 计算 p 值，并输出结论。\\n5. 改变 B 组真实转化率为 5.1%、5.5%、6.0%，观察 p 值变化，并解释为什么样本量会影响显著性。\\n\\n**提交要求：** 一个可运行 Python 脚本，输出分流人数、转化率、p 值和结论。\n",
+  "quiz": [
+    {
+      "kp": "arch.mlops.model_registry",
+      "type": "single_choice",
+      "question": "在 MLOps 体系中，模型注册表（Model Registry）最核心的职责是什么？",
+      "options": [
+        "存储训练数据集的原始副本并做数据版本控制",
+        "记录模型的版本、阶段（如 Staging/Production）及其元数据，供部署与审计使用",
+        "替代模型训练框架，直接负责梯度下降与参数更新",
+        "在推理时承担 GPU 显存分配与算力调度"
+      ],
+      "answer": 1,
+      "explanation": "模型注册表用于对已训练的模型进行版本化、阶段管理与元数据（指标、来源、签名等）记录，是部署和审计的枢纽。数据版本由数据管理工具负责，训练由训练框架负责，显存与算力属于运行时/编排职责。",
+      "error_tag": "概念混淆",
+      "variant_group": "model_registry_concept"
+    },
+    {
+      "kp": "arch.mlops.model_registry",
+      "type": "single_choice",
+      "question": "团队在训练完成后，希望把一次实验产出的模型连同其评估指标和超参数一起登记，以便后续复现。最合适的做法是？",
+      "options": [
+        "只把模型权重文件重命名为带日期的新文件名，放在共享盘",
+        "将模型工件与指标、超参数、数据版本、代码提交等信息一并写入模型注册表",
+        "把评估指标写进训练日志文件，模型权重保持原文件名不变",
+        "仅在实验跟踪工具里记录指标，不登记模型工件本身"
+      ],
+      "answer": 1,
+      "explanation": "模型注册表的价值在于把模型工件和其上下文（指标、超参、数据/代码版本）关联起来，支持复现与追溯。仅重命名文件或只记录指标都无法满足完整追溯需求。",
+      "error_tag": "实践理解不足",
+      "variant_group": "model_registry_lineage"
+    },
+    {
+      "kp": "arch.mlops.model_registry",
+      "type": "single_choice",
+      "question": "关于模型注册表中的「版本」概念，下列描述最准确的是？",
+      "options": [
+        "版本号必须严格按整数递增，不允许使用语义化版本",
+        "每个版本对应一次注册的模型工件及其元数据快照，可独立被引用与部署",
+        "同一模型的所有版本共享同一份权重文件",
+        "版本一旦创建就不可查询历史记录"
+      ],
+      "answer": 1,
+      "explanation": "每个版本是一次注册的模型工件与元数据的快照，可独立引用、比较和部署。版本号格式无强制要求，各版本工件独立，历史记录可查询。",
+      "error_tag": "概念混淆",
+      "variant_group": "model_registry_version"
+    },
+    {
+      "kp": "arch.mlops.model_registry",
+      "type": "single_choice",
+      "question": "某公司将模型注册表与推理服务集成。当注册表中某版本被提升为 Production 时，期望自动触发部署。这体现了注册表的什么价值？",
+      "options": [
+        "降低模型训练的计算成本",
+        "作为单一事实来源，驱动下游部署与运维自动化",
+        "替代特征存储，统一管理特征",
+        "自动生成训练数据"
+      ],
+      "answer": 1,
+      "explanation": "注册表作为模型交付的单一事实来源，阶段变更可驱动下游部署自动化。它不降低训练成本，也不替代特征存储或生成数据。",
+      "error_tag": "价值理解偏差",
+      "variant_group": "model_registry_automation"
+    },
+    {
+      "kp": "arch.mlops.model_registry",
+      "type": "single_choice",
+      "question": "在模型注册表中为模型记录「训练数据版本」的主要目的是？",
+      "options": [
+        "减少模型文件占用的存储空间",
+        "在出现问题时能够追溯到具体数据，支持复现与合规审计",
+        "提高模型推理速度",
+        "自动清洗训练数据"
+      ],
+      "answer": 1,
+      "explanation": "记录数据版本是为了建立模型与训练数据的血缘关系，支持复现、问题排查与合规审计。它与存储优化、推理速度或数据清洗无关。",
+      "error_tag": "目的误解",
+      "variant_group": "model_registry_lineage"
+    },
+    {
+      "kp": "arch.mlops.model_registry",
+      "type": "single_choice",
+      "question": "下列哪项最可能是模型注册表中「模型卡片」（Model Card）或类似文档的作用？",
+      "options": [
+        "描述模型的用途、限制、训练数据与评估结果，供使用者判断适用性",
+        "记录模型文件的 MD5 校验值以校验完整性",
+        "规定模型推理时的线程数",
+        "存储模型的二进制权重"
+      ],
+      "answer": 0,
+      "explanation": "模型卡片用于说明模型用途、限制、数据与评估等，帮助使用者判断适用性与风险。校验值、线程数或权重存储是其他机制。",
+      "error_tag": "概念混淆",
+      "variant_group": "model_registry_documentation"
+    },
+    {
+      "kp": "arch.mlops.model_registry",
+      "type": "single_choice",
+      "question": "当多个团队共享一个模型注册表时，下列哪项做法最有助于避免误用他人模型？",
+      "options": [
+        "允许任何人随意修改所有模型的阶段",
+        "通过访问控制与命名空间/项目隔离，并明确模型所有权与阶段变更权限",
+        "将所有模型都标记为 Production 以便使用",
+        "禁止记录模型元数据以减少冲突"
+      ],
+      "answer": 1,
+      "explanation": "访问控制、项目隔离与明确的所有权及权限能降低误用风险。随意修改阶段、全部标记为 Production 或禁止元数据都会加剧混乱。",
+      "error_tag": "治理理解不足",
+      "variant_group": "model_registry_governance"
+    },
+    {
+      "kp": "arch.mlops.model_registry",
+      "type": "single_choice",
+      "question": "在模型注册表中，将某版本标记为 Archived 通常意味着？",
+      "options": [
+        "该版本已被删除，无法恢复",
+        "该版本不再推荐使用，但仍保留记录以备追溯",
+        "该版本正在生产环境服务流量",
+        "该版本是当前最佳模型"
+      ],
+      "answer": 1,
+      "explanation": "Archived 表示不再推荐使用但保留记录用于追溯，并非删除。生产服务对应 Production，最佳模型通常也由阶段或标签体现。",
+      "error_tag": "阶段语义混淆",
+      "variant_group": "model_registry_stage"
+    },
+    {
+      "kp": "arch.mlops.model_registry",
+      "type": "single_choice",
+      "question": "某团队在注册表中发现同一模型有多个版本，但无法判断哪个版本对应哪次实验。最可能缺失了什么？",
+      "options": [
+        "模型的推理代码",
+        "版本与实验运行/代码提交/数据版本的关联元数据",
+        "模型文件的压缩格式",
+        "推理服务器的 IP 地址"
+      ],
+      "answer": 1,
+      "explanation": "缺少版本与实验运行、代码提交、数据版本等关联元数据时，无法追溯版本来源。推理代码、压缩格式或 IP 地址并非版本溯源的关键。",
+      "error_tag": "元数据缺失",
+      "variant_group": "model_registry_metadata"
+    },
+    {
+      "kp": "arch.mlops.model_registry",
+      "type": "single_choice",
+      "question": "下列哪项最能体现模型注册表在合规审计中的作用？",
+      "options": [
+        "自动提升模型精度",
+        "提供模型版本、审批、阶段变更与血缘的不可篡改或可审计记录",
+        "替代法务团队出具合规报告",
+        "加密所有训练数据"
+      ],
+      "answer": 1,
+      "explanation": "注册表通过版本、审批、阶段变更与血缘等记录支持审计。它不能提升精度、替代法务或加密数据。",
+      "error_tag": "价值理解偏差",
+      "variant_group": "model_registry_compliance"
+    },
+    {
+      "kp": "arch.mlops.model_registry",
+      "type": "single_choice",
+      "question": "当模型注册表与模型服务集成时，服务端通常如何获取要加载的模型？",
+      "options": [
+        "服务端直接读取训练脚本源码",
+        "服务端根据注册表中指定版本/阶段的模型工件地址进行拉取或加载",
+        "服务端必须重新训练模型",
+        "服务端只能加载本地磁盘上任意文件"
+      ],
+      "answer": 1,
+      "explanation": "服务端依据注册表中指定版本或阶段的工件地址拉取/加载模型。读取源码、重训或任意本地文件都不符合注册表驱动的部署方式。",
+      "error_tag": "集成方式误解",
+      "variant_group": "model_registry_serving"
+    },
+    {
+      "kp": "arch.mlops.model_registry",
+      "type": "single_choice",
+      "question": "关于模型注册表中的「标签」（tag）与「阶段」（stage），下列描述正确的是？",
+      "options": [
+        "标签和阶段完全等价，可互换使用",
+        "阶段通常表达生命周期状态，标签更灵活，可用于分类、环境或自定义标记",
+        "标签只能表示生产环境",
+        "阶段只能表示归档状态"
+      ],
+      "answer": 1,
+      "explanation": "阶段表达生命周期状态（如 Staging/Production），标签更灵活，可用于分类、环境或其他自定义标记。两者不等价，也非仅限某一种取值。",
+      "error_tag": "概念混淆",
+      "variant_group": "model_registry_tag_stage"
+    },
+    {
+      "kp": "arch.mlops.model_registry",
+      "type": "single_choice",
+      "question": "某模型已在注册表中被标记为 Production 阶段，但团队发现其指标下降，需要回退到上一版本。注册表应如何支持这一操作？",
+      "options": [
+        "删除当前 Production 版本的记录，再重新训练一个新模型",
+        "通过版本历史与阶段变更记录，将上一版本重新提升为 Production",
+        "只能通过手动覆盖模型文件来切换，注册表不参与阶段管理",
+        "必须重新执行全部训练流程，注册表不支持回退"
+      ],
+      "answer": 1,
+      "explanation": "注册表维护版本历史与阶段状态，允许将旧版本重新提升为 Production 实现回退。删除记录或重训并非必要，且阶段管理正是注册表的核心能力之一。",
+      "error_tag": "回滚机制误解",
+      "variant_group": "model_registry_rollback"
+    },
+    {
+      "kp": "arch.mlops.model_registry",
+      "type": "single_choice",
+      "question": "以下哪一项最能说明模型注册表与实验跟踪（Experiment Tracking）之间的区别？",
+      "options": [
+        "实验跟踪记录训练过程中的参数与指标；注册表管理可部署的模型版本及其生命周期阶段",
+        "实验跟踪只能记录损失曲线；注册表只能记录准确率",
+        "两者完全等价，只是名称不同",
+        "注册表只用于记录实验参数；实验跟踪只用于部署模型"
+      ],
+      "answer": 0,
+      "explanation": "实验跟踪侧重记录实验运行的过程性信息（参数、指标、工件），注册表侧重对已选定模型进行版本化与生命周期阶段管理，两者互补但职责不同。",
+      "error_tag": "职责边界模糊",
+      "variant_group": "model_registry_vs_tracking"
+    },
+    {
+      "kp": "arch.mlops.model_registry",
+      "type": "single_choice",
+      "question": "在注册表中，模型的「阶段」（Stage，如 Staging、Production、Archived）主要用来表达什么？",
+      "options": [
+        "模型文件在磁盘上的物理存储路径",
+        "模型在生命周期中所处的状态，供部署流水线据此决定是否上线",
+        "模型训练时使用的学习率大小",
+        "模型推理时的批大小（batch size）"
+      ],
+      "answer": 1,
+      "explanation": "阶段是模型生命周期的逻辑状态标记，部署流水线可据此自动决定是否将某版本投入服务。它不表示存储路径、学习率或批大小。",
+      "error_tag": "概念混淆",
+      "variant_group": "model_registry_stage"
+    },
+    {
+      "kp": "arch.mlops.model_registry",
+      "type": "single_choice",
+      "question": "某团队在注册表中登记模型时，除了权重文件，还应记录下列哪些信息以支持可追溯性？",
+      "options": [
+        "仅记录模型名称和创建时间",
+        "训练数据版本、代码提交哈希、评估指标、超参数与模型签名",
+        "仅记录评估指标和模型大小",
+        "仅记录训练时使用的 GPU 型号"
+      ],
+      "answer": 1,
+      "explanation": "可追溯性要求把模型与其训练上下文关联，包括数据版本、代码版本、指标、超参数和输入输出签名等。信息过少无法支持复现与审计。",
+      "error_tag": "元数据缺失",
+      "variant_group": "model_registry_metadata"
+    },
+    {
+      "kp": "arch.mlops.model_registry",
+      "type": "single_choice",
+      "question": "当同一模型存在多个版本时，注册表中的「模型签名」（signature）主要帮助解决什么问题？",
+      "options": [
+        "确定模型的训练时间长短",
+        "明确模型推理时输入输出的结构、类型与名称，便于服务端正确调用",
+        "决定模型使用哪种优化器",
+        "控制模型在注册表中的访问权限"
+      ],
+      "answer": 1,
+      "explanation": "模型签名描述推理接口的输入输出契约（名称、类型、形状等），使部署与服务端能按正确方式调用模型。它与训练时长、优化器或权限无关。",
+      "error_tag": "概念混淆",
+      "variant_group": "model_registry_signature"
+    },
+    {
+      "kp": "arch.mlops.model_registry",
+      "type": "single_choice",
+      "question": "在 CI/CD 流水线中，模型注册表通常扮演什么角色？",
+      "options": [
+        "作为代码仓库的替代品，存放训练脚本源码",
+        "作为模型交付的枢纽：流水线将训练产物注册为版本，并依据阶段触发部署或审批",
+        "作为监控系统，实时采集线上推理延迟",
+        "作为数据标注工具，供标注人员使用"
+      ],
+      "answer": 1,
+      "explanation": "注册表是模型交付流水线的枢纽，训练产物在此登记为版本，流水线依据阶段变更触发部署、审批或回滚。它不替代代码仓库，也不负责监控或数据标注。",
+      "error_tag": "角色误解",
+      "variant_group": "model_registry_cicd"
+    },
+    {
+      "kp": "arch.mlops.model_registry",
+      "type": "single_choice",
+      "question": "以下哪项操作最不适合在模型注册表中执行？",
+      "options": [
+        "为模型版本添加描述和标签",
+        "将某版本从 Staging 提升为 Production",
+        "在注册表内直接对模型执行反向传播以更新权重",
+        "查询某模型的所有历史版本"
+      ],
+      "answer": 2,
+      "explanation": "注册表负责版本、元数据和阶段管理，不承担模型训练/反向传播等计算任务。添加描述、阶段提升和版本查询都是其典型功能。",
+      "error_tag": "功能越界",
+      "variant_group": "model_registry_scope"
+    },
+    {
+      "kp": "arch.mlops.model_registry",
+      "type": "single_choice",
+      "question": "团队希望在部署前对模型进行审批，只有审批通过的版本才能进入生产环境。注册表如何支持这一流程？",
+      "options": [
+        "通过阶段状态与审批记录，使部署流水线只在满足条件时推进",
+        "通过自动重训模型来替代人工审批",
+        "通过删除未审批的版本以阻止部署",
+        "注册表无法支持审批流程，必须依赖外部工单系统"
+      ],
+      "answer": 0,
+      "explanation": "注册表可通过阶段状态和审批/变更记录与流水线集成，实现门禁式部署。重训或删除版本并非审批机制，注册表通常也能与外部审批系统协同。",
+      "error_tag": "流程理解不足",
+      "variant_group": "model_registry_approval"
+    },
+    {
+      "kp": "arch.mlops.ab_test",
+      "type": "single_choice",
+      "question": "在 A/B 实验中，把用户随机分成对照组和实验组后，评估「实验组转化率高于对照组」这一结论是否可信，最核心的统计依据是什么？",
+      "options": [
+        "两组样本量必须完全相等",
+        "观测到的组间差异相对于随机波动是否足够大",
+        "实验组绝对数值一定大于对照组",
+        "实验持续时间越长结论越正确"
+      ],
+      "answer": 1,
+      "explanation": "A/B 实验的显著性判断本质是看观测差异是否超出随机波动可解释的范围（如 p 值/置信区间）。样本量相等不是必要条件（不等样本也可检验）；数值大小和时长本身不构成可信依据。",
+      "error_tag": "概念混淆",
+      "variant_group": "ab_test_basic_inference"
+    },
+    {
+      "kp": "arch.mlops.ab_test",
+      "type": "single_choice",
+      "question": "某团队做完 A/B 实验，p 值为 0.03（显著性水平 0.05）。下列哪种解释是正确的？",
+      "options": [
+        "原假设为真的概率是 3%",
+        "实验组一定优于对照组",
+        "在原假设成立的前提下，观测到当前或更极端差异的概率约为 3%",
+        "结论有 3% 的概率是错的"
+      ],
+      "answer": 2,
+      "explanation": "p 值定义是「原假设成立时观测到当前或更极端结果的概率」。它不等于原假设为真的概率，也不等于结论出错概率（那是第二类错误/假发现率的混淆）。",
+      "error_tag": "概念混淆",
+      "variant_group": "ab_test_pvalue_meaning"
+    },
+    {
+      "kp": "arch.mlops.ab_test",
+      "type": "fill_blank",
+      "question": "A/B 实验功效分析中，常用____（填英文缩写或全称）表示「有足够把握检测出预期效应」的概率，常用目标值为 0.8。",
+      "options": [],
+      "answer": [
+        "power",
+        "功效",
+        "统计功效",
+        "1-beta",
+        "1-β"
+      ],
+      "explanation": "统计功效（power）= 1 - β，表示在效应真实存在时正确检测出它的概率，工程上常以 0.8 为目标。",
+      "error_tag": "记忆缺失",
+      "variant_group": "ab_test_sample_size"
+    },
+    {
+      "kp": "arch.mlops.ab_test",
+      "type": "fill_blank",
+      "question": "在假设检验中，预先设定的「拒绝原假设」的阈值称为显著性水平，常用符号是____。",
+      "options": [],
+      "answer": [
+        "α",
+        "alpha",
+        "αlpha"
+      ],
+      "explanation": "显著性水平用 α 表示，常用 0.05，它约束第一类错误（假阳性）的概率上限。",
+      "error_tag": "记忆缺失",
+      "variant_group": "ab_test_pvalue_meaning"
+    },
+    {
+      "kp": "arch.mlops.ab_test",
+      "type": "code_reading",
+      "question": "阅读以下统计计算代码：\n\nimport numpy as np\nfrom scipy import stats\n\ncontrol = np.array([0, 1, 1, 0, 0, 1, 0, 0])\ntreatment = np.array([1, 1, 0, 1, 1, 1, 1, 0])\n\nt_stat, p_value = stats.ttest_ind(control, treatment, equal_var=False)\nprint(p_value < 0.05)\n\n假设返回的 p_value 为 0.21，请说明 print 的输出以及该结果对实验结论的含义。",
+      "options": [],
+      "answer": "输出 False。因为 p 值 0.21 大于显著性水平 0.05，不能拒绝原假设，即在当前数据下没有统计证据表明实验组与对照组存在显著差异（可能是样本量太小、效应小或真实无差异）。",
+      "explanation": "p 值大于 α 时不拒绝原假设，输出比较结果为 False，结论是不能声称实验组有效。注意不能反向证明「一定没有差异」，只是证据不足。",
+      "error_tag": "概念混淆",
+      "variant_group": "ab_test_pvalue_meaning"
+    },
+    {
+      "kp": "arch.mlops.ab_test",
+      "type": "code_reading",
+      "question": "阅读如下分流代码片段：\n\nimport hashlib\n\ndef assign_group(user_id, experiment_key, n_groups=2):\n    raw = f\"{experiment_key}:{user_id}\".encode()\n    h = int(hashlib.md5(raw).hexdigest(), 16)\n    return h % n_groups\n\n# 对同一 user_id，多次调用 assign_group 会得到什么结果？\nprint(assign_group(\"u123\", \"exp_1\"), assign_group(\"u123\", \"exp_1\"))\n\n请说明两次调用的分组结果，以及用 user_id + experiment_key 做哈希的原因。",
+      "options": [],
+      "answer": "两次调用结果相同。因为哈希函数对相同输入是确定性的，同一 user 在同一实验下每次都会被稳定分到同一组。加入 experiment_key 是为了让同一用户在不同实验之间相互独立地重新分桶，避免不同实验的分组产生系统性关联。",
+      "explanation": "基于确定性哈希的分流保证用户分组稳定（可复现），前缀 experiment_key 使不同实验的分桶相互独立。这是 A/B 分流中常见设计。",
+      "error_tag": "概念混淆",
+      "variant_group": "ab_test_randomization"
+    },
+    {
+      "kp": "arch.mlops.ab_test",
+      "type": "code_reading",
+      "question": "阅读以下计算置信区间的代码：\n\nimport numpy as np\nfrom scipy import stats\n\ndiff = 0.02  # 观测到的转化率差异\nse = 0.008   # 差值的标准误\nci_low, ci_high = stats.norm.interval(0.95, loc=diff, scale=se)\nprint(round(ci_low, 4), round(ci_high, 4))\n\n已知置信区间不包含 0，请说明这通常意味着什么。",
+      "options": [],
+      "answer": "95% 置信区间不包含 0，说明在 0.05 显著性水平下该差异在统计上显著，即有证据表明实验组与对照组的转化率存在差异。若区间包含 0，则不能排除「无差异」这一可能。",
+      "explanation": "双侧检验中，置信区间是否包含 0 与 p 值是否小于 α 判定一致。区间不含 0 表示在 95% 置信水平上差异「不可能是零」。",
+      "error_tag": "概念混淆",
+      "variant_group": "ab_test_pvalue_meaning"
+    },
+    {
+      "kp": "arch.mlops.ab_test",
+      "type": "scenario",
+      "question": "场景：你负责一个推荐算法的 A/B 实验。实验第三天，运营同事告诉你「实验组点击率明显更高」，并希望立刻全量上线。请说明你会怎么处理，以及为什么不直接下结论。",
+      "options": [],
+      "answer": null,
+      "explanation": "第三天很可能样本量不足且存在新奇效应/周期性波动，提前查看并据显著结果决策会显著提升假阳性率（peeking 问题）。应达到预先计算的样本量并跑完计划的实验周期后再判定。",
+      "error_tag": "边界错误",
+      "variant_group": "ab_test_peeking",
+      "required_keywords": [
+        "样本量",
+        "新奇效应",
+        "周期性波动",
+        "假阳性率",
+        "peeking"
+      ]
+    },
+    {
+      "kp": "arch.mlops.ab_test",
+      "type": "scenario",
+      "question": "场景：某电商 A/B 实验发现实验组下单转化率提升 0.5%，p 值为 0.04，但同期客单价下降了 8%。你会如何评估这次实验是否应该上线？",
+      "options": [],
+      "answer": null,
+      "explanation": "应把转化率与客单价的综合效果（如 GMV/利润）以及护栏指标一起评估，判断 0.5% 转化提升是否能覆盖客单价下降，并结合业务目标做权衡，而不能只看单一显著指标上线。",
+      "error_tag": "概念混淆",
+      "variant_group": "ab_test_metrics",
+      "required_keywords": [
+        "GMV",
+        "指标"
+      ]
+    },
+    {
+      "kp": "arch.mlops.ab_test",
+      "type": "scenario",
+      "question": "场景：产品团队同时在一次实验页面上测试了三个按钮颜色、两个标题文案和两个价格展示，最后报告「标题 B 显著更好」。这个结论可能有什么问题？你会建议怎么改进？",
+      "options": [],
+      "answer": null,
+      "explanation": "同时比较多个变体属于多重比较，未做 Bonferroni 或 FDR 等校正会抬高家族错误率，使假阳性概率远超 0.05。建议预先注册假设、减少同时检验的变量、或对 p 值进行多重比较校正。",
+      "error_tag": "边界错误",
+      "variant_group": "ab_test_pitfalls",
+      "required_keywords": [
+        "多重比较",
+        "Bonferroni",
+        "FDR",
+        "家族错误率",
+        "假阳性"
+      ]
+    },
+    {
+      "kp": "arch.mlops.ab_test",
+      "type": "single_choice",
+      "question": "关于 A/A 实验（对照组对对照组）的作用，下列描述正确的是？",
+      "options": [
+        "可以用来验证分流和统计管线是否无偏，正常情况下不应出现显著差异",
+        "可以替代 A/B 实验得出业务结论",
+        "一定会得到显著结果",
+        "只有在实验失败时才需要做"
+      ],
+      "answer": 0,
+      "explanation": "A/A 实验在两组处理相同时应得到无显著差异的结果，用于校验分流、指标口径与统计实现是否正确，是实验平台常见的健康检查手段。",
+      "error_tag": "概念混淆",
+      "variant_group": "ab_test_validity"
+    },
+    {
+      "kp": "arch.mlops.ab_test",
+      "type": "single_choice",
+      "question": "对于长期效应可能显现的实验（如用户留存、学习型算法），下列做法最合理的是？",
+      "options": [
+        "只看实验前两天的数据",
+        "根据短期结果立即全量上线",
+        "尊重预先设定的实验周期，并评估是否需要更长的观察窗口",
+        "把实验组和对照组反过来重复一次即可"
+      ],
+      "answer": 2,
+      "explanation": "留存和自适应类效果需要更长时间才能体现，短期数据可能低估或高估真实影响。应遵循预先设定的周期，必要时延长时间窗观察长期效应。",
+      "error_tag": "边界错误",
+      "variant_group": "ab_test_duration"
+    },
+    {
+      "kp": "arch.mlops.ab_test",
+      "type": "single_choice",
+      "question": "一个 A/B 实验统计上显著但业务上无意义，最可能的原因是？",
+      "options": [
+        "实验没有随机分组",
+        "样本量极大导致极小的差异也被判定为显著",
+        "对照组数据被删除",
+        "使用了单尾检验"
+      ],
+      "answer": 1,
+      "explanation": "样本量极大时，即使实际效应量极小也容易通过显著性检验。这体现了统计显著与业务显著（实用显著性/最小可检测效应）的区别。",
+      "error_tag": "边界错误",
+      "variant_group": "ab_test_significance_vs_practical"
+    },
+    {
+      "kp": "arch.mlops.ab_test",
+      "type": "single_choice",
+      "question": "在启动 A/B 实验前进行「功效分析（power analysis）」的主要目的是什么？",
+      "options": [
+        "计算实验的 p 值",
+        "确定需要的样本量，以有足够把握检测出预期效应",
+        "决定对照组和实验组的颜色",
+        "保证实验结果一定显著"
+      ],
+      "answer": 1,
+      "explanation": "功效分析用于在给定显著性水平、预期效应量和目标功效（通常 0.8）下估计所需样本量，避免样本不足导致漏检真实效应。它不能保证结果显著。",
+      "error_tag": "记忆缺失",
+      "variant_group": "ab_test_sample_size"
+    },
+    {
+      "kp": "arch.mlops.ab_test",
+      "type": "single_choice",
+      "question": "关于 A/B 实验中的「分流（随机分配）」，下列说法正确的是？",
+      "options": [
+        "只要用户量大就无需随机化",
+        "分流应保证每个用户被分到各组概率一致，且分组与用户特征独立",
+        "应该把活跃用户集中分到实验组",
+        "分流只在实验开始时做一次，之后可以凭经验调整"
+      ],
+      "answer": 1,
+      "explanation": "随机化要求分配概率一致且与潜在结果/特征独立，才能让组间差异可归因于处理。按活跃度集中分配或事后调整会引入选择偏差。",
+      "error_tag": "概念混淆",
+      "variant_group": "ab_test_randomization"
+    },
+    {
+      "kp": "arch.mlops.ab_test",
+      "type": "multi_choice",
+      "question": "下列哪些属于 A/B 实验中常见的偏差或陷阱？（多选）",
+      "options": [
+        "在实验中途因「看起来显著」就提前停止",
+        "多重比较未做校正",
+        "实验组和对照组用户特征分布高度相似",
+        "样本比例失衡且与分组相关（如某些设备只进实验组）"
+      ],
+      "answer": [
+        0,
+        1,
+        3
+      ],
+      "explanation": "提前停止会导致假阳性膨胀；多重比较不校正会提高家族错误率；分组与用户特征相关会引入选择偏差。组间特征相似恰恰是随机化成功的表现，不是陷阱。",
+      "error_tag": "边界错误",
+      "variant_group": "ab_test_pitfalls"
+    },
+    {
+      "kp": "arch.mlops.ab_test",
+      "type": "multi_choice",
+      "question": "一个可信的 A/B 实验结论通常需要满足哪些条件？（多选）",
+      "options": [
+        "分流随机且组间可比较",
+        "样本量足以检测目标效应",
+        "事先确定了主要指标和停止规则",
+        "分析时只报告显著的结果"
+      ],
+      "answer": [
+        0,
+        1,
+        2
+      ],
+      "explanation": "随机分组、充足样本量、预先注册主要指标与停止规则都是可信结论的基础。只报告显著结果属于发表/选择偏差，会误导结论。",
+      "error_tag": "概念混淆",
+      "variant_group": "ab_test_validity"
+    },
+    {
+      "kp": "arch.mlops.ab_test",
+      "type": "multi_choice",
+      "question": "关于 A/B 实验中的第一类错误与第二类错误，下列说法正确的有？（多选）",
+      "options": [
+        "第一类错误是原假设为真却拒绝了它（假阳性）",
+        "第二类错误是效应真实存在却未检测到（假阴性）",
+        "降低显著性水平 α 通常会增加第二类错误风险",
+        "增大样本量可以同时减少第一类和第二类错误"
+      ],
+      "answer": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "explanation": "四句均正确。α 越严格越难拒绝原假设，漏检风险上升；样本量增大会同时降低两类错误（在效应固定时提高功效并收紧判定）。",
+      "error_tag": "记忆缺失",
+      "variant_group": "ab_test_error_types"
+    },
+    {
+      "kp": "arch.mlops.ab_test",
+      "type": "multi_choice",
+      "question": "以下哪些指标适合作为 A/B 实验的「护栏指标（guardrail metrics）」？（多选）",
+      "options": [
+        "页面加载延迟",
+        "崩溃率",
+        "核心转化率",
+        "用户投诉率"
+      ],
+      "answer": [
+        0,
+        1,
+        3
+      ],
+      "explanation": "护栏指标用于监控实验是否带来负面影响，如性能、稳定性、体验类指标。核心转化率通常是主要评估指标，而非护栏指标。",
+      "error_tag": "概念混淆",
+      "variant_group": "ab_test_metrics"
+    },
+    {
+      "kp": "arch.mlops.ab_test",
+      "type": "fill_blank",
+      "question": "在 A/B 实验中，若真实效应存在但实验未能检测出来，这种错误称为第____类错误。",
+      "options": [],
+      "answer": [
+        "二",
+        "2",
+        "第二",
+        "II",
+        "type ii",
+        "TypeII"
+      ],
+      "explanation": "第二类错误（假阴性）指真实效应存在却未拒绝原假设，与实验功效（1-β）相关。",
+      "error_tag": "记忆缺失",
+      "variant_group": "ab_test_error_types"
+    }
+  ]
+}

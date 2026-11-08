@@ -1,0 +1,651 @@
+{
+  "id": "s7u3l5",
+  "title": "s7u3l5",
+  "kps": [
+    "agent.pattern.workflow",
+    "agent.pattern.state_machine"
+  ],
+  "theory": "## agent.pattern.workflow\n\n# Agent 工作流模式（agent.pattern.workflow）：从直觉到工程\n\n## 0. 一句话直觉\n\n**Agent 工作流模式，就是把“让大模型做一件大事”拆成“按固定顺序调用模型完成若干小步骤”，用工程化的流程替代一次性的巨长提示词。**\n\n你不需要一开始就让 LLM（Large Language Model，大语言模型）一口气写完文章、做研究、写代码。相反，你会把它当作一个**可调用的函数**：先让它列提纲，再让它逐段写，再让它自检，最后让它润色。这就是最朴素的 workflow（工作流）。\n\n---\n\n## 1. 为什么需要工作流：单个 LLM 调用的三个工程问题\n\n单个 LLM 调用看起来很简单：`llm(prompt) -> text`。但把它放进真实系统时，会遇到三个问题：\n\n1. **质量不可控**：让它一次输出 3000 字，细节容易跑偏、自相矛盾。\n2. **无状态**：每次调用都不记得上一次，无法自然延续。\n3. **难测试与调试**：一个巨大的 prompt 出错时，你不知道是哪一段坏了。\n\n工作流模式的核心思想是：**把复杂任务分解为多个小的、可观测的 LLM 调用（或工具调用），按固定顺序/条件连线执行**。它比你想象的更基础，甚至不需要 Agent 框架，几十行 Python 就能实现。\n\n```python\n# 最原始的工作流：函数组合\n# 每个步骤是一个独立的 LLM 调用，输入输出都是字符串\n\ndef llm(prompt: str) -> str:\n    \"\"\"模拟一个 LLM 调用。真实工程里这里会调用 OpenAI/本地模型 API。\"\"\"\n    return f\"[LLM 回答] {prompt[:30]}...\"\n\n\ndef step_outline(topic: str) -> str:\n    \"\"\"工作流第 1 步：根据主题生成提纲。\"\"\"\n    return llm(f\"请为主题《{topic}》列出 3 条提纲。\")\n\n\ndef step_draft(outline: str) -> str:\n    \"\"\"工作流第 2 步：根据提纲写初稿。\"\"\"\n    return llm(f\"根据以下提纲写一段 100 字初稿：{outline}\")\n\n\ndef step_polish(draft: str) -> str:\n    \"\"\"工作流第 3 步：润色初稿。\"\"\"\n    return llm(f\"请润色以下文字：{draft}\")\n\n\ndef article_workflow(topic: str) -> str:\n    \"\"\"把上面 3 步串成一条工作流。\"\"\"\n    outline = step_outline(topic)\n    draft = step_draft(outline)\n    final = step_polish(draft)\n    return final\n\n\nprint(article_workflow(\"AI 入门\"))\n```\n\n**关键结论**：工作流的本质是**函数组合**。每个步骤职责单一，出错可定位，容易替换模型和 prompt。\n\n---\n\n## 2. 工作流的最小数据结构：步骤、状态、执行器\n\n当我们不止有 3 步、还想加分支和日志时，把函数硬编码成长串 `a(b(c(d)))` 会很难维护。更工程化的做法是引入三个概念：\n\n- **步骤（Step）**：一个带名字的、可调用的函数，输入输出是工作流状态。\n- **状态（State）**：在步骤之间传递的数据，通常是一个字典。\n- **执行器（Runner）**：按顺序遍历步骤，把状态一路传下去。\n\n```python\nfrom typing import Callable\n\n# 一个工作流状态就是一个普通字典：所有步骤共享、读写\nState = dict[str, str]\nStep = Callable[[State], State]\n\n\ndef make_step(name: str, func: Callable[[str], str], key_in: str, key_out: str) -> Step:\n    \"\"\"把一个函数包装成一个可注册的工作流步骤。\"\"\"\n    def step(state: State) -> State:\n        state = dict(state)  # 避免改动外部状态，模拟不可变式传递\n        state[key_out] = func(state[key_in])\n        print(f\"[step:{name}] {key_in} -> {key_out}\")\n        return state\n    return step\n\n\ndef llm(prompt: str) -> str:\n    return f\"[LLM] {prompt[:20]}...\"\n\n\nworkflow: list[Step] = [\n    make_step(\"outline\", lambda t: llm(f\"列提纲：{t}\"), \"topic\", \"outline\"),\n    make_step(\"draft\",   lambda o: llm(f\"写初稿：{o}\"), \"outline\", \"draft\"),\n    make_step(\"polish\",  lambda d: llm(f\"润色：{d}\"),   \"draft\",   \"final\"),\n]\n\n\ndef run(workflow: list[Step], init_state: State) -> State:\n    \"\"\"线性执行器：按顺序执行步骤，前一步的输出就是后一步的输入状态。\"\"\"\n    state = init_state\n    for step in workflow:\n        state = step(state)\n    return state\n\n\nresult = run(workflow, {\"topic\": \"AI 入门\"})\nprint(\"最终输出：\", result[\"final\"])\n```\n\n**关键结论**：把步骤抽象成 `State -> State` 的函数，工作流就变成了**列表**。你可以对列表做插入、替换、条件跳过、日志记录——这就是工作流引擎的雏形。\n\n---\n\n## 3. 从线性到条件：加入分支与循环\n\n真实任务很少是纯线性的。典型的两类扩展：\n\n- **条件分支（Conditional Branch）**：根据上一步的结果决定走哪条路。\n- **循环（Loop / Reflection）**：让模型自检，不满意就重来，最多重试 N 次。\n\n```python\nfrom typing import Callable\n\nState = dict\n\n\ndef llm(prompt: str) -> str:\n    return f\"[LLM] {prompt[:20]}...\"\n\n\ndef draft_step(state: State) -> State:\n    state[\"draft\"] = llm(f\"写初稿：{state['topic']}\")\n    return state\n\n\ndef review_step(state: State) -> State:\n    \"\"\"模拟“评审”步骤：让模型判断草稿是否合格。\"\"\"\n    # 真实场景这里会调用 LLM 返回 yes/no，这里用简单规则演示\n    state[\"passed\"] = len(state[\"draft\"]) > 15\n    return state\n\n\ndef polish_step(state: State) -> State:\n    state[\"draft\"] = llm(f\"润色：{state['draft']}\")\n    state[\"round\"] = state.get(\"round\", 0) + 1\n    return state\n\n\ndef run_with_loop(init_state: State, max_rounds: int = 3) -> State:\n    \"\"\"循环式工作流：草稿 -> 评审 -> 若不过则润色，最多 max_rounds 轮。\"\"\"\n    state = init_state\n    for _ in range(max_rounds):\n        state = draft_step(state)\n        state = review_step(state)\n        if state[\"passed\"]:\n            print(\"评审通过\")\n            break\n        print(\"评审未通过，进入润色\")\n        state = polish_step(state)\n    return state\n\n\nprint(run_with_loop({\"topic\": \"AI 入门\"})[\"draft\"])\n```\n\n**关键结论**：加入分支和循环后，工作流从“管道”升级为“流程图”。这就是 Agent 框架（如 LangGraph、CrewAI）要解决的核心问题——把流程图表达出来并可靠执行。\n\n---\n\n## 4. 工程化关注点：可观测、可替换、可测试\n\n工作流模式真正进入生产后，还需要三个工程属性：\n\n1. **可观测（Observability）**：每一步的输入、输出、耗时、模型名都要记录，出问题能回溯。\n2. **可替换（Replaceability）**：把 LLM 封装成接口，换模型不改工作流。\n3. **可测试（Testability）**：用假的 LLM（返回固定字符串）来单测每个步骤。\n\n```python\nimport time\nfrom typing import Callable, Protocol\n\n\nclass LLM(Protocol):\n    \"\"\"LLM 接口：真实实现可以是 OpenAI、本地模型或测试用的假模型。\"\"\"\n    def __call__(self, prompt: str) -> str: ...\n\n\ndef real_llm(prompt: str) -> str:\n    # 真实场景：调用 API，这里只演示接口\n    return f\"[real] {prompt[:20]}\"\n\n\ndef fake_llm(prompt: str) -> str:\n    \"\"\"测试用：永远返回固定长度，方便断言。\"\"\"\n    return \"固定回答\" * 5\n\n\ndef traced_step(name: str, llm: LLM, prompt_fn: Callable[[dict], str], key_out: str):\n    \"\"\"带日志的工作流步骤工厂：记录耗时和输出长度。\"\"\"\n    def step(state: dict) -> dict:\n        prompt = prompt_fn(state)\n        t0 = time.time()\n        out = llm(prompt)\n        cost = time.time() - t0\n        state[key_out] = out\n        print(f\"[trace] {name}: {cost*1000:.1f}ms, out_len={len(out)}\")\n        return state\n    return step\n\n\ndef run(workflow, state):\n    for step in workflow:\n        state = step(state)\n    return state\n\n\n# 生产：用 real_llm\nprod = [traced_step(\"outline\", real_llm, lambda s: f\"列提纲：{s['topic']}\", \"outline\")]\nprint(run(prod, {\"topic\": \"AI\"})[\"outline\"])\n\n# 测试：换成 fake_llm，完全不改工作流结构\nprod = [traced_step(\"outline\", fake_llm, lambda s: f\"列提纲：{s['topic']}\", \"outline\")]\nassert run(prod, {\"topic\": \"AI\"})[\"outline\"] == \"固定回答\" * 5\nprint(\"测试通过\")\n```\n\n**关键结论**：工作流的价值不仅是“拆步骤”，更是把 LLM 不可控的部分隔离在接口后面，让**流程本身变得可测试、可观测、可演进**。\n\n---\n\n## 5. 什么时候用工作流，什么时候用自主 Agent\n\n这是初学者最容易混淆的地方。\n\n| 维度 | 工作流（Workflow） | 自主 Agent（Autonomous Agent） |\n|------|---------------------|--------------------------------|\n| 控制流 | 由你预先设计好 | 由 LLM 动态决定 |\n| 可预测性 | 高 | 低 |\n| 调试难度 | 低 | 高 |\n| 适合任务 | 流程稳定、步骤可枚举 | 探索性、路径不固定 |\n| 成本 | 较低（步骤数固定） | 较高（可能循环多次） |\n\n实践建议：**先写成工作流，只有当工作流的分支实在写不穷举时，再让 Agent 来做决策。** 这叫“workflow first, agent later”。\n\n---\n\n## 6. 动手练习\n\n**任务**：实现一个“读书笔记工作流”。\n\n要求：\n\n1. 定义三个步骤函数：`summarize`（总结原文）、`extract_points`（提取 3 个要点）、`make_questions`（生成 3 个思考题）。\n2. 每个步骤内部调用一个 `fake_llm(prompt) -> str`，不用真的接 API，可以用字符串拼接模拟。\n3. 写一个 `run_workflow(steps, state)` 执行器，按顺序调用并打印每一步的状态字典。\n4. 再实现一个“自检润色”循环：如果总结结果长度小于 20 字符，就重试一次 `summarize`，最多重试 2 次。\n\n**验收标准**：\n\n- 输入 `{\"text\": \"任意一段文字\"}`，输出包含 `summary`、`points`、`questions` 三个字段。\n- 打印出每一步的 trace 日志。\n- 用 `assert` 验证最终字典里三个字段都存在且非空。\n\n提示：可以参考第 2、3 节的代码，把 `Step` 类型统一成 `Callable[[dict], dict]`。\n\n```python\nfrom typing import Callable\n\nState = dict\nStep = Callable[[State], State]\n\n\ndef fake_llm(prompt: str) -> str:\n    \"\"\"模拟 LLM：返回带前缀的字符串，方便观察工作流。\"\"\"\n    return f\"[LLM] {prompt[:25]}...\"\n\n\n# ---- 三个步骤 ----\ndef summarize(state: State) -> State:\n    state[\"summary\"] = fake_llm(f\"总结原文：{state['text']}\")\n    print(f\"[trace] summarize -> {state['summary']}\")\n    return state\n\n\ndef extract_points(state: State) -> State:\n    state[\"points\"] = fake_llm(f\"提取 3 个要点：{state['summary']}\")\n    print(f\"[trace] extract_points -> {state['points']}\")\n    return state\n\n\ndef make_questions(state: State) -> State:\n    state[\"questions\"] = fake_llm(f\"生成 3 个思考题：{state['points']}\")\n    print(f\"[trace] make_questions -> {state['questions']}\")\n    return state\n\n\n# ---- 执行器 ----\ndef run_workflow(steps: list[Step], state: State) -> State:\n    for step in steps:\n        state = step(state)\n    return state\n\n\n# ---- 自检循环：summary 太短就重试 ----\ndef run_with_self_check(steps: list[Step], state: State, max_retry: int = 2) -> State:\n    state = run_workflow(steps[:1], state)  # 先跑 summarize\n    retry = 0\n    while len(state.get(\"summary\", \"\")) < 20 and retry < max_retry:\n        print(f\"[trace] summary 太短，第 {retry+1} 次重试\")\n        state = summarize(state)\n        retry += 1\n    state = run_workflow(steps[1:], state)  # 再跑后面两步\n    return state\n\n\nif __name__ == \"__main__\":\n    steps: list[Step] = [summarize, extract_points, make_questions]\n    result = run_with_self_check(steps, {\"text\": \"这是一段关于 AI 工作流的示例文字。\"})\n    assert result.get(\"summary\") and result.get(\"points\") and result.get(\"questions\")\n    print(\"最终状态：\", result)\n```\n\n## agent.pattern.state_machine\n\n# Agent 状态机模式（State Machine）：让 AI 智能体拥有\"记忆\"与\"流程\"\n\n> **一句话直觉**：如果把 Agent（智能体）比作一个正在办事的客服，状态机（State Machine）就是他的\"工牌 + 流程手册\"——工牌记录他**现在处于哪一步**，手册规定他**下一步该做什么**。没有状态机，Agent 就像失忆的员工，每次对话都从头问一遍。\n\n---\n\n## 一、为什么需要状态机？\n\n### 1.1 从\"一问一答\"到\"多轮任务\"\n\n你肯定用过 ChatGPT 这类对话 AI。如果只是聊天，一问一答就够了。但如果你要做一个能**订机票**的 Agent，流程是这样的：\n\n```\n用户：我想订机票\nAgent：请问去哪？\n用户：北京\nAgent：请问什么时候出发？\n用户：下周一\nAgent：确认订单？\n用户：确认\nAgent：✅ 已为您预订\n```\n\n这里 Agent 必须**记住**\"我还在问日期\"、\"用户已经告诉我目的地了\"。这个\"记住当前进展\"的东西，就叫**状态（State）**。\n\n### 1.2 朴素写法的痛点\n\n零基础同学第一反应通常是用一个变量标记进度：\n\n```python\nstep = \"ask_destination\"  # 全局变量\n```\n\n但这样写很快会遇到问题：\n- 状态一多，代码里全是 `if step == ...: elif step == ...`\n- 增加一个状态就要改所有分支\n- 谁允许切换到谁？完全靠脑子记，容易出 bug\n\n**状态机模式（State Machine Pattern，状态机模式）** 就是把\"有哪些状态、每个状态能去哪\"这件事，用**结构化**的方式写清楚。\n\n---\n\n## 二、状态机的三个核心概念\n\n状态机其实很简单，只需记住三个词：\n\n| 概念 | 英文 | 含义 | 例子 |\n|---|---|---|---|\n| 状态 | State | 当前所处的\"阶段\" | `ASK_DESTINATION`（正在问目的地） |\n| 事件 | Event | 触发变化的外部输入 | 用户说了\"北京\" |\n| 转移 | Transition | 从状态 A 到状态 B 的规则 | ASK_DESTINATION + 收到目的地 → ASK_DATE |\n\n**画成图就是这样**：\n\n```\n[START] ──用户说\"订机票\"──▶ [ASK_DESTINATION]\n                                    │\n                              用户说\"北京\"\n                                    ▼\n                              [ASK_DATE]\n                                    │\n                              用户说\"下周一\"\n                                    ▼\n                              [CONFIRM]\n                                    │\n                              用户说\"确认\"\n                                    ▼\n                                 [DONE]\n```\n\n每一个箭头就是一条**转移规则（Transition Rule）**。\n\n---\n\n## 三、最小可用实现：用字典定义状态机\n\nPython 里最朴素的状态机可以用**字典（dict）** 实现：键是 `(当前状态, 事件)`，值是 `下一个状态`。\n\n```python\n# 状态机的\"转移表\"（Transition Table）：告诉系统遇到什么事件该去哪\nTRANSITIONS = {\n    (\"START\",            \"want_book\"):  \"ASK_DESTINATION\",\n    (\"ASK_DESTINATION\",  \"give_dest\"):  \"ASK_DATE\",\n    (\"ASK_DATE\",         \"give_date\"):  \"CONFIRM\",\n    (\"CONFIRM\",          \"yes\"):        \"DONE\",\n}\n\nclass FlightAgent:\n    def __init__(self):\n        self.state = \"START\"      # 当前状态\n        self.data = {}            # 累积的信息（记忆）\n\n    def handle(self, event: str, payload: str = \"\") -> str:\n        \"\"\"接收一个事件，按转移表切到下一个状态，并返回给用户的回复。\"\"\"\n        key = (self.state, event)\n        if key not in TRANSITIONS:\n            return f\"（当前状态 {self.state} 无法处理事件 {event}）\"\n\n        self.state = TRANSITIONS[key]           # 状态转移\n        self.data[event] = payload              # 顺手记住信息\n\n        # 每个状态对应的\"台词\"\n        replies = {\n            \"ASK_DESTINATION\": \"请问您要去哪里？\",\n            \"ASK_DATE\":        f\"好的，去{self.data.get('give_dest','?')}。请问什么时候出发？\",\n            \"CONFIRM\":         f\"确认预订：{self.data.get('give_dest')}，{self.data.get('give_date')}？（是/否）\",\n            \"DONE\":            \"✅ 已为您预订成功！\",\n        }\n        return replies[self.state]\n\n# --- 试跑一遍 ---\nagent = FlightAgent()\nprint(agent.handle(\"want_book\"))\nprint(agent.handle(\"give_dest\", \"北京\"))\nprint(agent.handle(\"give_date\", \"下周一\"))\nprint(agent.handle(\"yes\"))\n```\n\n**输出**：\n```\n请问您要去哪里？\n好的，去北京。请问什么时候出发？\n确认预订：北京，下周一？（是/否）\n✅ 已为您预订成功！\n```\n\n**这段代码的三个关键点**：\n1. `self.state` 存**当前状态**——这就是 Agent 的\"工牌\"。\n2. `TRANSITIONS` 是**配置**，加新流程只改表，不改逻辑。\n3. `self.data` 存**累积信息**——这就是 Agent 的\"记忆\"。\n\n---\n\n## 四、进阶：用枚举（Enum）让状态更安全\n\n用字符串当状态容易写错（比如 `\"START\"` 顺手打成 `\"STRAT\"`，运行时才报错）。工程上更推荐用 **枚举（Enum，枚举类型）**：\n\n```python\nfrom enum import Enum, auto\n\nclass State(Enum):\n    START = auto()\n    ASK_DEST = auto()\n    ASK_DATE = auto()\n    CONFIRM = auto()\n    DONE = auto()\n\nclass Event(Enum):\n    WANT_BOOK = auto()\n    GIVE_DEST = auto()\n    GIVE_DATE = auto()\n    YES = auto()\n\n# 转移表用 (State, Event) 作为键，IDE 和类型检查器都能帮你查错\nTRANSITIONS = {\n    (State.START,     Event.WANT_BOOK): State.ASK_DEST,\n    (State.ASK_DEST,  Event.GIVE_DEST): State.ASK_DATE,\n    (State.ASK_DATE,  Event.GIVE_DATE): State.CONFIRM,\n    (State.CONFIRM,   Event.YES):       State.DONE,\n}\n\nclass FlightAgent:\n    def __init__(self):\n        self.state: State = State.START\n        self.data = {}\n\n    def handle(self, event: Event, payload: str = \"\") -> str:\n        nxt = TRANSITIONS.get((self.state, event))\n        if nxt is None:\n            return f\"[忽略] 状态 {self.state.name} 下无法处理 {event.name}\"\n        self.state = nxt\n        self.data[event.name] = payload\n        return f\"→ 转移到 {self.state.name}\"\n\n# 试一试：忘给日期直接确认，会被拦住\nagent = FlightAgent()\nprint(agent.handle(Event.WANT_BOOK))\nprint(agent.handle(Event.GIVE_DEST, \"上海\"))\nprint(agent.handle(Event.YES))          # 不合规转移，会被拦截\nprint(agent.handle(Event.GIVE_DATE, \"明天\"))\nprint(agent.handle(Event.YES))\n```\n\n**好处**：拼错 `State.ASK_DST` 会被 IDE 立刻标红，不用等运行时。\n\n---\n\n## 五、工程化：把状态机做成可配置的类\n\n真实 Agent 里状态会越来越多。我们可以把\"状态机骨架\"抽象成一个可复用类，让业务方只写**表**和**动作**：\n\n```python\nfrom typing import Callable, Optional\n\nAction = Callable[[dict], str]   # 每个状态进入时要执行的动作（比如调用 LLM）\n\nclass StateMachine:\n    \"\"\"通用状态机：表驱动（Table-Driven），逻辑与数据分离。\"\"\"\n    def __init__(self, init_state: str, transitions: dict, on_enter: dict):\n        self.state = init_state\n        self.transitions = transitions      # {(state, event): next_state}\n        self.on_enter = on_enter            # {state: 动作函数}\n        self.context: dict = {}             # 跨状态共享的上下文\n\n    def fire(self, event: str, payload: dict | None = None) -> str:\n        # 1) 查表\n        nxt: Optional[str] = self.transitions.get((self.state, event))\n        if nxt is None:\n            return f\"[invalid] {self.state} × {event}\"\n\n        # 2) 记住输入\n        if payload:\n            self.context.update(payload)\n\n        # 3) 切换状态\n        self.state = nxt\n\n        # 4) 执行该状态的\"入场动作\"（这里通常是调用 LLM）\n        return self.on_enter[self.state](self.context)\n\n# ===== 业务侧只需配置 =====\ntransitions = {\n    (\"START\",   \"user_intent\"): \"INTENT\",\n    (\"INTENT\",  \"is_search\"):   \"SEARCH\",\n    (\"INTENT\",  \"is_chat\"):     \"CHAT\",\n    (\"SEARCH\",  \"done\"):        \"ANSWER\",\n    (\"CHAT\",    \"done\"):        \"ANSWER\",\n}\n\ndef enter_intent(ctx):\n    ctx.setdefault(\"tools\", [\"search\", \"chat\"])\n    return f\"请选择工具：{ctx['tools']}\"\n\ndef enter_search(ctx):\n    return f\"[调用搜索工具] 查询：{ctx.get('query', '')}\"\n\ndef enter_chat(ctx):\n    return \"[调用对话模型] 你好，我是助手～\"\n\ndef enter_answer(ctx):\n    return \"[汇总] 任务完成。\"\n\non_enter = {\n    \"INTENT\": enter_intent,\n    \"SEARCH\": enter_search,\n    \"CHAT\":   enter_chat,\n    \"ANSWER\": enter_answer,\n}\n\nsm = StateMachine(\"START\", transitions, on_enter)\nprint(sm.fire(\"user_intent\"))\nprint(sm.fire(\"is_search\", {\"query\": \"今天天气\"}))\nprint(sm.fire(\"done\"))\n```\n\n**输出**：\n```\n请选择工具：['search', 'chat']\n[调用搜索工具] 查询：今天天气\n[汇总] 任务完成。\n```\n\n看到没？业务逻辑被彻底抽离开——你后面接 LangGraph、接真实 LLM 调用，只要换掉 `on_enter` 里的函数就行。这正是主流 Agent 框架（如 LangGraph 的 `StateGraph`、AutoGen 的 `GroupChat` 状态）背后的思想。\n\n---\n\n## 小结一句话\n\n> **状态机 = 状态（我在哪） + 事件（发生了什么） + 转移表（接下来去哪） + 上下文（我记住了什么）。**\n\n掌握这套模式，你就理解了当下主流 Agent 框架的\"骨架\"。\n\n```python\nfrom enum import Enum, auto\nfrom typing import Callable\n\n# ========= 1. 定义状态和事件（用枚举更安全） =========\nclass State(Enum):\n    START   = auto()\n    ASK_DEST = auto()\n    ASK_DATE = auto()\n    CONFIRM = auto()\n    DONE    = auto()\n\nclass Event(Enum):\n    WANT_BOOK = auto()\n    GIVE_DEST = auto()\n    GIVE_DATE = auto()\n    YES       = auto()\n\n# ========= 2. 转移表：状态机的大脑 =========\nTRANSITIONS = {\n    (State.START,    Event.WANT_BOOK): State.ASK_DEST,\n    (State.ASK_DEST, Event.GIVE_DEST): State.ASK_DATE,\n    (State.ASK_DATE, Event.GIVE_DATE): State.CONFIRM,\n    (State.CONFIRM,  Event.YES):       State.DONE,\n}\n\n# ========= 3. 通用状态机类 =========\nAction = Callable[[dict], str]\n\nclass StateMachine:\n    \"\"\"表驱动的状态机：便于扩展到真实 Agent。\"\"\"\n    def __init__(self, init: State, transitions: dict, on_enter: dict[State, Action]):\n        self.state = init\n        self.transitions = transitions\n        self.on_enter = on_enter\n        self.context: dict = {}       # 跨状态共享的记忆\n\n    def fire(self, event: Event, payload: str = \"\") -> str:\n        nxt = self.transitions.get((self.state, event))\n        if nxt is None:\n            return f\"[invalid] 状态 {self.state.name} 无法响应 {event.name}\"\n        if payload:\n            self.context[event.name] = payload\n        self.state = nxt\n        return self.on_enter[self.state](self.context)\n\n# ========= 4. 每个状态的入场动作（这里假装是回复用户 / 调 LLM） =========\ndef enter_ask_dest(ctx: dict) -> str:\n    return \"请问您要去哪里？\"\n\ndef enter_ask_date(ctx: dict) -> str:\n    dest = ctx.get(\"GIVE_DEST\", \"?\")\n    return f\"好的，{dest}。请问什么时候出发？\"\n\ndef enter_confirm(ctx: dict) -> str:\n    return f\"请确认：去{ctx['GIVE_DEST']}，{ctx['GIVE_DATE']} 出发？（YES 确认）\"\n\ndef enter_done(ctx: dict) -> str:\n    return \"✅ 已为您预订成功！\"\n\nON_ENTER = {\n    State.ASK_DEST: enter_ask_dest,\n    State.ASK_DATE: enter_ask_date,\n    State.CONFIRM:  enter_confirm,\n    State.DONE:     enter_done,\n}\n\n# ========= 5. 跑一遍完整流程 =========\nif __name__ == \"__main__\":\n    sm = StateMachine(State.START, TRANSITIONS, ON_ENTER)\n    print(sm.fire(Event.WANT_BOOK))\n    print(sm.fire(Event.GIVE_DEST, \"北京\"))\n    print(sm.fire(Event.YES))                       # 非法：还没给日期\n    print(sm.fire(Event.GIVE_DATE, \"下周一\"))\n    print(sm.fire(Event.YES))\n```\n",
+  "quiz": [
+    {
+      "kp": "agent.pattern.workflow",
+      "type": "single_choice",
+      "question": "在设计一个智能体工作流时，若要实现「先由模型生成多个候选方案，再由另一个模型调用对候选方案进行评估并选出最优」，这属于哪种工作流模式？",
+      "options": [
+        "串行链式工作流",
+        "并行化工作流",
+        "路由工作流",
+        "评估-优化工作流"
+      ],
+      "answer": 3,
+      "explanation": "该模式先生成多个候选，再通过独立评估步骤筛选或优化，属于评估-优化工作流。串行链式是线性传递；并行化强调同时执行互不依赖的子任务；路由是依据输入选择后续路径。",
+      "error_tag": "概念混淆",
+      "variant_group": "workflow_patterns"
+    },
+    {
+      "kp": "agent.pattern.workflow",
+      "type": "single_choice",
+      "question": "某工作流中，一个智能体负责将用户问题分类为「售后」或「售前」，然后根据分类结果把请求交给不同的下游智能体处理。这最符合哪种工作流模式？",
+      "options": [
+        "路由工作流",
+        "并行化工作流",
+        "串行链式工作流",
+        "人工审核工作流"
+      ],
+      "answer": 0,
+      "explanation": "根据输入分类决定后续路径，是路由工作流的典型特征。并行化是同时执行多个分支并汇总；串行链式是固定顺序传递；人工审核强调人的介入。",
+      "error_tag": "概念混淆",
+      "variant_group": "workflow_patterns"
+    },
+    {
+      "kp": "agent.pattern.workflow",
+      "type": "single_choice",
+      "question": "以下哪种情况最适合采用路由工作流而不是串行链式工作流？",
+      "options": [
+        "所有输入都需要经过完全相同的处理步骤",
+        "不同类别的输入需要走不同的处理分支",
+        "需要多个模型同时处理同一份数据",
+        "需要对同一输出反复生成和评估"
+      ],
+      "answer": 1,
+      "explanation": "路由工作流适合按输入类别选择不同分支。所有输入走相同步骤适合串行链式；同时处理同一份数据适合并行化；反复生成评估适合评估-优化。",
+      "error_tag": "模式选择错误",
+      "variant_group": "workflow_patterns"
+    },
+    {
+      "kp": "agent.pattern.workflow",
+      "type": "single_choice",
+      "question": "关于并行化工作流与串行链式工作流的区别，以下描述正确的是？",
+      "options": [
+        "并行化工作流中各子任务通常互不依赖，串行链式工作流中后一步依赖前一步输出",
+        "并行化工作流不需要汇总结果，串行链式工作流需要汇总",
+        "并行化工作流只能有一个步骤，串行链式工作流可以有多个步骤",
+        "并行化工作流必须使用路由，串行链式工作流必须使用评估"
+      ],
+      "answer": 0,
+      "explanation": "并行化强调子任务互不依赖、同时执行；串行链式强调固定顺序、后一步依赖前一步输出。并行化通常需要汇总；两者都可以有多个步骤；它们不强制依赖路由或评估。",
+      "error_tag": "概念混淆",
+      "variant_group": "workflow_patterns"
+    },
+    {
+      "kp": "agent.pattern.workflow",
+      "type": "single_choice",
+      "question": "某工作流需要把一份长文档拆成多个章节，分别让不同智能体并行总结，最后再合并成一份总摘要。这个设计主要使用了哪种模式？",
+      "options": [
+        "路由工作流",
+        "并行化工作流",
+        "串行链式工作流",
+        "评估-优化工作流"
+      ],
+      "answer": 1,
+      "explanation": "拆分成多个可独立处理的章节并行总结再合并，属于并行化工作流。路由是按类别选择分支；串行链式是顺序执行；评估-优化是生成与评估循环。",
+      "error_tag": "模式选择错误",
+      "variant_group": "workflow_patterns"
+    },
+    {
+      "kp": "agent.pattern.workflow",
+      "type": "single_choice",
+      "question": "在设计评估-优化工作流时，评估环节的输出通常应该包含什么，才能有效驱动优化？",
+      "options": [
+        "仅返回一个布尔值表示是否通过",
+        "具体的修改建议或评分维度上的反馈",
+        "完整的原始输入副本",
+        "下一个用户的身份信息"
+      ],
+      "answer": 1,
+      "explanation": "要让优化环节知道如何改，评估应给出具体反馈或分维度评分。仅返回布尔值信息量太少；原始输入副本和用户身份信息不能直接指导优化。",
+      "error_tag": "设计缺陷",
+      "variant_group": "workflow_evaluation"
+    },
+    {
+      "kp": "agent.pattern.workflow",
+      "type": "single_choice",
+      "question": "某智能体工作流中，模型先判断问题类型，然后选择调用「天气查询」或「股票查询」工具，最后把结果整理成自然语言回答。这个工作流同时体现了哪两种模式？",
+      "options": [
+        "串行链式与并行化",
+        "路由与串行链式",
+        "并行化与评估-优化",
+        "评估-优化与路由"
+      ],
+      "answer": 1,
+      "explanation": "先判断类型再选择工具属于路由；判断、调用、整理按顺序执行属于串行链式。没有同时并行执行多个分支，也没有生成-评估循环。",
+      "error_tag": "模式识别错误",
+      "variant_group": "workflow_patterns"
+    },
+    {
+      "kp": "agent.pattern.workflow",
+      "type": "single_choice",
+      "question": "以下哪一项不是工作流模式设计中常见的关注点？",
+      "options": [
+        "步骤之间的数据传递方式",
+        "失败时的重试或降级策略",
+        "模型参数的具体数值来源",
+        "分支选择或汇总逻辑"
+      ],
+      "answer": 2,
+      "explanation": "工作流模式关注步骤编排、数据传递、分支与汇总、失败处理等。模型参数的具体数值来源属于模型配置或调参问题，不是工作流模式本身的核心关注点。",
+      "error_tag": "概念混淆",
+      "variant_group": "workflow_design"
+    },
+    {
+      "kp": "agent.pattern.workflow",
+      "type": "single_choice",
+      "question": "如果工作流中某个并行分支执行失败，以下哪种处理方式最符合健壮工作流的设计原则？",
+      "options": [
+        "整个工作流必须立即丢弃所有已完成分支的结果",
+        "应有重试、降级或忽略该分支并继续汇总的机制",
+        "必须把失败分支的结果当作正确答案继续使用",
+        "应关闭所有并行分支改为完全串行执行"
+      ],
+      "answer": 1,
+      "explanation": "健壮的工作流会对失败的分支采取重试、降级或跳过并继续汇总等策略。立即丢弃全部结果、把失败结果当正确答案、完全改为串行都不是通用最佳做法。",
+      "error_tag": "设计缺陷",
+      "variant_group": "workflow_design"
+    },
+    {
+      "kp": "agent.pattern.workflow",
+      "type": "single_choice",
+      "question": "某团队希望工作流在遇到不确定的输入时不要贸然选择分支，而是先请求人工确认。这主要是在路由工作流中引入了什么？",
+      "options": [
+        "并行化处理",
+        "人工审核或兜底机制",
+        "评估-优化循环",
+        "串行链式回退"
+      ],
+      "answer": 1,
+      "explanation": "在路由无法可靠决策时交给人工确认，属于引入人工审核或兜底机制。并行化、评估-优化循环、串行链式回退都不是这里的主要手段。",
+      "error_tag": "概念混淆",
+      "variant_group": "workflow_routing"
+    },
+    {
+      "kp": "agent.pattern.workflow",
+      "type": "single_choice",
+      "question": "关于「评估-优化工作流」与「串行链式工作流」的区别，以下说法正确的是？",
+      "options": [
+        "评估-优化工作流一定比串行链式工作流消耗更少资源",
+        "评估-优化工作流包含根据评估结果的反馈循环，串行链式工作流没有",
+        "串行链式工作流不需要任何输入",
+        "评估-优化工作流不能包含串行步骤"
+      ],
+      "answer": 1,
+      "explanation": "评估-优化的关键特征是评估结果反馈给生成环节形成循环；串行链式是单向顺序执行。评估-优化通常消耗更多资源；串行链式也需要输入；评估-优化内部也可以有串行步骤。",
+      "error_tag": "概念混淆",
+      "variant_group": "workflow_patterns"
+    },
+    {
+      "kp": "agent.pattern.workflow",
+      "type": "single_choice",
+      "question": "在设计一个多步骤智能体工作流时，以下哪种做法最有助于提高整体可靠性？",
+      "options": [
+        "每一步都假设上一步一定成功，不做任何校验",
+        "为关键步骤设置校验与异常处理，并定义失败后的替代路径",
+        "尽量把所有步骤合并成一次模型调用以省略中间检查",
+        "让所有分支都依赖同一个外部服务且不设超时"
+      ],
+      "answer": 1,
+      "explanation": "关键步骤设置校验、异常处理和替代路径，可以提升工作流可靠性。不做校验、合并省略检查、单点依赖且无超时都会放大故障影响。",
+      "error_tag": "设计缺陷",
+      "variant_group": "workflow_design"
+    },
+    {
+      "kp": "agent.pattern.workflow",
+      "type": "single_choice",
+      "question": "以下关于「串行链式工作流」的描述，哪一项是正确的？",
+      "options": [
+        "各步骤之间必须共享同一个提示词模板",
+        "每一步的输出会作为下一步的输入，按固定顺序执行",
+        "所有步骤必须同时开始执行以降低延迟",
+        "它要求每个步骤都调用不同的模型供应商"
+      ],
+      "answer": 1,
+      "explanation": "串行链式工作流的核心是固定顺序，前一步输出作为后一步输入。共享提示词模板、同时开始、必须使用不同模型供应商都不是其必要条件。",
+      "error_tag": "概念混淆",
+      "variant_group": "workflow_patterns"
+    },
+    {
+      "kp": "agent.pattern.workflow",
+      "type": "single_choice",
+      "question": "某工作流先让模型生成一段代码，再运行单元测试，测试不通过就把错误信息反馈给模型重新生成。这个循环最符合哪种模式？",
+      "options": [
+        "路由工作流",
+        "并行化工作流",
+        "评估-优化工作流",
+        "串行链式工作流"
+      ],
+      "answer": 2,
+      "explanation": "生成代码后由测试作为评估手段，失败则反馈并重新生成，形成评估-优化循环。路由是分类选择；并行化是同时执行；串行链式没有基于评估的反馈重试。",
+      "error_tag": "模式识别错误",
+      "variant_group": "workflow_patterns"
+    },
+    {
+      "kp": "agent.pattern.workflow",
+      "type": "single_choice",
+      "question": "在设计工作流时，如果多个子任务之间没有数据依赖，并且希望缩短整体响应时间，最合适的模式通常是？",
+      "options": [
+        "串行链式工作流",
+        "路由工作流",
+        "并行化工作流",
+        "评估-优化工作流"
+      ],
+      "answer": 2,
+      "explanation": "任务之间无依赖时，可以并行执行多个子任务再汇总结果，以缩短总耗时。串行链式会按顺序执行；路由是选择路径；评估-优化强调生成与评估的迭代。",
+      "error_tag": "模式选择错误",
+      "variant_group": "workflow_patterns"
+    },
+    {
+      "kp": "agent.pattern.workflow",
+      "type": "single_choice",
+      "question": "某团队让一个智能体先撰写产品文案，再由另一个智能体检查文案中是否包含违禁词，若包含则返回修改意见，第一个智能体据此重写。这种「生成—检查—重写」的循环最接近哪种工作流模式？",
+      "options": [
+        "路由工作流",
+        "并行化工作流",
+        "评估-优化工作流",
+        "串行链式工作流"
+      ],
+      "answer": 2,
+      "explanation": "生成后由独立评估环节给出反馈并驱动重写，属于评估-优化工作流。串行链式不包含根据评估结果回环修改的机制；路由是分类选择；并行化是同时执行。",
+      "error_tag": "概念混淆",
+      "variant_group": "workflow_patterns"
+    },
+    {
+      "kp": "agent.pattern.workflow",
+      "type": "single_choice",
+      "question": "在智能体工作流中使用路由模式时，路由决策通常由什么产生？",
+      "options": [
+        "由下游智能体执行结束后反向决定",
+        "由模型或规则对输入进行分类或判断",
+        "由系统随机分配以平衡负载",
+        "由用户手动选择每一次的执行路径"
+      ],
+      "answer": 1,
+      "explanation": "路由模式的关键是先对输入进行分类或判断，再决定走哪条分支，通常由模型或规则完成。反向决定、随机分配、用户手动选择都不是路由模式的典型做法。",
+      "error_tag": "概念混淆",
+      "variant_group": "workflow_patterns"
+    },
+    {
+      "kp": "agent.pattern.workflow",
+      "type": "single_choice",
+      "question": "关于并行化工作流，以下说法正确的是？",
+      "options": [
+        "并行执行的各分支之间必须存在严格的先后依赖",
+        "并行执行后通常需要一个汇总或聚合步骤来合并结果",
+        "并行化工作流只能用于图像处理任务",
+        "并行化工作流不需要任何任务分解"
+      ],
+      "answer": 1,
+      "explanation": "并行化工作流将任务分解为可独立执行的子任务并行处理，之后通常需要汇总或聚合。严格先后依赖与并行相矛盾；它不限于图像任务；任务分解是其前提。",
+      "error_tag": "概念混淆",
+      "variant_group": "workflow_patterns"
+    },
+    {
+      "kp": "agent.pattern.workflow",
+      "type": "single_choice",
+      "question": "设计一个客服智能体工作流：先判断用户意图，若属于「退款」则调用退款流程，若属于「技术问题」则调用诊断流程，其他情况转人工。这个设计主要体现了哪种模式？",
+      "options": [
+        "评估-优化工作流",
+        "路由工作流",
+        "串行链式工作流",
+        "并行化工作流"
+      ],
+      "answer": 1,
+      "explanation": "先判断意图再分派到不同流程，属于路由工作流。评估-优化涉及生成与评估循环；串行链式是固定顺序；并行化是同时执行多个分支。",
+      "error_tag": "模式选择错误",
+      "variant_group": "workflow_patterns"
+    },
+    {
+      "kp": "agent.pattern.workflow",
+      "type": "single_choice",
+      "question": "某工作流把「翻译」和「润色」两个步骤写成：先翻译，再把翻译结果交给润色步骤，中间不根据结果回退。这属于？",
+      "options": [
+        "并行化工作流",
+        "路由工作流",
+        "串行链式工作流",
+        "评估-优化工作流"
+      ],
+      "answer": 2,
+      "explanation": "两个步骤按固定顺序执行，前一步输出作为后一步输入且不回退，属于串行链式工作流。并行化要求同时执行；路由要求分类选择；评估-优化要求有评估反馈循环。",
+      "error_tag": "概念混淆",
+      "variant_group": "workflow_patterns"
+    },
+    {
+      "kp": "agent.pattern.workflow",
+      "type": "single_choice",
+      "question": "在评估-优化工作流中，如果评估环节始终给出「通过」，最可能带来的问题是？",
+      "options": [
+        "工作流会立即抛出异常终止",
+        "优化环节会失去作用，无法提升输出质量",
+        "并行分支会自动合并",
+        "路由决策会变成随机选择"
+      ],
+      "answer": 1,
+      "explanation": "评估环节的作用是发现问题并驱动优化。若评估总是通过，优化步骤就不会被触发，工作流退化为一次生成，质量提升有限。其他选项描述的行为与评估结果无关。",
+      "error_tag": "因果误判",
+      "variant_group": "workflow_evaluation"
+    },
+    {
+      "kp": "agent.pattern.state_machine",
+      "type": "single_choice",
+      "question": "在将 Agent 的行为建模为状态机时，下列哪一项最准确地描述了「状态」的含义？",
+      "options": [
+        "Agent 在当前时刻对外部环境的所有感知输入的集合",
+        "Agent 在某一时刻所处的、决定其后续可选动作与转移条件的处境或阶段",
+        "Agent 从启动到当前所执行的全部动作的历史日志",
+        "Agent 内部维护的全部变量的完整快照，包括临时计算中间值"
+      ],
+      "answer": 1,
+      "explanation": "状态机中的状态是抽象后「决定下一步行为」的处境，它决定了在该状态下哪些转移被允许。A 描述的是输入/观测，C 是轨迹历史，D 是过度的实现细节快照，都不是状态机的状态定义。",
+      "error_tag": "概念混淆",
+      "variant_group": "状态机_状态定义"
+    },
+    {
+      "kp": "agent.pattern.state_machine",
+      "type": "single_choice",
+      "question": "某 Agent 用状态机建模，规定「只有在已收到用户请求的状态下才能进入执行工具调用」。这条规则本质上是状态机中的什么要素？",
+      "options": [
+        "状态集合的一个成员",
+        "初始状态的选择",
+        "状态转移的守卫条件（guard）",
+        "终止状态的判定"
+      ],
+      "answer": 2,
+      "explanation": "「只有满足某条件才允许转移」属于转移上的守卫条件，用来约束状态之间的迁移。它不是状态本身，也不决定初始/终止状态。",
+      "error_tag": "概念混淆",
+      "variant_group": "状态机_转移与守卫"
+    },
+    {
+      "kp": "agent.pattern.state_machine",
+      "type": "multi_choice",
+      "question": "下列关于状态机中「终止状态」的说法，哪些是正确的？（多选）",
+      "options": [
+        "终止状态表示 Agent 已完成任务或应当停止运行",
+        "一个状态机可以有多个终止状态",
+        "终止状态不能有出边",
+        "终止状态必须与初始状态相同"
+      ],
+      "answer": [
+        0,
+        1,
+        2
+      ],
+      "explanation": "终止状态表示流程结束，可以有多个，通常不设出边以避免流程继续。它与初始状态是不同角色，不必相同。",
+      "error_tag": "概念混淆",
+      "variant_group": "状态机_初始与终止"
+    },
+    {
+      "kp": "agent.pattern.state_machine",
+      "type": "multi_choice",
+      "question": "在设计 Agent 状态机时，下列哪些做法有助于避免状态爆炸？（多选）",
+      "options": [
+        "将语义相近、转移条件一致的处境合并为一个状态",
+        "把状态信息中可计算得到的部分放到外部变量而不是拆成新状态",
+        "为每一种输入组合都单独定义一个状态",
+        "用层级状态机把公共行为提取到父状态中"
+      ],
+      "answer": [
+        0,
+        1,
+        3
+      ],
+      "explanation": "合并等价状态、把可推导信息外置、使用层级状态机都能控制状态数量。为每种输入组合单独建状态恰恰是状态爆炸的常见成因。",
+      "error_tag": "概念混淆",
+      "variant_group": "状态机_状态划分粒度"
+    },
+    {
+      "kp": "agent.pattern.state_machine",
+      "type": "multi_choice",
+      "question": "关于状态机中转移的守卫条件，下列说法正确的有哪些？（多选）",
+      "options": [
+        "守卫条件用于判断在给定事件下是否允许某条转移发生",
+        "当同一事件对应多条转移时，可用互斥的守卫条件决定走哪一条",
+        "守卫条件应当尽量保持无副作用",
+        "守卫条件可以修改状态机的状态以辅助判断"
+      ],
+      "answer": [
+        0,
+        1,
+        2
+      ],
+      "explanation": "守卫是判断是否允许转移的条件，可用来在多条候选转移间做选择，并应保持无副作用。修改状态属于动作而非守卫的职责。",
+      "error_tag": "概念混淆",
+      "variant_group": "状态机_转移与守卫"
+    },
+    {
+      "kp": "agent.pattern.state_machine",
+      "type": "multi_choice",
+      "question": "某 Agent 状态机在一次会话中意外跳过了「校验参数」这一状态直接进入「执行工具调用」。下列哪些原因可能导致该问题？（多选）",
+      "options": [
+        "从「解析请求」到「执行工具调用」存在一条守卫条件过宽的转移",
+        "「校验参数」状态的入口守卫写成了恒真条件",
+        "状态机缺少初始状态",
+        "「解析请求」状态的事件被映射到了非预期的目标状态"
+      ],
+      "answer": [
+        0,
+        1,
+        3
+      ],
+      "explanation": "跳过校验通常是因为存在越级转移、校验守卫恒真、或事件被错误映射到错误目标。缺少初始状态会导致启动失败，而不是跳过某个中间状态。",
+      "error_tag": "边界错误",
+      "variant_group": "状态机_转移错误定位"
+    },
+    {
+      "kp": "agent.pattern.state_machine",
+      "type": "fill_blank",
+      "question": "在状态机中，决定「从当前状态出发，在给定事件下应当迁移到哪个状态」的规则集合，通常称为状态______表或转移表。",
+      "options": [],
+      "answer": [
+        "转移",
+        "迁移",
+        "transition",
+        "transitions"
+      ],
+      "explanation": "转移表（迁移表）以「当前状态 × 事件」为索引，给出目标状态与可能的守卫和动作，是状态机实现的核心数据结构。",
+      "error_tag": "记忆缺失",
+      "variant_group": "状态机_转移表"
+    },
+    {
+      "kp": "agent.pattern.state_machine",
+      "type": "fill_blank",
+      "question": "状态机中，表示「系统启动后最先进入的那个状态」的术语是______状态。",
+      "options": [],
+      "answer": [
+        "初始",
+        "起始",
+        "initial",
+        "start"
+      ],
+      "explanation": "初始状态是状态机开始运行时进入的第一个状态，是所有转移的起点。",
+      "error_tag": "记忆缺失",
+      "variant_group": "状态机_初始与终止"
+    },
+    {
+      "kp": "agent.pattern.state_machine",
+      "type": "fill_blank",
+      "question": "状态机中，附加在转移或状态进入/退出上、用于产生副作用（如调用外部服务、打印日志）的机制称为______。",
+      "options": [],
+      "answer": [
+        "动作",
+        "action",
+        "actions",
+        "副作用"
+      ],
+      "explanation": "动作是在状态进入、退出或转移发生时执行的副作用逻辑，与只做判断的守卫条件相区分。",
+      "error_tag": "概念混淆",
+      "variant_group": "状态机_动作"
+    },
+    {
+      "kp": "agent.pattern.state_machine",
+      "type": "code_reading",
+      "question": "阅读下面的状态机伪代码，回答：当依次收到事件 e1、e2、e3 时，最终处于哪个状态？\n\nstates = {\"Idle\": {\"e1\": \"Parsing\"},\n          \"Parsing\": {\"e2\": \"Validating\"},\n          \"Validating\": {\"e3\": \"Executing\", \"e1\": \"Error\"},\n          \"Executing\": {},\n          \"Error\": {\"e1\": \"Idle\"}}\ncurrent = \"Idle\"\nfor event in [\"e1\", \"e2\", \"e3\"]:\n    current = states[current].get(event, current)\n\nprint(current)",
+      "options": [],
+      "answer": "Executing",
+      "explanation": "Idle 收到 e1 进入 Parsing；Parsing 收到 e2 进入 Validating；Validating 收到 e3 进入 Executing。因此最终状态为 Executing。",
+      "error_tag": "边界错误",
+      "variant_group": "状态机_转移追踪"
+    },
+    {
+      "kp": "agent.pattern.state_machine",
+      "type": "code_reading",
+      "question": "阅读下面的状态机伪代码，回答：当事件序列为 [\"e1\", \"e2\"] 时，输出是什么？\n\nstates = {\"A\": {\"e1\": \"B\"},\n          \"B\": {\"e2\": \"C\"},\n          \"C\": {}}\ncurrent = \"A\"\nfor event in [\"e1\", \"e2\", \"e3\"]:\n    if event in states[current]:\n        current = states[current][event]\n    else:\n        current = \"Unknown\"\n        break\nprint(current)",
+      "options": [],
+      "answer": "Unknown",
+      "explanation": "A 收到 e1 进入 B，B 收到 e2 进入 C，C 收到 e3 时没有对应转移，于是进入 Unknown 并跳出循环，输出 Unknown。",
+      "error_tag": "边界错误",
+      "variant_group": "状态机_未定义转移处理"
+    },
+    {
+      "kp": "agent.pattern.state_machine",
+      "type": "scenario",
+      "question": "你在为一个客服 Agent 设计状态机，状态包括：等待用户输入、理解意图、查询知识库、生成回复、转人工。上线后发现当用户连续快速发送多条消息时，Agent 会在「理解意图」与「等待用户输入」之间反复切换，导致回复顺序错乱。请说明你会如何调整状态机设计来解决该问题。",
+      "options": [],
+      "answer": null,
+      "explanation": "该问题源于多条输入同时到达时，转移在状态间来回抖动。解决方案包括：把输入先放入缓冲或事件队列再合并处理，对快速连续输入做防抖/节流，在守卫条件中显式要求「输入已稳定」才迁移，并重新审视状态划分，避免把「等待输入」和「已收到输入」混在同一个状态里。",
+      "error_tag": "边界错误",
+      "variant_group": "状态机_输入抖动",
+      "required_keywords": [
+        "状态机",
+        "事件队列",
+        "防抖",
+        "节流",
+        "守卫条件"
+      ]
+    },
+    {
+      "kp": "agent.pattern.state_machine",
+      "type": "single_choice",
+      "question": "下列关于有限状态机（FSM）的说法，哪一项是正确的？",
+      "options": [
+        "FSM 的状态数必须是无限的，才能表达复杂 Agent 逻辑",
+        "FSM 在任一时刻只处于有限个状态中的一个，且转移由当前状态与输入决定",
+        "FSM 不允许存在从某状态回到自身的转移",
+        "FSM 的转移只能由时间触发，不能由输入事件触发"
+      ],
+      "answer": 1,
+      "explanation": "有限状态机的核心特征是状态集合有限、当前时刻处于单一状态、下一状态由当前状态和输入共同决定。自环转移是允许的，转移也可由事件触发，状态数也无需无限。",
+      "error_tag": "概念混淆",
+      "variant_group": "状态机_基本性质"
+    },
+    {
+      "kp": "agent.pattern.state_machine",
+      "type": "scenario",
+      "question": "某团队用状态机实现一个任务规划 Agent。随着功能增加，他们不断往状态机中加新状态，如今状态数量已超过 200，转移表维护困难、经常出现漏改导致的卡死。请给出你的重构思路。",
+      "options": [],
+      "answer": null,
+      "explanation": "核心是控制状态爆炸：引入层级状态机把公共转移和行为提取到父状态，合并语义等价的子状态，把可由其他状态推导的信息外置为变量，将状态数与输入组合解耦。这样能显著减少转移数量和漏改风险。",
+      "error_tag": "概念混淆",
+      "variant_group": "状态机_状态爆炸重构",
+      "required_keywords": [
+        "层级状态机",
+        "状态爆炸",
+        "父状态",
+        "状态数",
+        "转移表"
+      ]
+    },
+    {
+      "kp": "agent.pattern.state_machine",
+      "type": "single_choice",
+      "question": "在设计 Agent 状态机时，把「等待用户输入」和「正在思考」合并成同一个状态，最可能导致什么问题？",
+      "options": [
+        "状态总数减少，运行速度必然变慢",
+        "无法区分是否已收到输入，导致在缺少输入时也触发下一步动作",
+        "FSM 会退化成无限状态机",
+        "转移条件会自动失效"
+      ],
+      "answer": 1,
+      "explanation": "合并状态会丢失区分不同处境的能力，使得守卫条件无法判断「是否已收到输入」，从而在错误时机触发转移。状态数减少本身不会导致变慢或使 FSM 变为无限。",
+      "error_tag": "边界错误",
+      "variant_group": "状态机_状态划分粒度"
+    },
+    {
+      "kp": "agent.pattern.state_machine",
+      "type": "single_choice",
+      "question": "状态机中「初始状态」的作用是什么？",
+      "options": [
+        "表示 Agent 已经完成所有任务的状态",
+        "表示 Agent 启动后最先进入的状态，是转移的起点",
+        "表示 Agent 出错时才会进入的状态",
+        "表示 Agent 可以接受任意输入的万能状态"
+      ],
+      "answer": 1,
+      "explanation": "初始状态是运行开始时进入的起点状态，决定了第一条转移从何处出发。终止状态、错误状态、万能状态都是不同概念。",
+      "error_tag": "概念混淆",
+      "variant_group": "状态机_初始与终止"
+    },
+    {
+      "kp": "agent.pattern.state_machine",
+      "type": "single_choice",
+      "question": "若一个状态机中某个状态没有任何出边，也没有被标记为终止状态，这通常意味着什么设计问题？",
+      "options": [
+        "该状态永远不会被进入",
+        "Agent 进入该状态后会「卡死」，无法继续转移",
+        "该状态会自动跳到初始状态",
+        "该状态的守卫条件会失效"
+      ],
+      "answer": 1,
+      "explanation": "没有出边且非终止的状态是死状态，进入后无法继续迁移，表现为流程卡死。它仍可能被进入，也不会自动回到初始状态。",
+      "error_tag": "边界错误",
+      "variant_group": "状态机_死状态"
+    },
+    {
+      "kp": "agent.pattern.state_machine",
+      "type": "single_choice",
+      "question": "在状态机设计中，「事件」与「状态」的区别是什么？",
+      "options": [
+        "事件是持续存在的，状态是瞬时发生的",
+        "事件是触发转移的外部或内部信号，状态是系统在两次事件之间所处的处境",
+        "事件和状态是同一概念的不同叫法",
+        "事件只能由用户产生，状态只能由程序产生"
+      ],
+      "answer": 1,
+      "explanation": "事件是瞬时的触发信号，用来驱动转移；状态是系统在事件之间保持的处境。二者不是同义词，来源也不限于用户或程序。",
+      "error_tag": "概念混淆",
+      "variant_group": "状态机_事件与状态"
+    },
+    {
+      "kp": "agent.pattern.state_machine",
+      "type": "single_choice",
+      "question": "关于状态机中的「动作（action）」，下列描述最恰当的是？",
+      "options": [
+        "动作只能定义在状态上，不能定义在转移上",
+        "动作是在进入状态、退出状态或执行转移时附带产生的副作用",
+        "动作决定了状态机的状态数量",
+        "动作必须是纯函数，不能产生任何副作用"
+      ],
+      "answer": 1,
+      "explanation": "动作是状态机执行过程中附带的副作用，可以绑定在进入/退出状态或转移上。它不决定状态数量，也不是必须为纯函数。",
+      "error_tag": "概念混淆",
+      "variant_group": "状态机_动作"
+    },
+    {
+      "kp": "agent.pattern.state_machine",
+      "type": "single_choice",
+      "question": "用状态机实现 Agent 时，把「解析用户意图」放在转移的守卫条件里而不是放在动作里，可能带来的问题是？",
+      "options": [
+        "守卫条件变为纯判断，无法执行解析逻辑",
+        "解析逻辑可能被多次重复执行，因为它会在每次评估守卫时运行",
+        "状态机会因此进入无限循环",
+        "转移将无法触发"
+      ],
+      "answer": 1,
+      "explanation": "守卫条件可能在一次决策中被多次评估，其中执行有副作用的解析会造成重复计算。守卫应保持无副作用的纯判断，解析这类逻辑更适合放在动作中。",
+      "error_tag": "边界错误",
+      "variant_group": "状态机_守卫与副作用"
+    },
+    {
+      "kp": "agent.pattern.state_machine",
+      "type": "single_choice",
+      "question": "状态机中如果出现「A→B」「B→C」「C→A」的循环，且循环内没有任何退出条件，这属于什么问题？",
+      "options": [
+        "状态机状态数过多",
+        "活锁，Agent 会一直在循环中打转而无法完成目标",
+        "初始状态未定义",
+        "守卫条件缺失导致转移无法触发"
+      ],
+      "answer": 1,
+      "explanation": "无退出条件的循环会让 Agent 在若干状态间反复迁移而不推进目标，属于活锁。它与状态数、初始状态、守卫缺失是不同的缺陷。",
+      "error_tag": "边界错误",
+      "variant_group": "状态机_活锁与循环"
+    }
+  ]
+}

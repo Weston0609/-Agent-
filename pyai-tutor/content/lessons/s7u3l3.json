@@ -1,0 +1,583 @@
+{
+  "id": "s7u3l3",
+  "title": "s7u3l3",
+  "kps": [
+    "agent.pattern.tool_router",
+    "agent.pattern.multi_tool"
+  ],
+  "theory": "## agent.pattern.tool_router\n\n# agent.pattern.tool_router：让 Agent 知道「该用哪个工具」\n\n## 一句话直觉\n\n当 AI Agent（智能体）手里有十几个工具（搜索、计算器、数据库、发邮件……）时，用户一句话进来，它必须**先判断该调用哪个（或哪几个）工具**，再去填空调用——这个「先选工具，再填参数」的模式就叫 **Tool Router（工具路由）**。\n\n它是所有 Agent 的起点：没有路由，工具再多也只是一个摆设的抽屉。\n\n---\n\n## 1. 为什么需要 Tool Router\n\n一个 Agent 的核心循环通常是：\n\n```\n用户输入 → 选择工具 → 填参数 → 执行 → 观察结果 → 生成回答\n```\n\nTool Router 就是第二步。它本质上是一个**分类 + 参数抽取**问题：\n\n- 输入：用户自然语言 + 一份工具清单（每个工具有名字、描述、参数 schema）\n- 输出：`(tool_name, arguments)` 或「无需调用工具」\n\n现代做法把这件事交给 LLM（大语言模型）用 **function calling / tool calling** 完成；传统做法可以是一个分类器或关键词匹配。我们先讲传统做法理解本质，再上 LLM。\n\n---\n\n## 2. 工具注册表：给每个工具一个「身份证」\n\n要让路由器能选工具，工具必须具备**结构化元数据**：名字、描述、参数类型。Python 里用 `dataclass` 和 `typing` 表达最自然。\n\n注意：从 Python 3.9 起，内置的 `tuple`、`dict`、`list` 已经支持直接下标（`tuple[int, str]`），`typing.Tuple`、`typing.Dict` 只是**弃用的别名**。新代码优先用内置泛型。\n\n```python\nfrom dataclasses import dataclass, field\nfrom typing import Callable, Any\n\n@dataclass\nclass Tool:\n    name: str\n    description: str\n    # 参数名 -> 类型说明字符串，例如 {\"city\": \"str\"}\n    parameters: dict[str, str] = field(default_factory=dict)\n    func: Callable[..., Any] | None = None\n\n    def to_schema(self) -> dict:\n        \"\"\"导出成 LLM 能读的 JSON schema 风格。\"\"\"\n        return {\n            \"name\": self.name,\n            \"description\": self.description,\n            \"parameters\": self.parameters,\n        }\n```\n\n**关键结论**：路由器是「读」注册表的，而不是「猜」函数的——工具必须有可以被程序读取的描述。\n\n---\n\n## 3. 最简单的路由器：关键词打分（理解本质）\n\n在接入 LLM 之前，先用一个玩具路由器把「选择」逻辑跑通。它把所有工具的 name + description 拼起来，跟用户输入做词重叠打分，选最高分。\n\n```python\nclass KeywordRouter:\n    def __init__(self, tools: list[Tool]):\n        self.tools = tools\n\n    def route(self, query: str) -> tuple[str | None, float]:\n        q = query.lower()\n        best, best_score = None, 0.0\n        for t in self.tools:\n            text = (t.name + \" \" + t.description).lower()\n            # 单词级重叠\n            score = sum(1 for w in q.split() if w in text)\n            if score > best_score:\n                best, best_score = t.name, float(score)\n        return best, best_score\n```\n\n**关键结论**：路由 = 打分 = argmax。换掉打分函数，就换掉了整个路由器。\n\n---\n\n## 4. LLM 作为路由器：function calling 形态\n\n真正工程上，打分交给 LLM。你只需把工具 schema 作为 `tools` 参数传给模型，模型返回「要调哪个工具 + 参数」。下面是伪代码（各家 SDK 名字略有差异，模式一致）：\n\n```python\ndef route_with_llm(client, tools: list[Tool], user_input: str):\n    response = client.chat.completions.create(\n        model=\"gpt-4o-mini\",\n        messages=[\n            {\"role\": \"system\", \"content\": \"你是工具路由，只负责选工具和填参数。\"},\n            {\"role\": \"user\", \"content\": user_input},\n        ],\n        tools=[{\"type\": \"function\", \"function\": t.to_schema()} for t in tools],\n        tool_choice=\"auto\",  # 允许「不调用工具」\n    )\n    msg = response.choices[0].message\n    if not msg.tool_calls:\n        return None, {}          # 走纯聊天\n    call = msg.tool_calls[0]\n    import json\n    return call.function.name, json.loads(call.function.arguments)\n```\n\n**关键结论**：LLM 只负责「选 + 填」，**执行**和**错误处理**仍然是你的 Python 代码的事。这是 Agent 架构里最容易被混淆的边界。\n\n---\n\n## 5. 把路由串成一个可用的 Agent 步骤\n\n最终形态是三步：路由 → 校验 → 分发。校验很重要：LLM 可能编造不存在的工具名或漏填参数。\n\n```python\nclass Agent:\n    def __init__(self, tools: list[Tool]):\n        self.registry = {t.name: t for t in tools}\n\n    def dispatch(self, tool_name: str, args: dict) -> Any:\n        if tool_name not in self.registry:\n            raise ValueError(f\"未知工具: {tool_name}\")\n        tool = self.registry[tool_name]\n        missing = [k for k in tool.parameters if k not in args]\n        if missing:\n            raise ValueError(f\"缺少参数: {missing}\")\n        return tool.func(**args) if tool.func else None\n```\n\n**关键结论**：路由器的输出必须被**外部校验**，永远不要相信 LLM 一定会给你合法工具名和完整参数。\n\n---\n\n## 动手练习\n\n在本地写一个 `mini_router.py`，完成：\n\n1. 用 `@dataclass` 定义 `Tool`，字段：`name`、`description`、`parameters`（dict）。\n2. 注册 3 个工具：`get_weather(city: str)`、`add(a: int, b: int)`、`send_email(to: str, subject: str)`，`func` 用简单 print 占位。\n3. 实现 `KeywordRouter.route(query)`，返回 `(tool_name, score)`。\n4. 用 `Agent.dispatch` 跑通三个测试 query：\n   - `\"北京天气怎么样\"` → 期望 `get_weather`\n   - `\"1 加 2 等于几\"` → 期望 `add`\n   - `\"给 alice 发邮件\"` → 期望 `send_email`\n5. 打印每一次「路由结果」和「分发结果」。\n\n进阶：把 `KeywordRouter` 换成调用任一 LLM 的 function calling 版本，保持 `Agent.dispatch` 不变，验证接口一致性。\n\n```python\nfrom dataclasses import dataclass, field\nfrom typing import Callable, Any\n\n\n@dataclass\nclass Tool:\n    name: str\n    description: str\n    parameters: dict[str, str] = field(default_factory=dict)\n    func: Callable[..., Any] | None = None\n\n    def to_schema(self) -> dict:\n        return {\n            \"name\": self.name,\n            \"description\": self.description,\n            \"parameters\": self.parameters,\n        }\n\n\nclass KeywordRouter:\n    \"\"\"最朴素的工具路由器：按词重叠打分。\"\"\"\n\n    def __init__(self, tools: list[Tool]):\n        self.tools = tools\n\n    def route(self, query: str) -> tuple[str | None, float]:\n        q = query.lower()\n        best_name, best_score = None, 0.0\n        for t in self.tools:\n            text = (t.name + \" \" + t.description).lower()\n            score = float(sum(1 for w in q.split() if w in text))\n            if score > best_score:\n                best_name, best_score = t.name, score\n        return best_name, best_score\n\n\nclass Agent:\n    def __init__(self, tools: list[Tool]):\n        self.registry = {t.name: t for t in tools}\n\n    def dispatch(self, tool_name: str, args: dict) -> Any:\n        if tool_name not in self.registry:\n            raise ValueError(f\"未知工具: {tool_name}\")\n        tool = self.registry[tool_name]\n        missing = [k for k in tool.parameters if k not in args]\n        if missing:\n            raise ValueError(f\"缺少参数: {missing}\")\n        return tool.func(**args) if tool.func else None\n\n\n# --- 组装 ---\nif __name__ == \"__main__\":\n    tools = [\n        Tool(\"get_weather\", \"查询天气 weather\", {\"city\": \"str\"},\n             lambda city: f\"{city} 晴\"),\n        Tool(\"add\", \"加法计算 add\", {\"a\": \"int\", \"b\": \"int\"},\n             lambda a, b: a + b),\n        Tool(\"send_email\", \"发送邮件 email\", {\"to\": \"str\", \"subject\": \"str\"},\n             lambda to, subject: f\"已发给 {to}: {subject}\"),\n    ]\n    router = KeywordRouter(tools)\n    agent = Agent(tools)\n\n    for q in [\"weather 北京\", \"add 1 2\", \"email alice hello\"]:\n        name, score = router.route(q)\n        print(f\"query={q!r} -> tool={name} score={score}\")\n```\n\n## agent.pattern.multi_tool\n\n# `agent.pattern.multi_tool`：让智能体学会同时使用多把工具\n\n## 一句话直觉（为什么要学它）\n\n当你问 AI“北京今天适合跑步吗？”它需要同时查天气、看空气质量、再推荐路线——这把“多个工具协同完成任务”的套路，就是 `multi_tool` 模式。\n\n---\n\n## 一、从一个工具到多个工具：为什么要多工具？\n\n**工具（Tool）** 在 AI 智能体（Agent）语境里，指的是智能体可以调用的外部函数或 API，比如查天气、算数学、搜网页。\n\n早期智能体往往只挂一个工具。但真实任务很少只用一把锤子。你问“帮我订一张明天从上海到北京的高铁票”，智能体要先查车次、再比价格、最后下单——每一步都可能对应不同工具。\n\n**关键结论**：多工具模式（multi-tool pattern）的核心，是让智能体根据任务自动选择并串联多个工具，而不是把全部逻辑塞进一个函数里。\n\n```python\n# 三个独立的小工具，各自只做一件事\ndef get_weather(city: str) -> str:\n    \"\"\"查询天气，返回字符串\"\"\"\n    return f\"{city} 晴，25℃\"\n\ndef get_air_quality(city: str) -> str:\n    \"\"\"查询空气质量\"\"\"\n    return f\"{city} 空气优，AQI 35\"\n\ndef suggest_route(city: str) -> str:\n    \"\"\"推荐跑步路线\"\"\"\n    return f\"{city} 推荐滨江步道\"\n\n# 组合调用，形成一次完整回答\ndef answer(city: str) -> str:\n    return \" | \".join([\n        get_weather(city),\n        get_air_quality(city),\n        suggest_route(city),\n    ])\n\nprint(answer(\"北京\"))\n```\n\n---\n\n## 二、工具必须长一个样：统一接口（Uniform Interface）\n\n多工具模式要跑通，前提是所有工具**长得一模一样**：相同的入参风格、相同的返回结构。否则智能体没法自动挑选和拼接。\n\n在 Python 里，最通用的做法是用 **元组（tuple）** 或字典把每个工具的描述、参数、函数打包。注意：单元素元组必须加逗号，否则 Python 会把它当成普通括号。\n\n```python\n# 单元素元组必须带逗号，这是 Python 的硬规则\nFILES = ('setup.cfg',)   # 正确：单元素元组\n# FILES = ('setup.cfg')  # 错误：这只是字符串\n\n# 用元组统一描述工具： (名字, 描述, 函数)\ntools = [\n    ('get_weather', '查询指定城市天气', get_weather),\n    ('get_air_quality', '查询指定城市空气质量', get_air_quality),\n    ('suggest_route', '推荐指定城市跑步路线', suggest_route),\n]\n\nfor name, desc, fn in tools:\n    print(name, '->', desc, '->', fn.__name__)\n```\n\n**关键结论**：统一的元组结构让智能体“看到”工具列表时能一致地解析，避免为每个工具写特殊分支。\n\n---\n\n## 三、让智能体自己挑工具：路由（Routing）\n\n有了统一接口，就可以做一个极简路由器：根据用户问题的关键词，决定调用哪几个工具。这就是多工具模式的最小可用版本。\n\n```python\ndef route(question: str) -> list:\n    \"\"\"根据问题关键词返回要调用的工具名列表\"\"\"\n    plan = []\n    if '天气' in question or '跑步' in question:\n        plan.append('get_weather')\n    if '空气' in question or '跑步' in question:\n        plan.append('get_air_quality')\n    if '路线' in question or '跑步' in question:\n        plan.append('suggest_route')\n    return plan\n\nprint(route('北京今天适合跑步吗？'))\n```\n\n**关键结论**：多工具模式不必一开始就用大模型做规划，规则路由也能清楚地展示“选择—调用—聚合”的结构。\n\n---\n\n## 四、把结果聚合起来：聚合（Aggregation）\n\n选好了工具，还要把多个返回结果合并成一条人类可读的答案。聚合层让智能体的输出保持整洁。\n\n```python\nTOOL_MAP = {name: fn for name, _, fn in tools}\n\ndef run_multi_tool(question: str, city: str) -> str:\n    names = route(question)\n    results = [TOOL_MAP[n](city) for n in names]\n    return \"\\n\".join(results)\n\nprint(run_multi_tool('北京今天适合跑步吗？', '北京'))\n```\n\n**关键结论**：把“选工具”“调工具”“拼结果”分成三层，代码可读、可测、可扩展。\n\n---\n\n## 五、工程级考量：错误、超时与可观测性\n\n真实工程里工具会失败：网络断了、参数不对、超时。多工具模式必须处理**部分失败**——某个工具挂了，整体不能全崩。\n\n```python\nimport time\n\ndef safe_call(fn, city: str, retries: int = 2) -> str:\n    \"\"\"带重试的安全调用，失败返回错误说明\"\"\"\n    for i in range(retries + 1):\n        try:\n            return fn(city)\n        except Exception as e:\n            if i == retries:\n                return f\"[工具失败] {e}\"\n            time.sleep(0.1)\n\ndef run_safe(question: str, city: str) -> str:\n    names = route(question)\n    return \"\\n\".join(safe_call(TOOL_MAP[n], city) for n in names)\n\nprint(run_safe('北京今天适合跑步吗？', '北京'))\n```\n\n**关键结论**：多工具模式的工程价值在于“单个工具失败不影响整体回答”，并留下可观测的错误信息。\n\n---\n\n## 动手练习\n\n**任务**：在本地新建 `multi_tool_demo.py`，实现一个“旅行助手”智能体，满足：\n\n1. 至少定义 3 个工具：查天气、查汇率、查景点。\n2. 用元组 `(name, description, function)` 统一注册工具。\n3. 写一个 `route(question)` 函数，依据关键词返回要调用的工具名列表。\n4. 写一个 `run(question, city)` 函数，调用选中的工具并把结果拼成多行文本。\n5. 用一个会抛异常的工具（如 `get_exchange_rate` 里 `raise ValueError('汇率服务不可用')`）测试 `safe_call` 的重试与降级。\n\n运行示例：\n\n```python\nprint(run('去杭州旅游要带伞吗？顺便看看汇率和景点', '杭州'))\n```\n\n期望输出至少包含天气、汇率、景点三部分，且某一工具失败时其他结果仍能正常打印。\n\n```python\nimport time\n\n# ---------- 1. 定义三个独立工具 ----------\ndef get_weather(city: str) -> str:\n    \"\"\"查询天气，返回简短描述\"\"\"\n    return f\"{city} 晴，25℃\"\n\ndef get_air_quality(city: str) -> str:\n    \"\"\"查询空气质量\"\"\"\n    return f\"{city} 空气优，AQI 35\"\n\ndef suggest_route(city: str) -> str:\n    \"\"\"推荐跑步路线\"\"\"\n    return f\"{city} 推荐滨江步道\"\n\n# ---------- 2. 统一注册为 (name, description, function) 元组 ----------\ntools = [\n    ('get_weather', '查询指定城市天气', get_weather),\n    ('get_air_quality', '查询指定城市空气质量', get_air_quality),\n    ('suggest_route', '推荐指定城市跑步路线', suggest_route),\n]\nTOOL_MAP = {name: fn for name, _, fn in tools}\n\n# ---------- 3. 根据问题路由到工具名列表 ----------\ndef route(question: str) -> list:\n    \"\"\"多工具模式的最小路由器：按关键词决定调用哪些工具\"\"\"\n    plan = []\n    if '天气' in question or '跑步' in question:\n        plan.append('get_weather')\n    if '空气' in question or '跑步' in question:\n        plan.append('get_air_quality')\n    if '路线' in question or '跑步' in question:\n        plan.append('suggest_route')\n    return plan\n\n# ---------- 4. 带重试与降级的安全调用 ----------\ndef safe_call(fn, city: str, retries: int = 2) -> str:\n    \"\"\"单个工具失败不影响整体，最多重试 retries 次\"\"\"\n    for i in range(retries + 1):\n        try:\n            return fn(city)\n        except Exception as e:\n            if i == retries:\n                return f\"[工具失败] {e}\"\n            time.sleep(0.1)\n\n# ---------- 5. 聚合多个工具的结果 ----------\ndef run_multi_tool(question: str, city: str) -> str:\n    names = route(question)\n    return \"\\n\".join(safe_call(TOOL_MAP[n], city) for n in names)\n\nif __name__ == '__main__':\n    print(run_multi_tool('北京今天适合跑步吗？', '北京'))\n    # 输出示例：\n    # 北京 晴，25℃\n    # 北京 空气优，AQI 35\n    # 北京 推荐滨江步道\n```\n",
+  "quiz": [
+    {
+      "kp": "agent.pattern.tool_router",
+      "type": "single_choice",
+      "question": "在一个智能体系统中，用户输入「帮我查一下今天北京的天气」，系统首先调用一个轻量模型判断该请求应该交给「天气查询工具」处理，而不是直接让主模型生成回答。这种设计模式最准确的描述是？",
+      "options": [
+        "工具路由（Tool Router）：先对用户意图进行分类，再决定调用哪个工具或是否直接回答",
+        "函数调用（Function Calling）：模型在生成过程中直接输出结构化参数来调用函数",
+        "思维链（Chain of Thought）：让模型逐步推理后再给出最终答案",
+        "检索增强生成（RAG）：先从知识库检索相关内容再生成回答"
+      ],
+      "answer": 0,
+      "explanation": "题干强调「先判断交给哪个工具」，属于工具路由模式。函数调用是路由后真正执行工具时的机制；思维链是推理方式；RAG 是检索与生成结合，均不涉及工具选择决策。",
+      "error_tag": "概念混淆",
+      "variant_group": "tool_router_concept"
+    },
+    {
+      "kp": "agent.pattern.tool_router",
+      "type": "single_choice",
+      "question": "某智能体使用工具路由模式：路由模块输出工具名，主流程再调用对应工具。以下哪一项最可能是路由模块应有的输出？",
+      "options": [
+        "直接返回工具执行后的最终答案",
+        "返回一个工具标识（如工具名称或编号），由主流程据此分发",
+        "返回用户原始输入的改写版本",
+        "返回本次对话的 token 消耗统计"
+      ],
+      "answer": 1,
+      "explanation": "路由模块的职责是「选路」，输出应是工具标识或路由决策，而不是执行结果、输入改写或统计信息。",
+      "error_tag": "职责混淆",
+      "variant_group": "tool_router_output"
+    },
+    {
+      "kp": "agent.pattern.tool_router",
+      "type": "single_choice",
+      "question": "某系统在工具路由时把「工具选择」交给一个小的分类模型，而不是让大模型直接输出工具名。这样做的主要权衡是？",
+      "options": [
+        "分类模型一定比大模型更准确",
+        "可在低延迟/低成本下完成路由，但泛化能力可能不如大模型，需要更多训练数据",
+        "分类模型无法处理自然语言输入",
+        "分类模型不能输出多个类别"
+      ],
+      "answer": 1,
+      "explanation": "小模型路由的典型权衡是效率提升但泛化可能变差。它并非必然更准，也能处理文本并支持多分类，因此其余选项错误。",
+      "error_tag": "权衡分析",
+      "variant_group": "tool_router_model"
+    },
+    {
+      "kp": "agent.pattern.tool_router",
+      "type": "single_choice",
+      "question": "在工具路由的提示词中，如果两个工具的用途描述高度重叠（例如「查询订单」和「查询物流」都写成「查询信息」），最可能导致？",
+      "options": [
+        "路由模型随机或错误地在两者之间选择",
+        "路由模型自动合并两个工具",
+        "路由模型拒绝输出任何工具名",
+        "工具注册表被清空"
+      ],
+      "answer": 0,
+      "explanation": "描述重叠会降低路由的区分度，导致误选。模型不会自动合并工具或清空注册表，也不会因此必然拒绝输出。",
+      "error_tag": "提示词质量",
+      "variant_group": "tool_router_overlap"
+    },
+    {
+      "kp": "agent.pattern.tool_router",
+      "type": "single_choice",
+      "question": "某智能体在工具路由后执行工具，但工具调用失败（超时）。以下哪种处理最符合稳健的智能体设计？",
+      "options": [
+        "直接把超时错误原文返回给用户，不做任何处理",
+        "静默忽略失败，返回一个空答案",
+        "捕获失败信息，回退到无需工具的回答或重试，并把情况告知用户",
+        "把该工具从注册表中永久删除"
+      ],
+      "answer": 2,
+      "explanation": "稳健设计应处理失败并给出可理解的反馈，必要时重试或回退。直接抛错、静默忽略、永久删除工具都过于极端。",
+      "error_tag": "容错设计",
+      "variant_group": "tool_router_failure"
+    },
+    {
+      "kp": "agent.pattern.tool_router",
+      "type": "single_choice",
+      "question": "在工具路由模式中，路由决策的输入通常应包括哪些信息？",
+      "options": [
+        "仅用户当前这一句话",
+        "仅系统时间",
+        "用户当前输入、可用的工具列表及描述，必要时还包括对话历史",
+        "仅工具的返回结果"
+      ],
+      "answer": 2,
+      "explanation": "路由需要知道用户要什么以及有哪些工具可用，多轮场景下还需要对话历史。仅用当前句、时间或工具返回值都不足以做出正确路由。",
+      "error_tag": "输入设计",
+      "variant_group": "tool_router_input"
+    },
+    {
+      "kp": "agent.pattern.tool_router",
+      "type": "single_choice",
+      "question": "某团队发现工具路由经常把「闲聊类问题」错误地路由到「搜索工具」。以下改进措施中最有针对性的是？",
+      "options": [
+        "增加搜索工具的调用超时时间",
+        "在路由提示词或训练数据中明确「闲聊/无需工具」这一类，并加入相应样本",
+        "把搜索工具改名为更短的名字",
+        "减少工具返回结果的字段数量"
+      ],
+      "answer": 1,
+      "explanation": "问题在于路由缺少「无需工具」这一类的判别能力，应补充该类别的定义与样本。超时、改名、精简返回字段都不解决误路由。",
+      "error_tag": "改进方向",
+      "variant_group": "tool_router_chitchat"
+    },
+    {
+      "kp": "agent.pattern.tool_router",
+      "type": "single_choice",
+      "question": "关于工具路由的评估，以下哪种指标最直接反映「该调用工具时是否调用了正确的工具」？",
+      "options": [
+        "最终回答的平均长度",
+        "路由准确率：将路由结果与人工标注的正确工具进行比较",
+        "系统的内存占用",
+        "工具注册表的工具总数"
+      ],
+      "answer": 1,
+      "explanation": "路由准确率直接衡量路由决策与期望工具的一致性。回答长度、内存、工具数量都不能反映路由是否正确。",
+      "error_tag": "评估指标",
+      "variant_group": "tool_router_eval"
+    },
+    {
+      "kp": "agent.pattern.tool_router",
+      "type": "single_choice",
+      "question": "某智能体采用「先路由、再执行、后整合」的三段式流程。如果把「整合」阶段去掉，最可能出现的问题是？",
+      "options": [
+        "路由模块无法得到工具列表",
+        "用户直接看到工具返回的结构化数据，缺乏对问题的针对性解释",
+        "工具无法被调用",
+        "路由准确率会下降到零"
+      ],
+      "answer": 1,
+      "explanation": "缺少整合阶段会导致工具原始输出直接暴露给用户。路由、工具调用并不依赖整合阶段，因此其余选项不成立。",
+      "error_tag": "流程理解",
+      "variant_group": "tool_router_integrate"
+    },
+    {
+      "kp": "agent.pattern.tool_router",
+      "type": "single_choice",
+      "question": "在工具路由中，把「工具选择」与「参数抽取」分成两个步骤，相比让模型一步同时输出两者，主要优势是？",
+      "options": [
+        "减少总调用次数",
+        "每一步职责更单一，便于调试、评估和替换，出错时更容易定位问题",
+        "可以完全避免参数抽取错误",
+        "保证路由一定正确"
+      ],
+      "answer": 1,
+      "explanation": "拆分步骤可提升可调试性与可维护性，但不能保证零错误。它通常会增加调用次数，且路由正确性仍需评估验证。",
+      "error_tag": "架构权衡",
+      "variant_group": "tool_router_decompose"
+    },
+    {
+      "kp": "agent.pattern.tool_router",
+      "type": "single_choice",
+      "question": "某智能体支持用户自定义工具，运行时可动态注册新工具。工具路由模块应如何应对新注册的工具？",
+      "options": [
+        "忽略新工具，只使用启动时固定的工具列表",
+        "在每次路由时读取当前最新的工具注册表，使新工具立即可被路由到",
+        "要求重启整个系统后才能使用新工具",
+        "把新工具的描述硬编码进提示词"
+      ],
+      "answer": 1,
+      "explanation": "动态注册要求路由在运行时读取最新工具列表，否则新工具永远不被选中。重启或硬编码都违背动态注册的初衷；忽略新工具等于功能失效。",
+      "error_tag": "动态性",
+      "variant_group": "tool_router_dynamic"
+    },
+    {
+      "kp": "agent.pattern.tool_router",
+      "type": "single_choice",
+      "question": "在工具路由场景下，以下哪种做法最有助于降低「路由到错误工具」带来的负面影响？",
+      "options": [
+        "让工具在被调用时校验输入是否符合自身职责，不符合则返回明确的错误信息",
+        "让所有工具都返回相同格式的占位结果",
+        "取消所有工具的输入校验以提升速度",
+        "让路由模块忽略工具的返回信息"
+      ],
+      "answer": 0,
+      "explanation": "工具端做输入校验并返回明确错误，可使错误路由被尽早发现并由主流程回退或重路由。取消校验、统一占位结果、忽略返回信息都会掩盖问题。",
+      "error_tag": "防御设计",
+      "variant_group": "tool_router_guard"
+    },
+    {
+      "kp": "agent.pattern.tool_router",
+      "type": "single_choice",
+      "question": "在工具路由模式中，如果路由模块判断当前请求不需要任何工具即可回答，合理的处理方式是？",
+      "options": [
+        "随机选择一个工具执行以避免空路由",
+        "报错并终止对话",
+        "返回一个表示「无需工具」的路由结果，交给主模型直接生成回答",
+        "强制调用所有已注册工具并取第一个成功的结果"
+      ],
+      "answer": 2,
+      "explanation": "路由结果可以包含「不调用工具」这一分支，这是工具路由与纯函数调用的重要区别。随机选择或强制调用所有工具都会引入错误行为。",
+      "error_tag": "边界情况遗漏",
+      "variant_group": "tool_router_none"
+    },
+    {
+      "kp": "agent.pattern.tool_router",
+      "type": "single_choice",
+      "question": "某系统把工具路由实现为「用规则匹配关键词」：包含「天气」就调用天气工具，包含「汇率」就调用汇率工具。当用户说「我想知道去东京旅游要带伞吗」时，系统直接回答而不调用任何工具。这暴露了该实现的主要问题是？",
+      "options": [
+        "规则匹配速度太慢",
+        "关键词规则无法覆盖语义等价的表达，导致漏路由",
+        "规则匹配会导致工具被重复调用",
+        "规则匹配无法返回工具名称"
+      ],
+      "answer": 1,
+      "explanation": "该请求语义上需要天气信息，但未包含「天气」关键词，说明纯关键词规则的泛化能力不足。速度、重复调用、返回值格式都不是该场景的核心问题。",
+      "error_tag": "方案局限",
+      "variant_group": "tool_router_rule"
+    },
+    {
+      "kp": "agent.pattern.tool_router",
+      "type": "single_choice",
+      "question": "在设计工具路由的提示词时，把每个工具的用途、参数和适用场景都写入候选列表，最直接的好处是？",
+      "options": [
+        "减少模型生成答案所需的 token 数",
+        "让路由模型基于语义而非字符串匹配来选择工具",
+        "保证工具调用一定成功",
+        "避免主模型参与后续回答"
+      ],
+      "answer": 1,
+      "explanation": "提供工具描述能让路由模型进行语义判断，从而选择正确的工具。它不能保证调用成功，也不必然减少 token，更不会排除主模型。",
+      "error_tag": "因果误判",
+      "variant_group": "tool_router_prompt"
+    },
+    {
+      "kp": "agent.pattern.tool_router",
+      "type": "single_choice",
+      "question": "某智能体有两个工具：一个是「搜索网页」，一个是「查询本地数据库」。用户问「我们公司上季度的销售额是多少」。路由模块应优先选择哪个工具？",
+      "options": [
+        "搜索网页，因为网页信息更新更快",
+        "查询本地数据库，因为该问题指向内部业务数据",
+        "两个都调用，然后让模型挑一个结果",
+        "都不调用，直接让模型编造一个合理数字"
+      ],
+      "answer": 1,
+      "explanation": "「我们公司上季度销售额」属于内部数据，应走本地数据库。网页搜索适合公开信息；同时调用两个工具会造成资源浪费；让模型编造数字违背事实性原则。",
+      "error_tag": "工具选择错误",
+      "variant_group": "tool_router_choose"
+    },
+    {
+      "kp": "agent.pattern.tool_router",
+      "type": "single_choice",
+      "question": "在工具路由模式中，如果路由模块返回了一个不存在的工具名，主流程最稳健的处理方式是？",
+      "options": [
+        "忽略该结果，直接返回空字符串",
+        "把不存在的工具名当作新工具动态注册",
+        "捕获该错误并回退到「无需工具、由主模型回答」或重新路由",
+        "无限循环重新路由直到得到有效工具名"
+      ],
+      "answer": 2,
+      "explanation": "对无效路由结果应做容错回退，避免崩溃或死循环。动态注册不存在的工具既不安全也不合理；返回空字符串对用户无意义。",
+      "error_tag": "容错设计",
+      "variant_group": "tool_router_invalid"
+    },
+    {
+      "kp": "agent.pattern.tool_router",
+      "type": "single_choice",
+      "question": "某团队在工具路由后直接拼接工具原始返回值作为最终答案，结果用户看到一段 JSON。改进此问题最合适的做法是？",
+      "options": [
+        "禁止工具返回 JSON，强制返回纯文本",
+        "在工具返回后增加一步「结果整合/格式化」，由主模型结合用户问题生成自然语言回答",
+        "让路由模块直接生成最终答案",
+        "把 JSON 中的所有键名改成中文"
+      ],
+      "answer": 1,
+      "explanation": "工具路由通常与「结果整合」阶段配合，把结构化结果转成对用户友好的回答。禁止工具返回 JSON 会限制表达力；路由模块不负责生成答案；改键名不解决可读性问题。",
+      "error_tag": "流程缺失",
+      "variant_group": "tool_router_integrate"
+    },
+    {
+      "kp": "agent.pattern.tool_router",
+      "type": "single_choice",
+      "question": "关于工具路由与函数调用的关系，下列说法正确的是？",
+      "options": [
+        "两者完全等价，只是叫法不同",
+        "函数调用是模型输出结构化调用的能力，工具路由是决定「调用哪个/是否调用」的决策层，二者可配合使用",
+        "有了函数调用就不需要工具路由",
+        "工具路由只能用于非函数调用的场景"
+      ],
+      "answer": 1,
+      "explanation": "函数调用解决「怎么调用」，工具路由解决「调不调、调哪个」，二者是不同层次的能力，可组合使用。因此 A、C、D 都错误。",
+      "error_tag": "概念混淆",
+      "variant_group": "tool_router_vs_function"
+    },
+    {
+      "kp": "agent.pattern.tool_router",
+      "type": "single_choice",
+      "question": "在多工具智能体中，路由模块被要求「每次只选一个工具」。当用户请求「把这份 PDF 翻译成英文并保存到云盘」时，这种限制会导致什么问题？",
+      "options": [
+        "路由速度变慢",
+        "无法完成需要多个工具协作（翻译工具 + 云盘工具）的任务",
+        "翻译质量下降",
+        "云盘工具无法被注册"
+      ],
+      "answer": 1,
+      "explanation": "单工具限制使需要多步工具协作的任务无法完成。速度、翻译质量、工具注册与该限制无直接关系。",
+      "error_tag": "设计约束",
+      "variant_group": "tool_router_multi"
+    },
+    {
+      "kp": "agent.pattern.multi_tool",
+      "type": "single_choice",
+      "question": "在智能体设计中，「多工具模式」（multi-tool pattern）最核心的特征是什么？",
+      "options": [
+        "一个智能体在同一轮对话中只能调用一个固定的工具",
+        "智能体可以在一次任务中根据上下文自主选择并调用多个不同的工具",
+        "多个智能体必须同时并行运行，各自调用不同的工具",
+        "工具必须由人类在每步手动指定后才能被调用"
+      ],
+      "answer": 1,
+      "explanation": "多工具模式的核心是『一个智能体面对多种可用工具，依据任务需要自主决定调用哪个（或哪些）工具』，而不是固定单工具、强制多智能体并行或必须人工指定。",
+      "error_tag": "概念混淆",
+      "variant_group": "multi_tool_定义"
+    },
+    {
+      "kp": "agent.pattern.multi_tool",
+      "type": "single_choice",
+      "question": "下列关于多工具模式与多智能体（multi-agent）模式的对比，哪一项描述最准确？",
+      "options": [
+        "多工具模式中只有一个决策主体（一个智能体），它通过选择不同工具来扩展能力；多智能体模式中存在多个独立的决策主体",
+        "多工具模式必须依赖多智能体才能实现",
+        "多智能体模式中每个智能体只能使用一个工具",
+        "两者完全等价，只是命名不同"
+      ],
+      "answer": 0,
+      "explanation": "区分的关键在于『决策主体的数量』：多工具是单一智能体 + 多个工具；多智能体是多个智能体，各自可有自己的工具集。二者不等价，也非互相必需。",
+      "error_tag": "概念混淆",
+      "variant_group": "multi_tool_vs_multiagent"
+    },
+    {
+      "kp": "agent.pattern.multi_tool",
+      "type": "multi_choice",
+      "question": "关于多工具模式中智能体的决策过程，下列说法正确的有？（多选）",
+      "options": [
+        "智能体依据工具名称和描述来判断该调用哪个工具",
+        "工具返回结果会作为新的上下文，影响后续决策",
+        "智能体可能在一轮中不调用任何工具而直接回答",
+        "智能体必须先调用工具才能产生任何回复"
+      ],
+      "answer": [
+        0,
+        1,
+        2
+      ],
+      "explanation": "模型可基于描述选择工具、会根据工具结果继续判断，也可以在不需要工具时直接回答。『必须先调用工具』是错误限制。",
+      "error_tag": "概念混淆",
+      "variant_group": "multi_tool_迭代循环"
+    },
+    {
+      "kp": "agent.pattern.multi_tool",
+      "type": "fill_blank",
+      "question": "在多工具模式中，智能体选择工具时主要依据工具的名称和 ______（填写一个词），二者会作为提示信息提供给模型。",
+      "options": [],
+      "answer": [
+        "描述",
+        "description",
+        "自然语言描述",
+        "工具描述"
+      ],
+      "explanation": "工具的名称与描述是模型进行工具选择的关键依据，描述用自然语言说明该工具的用途与适用场景。",
+      "error_tag": "记忆缺失",
+      "variant_group": "multi_tool_工具描述"
+    },
+    {
+      "kp": "agent.pattern.multi_tool",
+      "type": "fill_blank",
+      "question": "区分多工具模式与多智能体模式的关键在于决策主体的 ______：多工具模式只有一个决策主体。（填写一个词，如『数量』）",
+      "options": [],
+      "answer": [
+        "数量",
+        "个数",
+        "数目",
+        "多少"
+      ],
+      "explanation": "多工具模式是单一智能体搭配多个工具；多智能体模式存在多个独立决策主体。区分点在于决策主体的数量。",
+      "error_tag": "概念混淆",
+      "variant_group": "multi_tool_vs_multiagent"
+    },
+    {
+      "kp": "agent.pattern.multi_tool",
+      "type": "code_reading",
+      "question": "阅读以下伪代码，回答问题：\n\n工具集 = {查天气, 订机票, 推荐酒店}\n用户问：『帮我规划下周去北京的行程，顺便看看那几天冷不冷』\n\n智能体可能的调用顺序是？并说明这体现了多工具模式的什么特征。",
+      "options": [],
+      "answer": "智能体可能先调用『查天气』了解下周北京气温，再调用『推荐酒店』、『订机票』等工具，最终综合结果给出行程建议。这体现了多工具模式下单个智能体依据任务上下文，自主选择并按需串联调用多个不同工具的能力。",
+      "explanation": "该任务需要多种能力（天气、交通、住宿），单一智能体会根据上下文决定调用哪些工具及顺序，这正是多工具模式的典型表现。",
+      "error_tag": "概念混淆",
+      "variant_group": "multi_tool_工具选择依据"
+    },
+    {
+      "kp": "agent.pattern.multi_tool",
+      "type": "code_reading",
+      "question": "阅读以下描述并回答问题：\n\n工具A描述：『查询指定城市的实时天气』\n工具B描述：『获取未来一周的天气预报』\n用户问：『北京现在的天气怎么样？』\n\n智能体应选择哪个工具？为什么？",
+      "options": [],
+      "answer": "应选择工具A。因为用户想了解的是『现在的天气』（实时），而工具A的描述是实时天气查询，工具B是未来一周预报，与需求不符。这说明工具描述是模型匹配用户意图、做出正确选择的关键依据。",
+      "explanation": "工具选择依赖描述与用户意图的匹配度。实时需求对应实时工具，预报工具不匹配，选错即体现描述理解偏差。",
+      "error_tag": "概念混淆",
+      "variant_group": "multi_tool_工具选择依据"
+    },
+    {
+      "kp": "agent.pattern.multi_tool",
+      "type": "code_reading",
+      "question": "阅读以下伪代码并回答问题：\n\n工具集 = {搜索, 计算器}\n用户问：『请直接告诉我 1+1 等于几』\n\n智能体可以直接回答『2』而不调用任何工具吗？说明理由。",
+      "options": [],
+      "answer": "可以。多工具模式并不要求每轮都必须调用工具。当智能体已有能力（如简单算术）直接得出答案时，可以不调用工具直接回复。是否调用工具取决于任务是否需要外部能力。",
+      "explanation": "多工具模式是『按需调用』，不是『必须调用』。简单问题模型可直接作答，体现了决策的灵活性。",
+      "error_tag": "概念混淆",
+      "variant_group": "multi_tool_迭代循环"
+    },
+    {
+      "kp": "agent.pattern.multi_tool",
+      "type": "scenario",
+      "question": "工程场景：你的智能体接入了三个工具——『发送邮件』『查询日历』『创建会议』。测试时发现，用户说『帮我安排明天下午和团队开会』时，模型经常只调用『创建会议』却忘了先查日历确认时间是否空闲。请说明你会如何改进工具设计或提示，使智能体更可靠地完成多步调用？",
+      "options": [],
+      "answer": null,
+      "explanation": "这类问题需要从工具描述清晰度、调用顺序引导和上下文依赖几方面改进：明确说明『创建会议前应先查日历』，在描述中体现工具间的依赖关系，或通过提示引导多步调用。开放题只要覆盖关键词即可。",
+      "error_tag": "边界错误",
+      "variant_group": "multi_tool_多步调用",
+      "required_keywords": [
+        "工具描述",
+        "依赖关系",
+        "调用顺序",
+        "多步调用",
+        "提示引导"
+      ]
+    },
+    {
+      "kp": "agent.pattern.multi_tool",
+      "type": "scenario",
+      "question": "工程场景：团队把一个智能体接入了 50 多个工具，结果发现模型经常选错工具，且响应变慢。作为工程师，你会从哪些方面诊断并优化这个多工具系统？",
+      "options": [],
+      "answer": null,
+      "explanation": "50+ 工具会造成选择困难与延迟。诊断应从工具数量是否过多、描述是否重叠模糊、职责是否单一入手，优化方式包括精简合并工具、澄清描述、必要时按场景分组或动态筛选可选工具，从而提升选择准确率。",
+      "error_tag": "边界错误",
+      "variant_group": "multi_tool_挑战",
+      "required_keywords": [
+        "工具选择准确率",
+        "工具描述",
+        "职责单一",
+        "工具合并",
+        "动态筛选"
+      ]
+    },
+    {
+      "kp": "agent.pattern.multi_tool",
+      "type": "single_choice",
+      "question": "智能体在决定调用哪个工具时，通常最依赖以下哪类信息？",
+      "options": [
+        "工具的源码实现细节",
+        "每个工具的名称与自然语言描述（以及参数说明），结合当前对话上下文",
+        "操作系统的环境变量",
+        "用户的 IP 地址"
+      ],
+      "answer": 1,
+      "explanation": "工具的名称、描述和参数 schema 是智能体进行工具选择的主要依据，模型据此判断哪个工具适合当前任务；源码细节、环境变量、IP 一般与选择无关。",
+      "error_tag": "概念混淆",
+      "variant_group": "multi_tool_工具选择依据"
+    },
+    {
+      "kp": "agent.pattern.multi_tool",
+      "type": "single_choice",
+      "question": "在多工具模式下，当两个工具的功能描述高度重叠时，最合理的工程做法是什么？",
+      "options": [
+        "保持重叠，让模型随便选，反正都能用",
+        "删除其中一个工具，即使它还有其他有用功能",
+        "精简或合并工具，使其职责边界清晰、描述互不混淆",
+        "把两个工具的描述都改成一模一样的文字"
+      ],
+      "answer": 2,
+      "explanation": "工具描述重叠会让模型难以判断该选哪个，导致选择不稳定。工程上应明确划分职责或合并工具，让边界清晰，而非放任重叠或粗暴删除。",
+      "error_tag": "边界错误",
+      "variant_group": "multi_tool_工具设计"
+    },
+    {
+      "kp": "agent.pattern.multi_tool",
+      "type": "single_choice",
+      "question": "智能体调用一个工具后得到结果，接下来它通常会怎么做？",
+      "options": [
+        "立刻结束任务，不再考虑其他工具",
+        "把结果作为新的上下文，判断是否需要继续调用其他工具或给出最终回答",
+        "自动重新调用同一个工具直到成功",
+        "丢弃结果，从头开始"
+      ],
+      "answer": 1,
+      "explanation": "多工具模式是迭代的：工具返回结果会回填到上下文中，智能体据此决定下一步——再调工具还是输出答案。直接结束或盲目重试都不合理。",
+      "error_tag": "概念混淆",
+      "variant_group": "multi_tool_迭代循环"
+    },
+    {
+      "kp": "agent.pattern.multi_tool",
+      "type": "single_choice",
+      "question": "某智能体要完成『查询天气』和『根据天气推荐穿着』两个子任务。下列哪种做法最符合多工具模式的思想？",
+      "options": [
+        "只提供一个万能工具，里面写死所有逻辑",
+        "提供『查天气』和『服饰推荐』两个工具，智能体先调查天气，再依据结果调推荐工具",
+        "把两个子任务分别交给两个完全独立的智能体，互不通信",
+        "让用户自己查天气再告诉智能体"
+      ],
+      "answer": 1,
+      "explanation": "多工具模式鼓励把能力拆成明确、专一的工具，由同一智能体按需串联调用。万能工具违背职责单一，两个不通信的智能体也不是多工具模式的重点。",
+      "error_tag": "概念混淆",
+      "variant_group": "multi_tool_工具划分"
+    },
+    {
+      "kp": "agent.pattern.multi_tool",
+      "type": "single_choice",
+      "question": "关于工具『描述（description）』的作用，下列说法正确的是？",
+      "options": [
+        "描述只是给人看的注释，对模型没有影响",
+        "描述是模型判断何时该调用该工具的重要线索，写得越清晰越好",
+        "描述必须和函数名一模一样才有用",
+        "描述越长越好，越啰嗦模型越容易选对"
+      ],
+      "answer": 1,
+      "explanation": "工具描述会作为提示的一部分提供给模型，是选择工具的关键依据，应准确、简洁、突出适用场景。它既不是无用注释，也不是越长越好。",
+      "error_tag": "概念混淆",
+      "variant_group": "multi_tool_工具描述"
+    },
+    {
+      "kp": "agent.pattern.multi_tool",
+      "type": "single_choice",
+      "question": "多工具模式下，智能体在一次任务中连续调用了三个不同的工具。以下哪种说法正确？",
+      "options": [
+        "这是错误用法，一次任务只能调用一个工具",
+        "这是允许的，多工具模式本就支持在任务中按需多次调用不同工具",
+        "只有多智能体模式才允许多次调用",
+        "必须三个工具同时并行调用才算正确"
+      ],
+      "answer": 1,
+      "explanation": "多工具模式允许在一个任务中多次、按需调用不同工具（可串行也可并行）。限制为单次调用或多智能体专属都是对模式的误解。",
+      "error_tag": "概念混淆",
+      "variant_group": "multi_tool_多次调用"
+    },
+    {
+      "kp": "agent.pattern.multi_tool",
+      "type": "multi_choice",
+      "question": "在设计多工具模式的工具集时，以下哪些做法是合理的？（多选）",
+      "options": [
+        "每个工具职责单一、边界清晰",
+        "为工具提供准确且简洁的自然语言描述",
+        "让多个工具的功能和描述高度重叠以增加冗余",
+        "为工具参数定义清晰的类型和含义说明",
+        "把所有功能塞进一个大工具以避免选择困难"
+      ],
+      "answer": [
+        0,
+        1,
+        3
+      ],
+      "explanation": "职责单一、描述准确、参数清晰都是良好工具设计要素；功能重叠会干扰选择，大而全的工具违背单一职责、增加调用复杂度，均不合理。",
+      "error_tag": "概念混淆",
+      "variant_group": "multi_tool_工具设计"
+    },
+    {
+      "kp": "agent.pattern.multi_tool",
+      "type": "multi_choice",
+      "question": "下列哪些情形属于多工具模式可能带来的挑战？（多选）",
+      "options": [
+        "工具数量过多导致模型选择困难或选错",
+        "工具描述重叠导致调用结果不稳定",
+        "工具调用链过长导致延迟或错误累积",
+        "工具越多，智能体一定越准确"
+      ],
+      "answer": [
+        0,
+        1,
+        2
+      ],
+      "explanation": "工具过多、描述重叠、链路过长都是真实存在的挑战；『工具越多越准确』是错误认知，工具过多反而会降低选择准确率。",
+      "error_tag": "概念混淆",
+      "variant_group": "multi_tool_挑战"
+    }
+  ]
+}

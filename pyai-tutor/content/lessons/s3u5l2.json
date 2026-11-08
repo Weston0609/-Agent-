@@ -1,0 +1,600 @@
+{
+  "id": "s3u5l2",
+  "title": "s3u5l2",
+  "kps": [
+    "py.async.cancel",
+    "py.async.timeout"
+  ],
+  "theory": "## py.async.cancel\n\n# py.async.cancel：让异步任务学会“叫停”\n\n**一句话直觉**：在并发世界里，任务不是永远该跑完的——用户取消订单、请求超时、页面关闭，都需要“干净地停下来”，`asyncio` 的取消（cancel）机制就是这套“叫停协议”。\n\n---\n\n## 一、为什么要学取消？从“任务”说起\n\n用 `asyncio` 写并发代码时，我们通常把协程（coroutine）包装成任务（Task）丢给事件循环（event loop）去跑：\n\n```python\nimport asyncio\n\nasync def work():\n    await asyncio.sleep(10)\n    return \"done\"\n\nasync def main():\n    task = asyncio.create_task(work())   # 注册到事件循环\n    await task\n\nasyncio.run(main())\n```\n\nTask 是“可被调度、可被观测、也可被取消”的协程容器。**取消（cancellation）** 是 `asyncio` 的核心能力：外部在任务还没结束前请求它停止，任务本身可以选择响应、清理资源后退出。\n\n学它的意义：超时控制、用户主动中断、父任务失败时联动清理子任务，都靠它。\n\n---\n\n## 二、第一原则：取消是“请求”，不是“强杀”\n\n`task.cancel()` 并不立刻杀死协程，它只是向任务投递一个取消请求。\n\n- 如果任务正卡在 `await` 的可取消点（如 `asyncio.sleep`），它会立刻收到 `CancelledError`。\n- 如果任务正在做同步计算，取消请求会排队，等它下次 `await` 时才被抛出。\n\n```python\nimport asyncio\n\nasync def worker():\n    print(\"worker: 开始\")\n    try:\n        await asyncio.sleep(5)\n    except asyncio.CancelledError:\n        print(\"worker: 收到取消\")\n        raise                 # 强烈建议：清理完再重新抛出\n    print(\"worker: 正常结束\")\n\nasync def main():\n    task = asyncio.create_task(worker())\n    await asyncio.sleep(0.5)\n    task.cancel()             # 发出取消请求\n    try:\n        await task            # 等待它真正结束\n    except asyncio.CancelledError:\n        print(\"main: 确认任务被取消\")\n\nasyncio.run(main())\n```\n\n**关键结论**：捕获 `CancelledError` 后，除非你确实要“吞掉”取消，否则必须 `raise` 重新抛出，让上层知道取消已生效。\n\n---\n\n## 三、取消的边界：`CancelledError` 是 `BaseException` 的子类\n\n在 Python 3.8+，`asyncio.CancelledError` 继承自 `BaseException`，而不再是 `Exception`。这意味着：\n\n```python\nasync def bad():\n    try:\n        await asyncio.sleep(5)\n    except Exception:        # 捕不到 CancelledError\n        print(\"这里不会打印\")\n```\n\n为什么这样设计？因为取消涉及“任务生命周期”，不应被 `except Exception` 这种宽泛兜底吞掉。写清理代码时应显式处理：\n\n```python\nasync def good():\n    try:\n        await asyncio.sleep(5)\n    except asyncio.CancelledError:\n        print(\"执行清理\")\n        raise\n    finally:\n        print(\"finally 一定会执行\")\n```\n\n---\n\n## 四、结构化取消：`asyncio.timeout` 与父任务联动\n\n实际工程中我们很少手写 `cancel()`，而是用更高层的原语表达意图。\n\n### 1）超时取消：`asyncio.timeout`（Python 3.11+）\n\n```python\nimport asyncio\n\nasync def slow():\n    await asyncio.sleep(10)\n\nasync def main():\n    try:\n        async with asyncio.timeout(1):   # 1 秒后请求取消\n            await slow()\n    except TimeoutError:\n        print(\"超时，已取消\")\n\nasyncio.run(main())\n```\n\n低版本可用 `asyncio.wait_for(slow(), timeout=1)`，语义相近。\n\n### 2）父任务取消：`TaskGroup` 自动联动\n\n```python\nimport asyncio\n\nasync def child(name):\n    try:\n        await asyncio.sleep(10)\n    except asyncio.CancelledError:\n        print(f\"{name} 被清理\")\n        raise\n\nasync def main():\n    async with asyncio.TaskGroup() as tg:\n        tg.create_task(child(\"A\"))\n        tg.create_task(child(\"B\"))\n        # 任一子任务异常或外部取消，其它兄弟任务会被自动取消\n\nasyncio.run(main())\n```\n\n**关键结论**：优先用 `asyncio.timeout` / `TaskGroup` 表达“取消意图”，把手工 `cancel()` 留给真正需要细粒度控制的场景。\n\n---\n\n## 五、取消的“坑位清单”\n\n1. **不要吞掉 `CancelledError`**：除非你明确要把取消转成别的语义，否则捕获后必须 `raise`。\n2. **`shield` 不是万能盾**：`asyncio.shield(coro)` 可以保护内层不被外层取消波及，但外层任务一旦被取消，`await shield` 本身仍会抛 `CancelledError`。\n3. **同步阻塞代码无法被取消**：`time.sleep`、CPU 密集计算不会在取消请求时中断；需要把它们放入线程/进程执行器（`run_in_executor`）或者配合 `await asyncio.sleep(0)` 让出控制权。\n4. **资源清理要放在 `finally` 或 `except CancelledError`**：否则连接、文件、锁可能泄漏。\n\n---\n\n## 动手练习（建议 15 分钟）\n\n实现一个 `fetch_with_retry` 异步函数，要求：\n\n1. 接受一个协程工厂 `make_coro()`（返回协程），最多重试 3 次；\n2. 使用 `asyncio.timeout(0.5)` 给每次尝试加上 0.5 秒超时；\n3. 超时视为一次失败并重试，但**整体函数**如果被外部取消，必须立刻停止重试并向上抛出 `CancelledError`；\n4. 在本地用一个会 `sleep(2)` 的假协程和一个会立即返回的假协程分别测试，观察是否重试、是否响应外部取消。\n\n提示：区分“内部 `TimeoutError`”与“外部 `CancelledError`”是本题的关键。\n\n```python\nimport asyncio\n\nasync def worker(name: str) -> None:\n    try:\n        print(f\"{name}: 开始\")\n        await asyncio.sleep(5)\n    except asyncio.CancelledError:\n        print(f\"{name}: 收到取消，做清理\")\n        raise  # 重要：清理后重新抛出，让调用者感知取消已生效\n    finally:\n        print(f\"{name}: finally 清理\")\n\nasync def main() -> None:\n    task = asyncio.create_task(worker(\"task-1\"))\n    await asyncio.sleep(0.5)     # 让它先跑一会儿\n    task.cancel()                # 投递取消请求\n    try:\n        await task               # 等待取消真正落地\n    except asyncio.CancelledError:\n        print(\"main: 确认任务已取消\")\n\n    # 使用 asyncio.timeout 做超时取消\n    try:\n        async with asyncio.timeout(0.3):\n            await asyncio.sleep(2)\n    except TimeoutError:\n        print(\"main: 超时取消完成\")\n\nif __name__ == \"__main__\":\n    asyncio.run(main())\n```\n\n## py.async.timeout\n\n# py.async.timeout —— 让异步任务学会「到点就止」\n\n> **一句话直觉**：在异步代码里，一个 `await` 可能永远不返回（网络卡住、服务挂掉）；`asyncio.timeout` 就是给你的 `await` 装一个「闹钟」，到点自动抛异常，让程序不会被一个慢调用拖死。\n\n---\n\n## 1. 为什么需要超时：异步不等于万能\n\n**asyncio**（异步 I/O 库）让我们可以用 `async/await` 语法写并发代码。它的核心优势是：单个线程里，当一个协程（**coroutine**）在等待 I/O 时，事件循环（**event loop**）可以切去运行别的协程。\n\n但异步也有一个隐形的坑：**它没有自动的「保护机制」**。同步代码里线程卡住你还能 `kill`，但在 `await` 点上，如果对端永远不响应，这个协程就会永久挂在那里，事件循环里其他任务可能还在跑，你自己却「永远等不到结果」。\n\n```python\n# 没有超时保护：如果 slow_server 不响应，这一行会永久挂住\nresult = await slow_server_call()\n```\n\n**结论**：任何涉及网络、子进程、外部服务的 `await`，都应该考虑加超时。\n\n---\n\n## 2. 三种超时方案，先看历史\n\nPython 的 asyncio 超时 API 经历了三代演化：\n\n| 方案 | 出现版本 | 状态 |\n|---|---|---|\n| `asyncio.wait_for(coro, timeout)` | 3.4 | 仍可用，但取消语义不够干净 |\n| `asyncio.wait(...)` 带 timeout | 3.4 | 只在等待多任务时用 |\n| **`asyncio.timeout(delay)`** | **3.11** | **官方推荐，本文主角** |\n\n`asyncio.timeout` 是一个 **异步上下文管理器**（async context manager），配合 `async with` 使用。它把「这段代码必须在 N 秒内跑完」表达得非常清楚。\n\n---\n\n## 3. `asyncio.timeout` 基本用法\n\n```python\nimport asyncio\n\nasync def slow_task():\n    await asyncio.sleep(10)   # 假装一个慢操作\n    return \"done\"\n\nasync def main():\n    try:\n        # 给下面这一整块代码 1 秒的预算\n        async with asyncio.timeout(1):\n            result = await slow_task()\n            print(result)\n    except TimeoutError:\n        print(\"超时了！\")\n\nasyncio.run(main())\n```\n\n关键点：\n\n- `asyncio.timeout(1)` 参数单位是**秒**，也可以是 `None`（表示不超时）。\n- 超时发生时，`async with` 块**内部正在 await 的协程会被取消**（raise `CancelledError`），然后 `asyncio.timeout` 把它转换成 `TimeoutError` 抛到 `async with` 之外。\n- 捕获的异常是内置的 `TimeoutError`（Python 3.11+ 起，`asyncio.TimeoutError` 是它的别名）。\n\n---\n\n## 4. 超时预算可以动态调整与查询\n\n`asyncio.timeout` 返回一个 `Timeout` 对象，它有两个实用能力：\n\n1. **`.expired()`**：判断是否已经超时（在 `except` 里用）。\n2. **`.reschedule(when)`**：重新设定截止时间，适合「分段预算」场景。\n\n```python\nimport asyncio\n\nasync def fetch():\n    await asyncio.sleep(0.1)\n    return \"ok\"\n\nasync def main():\n    try:\n        async with asyncio.timeout(0.5) as cm:\n            await fetch()\n            # 发现前半段很快，给后半段更多时间\n            cm.reschedule(asyncio.get_running_loop().time() + 2)\n            await fetch()\n    except TimeoutError:\n        assert cm.expired()\n        print(\"确实超时了\")\n\nasyncio.run(main())\n```\n\n这比 `wait_for` 灵活得多：**预算是可以谈判的**。\n\n---\n\n## 5. 与取消、清理、嵌套的配合\n\n超时本质上是「**自动取消**」。理解这点，才能写出健壮的代码：\n\n- `async with asyncio.timeout(t):` 超时后，内部协程收到 `CancelledError`。\n- 你的 `try/finally` 或 `async with` 资源清理逻辑**仍会执行**，这是好事。\n- 但如果你在 `finally` 里再 `await`，那也要加超时，否则取消可能被「吃掉」。\n- **可以嵌套**：外层超时是整体预算，内层超时是子任务预算。\n\n```python\nimport asyncio\n\nasync def step(name, t):\n    try:\n        async with asyncio.timeout(t):\n            await asyncio.sleep(t + 1)  # 必定超时\n    except TimeoutError:\n        print(f\"{name} 超时\")\n\nasync def main():\n    # 外层给整个流程 5 秒，内层两步各 0.3 秒\n    try:\n        async with asyncio.timeout(5):\n            await step(\"第一步\", 0.3)\n            await step(\"第二步\", 0.3)\n    except TimeoutError:\n        print(\"整体超时\")\n\nasyncio.run(main())\n```\n\n嵌套的语义是：**谁先到点谁触发**。内层先超时，就会把 `TimeoutError` 往上传；外层超时则直接终止整块。\n\n---\n\n## 动手练习\n\n**任务**：写一个 `fetch_with_retry(urls, per_try_timeout=0.5, total_timeout=2.0)` 异步函数。\n\n要求：\n\n1. 输入一个 URL 列表（可以用 `asyncio.sleep(random.uniform(0, 1))` 模拟网络请求）。\n2. 每次请求都套上 `asyncio.timeout(per_try_timeout)`；超时就重试一次，最多两次。\n3. 整个函数再套一层 `asyncio.timeout(total_timeout)`，保证总时长不超过 2 秒。\n4. 打印每个 URL 的最终结果：成功 / 单次超时 / 整体超时。\n\n本地运行提示：\n\n```python\nimport asyncio, random\n\nasync def fake_fetch(url):\n    await asyncio.sleep(random.uniform(0, 1.0))\n    return f\"{url} 的内容\"\n\n# 你的实现...\n```\n\n写完后再问自己两个问题：\n\n- 如果 `per_try_timeout` 之和超过 `total_timeout`，会发生什么？\n- 如何在 `finally` 里安全地记录日志（提示：不要在 `finally` 里做长时间 await）？\n\n```python\nimport asyncio\nimport random\n\nasync def fake_fetch(url: str, delay: float) -> str:\n    \"\"\"模拟一次网络请求：耗时 delay 秒后返回内容。\"\"\"\n    await asyncio.sleep(delay)\n    return f\"{url} -> OK (delay={delay:.2f}s)\"\n\nasync def fetch_with_retry(url: str, per_try_timeout: float = 0.5) -> str:\n    \"\"\"单 URL 抓取：最多两次尝试，每次使用 asyncio.timeout 限时。\"\"\"\n    for attempt in range(1, 3):\n        try:\n            async with asyncio.timeout(per_try_timeout) as cm:\n                # 每次延迟随机，模拟真实网络波动\n                delay = random.uniform(0, 1.0)\n                return await fake_fetch(url, delay)\n        except TimeoutError:\n            assert cm.expired()\n            print(f\"[retry] {url} 第 {attempt} 次超时\")\n    return f\"{url} -> FAILED (all attempts timeout)\"\n\nasync def main():\n    urls = [\"https://a.example\", \"https://b.example\", \"https://c.example\"]\n    # 整个批次的总预算 2 秒\n    try:\n        async with asyncio.timeout(2.0):\n            tasks = [asyncio.create_task(fetch_with_retry(u)) for u in urls]\n            results = await asyncio.gather(*tasks)\n            for r in results:\n                print(r)\n    except TimeoutError:\n        print(\"整体超时：未能在 2 秒内完成所有 URL\")\n\nif __name__ == \"__main__\":\n    asyncio.run(main())\n```\n",
+  "quiz": [
+    {
+      "kp": "py.async.cancel",
+      "type": "single_choice",
+      "question": "在 asyncio 中，任务被取消时会在内部协程的挂起点抛出什么异常？",
+      "options": [
+        "CancelledError",
+        "TimeoutError",
+        "RuntimeError",
+        "StopIteration"
+      ],
+      "answer": 0,
+      "explanation": "任务取消通过在挂起点向协程抛出 CancelledError 实现。TimeoutError 用于超时（Python 3.11 起为内置），StopIteration 表示迭代结束，RuntimeError 是通用运行时错误。",
+      "error_tag": "异常类型混淆",
+      "variant_group": "cancel_mechanism"
+    },
+    {
+      "kp": "py.async.cancel",
+      "type": "single_choice",
+      "question": "以下代码运行后最可能的输出是什么？\n\nimport asyncio\n\nasync def worker():\n    try:\n        await asyncio.sleep(10)\n    except asyncio.CancelledError:\n        print('cancelled')\n        raise\n\nasync def main():\n    t = asyncio.create_task(worker())\n    await asyncio.sleep(0.1)\n    t.cancel()\n    try:\n        await t\n    except asyncio.CancelledError:\n        print('main caught')\n\nasyncio.run(main())",
+      "options": [
+        "先打印 cancelled，再打印 main caught",
+        "只打印 cancelled",
+        "只打印 main caught",
+        "什么都不打印，程序静默结束"
+      ],
+      "answer": 0,
+      "explanation": "worker 捕获后重新 raise，取消继续传播；await t 会抛出 CancelledError，被 main 捕获后打印 main caught。若 worker 不重新抛出，任务会变成正常完成而不是取消。",
+      "error_tag": "取消传播理解错误",
+      "variant_group": "cancel_propagation"
+    },
+    {
+      "kp": "py.async.cancel",
+      "type": "single_choice",
+      "question": "对已经正常完成的任务调用 cancel()，返回值与效果是？",
+      "options": [
+        "返回 False，任务保持正常完成状态，结果不受影响",
+        "返回 True，任务被改为已取消状态",
+        "返回 True，但结果被丢弃",
+        "抛出 RuntimeError，因为任务不可取消"
+      ],
+      "answer": 0,
+      "explanation": "cancel() 若发现任务已完成则返回 False，不改变其结果与状态。它不会抛异常，也不会把已完成任务标记为取消。",
+      "error_tag": "cancel 返回值误解",
+      "variant_group": "cancel_api"
+    },
+    {
+      "kp": "py.async.cancel",
+      "type": "single_choice",
+      "question": "以下哪种做法会导致 'Task exception was never retrieved' 警告？",
+      "options": [
+        "任务因未处理异常而失败，但从未被 await 也未被检查",
+        "任务被取消且从未被 await",
+        "任务正常完成且从未被 await",
+        "任务使用 asyncio.gather 并且设置了 return_exceptions=True"
+      ],
+      "answer": 0,
+      "explanation": "未取回的异常在任务被垃圾回收时触发该警告。取消属于预期控制流，正常完成无结果问题；gather 的 return_exceptions=True 会取回异常。",
+      "error_tag": "任务异常处理遗漏",
+      "variant_group": "cancel_task_lifecycle"
+    },
+    {
+      "kp": "py.async.cancel",
+      "type": "single_choice",
+      "question": "关于 asyncio.gather 的取消行为，正确的是？",
+      "options": [
+        "取消 gather 返回的外层 future 会向所有未完成的子任务传播取消",
+        "取消外层 future 只停止等待，子任务继续在后台运行直到完成",
+        "一旦有子任务被取消，gather 会立即抛出 CancelledError，与其他子任务无关",
+        "gather 的 return_exceptions=True 会把 CancelledError 转成普通结果返回"
+      ],
+      "answer": 0,
+      "explanation": "取消 gather 的外层 future 会逐个取消尚在运行的子任务。return_exceptions=True 不把取消转成返回值；取消是传播性的，而非仅停止等待。",
+      "error_tag": "gather 取消语义误解",
+      "variant_group": "cancel_gather"
+    },
+    {
+      "kp": "py.async.cancel",
+      "type": "single_choice",
+      "question": "使用 asyncio.wait_for(coro(), timeout) 在超时时，内部按什么机制处理？",
+      "options": [
+        "取消被等待的任务并抛出 TimeoutError（Python 3.11 起为内置 TimeoutError）",
+        "直接丢弃 coro 并返回 None",
+        "阻塞事件循环直到 coro 完成，然后抛出 TimeoutError",
+        "只抛出 TimeoutError，coro 继续在后台执行且不会被取消"
+      ],
+      "answer": 0,
+      "explanation": "wait_for 通过取消内部任务实现超时，并对外抛出 TimeoutError。它不会阻塞循环，也不会放任任务继续运行（除非任务吞掉取消）。",
+      "error_tag": "超时与取消关系误解",
+      "variant_group": "cancel_timeout"
+    },
+    {
+      "kp": "py.async.cancel",
+      "type": "single_choice",
+      "question": "关于 asyncio.shield 的作用，正确的是？",
+      "options": [
+        "使内部 awaitable 不受外层取消影响，但外层仍会收到取消（内部继续运行）",
+        "完全阻止取消向外传播，使外层协程无法被取消",
+        "将取消转换为普通异常返回给调用者",
+        "让内部任务在独立线程中运行以避免取消"
+      ],
+      "answer": 0,
+      "explanation": "shield 保护内部对象不被取消波及，使它可以继续运行；但外层等待者仍会被取消，需要自行处理内部任务的结果或异常，否则可能产生未取回异常。",
+      "error_tag": "shield 语义误解",
+      "variant_group": "cancel_shield"
+    },
+    {
+      "kp": "py.async.cancel",
+      "type": "single_choice",
+      "question": "以下哪种场景最适合主动取消任务？",
+      "options": [
+        "用户离开页面后，停止仍在轮询远程接口的后台任务",
+        "需要等待多个任务全部完成时",
+        "需要将同步函数放到事件循环中运行时",
+        "任务抛出了未捕获异常需要重试时"
+      ],
+      "answer": 0,
+      "explanation": "取消适用于不再需要的结果场景，如用户离去后的后台轮询。等待全部完成用 gather，运行同步函数用 to_thread，异常重试与取消无关。",
+      "error_tag": "取消场景误用",
+      "variant_group": "cancel_usage"
+    },
+    {
+      "kp": "py.async.cancel",
+      "type": "single_choice",
+      "question": "在 Python 3.11+ 中，若在 except CancelledError 中完成了清理并打算继续执行，应调用什么来清除取消状态？",
+      "options": [
+        "task.uncancel()，并检查 cancelling() 计数",
+        "task.cancel(None)",
+        "asyncio.clear_cancelled()",
+        "直接 pass 即可，取消状态会自动清除"
+      ],
+      "answer": 0,
+      "explanation": "3.11 引入 uncancel()/cancelling() 用于在抑制取消后正确维护取消计数。取消状态不会因 pass 自动消失；canceling(None) 不是合法 API，asyncio.clear_cancelled 不存在。",
+      "error_tag": "取消状态管理错误",
+      "variant_group": "cancel_state"
+    },
+    {
+      "kp": "py.async.cancel",
+      "type": "single_choice",
+      "question": "一个任务在被取消的过程中又调用了 client 库的方法，而该方法内部把 CancelledError 转换成了普通异常，可能的后果是？",
+      "options": [
+        "取消被吞掉，任务可能继续运行，外层误以为任务仍在正常工作",
+        "取消仍然生效，因为解释器会强制重新抛出",
+        "任务会立即崩溃并打印 traceback",
+        "事件循环会检测到并自动再次取消该任务"
+      ],
+      "answer": 0,
+      "explanation": "把 CancelledError 转成普通异常会破坏协作式取消协议，使取消丢失、任务继续运行。解释器不会强制重抛，也没有自动重取消机制。",
+      "error_tag": "吞取消的后果",
+      "variant_group": "cancel_swallow"
+    },
+    {
+      "kp": "py.async.cancel",
+      "type": "single_choice",
+      "question": "同步函数中调用 asyncio.Task.cancel() 会怎样？",
+      "options": [
+        "可以调用，但取消的实际效果依赖事件循环稍后调度，非线程安全需谨慎",
+        "会直接抛出 RuntimeError，因为必须在协程内调用",
+        "会立即中断目标任务并执行清理",
+        "只能在 asyncio.run 内部调用，否则无效果"
+      ],
+      "answer": 0,
+      "explanation": "cancel() 不是协程函数，可在同步上下文调用，会安排取消；但跨线程调用 asyncio 对象通常需要 call_soon_threadsafe，否则不是线程安全的。它不会立即中断任务。",
+      "error_tag": "线程安全误解",
+      "variant_group": "cancel_api"
+    },
+    {
+      "kp": "py.async.cancel",
+      "type": "single_choice",
+      "question": "下列代码片段中，哪一种最能正确实现'取消后必须释放锁'？\n\nA) async with lock: await work()\nB) await lock.acquire()\\ntry: await work()\\nfinally: lock.release()\nC) await lock.acquire()\\nawait work()\\nlock.release()\nD) async with lock: pass",
+      "options": [
+        "A 和 B 都能保证异常/取消时释放锁",
+        "只有 A 能，B 在取消时不会执行 finally",
+        "只有 C 能，因为显式 release 最可靠",
+        "只有 D 能，因为其它写法会死锁"
+      ],
+      "answer": 0,
+      "explanation": "async with 等价于带 finally 的 acquire/release，取消或异常时都会释放；B 显式使用 try/finally 同样安全。C 缺少 finally，取消时会泄漏锁；D 根本没执行工作。",
+      "error_tag": "清理与取消结合错误",
+      "variant_group": "cancel_cleanup"
+    },
+    {
+      "kp": "py.async.cancel",
+      "type": "single_choice",
+      "question": "关于 Task.cancel() 的返回值与语义，下列说法正确的是？",
+      "options": [
+        "它返回一个布尔值，表示取消请求是否成功发出",
+        "它立即终止目标任务，且保证任务不会再执行任何代码",
+        "它会同步等待目标任务结束",
+        "它只能取消尚未开始执行的任务"
+      ],
+      "answer": 0,
+      "explanation": "cancel() 只是发出取消请求并返回是否成功安排（例如任务已完成时返回 False）。真正的取消发生在下次挂起点，任务仍可能执行清理代码。它不会同步等待，也不限于未开始的任务。",
+      "error_tag": "cancel 语义误解",
+      "variant_group": "cancel_api"
+    },
+    {
+      "kp": "py.async.cancel",
+      "type": "single_choice",
+      "question": "一个协程正在执行纯 CPU 密集的循环且从不 await，此时对它所在的 Task 调用 cancel()，结果如何？",
+      "options": [
+        "取消请求要等该协程再次 await 时才会生效，当前循环会一直跑完",
+        "协程会立刻在循环中被打断并抛出 CancelledError",
+        "事件循环会强制杀死该任务线程",
+        "cancel() 会直接返回 False，因为任务不可取消"
+      ],
+      "answer": 0,
+      "explanation": "取消依赖挂起点。没有 await 的同步代码无法被中断，取消请求会挂起并在下次真正 await 时抛出 CancelledError。事件循环是单线程协作式的，不会强杀任务。",
+      "error_tag": "忽略协作式取消",
+      "variant_group": "cancel_mechanism"
+    },
+    {
+      "kp": "py.async.cancel",
+      "type": "single_choice",
+      "question": "如果协程捕获了 CancelledError 但没有重新抛出，会发生什么？",
+      "options": [
+        "任务会被视为正常完成，取消被吞掉，调用方 await 不会收到 CancelledError",
+        "任务仍会被标记为已取消，调用方仍会收到 CancelledError",
+        "解释器会报错并终止程序",
+        "取消请求会被自动重新发送一次"
+      ],
+      "answer": 0,
+      "explanation": "取消通过异常传播，吞掉异常就等于吞掉取消信号，任务以正常结果结束。因此清理代码后应重新 raise，否则会破坏取消语义（如 asyncio.timeout 等依赖取消的机制）。",
+      "error_tag": "取消传播理解错误",
+      "variant_group": "cancel_swallow"
+    },
+    {
+      "kp": "py.async.cancel",
+      "type": "single_choice",
+      "question": "在 Python 3.8+ 中，asyncio.CancelledError 与 BaseException、Exception 的关系是？",
+      "options": [
+        "它是 BaseException 的子类，不是 Exception 的子类",
+        "它是 Exception 的子类，因此会被 except Exception 捕获",
+        "它直接继承自 object",
+        "它同时是 Exception 和 BaseException 的直接子类"
+      ],
+      "answer": 0,
+      "explanation": "Python 3.8 起 CancelledError 继承 BaseException 而非 Exception，所以 except Exception 不会误吞取消信号。这也是为什么清理逻辑里要显式处理它并重新抛出。",
+      "error_tag": "继承关系混淆",
+      "variant_group": "cancel_exception_hierarchy"
+    },
+    {
+      "kp": "py.async.cancel",
+      "type": "single_choice",
+      "question": "以下代码中，except Exception 是否会捕获到取消信号？\n\nasync def job():\n    try:\n        await asyncio.sleep(5)\n    except Exception:\n        print('caught by Exception')\n\nasync def main():\n    t = asyncio.create_task(job())\n    await asyncio.sleep(0.1)\n    t.cancel()\n    try:\n        await t\n    except asyncio.CancelledError:\n        print('main caught')\n\nasyncio.run(main())",
+      "options": [
+        "不会，CancelledError 继承自 BaseException，'caught by Exception' 不打印，最终打印 main caught",
+        "会，先打印 caught by Exception 再打印 main caught",
+        "会，只打印 caught by Exception",
+        "不会，且 main caught 也不会打印，因为任务悄然消失"
+      ],
+      "answer": 0,
+      "explanation": "CancelledError 不是 Exception 的子类，故 except Exception 不捕获它；异常继续传播到 await t 处被 main 捕获。若写成 except BaseException 才会捕获。",
+      "error_tag": "继承关系混淆",
+      "variant_group": "cancel_exception_hierarchy"
+    },
+    {
+      "kp": "py.async.cancel",
+      "type": "single_choice",
+      "question": "要在协程中执行必要的清理（如释放资源），同时不吞掉取消信号，最合适的写法是？",
+      "options": [
+        "try/finally 中写清理代码，让 CancelledError 自然传播",
+        "except BaseException 中写清理代码并 pass 忽略",
+        "except CancelledError 中写清理代码但不重新抛出",
+        "在协程末尾写清理代码，因为取消不会跳过它"
+      ],
+      "answer": 0,
+      "explanation": "try/finally 保证无论正常结束、异常还是取消都会执行清理，且不改变异常传播。吞掉异常（pass/不 re-raise）会破坏取消语义。取消会跳过后续同步代码，故末尾写清理不可靠。",
+      "error_tag": "清理写法错误",
+      "variant_group": "cancel_cleanup"
+    },
+    {
+      "kp": "py.async.cancel",
+      "type": "single_choice",
+      "question": "在 finally 或 except 块中执行 await（例如 await asyncio.sleep(0)）可能导致什么问题？",
+      "options": [
+        "若任务此时被再次取消，挂起点会立刻再次抛出 CancelledError，可能中断清理逻辑",
+        "await 在 finally 中是非法的，会抛 SyntaxError",
+        "事件循环会自动屏蔽取消，保证清理完整执行",
+        "只要清理不超过一秒就不会有任何影响"
+      ],
+      "answer": 0,
+      "explanation": "清理代码中的挂起点仍是取消注入点，尤其 uncancel/重复取消场景下会被打断。需要保护式清理时可考虑 asyncio.shield 或临时抑制取消，但需谨慎处理取消状态。",
+      "error_tag": "清理中的挂起点风险",
+      "variant_group": "cancel_cleanup"
+    },
+    {
+      "kp": "py.async.cancel",
+      "type": "single_choice",
+      "question": "await task 时任务被取消，关于此时 task 对象的状态，正确的是？",
+      "options": [
+        "task.cancelled() 为 True，task.done() 为 True，再次 await 它仍会抛出 CancelledError",
+        "task.cancelled() 为 False，因为异常已经抛出过了",
+        "task.done() 为 False，任务仍可被恢复执行",
+        "再次 await 会返回 None，因为取消已被消费"
+      ],
+      "answer": 0,
+      "explanation": "取消后任务进入已取消的完成态；cancelled() 和 done() 均为 True，且异常会保留，重复 await 会再次抛出 CancelledError。任务不可恢复。",
+      "error_tag": "任务状态理解错误",
+      "variant_group": "cancel_state"
+    },
+    {
+      "kp": "py.async.timeout",
+      "type": "single_choice",
+      "question": "关于异步代码中的超时控制，下列说法正确的是？",
+      "options": [
+        "超时只适用于同步阻塞函数，异步函数无法设置超时",
+        "异步超时通常通过在等待协程时限定最大等待时间来触发，超时后需处理被取消的等待",
+        "设置超时后，一定会在规定时间内强制终止正在运行的协程，无论它是否可取消",
+        "超时机制只对 I/O 操作有效，对纯计算任务没有意义"
+      ],
+      "answer": 1,
+      "explanation": "异步超时本质是对 await 的等待时间做限制，超时后等待会被取消并抛出超时异常，但需要协程自身可被取消才能真正停下来。A、C、D 都是常见误解。",
+      "error_tag": "概念混淆",
+      "variant_group": "async_timeout_basic"
+    },
+    {
+      "kp": "py.async.timeout",
+      "type": "single_choice",
+      "question": "在异步代码中为一段等待设置超时，如果等待超时，通常会发生什么？",
+      "options": [
+        "程序直接崩溃退出，无法捕获",
+        "等待被取消，并抛出可捕获的超时异常",
+        "该协程会被自动重启并重新等待",
+        "超时被静默忽略，继续无限等待"
+      ],
+      "answer": 1,
+      "explanation": "异步超时通常表现为等待被取消并抛出可捕获的异常，调用方可据此进行重试或降级，而不是崩溃或忽略。",
+      "error_tag": "概念混淆",
+      "variant_group": "async_timeout_basic"
+    },
+    {
+      "kp": "py.async.timeout",
+      "type": "fill_blank",
+      "question": "在异步编程中，要限制一次 await 等待的最长时间，通常需要设置 ______；当超过该时间时，等待会被取消并抛出超时异常。",
+      "options": [],
+      "answer": [
+        "超时",
+        "超时时间",
+        "timeout"
+      ],
+      "explanation": "限制等待最长时长的机制就是超时，它通常以取消等待并抛异常的形式体现。",
+      "error_tag": "记忆缺失",
+      "variant_group": "async_timeout_basic"
+    },
+    {
+      "kp": "py.async.timeout",
+      "type": "fill_blank",
+      "question": "当多个子步骤共享一次请求的总时间上限时，前序步骤消耗的时间应使后续步骤的可用超时______。",
+      "options": [],
+      "answer": [
+        "递减",
+        "减少",
+        "缩短",
+        "变小"
+      ],
+      "explanation": "这正是超时预算的核心：总上限固定，随消耗递减，避免各子步骤各自使用全量超时。",
+      "error_tag": "概念混淆",
+      "variant_group": "timeout_budget"
+    },
+    {
+      "kp": "py.async.timeout",
+      "type": "fill_blank",
+      "question": "超时发生后，如果调用方希望继续提供服务，通常应捕获超时异常并执行______逻辑，例如返回缓存结果或默认值。",
+      "options": [],
+      "answer": [
+        "降级",
+        "fallback",
+        "兜底"
+      ],
+      "explanation": "捕获超时异常后执行降级是常见做法，可保证在部分依赖变慢时整体服务仍可用。",
+      "error_tag": "概念混淆",
+      "variant_group": "timeout_design"
+    },
+    {
+      "kp": "py.async.timeout",
+      "type": "code_reading",
+      "question": "阅读下面的伪代码，回答问题：\n\nasync def fetch():\n    async with timeout(2):\n        result = await slow_call()\n    return result\n\n若 slow_call() 需要 5 秒才可能返回，且它内部不含任何 await 点、无法被取消，那么 timeout(2) 到时间后实际会发生什么？请说明原因。",
+      "options": [],
+      "answer": "超时会尝试取消这次等待，但由于 slow_call 内部没有 await 点、无法响应取消，实际执行不会在 2 秒时立刻停止；协程要等到该阻塞操作结束后才真正返回，此时才会体现出超时/取消异常。也就是说超时依赖协作式取消，不可中断的阻塞操作会削弱超时效果。",
+      "explanation": "关键点是超时通过取消生效，而取消是协作式的，需要 await 点配合；不可中断的计算会拖延取消的实际生效时间。",
+      "error_tag": "边界错误",
+      "variant_group": "timeout_effectiveness"
+    },
+    {
+      "kp": "py.async.timeout",
+      "type": "code_reading",
+      "question": "阅读下面的伪代码，回答问题：\n\ntry:\n    async with timeout(1):\n        await do_work()\n    print('done')\nexcept TimeoutError:\n    print('timeout caught')\n\n如果 do_work() 响应取消并且耗时超过 1 秒，控制台最可能输出什么？",
+      "options": [],
+      "answer": "最可能输出 'timeout caught'。因为等待超过 1 秒后触发超时，抛出可捕获的超时异常，被 except 分支捕获，而 print('done') 不会执行。",
+      "explanation": "考察超时异常的捕获路径：超时抛出 TimeoutError 一类的异常，被捕获后执行 except 分支，成功分支被跳过。",
+      "error_tag": "概念混淆",
+      "variant_group": "async_timeout_basic"
+    },
+    {
+      "kp": "py.async.timeout",
+      "type": "code_reading",
+      "question": "阅读下面的伪代码，回答问题：\n\nasync with timeout(total=3) as t:\n    await step1()   # 耗时 1s\n    remaining = t.remaining\n    await step2(remaining)\n\n这段代码体现了什么设计思想？如果 step1 耗时改为 2.5s，对 step2 的超时有什么影响？",
+      "options": [],
+      "answer": "体现的是超时预算思想：总上限为 3 秒，子步骤共享该预算，通过获取剩余时间传给后续步骤。若 step1 耗时 2.5s，则 step2 只剩约 0.5s 的预算，可用超时相应缩短。",
+      "explanation": "总时间上限固定，子步骤消耗后剩余时间递减并传递给后续步骤，防止每个子步骤都使用完整超时导致总耗时超限。",
+      "error_tag": "概念混淆",
+      "variant_group": "timeout_budget"
+    },
+    {
+      "kp": "py.async.timeout",
+      "type": "scenario",
+      "question": "工程场景：你的服务需要并行调用三个下游接口来组装一次响应。最近发现某个下游偶发变慢，导致整个接口的响应时间飙升甚至拖垮线程池。团队提出「把每个下游调用的超时都设为 10 秒」。作为负责人，你会如何调整超时策略？请说明你的做法和理由。",
+      "options": [],
+      "answer": null,
+      "explanation": "回答应围绕总超时预算、并行调用的超时与取消、超时后的降级、有限重试等展开，而不是简单地给每个调用设一个固定的较大值。",
+      "error_tag": "概念混淆",
+      "variant_group": "timeout_design",
+      "required_keywords": [
+        "降级",
+        "重试",
+        "并行"
+      ]
+    },
+    {
+      "kp": "py.async.timeout",
+      "type": "scenario",
+      "question": "工程场景：同事在异步代码里对某个调用设置了 30 秒超时，但线上反馈该调用有时仍会卡住很久不返回。排查发现被调用的协程内部有一个耗时较长的循环，中间没有任何 await。请解释为什么超时没有按预期生效，并给出改进方向。",
+      "options": [],
+      "answer": null,
+      "explanation": "关键点是取消是协作式的：协程内部缺少 await 点，无法在超时时被及时打断。改进方向包括在长循环中插入 await 点、把任务分片、使用可中断的等待方式等。",
+      "error_tag": "边界错误",
+      "variant_group": "timeout_effectiveness",
+      "required_keywords": [
+        "协程",
+        "分片"
+      ]
+    },
+    {
+      "kp": "py.async.timeout",
+      "type": "scenario",
+      "question": "工程场景：某个异步任务在超时被取消后，你发现它占用的外部资源（如连接）没有释放，日志里也看不到清理信息。你会如何排查和修复？",
+      "options": [],
+      "answer": null,
+      "explanation": "排查方向包括确认清理逻辑是否放在 finally 或上下文管理器中、清理逻辑本身是否阻塞或不可取消、是否吞掉了取消/超时异常等。修复应保证清理逻辑能响应取消并确实执行。",
+      "error_tag": "边界错误",
+      "variant_group": "timeout_cancel",
+      "required_keywords": [
+        "finally",
+        "上下文管理器",
+        "CancelledError",
+        "协程取消",
+        "资源释放"
+      ]
+    },
+    {
+      "kp": "py.async.timeout",
+      "type": "single_choice",
+      "question": "下列哪一项最能描述「超时预算（timeout budget）」的概念？",
+      "options": [
+        "为一次请求分配的总时间上限，子步骤共享该预算，剩余时间随消耗递减",
+        "每个子步骤都独立使用完整的总超时时间",
+        "超时时间必须是固定常数，不能动态计算",
+        "超时预算只与内存占用有关"
+      ],
+      "answer": 0,
+      "explanation": "超时预算强调总时间上限在多个子步骤之间共享，前序步骤消耗后，后续步骤的可用时间应相应减少，而不是各自使用全量超时。",
+      "error_tag": "概念混淆",
+      "variant_group": "timeout_budget"
+    },
+    {
+      "kp": "py.async.timeout",
+      "type": "single_choice",
+      "question": "关于超时设置为 0 或负数，下列理解最合理的是？",
+      "options": [
+        "等价于永不超时",
+        "通常表示立即超时或参数非法，应避免这种用法",
+        "会自动调整为默认最大值",
+        "与设置为正数效果完全相同"
+      ],
+      "answer": 1,
+      "explanation": "超时时间应为正数；0 或负数通常被视为非法参数或立即超时，依赖这种边界行为容易出问题，最佳做法是显式校验参数。",
+      "error_tag": "边界错误",
+      "variant_group": "timeout_edge"
+    },
+    {
+      "kp": "py.async.timeout",
+      "type": "single_choice",
+      "question": "异步代码中若超时后立即重试且不设上限，最可能引发的问题是？",
+      "options": [
+        "显著缩短总耗时",
+        "重试风暴，放大下游压力并加剧资源消耗",
+        "自动修复网络故障",
+        "超时时间会自适应变长"
+      ],
+      "answer": 1,
+      "explanation": "无限制重试在下游已超时时会形成重试风暴，进一步压垮服务。应配合重试上限、退避和超时预算。",
+      "error_tag": "概念混淆",
+      "variant_group": "timeout_retry"
+    },
+    {
+      "kp": "py.async.timeout",
+      "type": "single_choice",
+      "question": "异步任务在等待超时被取消时，若在 finally 中执行清理逻辑，应注意什么？",
+      "options": [
+        "清理逻辑也必须能响应取消，避免长时间阻塞导致取消无法及时完成",
+        "清理逻辑完全不会被执行",
+        "清理逻辑中不能再有 await",
+        "取消后 finally 会被跳过"
+      ],
+      "answer": 0,
+      "explanation": "取消会注入到 await 点，finally 通常会执行，但清理逻辑本身若长时间阻塞或不可取消，则可能拖延甚至阻碍取消的完成。",
+      "error_tag": "边界错误",
+      "variant_group": "timeout_cancel"
+    },
+    {
+      "kp": "py.async.timeout",
+      "type": "multi_choice",
+      "question": "关于异步超时控制，下列说法正确的有？",
+      "options": [
+        "超时通常是取消等待的协程并抛出可捕获的异常",
+        "协程内若存在不可取消的阻塞操作，超时可能无法真正停止它",
+        "超时时间应结合下游服务的实际响应时间来设置，而不是随意取值",
+        "设置超时后，超时永远不会抛出异常，只会返回 None",
+        "在有限时间的等待场景中，超时与取消机制常常配合使用"
+      ],
+      "answer": [
+        0,
+        1,
+        2,
+        4
+      ],
+      "explanation": "A、B、C、E 描述正确。D 错误，因为超时通常通过抛出异常来表达，可通过捕获异常来处理。",
+      "error_tag": "概念混淆",
+      "variant_group": "async_timeout_basic"
+    },
+    {
+      "kp": "py.async.timeout",
+      "type": "multi_choice",
+      "question": "在设计带超时的异步调用时，以下哪些做法是合理的？",
+      "options": [
+        "为整条调用链设定总超时预算，并在子步骤间递减",
+        "对超时失败设计退避与重试上限",
+        "把超时时间设置为一个极大值以「避免误报」",
+        "在超时异常中记录上下文信息以方便排查",
+        "忽略超时异常，当作成功继续执行下游逻辑"
+      ],
+      "answer": [
+        0,
+        1,
+        3
+      ],
+      "explanation": "A、B、D 是合理工程实践。C 变相等于没有超时，E 忽略异常会导致状态不一致。",
+      "error_tag": "概念混淆",
+      "variant_group": "timeout_design"
+    },
+    {
+      "kp": "py.async.timeout",
+      "type": "multi_choice",
+      "question": "下列关于超时与取消关系的说法，正确的有？",
+      "options": [
+        "超时可以看作一种带时间条件的自动取消",
+        "被取消的协程有机会通过异常处理或 finally 做清理",
+        "取消一定会在任意时刻立即生效，即使协程正在执行不可中断的计算",
+        "超时发生后，调用方可以选择捕获异常并执行降级逻辑",
+        "取消与超时是完全无关的两套机制"
+      ],
+      "answer": [
+        0,
+        1,
+        3
+      ],
+      "explanation": "C 错误，取消依赖协作，不可中断的计算无法立即被停止；E 错误，超时通常借助取消机制实现。",
+      "error_tag": "概念混淆",
+      "variant_group": "timeout_cancel"
+    },
+    {
+      "kp": "py.async.timeout",
+      "type": "multi_choice",
+      "question": "以下哪些情况可能使异步超时设置失效或达不到预期效果？",
+      "options": [
+        "协程内部执行长时间的纯计算且没有 await 点",
+        "下游调用本身不响应取消",
+        "使用过大的超时值，导致等待时间远超可接受范围",
+        "在等待上设置了合理的超时并正确处理了异常"
+      ],
+      "answer": [
+        0,
+        1,
+        2
+      ],
+      "explanation": "A、B、C 都会削弱超时效果；D 是正确用法，不在失效之列。",
+      "error_tag": "边界错误",
+      "variant_group": "timeout_effectiveness"
+    }
+  ]
+}

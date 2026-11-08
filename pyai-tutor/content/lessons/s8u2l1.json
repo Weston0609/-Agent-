@@ -1,0 +1,640 @@
+{
+  "id": "s8u2l1",
+  "title": "s8u2l1",
+  "kps": [
+    "arch.serve.batch",
+    "arch.serve.streaming"
+  ],
+  "theory": "## arch.serve.batch\n\n# `arch.serve.batch`：批处理服务架构\n\n## 一句话直觉\n\n当你要让 AI 模型对外提供服务时，一次性只处理一个请求会浪费 GPU、吞吐量低、成本高；**批处理（batching）** 就是把多个请求攒在一起送给模型，用一次前向计算服务多个用户。\n\n---\n\n## 第 1 节：为什么需要批处理？\n\n假设你有一个深度神经网络（Deep Neural Network, DNN），每次只处理一张图片。GPU 计算单元大部分时间在等待数据搬运，利用率极低。\n\n如果把 32 张图片堆成一个张量（Tensor）— 形状 `(32, 3, 224, 224)` — 送进模型，GPU 可以在同一时间做并行运算，吞吐量（throughput）能提升几十倍，而单次延迟（latency）增加有限。\n\n这就是服务端批处理的核心动机：**用延迟换吞吐**，但延迟增加远小于批量大小的增长。\n\n```python\nimport torch\nimport time\n\nmodel = torch.nn.Sequential(\n    torch.nn.Linear(512, 512),\n    torch.nn.ReLU(),\n    torch.nn.Linear(512, 10),\n).cuda().eval()\n\n# 逐个推理 vs 批量推理\nx_single = torch.randn(1, 512).cuda()\nx_batch = torch.randn(64, 512).cuda()\n\nwith torch.no_grad():\n    # 单条推理 100 次\n    t0 = time.time()\n    for _ in range(100):\n        model(x_single)\n    t_single = time.time() - t0\n\n    # 批量推理一次\n    t0 = time.time()\n    model(x_batch)\n    t_batch = time.time() - t0\n\nprint(f\"100 次单条: {t_single:.4f}s, 单条平均 {t_single/100*1000:.2f}ms\")\nprint(f\"1 次批量 64: {t_batch:.4f}s, 单条平均 {t_batch/64*1000:.2f}ms\")\n```\n\n> 关键结论：批量推理在 GPU 上通常能把单条平均耗时降低一个数量级。\n\n---\n\n## 第 2 节：静态批处理 vs 动态批处理\n\n**静态批处理（static batching）**：训练时预先确定 batch size，比如固定 32。简单，但服务线上请求到达时间不均匀时，会造成等待或空转。\n\n**动态批处理（dynamic batching）**：服务端把短时间窗口内到达的请求攒起来，达到 `max_batch_size` 或超时 `max_wait_ms` 就立刻推理。这是 Triton、TorchServe、vLLM 等推理框架的默认策略。\n\n核心参数：\n- `max_batch_size`：单批最多几条\n- `max_wait_ms`：最多等多久，避免小流量时延迟爆炸\n- `timeout`：整体请求超时\n\n```python\nimport asyncio\nimport torch\n\nclass DynamicBatcher:\n    \"\"\"极简动态批处理：攒到 max_batch_size 或超过 max_wait_ms 就推理\"\"\"\n    def __init__(self, model, max_batch_size=8, max_wait_ms=50):\n        self.model = model\n        self.max_batch_size = max_batch_size\n        self.max_wait_ms = max_wait_ms\n        self.queue: list[tuple[torch.Tensor, asyncio.Future]] = []\n        self.lock = asyncio.Lock()\n\n    async def infer(self, x: torch.Tensor):\n        loop = asyncio.get_running_loop()\n        fut = loop.create_future()\n        async with self.lock:\n            self.queue.append((x, fut))\n            if len(self.queue) >= self.max_batch_size:\n                await self._flush()\n            else:\n                # 启动一个超时任务，避免无限等待\n                loop.call_later(self.max_wait_ms / 1000, lambda: asyncio.create_task(self._maybe_flush()))\n        return await fut\n\n    async def _maybe_flush(self):\n        async with self.lock:\n            if self.queue:\n                await self._flush()\n\n    async def _flush(self):\n        batch = self.queue\n        self.queue = []\n        x = torch.cat([b[0] for b in batch], dim=0)\n        with torch.no_grad():\n            y = self.model(x)\n        for i, (_, fut) in enumerate(batch):\n            fut.set_result(y[i:i+1])\n```\n\n> 关键结论：动态批处理的关键是「要么攒满、要么等超时」，两个阈值共同决定延迟与吞吐的平衡。\n\n---\n\n## 第 3 节：连续批处理（Continuous Batching）\n\n对于大语言模型（LLM）这种每条请求生成长度不一的场景，静态 batch 会导致「短请求等长请求」的浪费。\n\n**连续批处理（continuous batching）**：不再等整批都做完，而是每一轮 decode step 完成后，把已经结束的序列踢出，把排队中的新序列插进来。GPU 每步都跑满。\n\n这是 vLLM、TensorRT-LLM、SGLang 的核心优化之一。\n\n```python\n# 伪代码：连续批处理的调度思想\n# 每一轮 decode step：\n#   1. 移除已生成 <EOS> 的序列\n#   2. 从等待队列补充新序列填满 max_batch_size\n#   3. 对当前活跃序列做一次 forward\nactive = []          # 正在生成的序列\nwaiting = [...]      # 排队中的请求\n\nwhile active or waiting:\n    active = [s for s in active if not s.finished]      # 踢掉完成的\n    while len(active) < max_batch_size and waiting:\n        active.append(waiting.pop(0))                    # 补新的\n    outputs = model.decode_step(active)                  # 一次 forward\n    for s, o in zip(active, outputs):\n        s.append_token(o)\n```\n\n> 关键结论：连续批处理让「已完成的请求立刻让位」，显著提高 GPU 占用率并降低平均延迟。\n\n---\n\n## 第 4 节：工程化落地要点\n\n真实服务里，批处理不只是 `torch.cat`，还需要考虑：\n\n1. **不同输入形状**：文本长度不一，需 padding（填充）到同一长度，配合 attention mask。\n2. **优先级**：高优请求可以抢占，或进入小 batch 快速返回。\n3. **背压（backpressure）**：队列过长时拒绝新请求（返回 429），避免雪崩。\n4. **超时**：每个请求单独计时，超时就返回错误。\n5. **可观测性**：记录 batch size 分布、排队时延、推理时延。\n\n```python\nimport asyncio\nfrom collections import deque\n\nclass BatchingServer:\n    def __init__(self, model, max_batch=16, max_wait=0.05, max_queue=256):\n        self.model = model\n        self.max_batch = max_batch\n        self.max_wait = max_wait\n        self.max_queue = max_queue\n        self.q = deque()\n\n    async def handle(self, x):\n        if len(self.q) >= self.max_queue:          # 背压\n            raise RuntimeError(\"server overloaded (429)\")\n        fut = asyncio.get_running_loop().create_future()\n        self.q.append((x, fut))\n        asyncio.create_task(self._drain())\n        return await asyncio.wait_for(fut, timeout=10.0)   # 整体超时\n\n    async def _drain(self):\n        await asyncio.sleep(self.max_wait)         # 攒一小会儿\n        batch = []\n        while self.q and len(batch) < self.max_batch:\n            batch.append(self.q.popleft())\n        if not batch:\n            return\n        xs = torch.cat([b[0] for b in batch], dim=0)\n        with torch.no_grad():\n            ys = self.model(xs)\n        for i, (_, fut) in enumerate(batch):\n            if not fut.done():\n                fut.set_result(ys[i:i+1])\n```\n\n> 关键结论：批处理服务的鲁棒性来自「队列 + 批大小 + 超时 + 背压」四件套。\n\n---\n\n## 第 5 节：什么时候不该批处理\n\n- **极致低延迟场景**：如实时语音唤醒、高频交易，宁可单条也不等。\n- **超大批次会 OOM**：需动态调整 max_batch_size，或做 micro-batching（微批）。\n- **输入不可张量化**：如需要复杂的自定义 Python 逻辑，难以批量。\n\n**微批（micro-batching）**：把一个大 batch 拆成多个小 batch 依次跑，用时间换取显存，是显存受限时的常用手段。\n\n```python\n# 微批：大 batch 拆小，缓解显存\nBIG = 256\nMICRO = 32\nx = torch.randn(BIG, 512).cuda()\nouts = []\nwith torch.no_grad():\n    for i in range(0, BIG, MICRO):\n        outs.append(model(x[i:i+MICRO]))\nresult = torch.cat(outs, dim=0)\n```\n\n---\n\n## 动手练习\n\n写一个本地可运行的小服务，模拟动态批处理：\n\n1. 用 `torch.nn.Linear(128, 10)` 造一个假模型。\n2. 写一个 `DynamicBatcher`，参数 `max_batch_size=8, max_wait_ms=30`。\n3. 用 `asyncio` 并发发起 100 个请求，每个请求是 `torch.randn(1, 128)`。\n4. 统计：(a) 总共发生多少次 forward；(b) 每批的平均 batch size；(c) 端到端 P50/P99 延迟。\n5. 改变 `max_wait_ms`（10/30/100），画出「平均延迟 vs 吞吐量」曲线，观察 trade-off。\n\n预期结果：`max_wait_ms` 越大，batch size 越大、吞吐越高，但单请求延迟也越高。\n\n## arch.serve.streaming\n\n# arch.serve.streaming：流式推理服务\n\n> 一句话直觉：用户等大模型回答时，希望**第一个字尽快出来**，而不是等整段话生成完才一次性显示。**流式（streaming）**就是让服务端一边生成、一边把结果推给客户端，把\"等 10 秒\"变成\"0.3 秒看到第一个字\"。\n\n---\n\n## 一、为什么需要流式？从\"批\"到\"流\"\n\n传统 HTTP 接口的模型是**请求-响应（request-response）**：客户端发一个请求，服务端算完，把完整结果塞进一个 `Response` 返回。对大模型（LLM）来说这很糟：生成 500 个字可能要 10 秒，用户盯着白屏 10 秒才看到字。\n\n**流式（streaming）**把一次响应拆成**多个数据块（chunk）**，服务端算出一小块就立刻发一块。用户看到的体验是\"打字机效果\"，首字节时间（TTFB, Time To First Byte）从秒级降到几百毫秒。\n\n关键术语：\n- **SSE（Server-Sent Events）**：HTTP 上的一种单向\"服务端推流\"协议，浏览器用 `EventSource` 或 `fetch` 读取。LLM 行业最常用。\n- **chunk**：一次推送的最小数据单位，通常是一段文字或一个 token。\n- **TTFB（Time To First Byte）**：从发请求到收到第一个字节的时间，流式服务的核心指标。\n\n```python\n# 对比：非流式 vs 流式\n# 非流式：等全部生成完才返回\nresponse = model.generate(\"讲个笑话\")   # 阻塞 10 秒\nprint(response)                          # 10 秒后一次性看到结果\n\n# 流式：边生成边返回\nfor chunk in model.stream(\"讲个笑话\"):\n    print(chunk, end=\"\", flush=True)     # 0.3 秒就看到第一个字\n```\n\n---\n\n## 二、最小可用流式服务：生成器 + SSE\n\nPython 做流式最自然的工具是**生成器（generator）**——用 `yield` 一次吐一块。配合 Web 框架（下面用 FastAPI）就能变成 SSE 接口。\n\n```python\n# 一个极简的流式接口\nfrom fastapi import FastAPI\nfrom fastapi.responses import StreamingResponse\n\napp = FastAPI()\n\ndef fake_llm_stream(prompt: str):\n    \"\"\"模拟 LLM 逐字输出\"\"\"\n    text = f\"你说的是：{prompt}，我来回答……\"\n    for ch in text:\n        yield ch            # 每次产出 1 个字符\n\n@app.get(\"/chat\")\ndef chat(q: str):\n    def event_stream():\n        for ch in fake_llm_stream(q):\n            # SSE 格式：data: <内容>\\n\\n\n            yield f\"data: {ch}\\n\\n\"\n    return StreamingResponse(event_stream(), media_type=\"text/event-stream\")\n```\n\n要点：\n1. 生成器**惰性求值**，服务端只在客户端还在读时才继续算。\n2. `media_type=\"text/event-stream\"` 告诉浏览器/客户端这是 SSE。\n3. 每条消息以 `\\n\\n` 结束，客户端按这个分帧。\n\n---\n\n## 三、客户端如何消费流？\n\n流式客户端要**增量解析**，不能等响应结束。Python 用 `httpx.stream` 或 `requests` 的 `iter_lines`。\n\n```python\nimport httpx\n\n# 客户端流式读取\nwith httpx.stream(\"GET\", \"http://localhost:8000/chat\", params={\"q\": \"你好\"}) as r:\n    for line in r.iter_lines():\n        if line.startswith(\"data: \"):\n            chunk = line[len(\"data: \"):]\n            print(chunk, end=\"\", flush=True)  # 立即打印\n```\n\n注意：`iter_lines` 是**行级**迭代，SSE 的 `\\n\\n` 分帧需要我们再做一次\"空行触发一次 emit\"的状态机；生产代码里通常用 `sse-starlette` 或 `httpx-sse` 库。\n\n---\n\n## 四、工程化要点\n\n真实服务不止\"能流\"，还要**稳、快、可观测**：\n\n1. **背压（backpressure）**：客户端读得慢时，服务端不能无限缓存。SSE 靠 TCP 窗口天然限速；用 `asyncio.Queue` 时要注意设置 `maxsize`。\n2. **断线重连**：SSE 支持 `id:` 字段 + `Last-Event-ID` 头，客户端断线后可从上次位置继续。\n3. **取消（cancellation）**：客户端关闭连接时，服务端要能停下生成，释放 GPU/调用。FastAPI 里检查 `await request.is_disconnected()`。\n4. **缓冲（buffering）**：Nginx 默认会缓冲响应，必须加 `X-Accel-Buffering: no` 或 `proxy_buffering off`，否则\"流\"变\"批\"。\n5. **心跳（heartbeat）**：长时间没 chunk 时定期发注释行 `: ping\\n\\n`，防止中间层掐连接。\n\n```python\nimport asyncio, json\nfrom fastapi import FastAPI, Request\nfrom fastapi.responses import StreamingResponse\n\napp = FastAPI()\n\nasync def sse_format(request: Request):\n    \"\"\"带心跳、可取消的 SSE 生成器\"\"\"\n    for i in range(100):\n        if await request.is_disconnected():\n            break                              # 客户端走了，停\n        payload = json.dumps({\"i\": i})\n        yield f\"id: {i}\\ndata: {payload}\\n\\n\"     # 带 id，便于断线续传\n        await asyncio.sleep(0.1)\n\n@app.get(\"/tick\")\nasync def tick(request: Request):\n    return StreamingResponse(\n        sse_format(request),\n        media_type=\"text/event-stream\",\n        headers={\n            \"Cache-Control\": \"no-cache\",\n            \"X-Accel-Buffering\": \"no\",           # 关掉 Nginx 缓冲\n        },\n    )\n```\n\n---\n\n## 五、与类型系统的关系：`Self`、`TypeVar`、`TypeAlias`\n\n流式 SDK 常要写**链式风格**的客户端（如 `client.chat(...).on(\"chunk\", cb)`），链式方法要返回 `self` 以保持类型。Python 3.11 引入的 `typing.Self` 正是为此：\n\n- 方法返回 `Self` 时，子类调用仍推断为子类类型，而不是父类。\n- 备选构造器 `@classmethod` 应返回 `Self`（或 `cls` 的类型），保证子类工厂返回子类实例。\n- `TypeVar` 让泛型容器（如 `Stream[T]`）保留元素类型；`TypeAlias` 给复杂类型起名。\n\n```python\nfrom typing import Self, TypeVar, TypeAlias, Generic\n\nT = TypeVar(\"T\")\n\nclass Stream(Generic[T]):\n    \"\"\"泛型流，链式 API 用 Self 保持类型\"\"\"\n    def __init__(self): self._items: list[T] = []\n    def add(self, item: T) -> Self:      # 返回 Self，子类链式调用类型不丢\n        self._items.append(item)\n        return self\n    def collect(self) -> list[T]:\n        return list(self._items)\n\n# 复杂类型起别名\nChunkHandler: TypeAlias = \"Callable[[str], None]\"\n```\n\n> 注意：如果方法**不保证**返回子类实例（比如总返回固定的 `Eggs()`），就不能用 `Self`，应写具体类名。\n\n---\n\n## 小结\n\n| 概念 | 作用 |\n|---|---|\n| Streaming | 边生成边推送，降低 TTFB |\n| SSE | HTTP 上最常用的流式协议 |\n| Generator | Python 实现流的天然工具 |\n| Backpressure/Cancel/Heartbeat | 工程上必须处理的三件事 |\n| `Self` / `TypeVar` / `TypeAlias` | 流式 SDK 的类型友好写法 |\n",
+  "quiz": [
+    {
+      "kp": "arch.serve.batch",
+      "type": "single_choice",
+      "question": "某推理服务每秒收到约 500 个请求，但每个请求的计算量很小，导致 GPU 利用率只有 15%。以下哪种做法最可能提升吞吐量？",
+      "options": [
+        "把每个请求单独提交给模型，减少排队延迟",
+        "把多个请求聚合成一个批次一起送入模型计算",
+        "增加更多的 HTTP 工作线程",
+        "把模型的权重从 FP32 转换为 FP16"
+      ],
+      "answer": 1,
+      "explanation": "小请求单独执行时 GPU 利用率低，主要是启动开销和并行度不足。批处理能把多次前向合并成一次大矩阵运算，显著提升吞吐。增加 HTTP 线程只解决 CPU 侧的并发，不改变 GPU 利用率；FP16 能加速但通常不如批处理影响大。",
+      "error_tag": "吞吐优化理解不足",
+      "variant_group": "batch_basic"
+    },
+    {
+      "kp": "arch.serve.batch",
+      "type": "single_choice",
+      "question": "在批处理推理中，若一个批次内不同样本的序列长度差异很大，直接补齐到最长序列会导致什么问题？",
+      "options": [
+        "模型会报错，因为无法处理不等长输入",
+        "权重会被错误更新",
+        "大量无效填充计算，浪费显存和算力",
+        "批处理的延迟一定低于单条处理"
+      ],
+      "answer": 2,
+      "explanation": "补齐到最长序列是常见做法，但会产生大量填充 token，造成无谓计算。模型本身可以处理不等长输入（通过 mask），但补齐会引入 wasted computation。",
+      "error_tag": "padding 代价认识不足",
+      "variant_group": "batch_padding"
+    },
+    {
+      "kp": "arch.serve.batch",
+      "type": "single_choice",
+      "question": "关于批处理中的「微批」（micro-batch），下列说法正确的是？",
+      "options": [
+        "微批是指把一个大批次拆成多个小批次依次执行，常用于流水线并行",
+        "微批意味着必须放弃批处理",
+        "微批只能用于训练，不能用于推理",
+        "微批的批次大小必须为 1"
+      ],
+      "answer": 0,
+      "explanation": "微批是把大批次切分成若干小块，在流水线并行中让不同阶段重叠执行，减少气泡。它仍是批处理的一种形式，推理中也可使用。",
+      "error_tag": "微批概念混淆",
+      "variant_group": "batch_micro"
+    },
+    {
+      "kp": "arch.serve.batch",
+      "type": "single_choice",
+      "question": "某服务使用批处理，但发现 GPU 利用率仍然很低。以下哪项最不可能是原因？",
+      "options": [
+        "批次大小设置得过小",
+        "请求到达速率太低，队列长期为空",
+        "CPU 预处理成为瓶颈，GPU 经常等待数据",
+        "模型使用了 FP16 权重"
+      ],
+      "answer": 3,
+      "explanation": "FP16 通常能提升计算速度和利用率，不会导致 GPU 利用率低。批次小、请求稀疏、CPU 瓶颈都会让 GPU 空闲。",
+      "error_tag": "GPU 利用率归因错误",
+      "variant_group": "batch_utilization"
+    },
+    {
+      "kp": "arch.serve.batch",
+      "type": "single_choice",
+      "question": "在动态批处理中，如果最大等待时间设置得过长，最直接的后果是？",
+      "options": [
+        "吞吐量一定下降",
+        "请求的平均排队延迟增加",
+        "模型精度下降",
+        "显存占用一定减少"
+      ],
+      "answer": 1,
+      "explanation": "等待窗口越长，请求在队列中停留越久，平均延迟上升。吞吐可能因批次更大而提升，所以「一定下降」不成立。",
+      "error_tag": "等待窗口影响误判",
+      "variant_group": "batch_timeout_tradeoff"
+    },
+    {
+      "kp": "arch.serve.batch",
+      "type": "single_choice",
+      "question": "某推理框架支持「批处理 + KV Cache 复用」。当同一用户的多轮对话请求被一起批处理时，复用 KV Cache 的主要好处是？",
+      "options": [
+        "避免重复计算历史 token 的注意力键值",
+        "减少模型参数数量",
+        "提高 tokenizer 的速度",
+        "让批次大小自动增大"
+      ],
+      "answer": 0,
+      "explanation": "KV Cache 缓存历史 token 的键值，多轮对话中可复用，避免重复前向计算历史部分，从而降低延迟和算力消耗。",
+      "error_tag": "KV Cache 复用理解错误",
+      "variant_group": "batch_kv_cache"
+    },
+    {
+      "kp": "arch.serve.batch",
+      "type": "single_choice",
+      "question": "关于批处理对模型输出结果的影响，下列说法正确的是？",
+      "options": [
+        "只要实现正确，批处理不应改变每个样本的推理结果",
+        "批处理会降低模型精度，所以结果一定不同",
+        "批处理会让所有样本输出相同结果",
+        "批处理只影响速度，不影响数值"
+      ],
+      "answer": 0,
+      "explanation": "正确的批处理实现中，每个样本独立计算，结果与单条推理应一致（浮点误差除外）。批处理不会改变模型语义。",
+      "error_tag": "批处理语义误解",
+      "variant_group": "batch_correctness"
+    },
+    {
+      "kp": "arch.serve.batch",
+      "type": "single_choice",
+      "question": "在服务端做批处理时，为什么通常需要对请求设置最大批次大小上限？",
+      "options": [
+        "因为模型只能处理固定数量的输入",
+        "为了防止单个大批次导致显存溢出或延迟过高",
+        "因为批处理框架不支持更大的批次",
+        "为了减少网络请求数量"
+      ],
+      "answer": 1,
+      "explanation": "批次过大会导致显存不足或单步耗时过长，影响稳定性和尾延迟。设置上限是保护服务的手段，而非模型本身的硬限制。",
+      "error_tag": "批次上限原因误解",
+      "variant_group": "batch_max_size"
+    },
+    {
+      "kp": "arch.serve.batch",
+      "type": "single_choice",
+      "question": "某团队在压测时发现，批次大小从 1 增加到 8 时吞吐几乎翻倍，但从 32 增加到 64 时吞吐提升很小。最合理的解释是？",
+      "options": [
+        "GPU 已经接近计算饱和，继续增大批次收益递减",
+        "模型在批次大于 32 时精度下降",
+        "网络带宽成为瓶颈",
+        "请求数量不够"
+      ],
+      "answer": 0,
+      "explanation": "批次增大到一定程度后，GPU 计算单元接近饱和，额外批次带来的并行收益递减，甚至被显存和调度开销抵消。",
+      "error_tag": "收益递减理解不足",
+      "variant_group": "batch_scaling"
+    },
+    {
+      "kp": "arch.serve.batch",
+      "type": "single_choice",
+      "question": "在批处理推理中，对输入做 padding 后，通常需要配合什么机制来保证结果正确？",
+      "options": [
+        "注意力掩码（attention mask）",
+        "梯度裁剪",
+        "学习率预热",
+        "权重衰减"
+      ],
+      "answer": 0,
+      "explanation": "padding 位置是无效 token，必须通过 attention mask 让模型忽略它们，否则会污染注意力计算。梯度裁剪、学习率等是训练概念。",
+      "error_tag": "mask 作用不清",
+      "variant_group": "batch_mask"
+    },
+    {
+      "kp": "arch.serve.batch",
+      "type": "single_choice",
+      "question": "某在线服务同时支持短文本分类和长文本摘要。以下哪种批处理策略更合理？",
+      "options": [
+        "把所有请求混在同一个批次里，统一补齐到最长",
+        "按任务和长度分别组批，避免长短混批",
+        "只对短文本启用批处理",
+        "禁用批处理以保证公平"
+      ],
+      "answer": 1,
+      "explanation": "不同任务的计算图和长度差异大，混批会导致严重 padding 和资源浪费。按任务/长度分桶组批能兼顾效率和延迟。",
+      "error_tag": "混合负载批处理策略错误",
+      "variant_group": "batch_heterogeneous"
+    },
+    {
+      "kp": "arch.serve.batch",
+      "type": "single_choice",
+      "question": "关于「批处理」与「并行计算」的关系，下列说法正确的是？",
+      "options": [
+        "批处理是把多个样本合并成一次前向，利用 GPU 并行能力",
+        "批处理等同于多线程 CPU 并行",
+        "批处理必须使用多张 GPU",
+        "批处理会降低 GPU 并行度"
+      ],
+      "answer": 0,
+      "explanation": "批处理把多个样本的矩阵运算合并，形成更大的矩阵乘法，从而更充分地利用 GPU 的并行计算单元。它不要求多 GPU，也不是 CPU 多线程。",
+      "error_tag": "批处理与并行关系混淆",
+      "variant_group": "batch_parallelism"
+    },
+    {
+      "kp": "arch.serve.batch",
+      "type": "single_choice",
+      "question": "关于静态批处理和动态批处理，下列说法正确的是？",
+      "options": [
+        "静态批处理必须等到凑满固定数量才能开始计算，可能增加等待时间",
+        "动态批处理要求所有请求的长度完全一致",
+        "静态批处理的平均延迟一定低于动态批处理",
+        "动态批处理不能和连续批处理结合"
+      ],
+      "answer": 0,
+      "explanation": "静态批处理按固定批次大小组批，可能需要等待或填充；动态批处理根据当前队列在短时间内组批，更灵活。长度一致并非动态批处理的要求。",
+      "error_tag": "批处理模式混淆",
+      "variant_group": "batch_static_dynamic"
+    },
+    {
+      "kp": "arch.serve.batch",
+      "type": "single_choice",
+      "question": "某服务采用动态批处理，配置了最大等待时间 10ms 和最大批次大小 32。当前队列只有 3 个请求，已经等待 12ms。最可能发生什么？",
+      "options": [
+        "继续等待直到凑满 32 个请求",
+        "直接丢弃这 3 个请求",
+        "立即用这 3 个请求组批执行",
+        "把批次大小上限临时改为 3"
+      ],
+      "answer": 2,
+      "explanation": "动态批处理通常以「凑满批次或达到最大等待时间」中先满足者触发。已超过 10ms 等待上限，应立即组批执行，避免延迟继续增大。",
+      "error_tag": "动态批处理触发条件不清",
+      "variant_group": "batch_timeout"
+    },
+    {
+      "kp": "arch.serve.batch",
+      "type": "single_choice",
+      "question": "在连续批处理（continuous batching）中，一个正在解码的序列生成结束后，调度器通常如何处理该批次？",
+      "options": [
+        "必须等整个批次所有序列都结束才能开始新请求",
+        "可以把空出的位置立即分配给队列中的新请求",
+        "必须清空 KV Cache 并重新开始整个批次",
+        "新请求必须等到下一个批次周期"
+      ],
+      "answer": 1,
+      "explanation": "连续批处理的核心是逐 token 调度，序列结束后释放的槽位可立即被新请求复用，从而减少空闲等待，提升 GPU 利用率。",
+      "error_tag": "连续批处理机制误解",
+      "variant_group": "batch_continuous"
+    },
+    {
+      "kp": "arch.serve.batch",
+      "type": "single_choice",
+      "question": "某在线问答服务要求首 token 延迟尽可能低，同时吞吐量也不能太差。以下哪种批处理策略更合适？",
+      "options": [
+        "无限增大批次大小，吞吐优先",
+        "完全禁用批处理，只做单条推理",
+        "设置较小的最大批次和较短的等待窗口",
+        "只在夜间低峰期启用批处理"
+      ],
+      "answer": 2,
+      "explanation": "首 token 延迟对等待窗口敏感，窗口越长延迟越高；批次越大单步耗时也越高。折中方案是小批次加短等待窗口，在延迟和吞吐之间取得平衡。",
+      "error_tag": "延迟与吞吐权衡错误",
+      "variant_group": "batch_latency_throughput"
+    },
+    {
+      "kp": "arch.serve.batch",
+      "type": "single_choice",
+      "question": "关于批处理对显存的需求，下列说法正确的是？",
+      "options": [
+        "批处理不会增加显存占用，因为权重是共享的",
+        "批次越大，激活值和 KV Cache 等中间张量的显存占用通常越高",
+        "只要模型权重能放进显存，批次就可以无限增大",
+        "显存占用只和输入文本长度有关，和批次大小无关"
+      ],
+      "answer": 1,
+      "explanation": "虽然权重在批次内共享，但每个样本的激活值、注意力中间结果、KV Cache 等都会随批次增大而增大，因此显存会成为批次大小的约束。",
+      "error_tag": "批处理显存开销误解",
+      "variant_group": "batch_memory"
+    },
+    {
+      "kp": "arch.serve.batch",
+      "type": "single_choice",
+      "question": "在请求长度分布高度不均的场景下，采用「按长度分桶」再组批的主要目的是什么？",
+      "options": [
+        "降低模型权重的显存占用",
+        "减少因补齐到最长序列造成的无效计算",
+        "让所有请求的延迟完全一致",
+        "避免使用动态批处理"
+      ],
+      "answer": 1,
+      "explanation": "把长度相近的请求放在同一批次，能显著减少 padding 比例，从而提高有效计算占比。它不改变权重占用，也不能保证延迟完全一致。",
+      "error_tag": "分桶目的理解错误",
+      "variant_group": "batch_bucketing"
+    },
+    {
+      "kp": "arch.serve.batch",
+      "type": "single_choice",
+      "question": "某团队发现增大批次后吞吐上升，但 P99 延迟明显变差。最可能的原因是？",
+      "options": [
+        "批次越大，单个批次的计算时间越长，排在后面的请求等待更久",
+        "批次越大，模型精度越低",
+        "批次越大，网络带宽消耗越大",
+        "批次越大，CPU 预处理越慢"
+      ],
+      "answer": 0,
+      "explanation": "批次增大通常提升吞吐，但单次前向耗时也增加，队列中的请求要等更久，导致尾延迟恶化。精度和带宽通常不是主因。",
+      "error_tag": "尾延迟归因错误",
+      "variant_group": "batch_tail_latency"
+    },
+    {
+      "kp": "arch.serve.batch",
+      "type": "single_choice",
+      "question": "在推理服务中，把预处理（如 tokenization）和后处理放在 GPU 计算之外并行执行，主要好处是？",
+      "options": [
+        "减少模型参数量",
+        "让 GPU 专注于矩阵运算，减少空闲等待",
+        "提高模型准确率",
+        "避免使用批处理"
+      ],
+      "answer": 1,
+      "explanation": "CPU 侧的预处理/后处理如果串行阻塞 GPU，会造成气泡。异步或并行执行可以让 GPU 持续工作，提升整体利用率。",
+      "error_tag": "流水线并行收益误解",
+      "variant_group": "batch_pipeline"
+    },
+    {
+      "kp": "arch.serve.streaming",
+      "type": "single_choice",
+      "question": "在 Web 服务中把大文件响应一次性读入内存再返回，会带来什么最主要的问题？",
+      "options": [
+        "响应内容会被浏览器缓存",
+        "内存占用随文件大小增长，可能触发 OOM 并拖垮并发能力",
+        "HTTP 状态码会变成 206",
+        "Content-Length 无法被设置"
+      ],
+      "answer": 1,
+      "explanation": "一次性读入内存会让服务进程的内存随单个响应体大小线性增长，大文件或高并发时容易内存耗尽，而流式响应通过分块读取与发送把内存占用控制在较小常量级。",
+      "error_tag": "概念混淆",
+      "variant_group": "streaming_motivation"
+    },
+    {
+      "kp": "arch.serve.streaming",
+      "type": "single_choice",
+      "question": "关于『流式响应』的本质，下列说法最准确的是？",
+      "options": [
+        "服务器必须先知道完整响应体的长度才能发送",
+        "响应体被拆成多个块依次发送，客户端可以边接收边处理",
+        "流式响应只适用于 WebSocket，普通 HTTP 不支持",
+        "流式响应必须使用 POST 方法"
+      ],
+      "answer": 1,
+      "explanation": "流式响应的核心是把响应体分批（chunk）发送，客户端可以在收到部分数据后就开始处理，从而降低首字节延迟；它并不绑定 WebSocket 或特定请求方法。",
+      "error_tag": "概念混淆",
+      "variant_group": "streaming_basic"
+    },
+    {
+      "kp": "arch.serve.streaming",
+      "type": "single_choice",
+      "question": "下列哪种做法最可能导致流式响应在小数据量时『卡住不返回』？",
+      "options": [
+        "每写一块就 flush",
+        "数据被中间反向代理缓冲，且未配置禁用缓冲",
+        "使用 chunked 传输编码",
+        "响应头设置了正确的 Content-Type"
+      ],
+      "answer": 1,
+      "explanation": "反向代理（如 Nginx）默认会缓冲上游响应，导致小块数据被攒着不转发；需要针对该路由关闭代理缓冲才能保证实时下发。",
+      "error_tag": "边界错误",
+      "variant_group": "streaming_proxy_buffer"
+    },
+    {
+      "kp": "arch.serve.streaming",
+      "type": "multi_choice",
+      "question": "下列哪些属于采用流式响应的合理理由？（多选）",
+      "options": [
+        "响应体很大，无法或不宜整体放入内存",
+        "数据是逐步产生、长度事先不确定的",
+        "希望降低首字节延迟、提升感知性能",
+        "希望减少服务端代码的单元测试数量"
+      ],
+      "answer": [
+        0,
+        1,
+        2
+      ],
+      "explanation": "流式适用于大响应、增量产生、低延迟等场景；它与测试数量没有因果关系，属于干扰项。",
+      "error_tag": "概念混淆",
+      "variant_group": "streaming_use_case"
+    },
+    {
+      "kp": "arch.serve.streaming",
+      "type": "multi_choice",
+      "question": "实现流式响应时，下列说法正确的有哪些？（多选）",
+      "options": [
+        "响应头一旦发出，就无法再更改状态码",
+        "生成器/迭代器可以作为惰性数据源",
+        "为保证实时性通常需要及时 flush",
+        "流式响应必须把整个响应体一次性计算完成后再发送",
+        "客户端断开后服务端应当停止无谓的生成"
+      ],
+      "answer": [
+        0,
+        1,
+        2,
+        4
+      ],
+      "explanation": "前三项与最后一项都是流式实现的关键要点；『先算完再发送』恰恰与流式的增量思想相悖，是错误选项。",
+      "error_tag": "概念混淆",
+      "variant_group": "streaming_basic"
+    },
+    {
+      "kp": "arch.serve.streaming",
+      "type": "multi_choice",
+      "question": "关于流式响应中的错误处理，哪些说法合理？（多选）",
+      "options": [
+        "在发送响应头之前发生的错误，通常仍可返回普通错误状态码",
+        "在已发送部分数据后，无法再把状态码改成 500",
+        "可以在流内以约定格式发送错误信息供客户端识别",
+        "只要捕获异常，客户端就一定能自动感知错误",
+        "错误处理可以完全省略，让连接超时即可"
+      ],
+      "answer": [
+        0,
+        1,
+        2
+      ],
+      "explanation": "头部发送前可正常报错，之后只能靠流内约定；捕获异常不等于客户端能自动感知，省略错误处理会导致客户端一直等待或拿到不完整数据。",
+      "error_tag": "边界错误",
+      "variant_group": "streaming_error_handling"
+    },
+    {
+      "kp": "arch.serve.streaming",
+      "type": "multi_choice",
+      "question": "下列哪些做法有助于保证流式数据及时到达客户端？（多选）",
+      "options": [
+        "每次写出一块数据后主动 flush",
+        "为该路由关闭反向代理的响应缓冲",
+        "避免使用会积攒数据才输出的压缩方式",
+        "把所有数据先累积到列表里，最后统一发送",
+        "让写入操作在需要时立即下发而非等多块攒满"
+      ],
+      "answer": [
+        0,
+        1,
+        2,
+        4
+      ],
+      "explanation": "及时 flush、关闭代理缓冲、避免缓冲型压缩、及时下发都是保持实时性的手段；先全部累积再发送等于放弃了流式，是错误选项。",
+      "error_tag": "边界错误",
+      "variant_group": "streaming_flush"
+    },
+    {
+      "kp": "arch.serve.streaming",
+      "type": "fill_blank",
+      "question": "在生成器函数中，用于产出一个值并在该处挂起、下次迭代时继续执行的关键字是 ______。",
+      "options": [],
+      "answer": [
+        "yield",
+        "yield 关键字",
+        "yield语句"
+      ],
+      "explanation": "yield 使函数成为生成器，每次迭代执行到 yield 处产出值并暂停，从而支持惰性、逐步产生数据。",
+      "error_tag": "记忆缺失",
+      "variant_group": "generator_semantics"
+    },
+    {
+      "kp": "arch.serve.streaming",
+      "type": "fill_blank",
+      "question": "HTTP/1.1 中让服务器可以在不知道响应体总长度的情况下逐块发送数据的传输编码名称是 ______。",
+      "options": [],
+      "answer": [
+        "chunked",
+        "chunked 编码",
+        "分块传输编码",
+        "chunked transfer encoding"
+      ],
+      "explanation": "chunked 传输编码把响应体分成若干块并发送，以终止块结束，使未知长度的流式响应成为可能。",
+      "error_tag": "记忆缺失",
+      "variant_group": "streaming_http"
+    },
+    {
+      "kp": "arch.serve.streaming",
+      "type": "code_reading",
+      "question": "阅读以下代码：\n\n```python\ndef gen():\n    print(\"start\")\n    yield 1\n    print(\"mid\")\n    yield 2\n    print(\"end\")\n\ng = gen()\nprint(\"created\")\nnext(g)\nnext(g)\n```\n\n问：控制台输出的顺序是什么？",
+      "options": [],
+      "answer": "created\\nstart\\nmid\\nend",
+      "explanation": "调用生成器函数 gen() 不会执行函数体，只返回生成器对象，所以先打印 created；第一次 next 执行到第一个 yield，打印 start 并产出 1；第二次 next 从挂起点继续，打印 mid 并产出 2；end 只有在第三次 next（或迭代结束）时才会打印，因此不含 end 的第二次 next 之后尚未打印 end。",
+      "error_tag": "概念混淆",
+      "variant_group": "generator_semantics"
+    },
+    {
+      "kp": "arch.serve.streaming",
+      "type": "code_reading",
+      "question": "阅读以下代码：\n\n```python\ndef counter(n):\n    i = 0\n    while i < n:\n        yield i\n        i += 1\n\nresult = list(counter(3)) + list(counter(3))\nprint(result)\n```\n\n问：输出是什么？",
+      "options": [],
+      "answer": "[0, 1, 2, 0, 1, 2]",
+      "explanation": "每次调用 counter(3) 都返回一个全新的生成器，各自独立地从 0 迭代到 2，因此两次 list() 结果拼接为 [0,1,2,0,1,2]。",
+      "error_tag": "边界错误",
+      "variant_group": "generator_semantics"
+    },
+    {
+      "kp": "arch.serve.streaming",
+      "type": "scenario",
+      "question": "你负责一个接口，用于把上游逐步产生的大模型文本实时推送给浏览器。上线后发现：本地测试时文字是逐段出现的，但经过反向代理部署到线上后，用户要等全部生成完才一次性看到内容。请分析最可能的原因，并说明你会如何排查和修复。",
+      "options": [],
+      "answer": null,
+      "explanation": "典型原因是反向代理对上游响应做了缓冲，把小块数据攒着，破坏实时性；也有可能是应用未及时 flush 或压缩层引入缓冲。排查时可对比直连与经代理的表现，检查代理缓冲配置；修复方向是针对该路由关闭代理缓冲、在应用中及时 flush，并避免缓冲型压缩。",
+      "error_tag": "边界错误",
+      "variant_group": "streaming_proxy_buffer",
+      "required_keywords": [
+        "反向代理",
+        "缓冲",
+        "排查",
+        "flush",
+        "压缩"
+      ]
+    },
+    {
+      "kp": "arch.serve.streaming",
+      "type": "single_choice",
+      "question": "在 HTTP/1.1 中，为支持未知长度的流式响应，常用的传输编码方式是？",
+      "options": [
+        "identity",
+        "chunked",
+        "gzip",
+        "multipart"
+      ],
+      "answer": 1,
+      "explanation": "chunked 传输编码允许服务器在不知道总长度时逐块发送响应体并以终止块结束；identity 表示不编码，gzip 是内容压缩而非分块机制。",
+      "error_tag": "记忆缺失",
+      "variant_group": "streaming_http"
+    },
+    {
+      "kp": "arch.serve.streaming",
+      "type": "scenario",
+      "question": "某团队实现了一个流式接口：先在内存里把全部结果拼好放进一个列表，最后一次性返回并声称『这就是流式』。请指出这种做法的问题，并给出符合流式思想的改造方向。",
+      "options": [],
+      "answer": null,
+      "explanation": "先把全部结果算好再返回并不具备流式的核心特征——增量产出与低首字节延迟，还会让内存随时长/规模增长。改造方向是用生成器或迭代器惰性产生数据、边产生边发送，并及时 flush，从而降低内存占用与首字节延迟。",
+      "error_tag": "概念混淆",
+      "variant_group": "streaming_use_case",
+      "required_keywords": [
+        "增量产出",
+        "低首字节延迟",
+        "内存占用",
+        "生成器",
+        "迭代器"
+      ]
+    },
+    {
+      "kp": "arch.serve.streaming",
+      "type": "single_choice",
+      "question": "下列哪种场景最适合使用流式响应？",
+      "options": [
+        "返回一个 20 字节的 JSON 状态对象",
+        "向客户端持续推送大模型逐词生成的文本",
+        "返回 302 重定向",
+        "返回 204 No Content"
+      ],
+      "answer": 1,
+      "explanation": "逐词生成属于内容持续产生、总体长度事先不确定的场景，适合边生成边推送；而小对象、重定向、无内容响应都不需要流式。",
+      "error_tag": "场景误判",
+      "variant_group": "streaming_use_case"
+    },
+    {
+      "kp": "arch.serve.streaming",
+      "type": "single_choice",
+      "question": "流式响应相比一次性响应，最直接的收益通常体现在哪个指标上？",
+      "options": [
+        "总传输字节数显著减少",
+        "首字节时间（TTFB）更早，用户更早看到内容",
+        "服务端 CPU 使用率必然下降",
+        "可以完全省略 TLS 握手"
+      ],
+      "answer": 1,
+      "explanation": "流式的最直接收益是提早返回首批数据，降低首字节延迟、改善感知性能；总字节数一般不变，CPU 也不一定下降，TLS 握手与是否流式无关。",
+      "error_tag": "概念混淆",
+      "variant_group": "streaming_benefit"
+    },
+    {
+      "kp": "arch.serve.streaming",
+      "type": "single_choice",
+      "question": "生成器函数（含 yield 的函数）在被调用时，函数体是否立即执行？",
+      "options": [
+        "立即完整执行到 return",
+        "立即执行到第一个 yield 后暂停",
+        "不会立即执行，只返回一个生成器对象，迭代时才执行",
+        "会在线程中异步执行"
+      ],
+      "answer": 2,
+      "explanation": "调用生成器函数只返回生成器对象，函数体在第一次迭代（如 next()）时才执行到首个 yield 并挂起，这正是可以用于惰性、流式产出数据的原因。",
+      "error_tag": "概念混淆",
+      "variant_group": "generator_semantics"
+    },
+    {
+      "kp": "arch.serve.streaming",
+      "type": "single_choice",
+      "question": "在流式响应过程中，服务端中途抛出异常且已经发送了部分数据，正确的处理思路是？",
+      "options": [
+        "直接让连接异常断开即可，无需任何处理",
+        "由于已经发送了响应头，无法再改成 500，应以某种约定格式在流中告知客户端错误并安全结束",
+        "重新从头发送一个 500 响应",
+        "忽略异常继续发送剩余数据"
+      ],
+      "answer": 1,
+      "explanation": "一旦响应头已发出，HTTP 状态码无法再变更；常见做法是在流内发送一个约定好的错误标记/事件，并妥善关闭流，让客户端识别并处理。",
+      "error_tag": "边界错误",
+      "variant_group": "streaming_error_handling"
+    },
+    {
+      "kp": "arch.serve.streaming",
+      "type": "single_choice",
+      "question": "关于客户端断开连接对服务端流式生成的影响，下列说法正确的是？",
+      "options": [
+        "服务端会立即收到通知并应停止继续生成，避免无谓的资源消耗",
+        "客户端断开后服务端仍会完整生成所有数据直到结束",
+        "客户端断开会导致服务进程崩溃",
+        "客户端断开后服务端无法感知，只能等超时"
+      ],
+      "answer": 0,
+      "explanation": "大多数框架能感知连接断开（如捕获写失败或断开事件），此时应停止生成、释放资源；否则会做无用功、浪费 CPU 和上游调用配额。",
+      "error_tag": "边界错误",
+      "variant_group": "streaming_disconnect"
+    },
+    {
+      "kp": "arch.serve.streaming",
+      "type": "single_choice",
+      "question": "在流式响应中启用压缩（如 gzip）时，常见的问题是？",
+      "options": [
+        "压缩会使响应无法分块",
+        "压缩可能引入缓冲，导致数据不能及时刷出，削弱流式的实时性",
+        "压缩会改变 HTTP 状态码",
+        "压缩只能用于 200 响应"
+      ],
+      "answer": 1,
+      "explanation": "压缩实现通常需要攒够一定数据量才输出，从而引入缓冲、延迟刷出，抵消流式的低延迟优势；实时场景常禁用压缩或使用流式友好的压缩配置。",
+      "error_tag": "边界错误",
+      "variant_group": "streaming_compression"
+    },
+    {
+      "kp": "arch.serve.streaming",
+      "type": "single_choice",
+      "question": "服务端在流式响应中为降低延迟，通常需要显式做什么？",
+      "options": [
+        "手动把每次写出的数据立即 flush/刷出，避免中间层缓冲",
+        "把所有数据写完后一次性 flush",
+        "禁用 Nagle 算法即可，无需 flush",
+        "增加响应体长度"
+      ],
+      "answer": 0,
+      "explanation": "中间件、代理和底层 socket 都可能缓冲数据，若不主动 flush，小块数据会被攒着，导致客户端迟迟收不到，实时性丧失。",
+      "error_tag": "记忆缺失",
+      "variant_group": "streaming_flush"
+    }
+  ]
+}

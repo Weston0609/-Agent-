@@ -1,0 +1,630 @@
+{
+  "id": "s1u3l3",
+  "title": "s1u3l3",
+  "kps": [
+    "py.flow.for_range",
+    "py.flow.enumerate"
+  ],
+  "theory": "## py.flow.for_range\n\n# 40 分钟讲义：Python 的 for 循环与 range()\\n\\n> 知识点 ID：`py.flow.for_range`　|　课程：s1u3l3　|　前置：无\\n\\n## 一句话直觉\\n\\n**`for` 循环是 Python 里「把一件事重复做 N 遍」的最标准写法，而 `range()` 是它最常见的搭档——一个负责『反复执行』，一个负责『生成一串整数编号』。**\\n\\n学会了这一对，你就能：遍历列表、按索引访问、生成序列、写累加器、做批量数据处理——这是后面所有算法与 AI 工程代码的语法地基。\\n\\n---\\n\\n## 第 1 节　什么是 for 循环？\\n\\n**`for` 循环（for loop）**：把一段代码块重复执行，每一次从「可迭代对象（iterable）」中取出一个元素。\\n\\n**可迭代对象（iterable）**：能被逐个取元素的东西，比如字符串、列表、元组、`range` 对象。\\n\\nPython 的 `for` 写法是 `for 变量 in 可迭代对象:`，**不需要**手动维护下标。\\n\\n```python\\n# 例 1：按「元素」直接遍历，这是 Python 最地道的写法\\nfruits = [\\\"apple\\\", \\\"banana\\\", \\\"cherry\\\"]\\nfor fruit in fruits:          # 每轮 fruit 依次等于列表里的一个元素\\n    print(fruit)\\n# 输出: apple / banana / cherry\\n\\n# 例 2：遍历字符串（字符串也是可迭代对象）\\nfor ch in \\\"abc\\\":\\n    print(ch)\\n# 输出: a / b / c\\n```\\n\\n**关键结论**：只要对象是 iterable，就能用 `for ... in ...`。这就是 `for` 的通用能力。\\n\\n---\\n\\n## 第 2 节　range()：生成整数序列\\n\\n很多时候我们不是想遍历已存在的数据，而是想「重复 N 次」或者「用 0,1,2,... 做下标」。这时用 **`range()`**。\\n\\n`range()` 返回一个惰性序列（lazy sequence），只有真正迭代时才产生整数，内存开销极小。三种形态：\\n\\n- `range(stop)` → `0, 1, ..., stop-1`\\n- `range(start, stop)` → `start, ..., stop-1`\\n- `range(start, stop, step)` → 按 `step` 步长走\\n\\n```python\\n# range(stop)：0 到 stop-1，不含 stop\\nfor i in range(3):\\n    print(i)            # 0 1 2\\n\\n# range(start, stop)\\nfor i in range(2, 5):\\n    print(i)            # 2 3 4\\n\\n# range(start, stop, step)：步长可为负\\nfor i in range(10, 0, -2):\\n    print(i)            # 10 8 6 4 2\\n\\n# 常用：用 range 生成下标，配合索引访问列表\\nnums = [10, 20, 30]\\nfor i in range(len(nums)):\\n    print(i, nums[i])   # 0 10 / 1 20 / 2 30\\n```\\n\\n**关键结论**：`range` 的区间是**左闭右开**（`start` 取得到，`stop` 取不到），这是 Python 里最统一的约定。\\n\\n---\\n\\n## 第 3 节　for 循环里的三个控制关键字：break / continue / else\\n\\n循环不只有「老老实实跑完」，还有中途干预的语法。\\n\\n- **`break`**：立刻跳出整个循环。\\n- **`continue`**：跳过本轮剩余代码，进入下一轮。\\n- **`for ... else`**：如果循环**没有被 break 中断**，就执行 `else` 块。\\n\\n```python\\n# break：找到 3 就不找了\\nfor i in range(10):\\n    if i == 3:\\n        break\\n    print(i)            # 0 1 2\\n\\n# continue：跳过偶数\\nfor i in range(6):\\n    if i % 2 == 0:\\n        continue\\n    print(i)            # 1 3 5\\n\\n# for...else：没被 break，算作「完整跑完」\\nfor i in range(5):\\n    if i == 100:\\n        print(\\\"found\\\")\\n        break\\nelse:\\n    print(\\\"no break happened\\\")   # 会打印这一行\\n```\\n\\n**关键结论**：`for...else` 不是「否则」，它是「循环正常结束才执行」，常见于「查找不到就报错」的场景。\\n\\n---\\n\\n## 第 4 节　常见组合与惯用法（idiomatic patterns）\\n\\n工程里，`for` + `range` 往往和以下模式一起出现：\\n\\n1. **累加器（accumulator）**：用一个变量把每轮结果累积起来。\\n2. **枚举（enumerate）**：需要下标又需要元素时比 `range(len(...))` 更 Pythonic。\\n3. **嵌套循环（nested loop）**：二维数据、乘法表、矩阵遍历。\\n4. **推导式（comprehension）**：把简单 for 循环压成一行。\\n\\n```python\\n# 1. 累加器：1 到 100 求和\\ntotal = 0\\nfor i in range(1, 101):\\n    total += i\\nprint(total)              # 5050\\n\\n# 2. enumerate：同时拿到下标和元素，比 range(len(...)) 更清晰\\nfor idx, fruit in enumerate([\\\"a\\\", \\\"b\\\", \\\"c\\\"]):\\n    print(idx, fruit)\\n\\n# 3. 嵌套循环：打印 3x3 乘法表片段\\nfor i in range(1, 4):\\n    for j in range(1, 4):\\n        print(i * j, end=\\\" \\\")\\n    print()\\n\\n# 4. 推导式：等价于「建一个 0..4 的平方列表」\\nsquares = [x * x for x in range(5)]\\nprint(squares)            # [0, 1, 4, 9, 16]\\n```\\n\\n**关键结论**：Python 提倡「遍历元素本身」，`range(len(...))` 只有在「真的需要下标」时才用；能用 `enumerate` 或推导式就别硬套 `range`。\\n\\n---\\n\\n## 第 5 节　快速对照与易错点地图\\n\\n| 写法 | 含义 | 提示 |\\n|---|---|---|\\n| `for x in seq:` | 遍历元素 | 最地道 |\\n| `for i in range(n):` | 重复 n 次 / 取 0..n-1 | 不含 n |\\n| `for i in range(a, b):` | a..b-1 | 左闭右开 |\\n| `for i in range(a, b, s):` | 步长 s | s 可为负 |\\n| `break` | 立即退出循环 | 只退最内层 |\\n| `continue` | 跳过本轮 | 剩下的本轮代码不执行 |\\n| `for...else` | 未 break 才走 else | 不是\\\"否则\\\" |\\n\\n---\\n\\n## 动手练习（本地完成）\\n\\n**任务：写一个 FizzBuzz（经典面试题），用本课学的 for + range + 条件控制完成。**\\n\\n要求：\\n1. 用 `for i in range(1, 21):` 遍历 1 到 20。\\n2. 如果是 3 的倍数 → 打印 `Fizz`。\\n3. 如果是 5 的倍数 → 打印 `Buzz`。\\n4. 同时是 3 和 5 的倍数 → 打印 `FizzBuzz`。\\n5. 其余情况打印数字本身。\\n6. **进阶**：写完后用列表推导式改写为一行，把结果存进一个 `result` 列表。\\n\\n参考输出开头：`1, 2, Fizz, 4, Buzz, Fizz, 7, 8, Fizz, Buzz, 11, Fizz, 13, 14, FizzBuzz, ...`\\n\\n> 提示：先处理最特殊的条件（同时被 3 和 5 整除），再处理一般条件，否则会被覆盖。\n\n```python\n# -*- coding: utf-8 -*-\n\"\"\"py.flow.for_range 综合示例：for 循环 + range() 全形态演示。\n\n直接运行本文件即可看到每段输出；可逐段注释验证。\n\"\"\"\n\n# --- 1) 遍历可迭代对象本身（最地道） ---\nfruits = [\"apple\", \"banana\", \"cherry\"]\nfor fruit in fruits:\n    print(\"fruit:\", fruit)\n\n# --- 2) range 三种形态 ---\nfor i in range(3):              # 0,1,2\n    print(\"range(stop):\", i)\nfor i in range(2, 5):           # 2,3,4\n    print(\"range(start, stop):\", i)\nfor i in range(10, 0, -2):      # 10,8,6,4,2\n    print(\"range(step):\", i)\n\n# --- 3) break / continue / else ---\nfor i in range(10):\n    if i == 3:\n        break\n    print(\"before break:\", i)\n\nfor i in range(6):\n    if i % 2 == 0:\n        continue\n    print(\"odd only:\", i)\n\nfor i in range(5):\n    if i == 100:\n        print(\"found\")\n        break\nelse:\n    print(\"no break -> else branch\")\n\n# --- 4) 累加器 + enumerate + 嵌套 + 推导式 ---\ntotal = 0\nfor i in range(1, 101):         # 1..100 求和\n    total += i\nprint(\"sum 1..100 =\", total)\n\nfor idx, fruit in enumerate(fruits):\n    print(\"enumerate:\", idx, fruit)\n\nfor i in range(1, 4):           # 3x3 表\n    for j in range(1, 4):\n        print(i * j, end=\" \")\n    print()\n\nsquares = [x * x for x in range(5)]\nprint(\"squares =\", squares)     # [0, 1, 4, 9, 16]\n\n# --- 5) 练习参考实现：FizzBuzz ---\nfor i in range(1, 21):\n    if i % 15 == 0:\n        print(\"FizzBuzz\")\n    elif i % 3 == 0:\n        print(\"Fizz\")\n    elif i % 5 == 0:\n        print(\"Buzz\")\n    else:\n        print(i)\n```\n\n## py.flow.enumerate\n\n# py.flow.enumerate：让循环同时拿到「第几个」和「是什么」\n\n> **一句话直觉**：当你既想知道「这是第几个元素」，又想知道「这个元素是什么」时，不要再自己维护计数器——`enumerate()`（枚举）一行就够。\n\n---\n\n## 0. 为什么需要 enumerate？\n\n在 Python 里遍历一个列表非常自然：\n\n```python\nfruits = [\"apple\", \"banana\", \"cherry\"]\nfor fruit in fruits:\n    print(fruit)\n```\n\n但很多时候你不仅需要元素，还需要它的**下标（index）**。例如打印带编号的菜单：\n\n```\n1. apple\n2. banana\n3. cherry\n```\n\n零基础时最常见的写法是「自己维护一个计数器」：\n\n```python\nfruits = [\"apple\", \"banana\", \"cherry\"]\ni = 0\nfor fruit in fruits:\n    print(i, fruit)\n    i += 1\n```\n\n能跑，但有两个问题：\n\n1. **啰嗦**：每次循环都要小心维护 `i`，容易忘写 `i += 1` 或写错位置。\n2. **容易出 bug**：一旦循环里有 `continue`、`break`、异常，计数逻辑很容易漏掉或重复。\n\n`enumerate()` 就是为这个场景设计的：它把「可迭代对象（iterable）」包装成一个新的迭代器（iterator），每次产出 `(下标, 元素)` 的二元组（tuple）。\n\n---\n\n## 1. 基本用法：一行拿到下标 + 元素\n\n`enumerate(iterable, start=0)`：\n\n- `iterable`：任何可迭代对象，例如列表、字符串、元组、文件对象等。\n- `start`：索引起始值，默认是 `0`，可以改成 `1` 让它更符合人类习惯。\n\n```python\n# 示例 1：最基础的 enumerate 用法\nfruits = [\"apple\", \"banana\", \"cherry\"]\n\nfor index, fruit in enumerate(fruits):\n    print(index, fruit)\n# 输出：\n# 0 apple\n# 1 banana\n# 2 cherry\n```\n\n上面这行 `for index, fruit in enumerate(fruits):` 体现了 Python 的**元组解包（tuple unpacking）**：每次迭代得到 `(index, fruit)`，直接拆成两个变量。等价于：\n\n```python\nfor pair in enumerate(fruits):\n    index, fruit = pair\n    print(index, fruit)\n```\n\n**关键结论**：`enumerate` 返回的是一个迭代器，每次产出的是 `(index, item)`，所以自然可以用两个变量接收。\n\n---\n\n## 2. 改变起始编号：`start` 参数\n\n很多业务里编号要从 `1` 开始（例如「第 1 名、第 2 名」），不要用 `index + 1` 这类手工偏移，直接用 `start=1`。\n\n```python\n# 示例 2：start 参数，让编号从 1 开始\nfruits = [\"apple\", \"banana\", \"cherry\"]\n\nfor rank, fruit in enumerate(fruits, start=1):\n    print(f\"第 {rank} 名：{fruit}\")\n# 输出：\n# 第 1 名：apple\n# 第 2 名：banana\n# 第 3 名：cherry\n```\n\n`start` 可以是任意整数，甚至是负数：\n\n```python\n# 示例 3：start 为负数\nfor i, ch in enumerate(\"abc\", start=-1):\n    print(i, ch)\n# 输出：\n# -1 a\n# 0 b\n# 1 c\n```\n\n**关键结论**：`start` 只影响编号，不影响遍历顺序和元素本身；它默认是 `0`。\n\n---\n\n## 3. 与常见场景结合：字典、字符串、文件、生成器\n\n`enumerate` 不关心对象是什么类型，只要它是**可迭代的（iterable）**。\n\n```python\n# 示例 4：字符串、字典、生成器都能用\n\n# 4.1 遍历字符串\nfor i, ch in enumerate(\"Py\", start=1):\n    print(i, ch)\n# 输出：\n# 1 P\n# 2 y\n\n# 4.2 遍历字典（默认遍历 key）\nscores = {\"alice\": 90, \"bob\": 85}\nfor i, name in enumerate(scores):\n    print(i, name)\n# 输出：\n# 0 alice\n# 1 bob\n\n# 4.3 遍历生成器表达式（惰性求值）\nsquares = (x * x for x in range(3))\nfor i, sq in enumerate(squares):\n    print(i, sq)\n# 输出：\n# 0 0\n# 1 1\n# 2 4\n```\n\n**关键结论**：`enumerate` 是「迭代器包装器」，几乎可以包装任何可迭代对象；它自身也是惰性的（lazy），不会一次性把所有元素算出来。\n\n---\n\n## 4. 工程级用法：同时拿下标和值做判断、构建索引、行号日志\n\n在真实项目里，`enumerate` 常出现在这些地方：\n\n### 4.1 找到第一个满足条件的元素位置\n\n```python\n# 示例 5：找第一个负数\nnumbers = [3, 5, -1, 7, -2]\nfor i, n in enumerate(numbers):\n    if n < 0:\n        print(f\"第一个负数是 {n}，位置 {i}\")\n        break\n# 输出：第一个负数是 -1，位置 2\n```\n\n### 4.2 构建「值 → 位置」的映射\n\n```python\n# 示例 6：构建索引字典\nwords = [\"a\", \"b\", \"c\"]\npos = {word: i for i, word in enumerate(words)}\nprint(pos)  # {'a': 0, 'b': 1, 'c': 2}\n```\n\n### 4.3 处理文件行号（日志、报错定位）\n\n```python\n# 示例 7：读取文件并带上行号\n# 假设本地有一个 data.txt，内容为三行文本\nwith open(\"data.txt\", \"r\", encoding=\"utf-8\") as f:\n    for line_no, line in enumerate(f, start=1):\n        # line 末尾通常带 \\n，用 rstrip 去掉\n        print(f\"Line {line_no}: {line.rstrip()}\")\n```\n\n**关键结论**：凡是「需要下标 + 元素」的场景，第一反应应该是 `enumerate`，而不是手动维护 `i`。\n\n---\n\n## 5. 什么时候不该用 enumerate？\n\n`enumerate` 不是万能的：\n\n1. **只需要元素时**：直接 `for x in xs:`；加 `enumerate` 是噪音。\n2. **需要同时遍历多个序列时**：用 `zip(a, b)`，或者 `zip` 后再 `enumerate`。\n3. **需要随机访问下标时**：直接用 `xs[i]`，或者用 `range(len(xs))`（但通常不如 `enumerate`）。\n4. **需要「反向带下标」时**：用 `reversed()` 或 `enumerate(reversed(xs))`，不要用 `xs[::-1]` 再 `enumerate`（会复制列表）。\n\n```python\n# 示例 8：把 enumerate 和 zip 组合使用\nnames = [\"alice\", \"bob\"]\nages = [30, 25]\nfor i, (name, age) in enumerate(zip(names, ages), start=1):\n    print(f\"{i}. {name} 年龄 {age}\")\n# 输出：\n# 1. alice 年龄 30\n# 2. bob 年龄 25\n```\n\n**关键结论**：`enumerate` 负责「编号」，`zip` 负责「并行」，两者可以叠加使用。\n\n---\n\n## 6. 工程小贴士\n\n- `enumerate` 返回的迭代器是**一次性**的：遍历完就空了，需要再用请重新 `list(...)` 或重新创建。\n- 变量命名建议用 `i`、`index`、`idx`、`line_no` 这类有意义的名字，而不是 `a`、`b`。\n- `start` 可以是关键字参数，也可以按位置传：`enumerate(xs, 1)` 等价于 `enumerate(xs, start=1)`。\n- 与列表推导（list comprehension）结合时非常自然：`[f(i, x) for i, x in enumerate(xs)]`。\n\n---\n\n## 7. 动手练习\n\n**任务：写一个「日志行号 + 关键词定位」小脚本。**\n\n要求：\n\n1. 在本地创建一个文件 `access.log`，写入若干行日志，例如：\n   ```\n   INFO  user=alice action=login\n   WARN  user=bob action=retry\n   ERROR user=alice action=checkout\n   INFO  user=carol action=login\n   ```\n2. 写一个 Python 脚本 `scan_log.py`，用 `enumerate` 读取文件并：\n   - 打印每一行的行号（从 1 开始）和内容（去掉末尾换行）。\n   - 如果该行包含 `ERROR`，额外打印一行 `  --> 第 N 行出现 ERROR`。\n3. 最后统计并打印：包含 `ERROR` 的行一共有多少行、分别是哪些行号。\n\n参考输出示例：\n\n```\nLine 1: INFO  user=alice action=login\nLine 2: WARN  user=bob action=retry\nLine 3: ERROR user=alice action=checkout\n  --> 第 3 行出现 ERROR\nLine 4: INFO  user=carol action=login\n\n共发现 1 行 ERROR，行号：3\n```\n\n提示：使用 `with open(..., encoding=\"utf-8\") as f:` 和 `for line_no, line in enumerate(f, start=1):`。\n\n完成后，把 `enumerate` 换成手动维护 `i` 的写法对比一下，感受为什么 `enumerate` 更安全、更清晰。\n\n```python\n# 可直接运行：演示 enumerate 的核心用法\nfruits = [\"apple\", \"banana\", \"cherry\"]\n\n# 1) 默认从 0 开始\nfor i, fruit in enumerate(fruits):\n    print(i, fruit)\n\nprint(\"---\")\n\n# 2) start=1 更符合人类编号习惯\nfor rank, fruit in enumerate(fruits, start=1):\n    print(f\"第 {rank} 名：{fruit}\")\n\nprint(\"---\")\n\n# 3) 与条件判断组合：找第一个负数\nnumbers = [3, 5, -1, 7, -2]\nfor i, n in enumerate(numbers):\n    if n < 0:\n        print(f\"第一个负数是 {n}，位置 {i}\")\n        break\n\nprint(\"---\")\n\n# 4) 与字典推导组合：值 -> 位置\nwords = [\"a\", \"b\", \"c\"]\npos = {word: i for i, word in enumerate(words)}\nprint(pos)\n```\n",
+  "quiz": [
+    {
+      "kp": "py.flow.for_range",
+      "type": "single_choice",
+      "question": "执行以下代码后，输出结果是什么？\nfor i in range(3):\n    print(i)",
+      "options": [
+        "0 1 2",
+        "1 2 3",
+        "0 1 2 3",
+        "1 2 3 4"
+      ],
+      "answer": 0,
+      "explanation": "range(3) 生成 0、1、2，共 3 个数，因此循环体执行 3 次，依次打印 0、1、2。",
+      "error_tag": "range边界理解错误",
+      "variant_group": "for_range_basic"
+    },
+    {
+      "kp": "py.flow.for_range",
+      "type": "single_choice",
+      "question": "以下代码会打印几个数字？\nfor i in range(1, 5):\n    print(i)",
+      "options": [
+        "3 个",
+        "4 个",
+        "5 个",
+        "1 个"
+      ],
+      "answer": 1,
+      "explanation": "range(1, 5) 从 1 开始、到 5 之前结束，包含 1、2、3、4，共 4 个。",
+      "error_tag": "range边界理解错误",
+      "variant_group": "for_range_basic"
+    },
+    {
+      "kp": "py.flow.for_range",
+      "type": "single_choice",
+      "question": "以下代码的输出是？\nfor c in range(ord('a'), ord('a') + 3):\n    print(chr(c), end='')",
+      "options": [
+        "abc",
+        "bcd",
+        "abcd",
+        "cde"
+      ],
+      "answer": 0,
+      "explanation": "range 从 ord('a') 开始，连续三个整数对应 'a'、'b'、'c'。",
+      "error_tag": "range与字符转换综合错误",
+      "variant_group": "for_range_misc"
+    },
+    {
+      "kp": "py.flow.for_range",
+      "type": "single_choice",
+      "question": "以下代码打印的最后一个数字是？\nfor i in range(10, 0, -2):\n    print(i)",
+      "options": [
+        "2",
+        "0",
+        "1",
+        "10"
+      ],
+      "answer": 0,
+      "explanation": "从 10 开始以步长 -2 递减：10、8、6、4、2；再减 2 得 0，已不在范围内，故最后一个为 2。",
+      "error_tag": "负数步长终止条件误解",
+      "variant_group": "for_range_step"
+    },
+    {
+      "kp": "py.flow.for_range",
+      "type": "single_choice",
+      "question": "以下代码的输出是？\nnums = []\nfor i in range(3):\n    nums.append(i * 2)\nprint(nums)",
+      "options": [
+        "[0, 2, 4]",
+        "[2, 4, 6]",
+        "[0, 1, 2]",
+        "[0, 2, 4, 6]"
+      ],
+      "answer": 0,
+      "explanation": "i 为 0、1、2，i*2 得到 0、2、4，依次加入列表，结果为 [0, 2, 4]。",
+      "error_tag": "循环累计结果错误",
+      "variant_group": "for_range_calc"
+    },
+    {
+      "kp": "py.flow.for_range",
+      "type": "single_choice",
+      "question": "以下嵌套循环共打印多少个 '*'？\nfor i in range(2):\n    for j in range(3):\n        print('*', end='')",
+      "options": [
+        "6 个",
+        "5 个",
+        "8 个",
+        "9 个"
+      ],
+      "answer": 0,
+      "explanation": "外层执行 2 次，内层每次执行 3 次，共 2×3=6 次打印。",
+      "error_tag": "嵌套循环次数计算错误",
+      "variant_group": "for_range_nested"
+    },
+    {
+      "kp": "py.flow.for_range",
+      "type": "single_choice",
+      "question": "以下代码的输出是？\nfor i in range(4):\n    if i % 2 == 0:\n        print(i, end=' ')\n    else:\n        print('-', end=' ')",
+      "options": [
+        "0 - 2 -",
+        "0 1 2 3",
+        "0 2",
+        "- - - -"
+      ],
+      "answer": 0,
+      "explanation": "i 为 0、2 时打印数字，i 为 1、3 时打印 '-'，所以是 0 - 2 -。",
+      "error_tag": "条件分支与循环结合错误",
+      "variant_group": "for_range_control"
+    },
+    {
+      "kp": "py.flow.for_range",
+      "type": "single_choice",
+      "question": "以下代码的输出是？\nfor i in range(1, 6, 2):\n    print(i, end=' ')",
+      "options": [
+        "1 3 5",
+        "1 2 3 4 5",
+        "2 4 6",
+        "1 4"
+      ],
+      "answer": 0,
+      "explanation": "从 1 开始步长为 2：1、3、5；下一个 7 超出范围，故输出 1 3 5。",
+      "error_tag": "步长含义理解错误",
+      "variant_group": "for_range_step"
+    },
+    {
+      "kp": "py.flow.for_range",
+      "type": "single_choice",
+      "question": "关于 range(0, 10)，下列说法正确的是？",
+      "options": [
+        "包含 0 到 9 共 10 个整数",
+        "包含 0 到 10 共 11 个整数",
+        "包含 1 到 9 共 9 个整数",
+        "包含 0 到 9 共 9 个整数"
+      ],
+      "answer": 0,
+      "explanation": "range(0, 10) 从 0 到 10 之前（不含 10），共 10 个整数 0~9。",
+      "error_tag": "range边界理解错误",
+      "variant_group": "for_range_basic"
+    },
+    {
+      "kp": "py.flow.for_range",
+      "type": "single_choice",
+      "question": "以下代码会导致什么结果？\nfor i in range(3):\nprint(i)",
+      "options": [
+        "抛出 IndentationError",
+        "正常打印 0 1 2",
+        "只打印 0",
+        "无限循环"
+      ],
+      "answer": 0,
+      "explanation": "Python 通过缩进确定循环体，print 未缩进会引发 IndentationError。",
+      "error_tag": "缩进语法错误",
+      "variant_group": "for_range_syntax"
+    },
+    {
+      "kp": "py.flow.for_range",
+      "type": "single_choice",
+      "question": "以下代码输出是？\nfor i in range(3, 0, -1):\n    print(i, end=' ')\nprint('Go')",
+      "options": [
+        "3 2 1 Go",
+        "3 2 1 0 Go",
+        "1 2 3 Go",
+        "Go 3 2 1"
+      ],
+      "answer": 0,
+      "explanation": "range(3, 0, -1) 得到 3、2、1，循环结束后打印 Go，所以是 3 2 1 Go。",
+      "error_tag": "负数步长与后续语句误判",
+      "variant_group": "for_range_step"
+    },
+    {
+      "kp": "py.flow.for_range",
+      "type": "single_choice",
+      "question": "以下代码中，循环体一共执行多少次？\ncount = 0\nfor i in range(2, 20, 5):\n    count += 1\nprint(count)",
+      "options": [
+        "4",
+        "3",
+        "5",
+        "6"
+      ],
+      "answer": 0,
+      "explanation": "从 2 开始步长 5：2、7、12、17；再加 5 得 22 超出范围，共 4 次。",
+      "error_tag": "循环次数计算错误",
+      "variant_group": "for_range_count"
+    },
+    {
+      "kp": "py.flow.for_range",
+      "type": "single_choice",
+      "question": "以下代码的输出是？\nfor i in range(2, 10, 3):\n    print(i)",
+      "options": [
+        "2 5 8",
+        "2 4 6 8",
+        "3 6 9",
+        "2 5 8 11"
+      ],
+      "answer": 0,
+      "explanation": "起始为 2，步长为 3，依次得到 2、5、8；再加 3 得 11，已超过 10（不含），停止。",
+      "error_tag": "步长含义理解错误",
+      "variant_group": "for_range_step"
+    },
+    {
+      "kp": "py.flow.for_range",
+      "type": "single_choice",
+      "question": "以下代码的输出是？\nfor i in range(3):\n    for j in range(i):\n        print(j, end='')\n    print('|', end='')",
+      "options": [
+        "||0|01|",
+        "|0|01|",
+        "0|01|2|",
+        "|||"
+      ],
+      "answer": 0,
+      "explanation": "i=0 时内层不执行，打印 '|'；i=1 时打印 0，再打印 '|'；i=2 时打印 01，再打印 '|'，合并为 ||0|01|。",
+      "error_tag": "嵌套循环边界错误",
+      "variant_group": "for_range_nested"
+    },
+    {
+      "kp": "py.flow.for_range",
+      "type": "single_choice",
+      "question": "想要依次打印 5、4、3、2、1，下列哪个 range 写法正确？",
+      "options": [
+        "range(5, 0, -1)",
+        "range(1, 5)",
+        "range(5, 0)",
+        "range(0, 5, -1)"
+      ],
+      "answer": 0,
+      "explanation": "range(start, stop, step) 若要递减必须给负步长；range(5, 0, -1) 得到 5、4、3、2、1。",
+      "error_tag": "负数步长用法错误",
+      "variant_group": "for_range_step"
+    },
+    {
+      "kp": "py.flow.for_range",
+      "type": "single_choice",
+      "question": "以下代码输出多少个 'A'？\nfor i in range(0):\n    print('A')",
+      "options": [
+        "0 个",
+        "1 个",
+        "2 个",
+        "会报错"
+      ],
+      "answer": 0,
+      "explanation": "range(0) 是空序列，循环体一次都不会执行。",
+      "error_tag": "空range理解错误",
+      "variant_group": "for_range_basic"
+    },
+    {
+      "kp": "py.flow.for_range",
+      "type": "single_choice",
+      "question": "执行以下代码后，i 最后的值是多少？\nfor i in range(4):\n    pass",
+      "options": [
+        "3",
+        "4",
+        "0",
+        "未定义"
+      ],
+      "answer": 0,
+      "explanation": "range(4) 遍历 0、1、2、3，循环结束后 i 保留最后一次迭代的值 3。",
+      "error_tag": "循环变量终值误解",
+      "variant_group": "for_range_basic"
+    },
+    {
+      "kp": "py.flow.for_range",
+      "type": "single_choice",
+      "question": "以下代码的打印结果是？\nfor i in range(3):\n    if i == 1:\n        continue\n    print(i)",
+      "options": [
+        "0 2",
+        "0 1 2",
+        "1",
+        "什么也不打印"
+      ],
+      "answer": 0,
+      "explanation": "i 为 1 时执行 continue 跳过本次打印，因此只打印 0 和 2。",
+      "error_tag": "continue作用误解",
+      "variant_group": "for_range_control"
+    },
+    {
+      "kp": "py.flow.for_range",
+      "type": "single_choice",
+      "question": "以下代码的输出是？\nfor i in range(5):\n    if i == 3:\n        break\n    print(i)",
+      "options": [
+        "0 1 2",
+        "0 1 2 3",
+        "0 1 2 3 4",
+        "3 4"
+      ],
+      "answer": 0,
+      "explanation": "i 等于 3 时 break 立即终止整个循环，因此只打印 0、1、2。",
+      "error_tag": "break作用误解",
+      "variant_group": "for_range_control"
+    },
+    {
+      "kp": "py.flow.for_range",
+      "type": "single_choice",
+      "question": "以下代码的输出是？\nfor i in range(1, 4):\n    print(i * i)",
+      "options": [
+        "1 4 9",
+        "1 2 3",
+        "2 4 6",
+        "1 4 9 16"
+      ],
+      "answer": 0,
+      "explanation": "i 依次为 1、2、3，打印它们的平方：1、4、9。",
+      "error_tag": "循环体计算错误",
+      "variant_group": "for_range_calc"
+    },
+    {
+      "kp": "py.flow.for_range",
+      "type": "single_choice",
+      "question": "要计算 1 到 10 的数字之和，以下代码横线处应填？\ntotal = 0\nfor i in range(____):\n    total += i",
+      "options": [
+        "1, 11",
+        "1, 10",
+        "0, 10",
+        "10"
+      ],
+      "answer": 0,
+      "explanation": "要包括 1 到 10，需 range(1, 11)，stop 为 11 时才能取到 10。",
+      "error_tag": "range边界理解错误",
+      "variant_group": "for_range_sum"
+    },
+    {
+      "kp": "py.flow.enumerate",
+      "type": "single_choice",
+      "question": "阅读下面的代码，输出结果是什么？\n\nfor i, ch in enumerate('abc'):\n    print(i, ch)",
+      "options": [
+        "0 a\\n1 b\\n2 c",
+        "1 a\\n2 b\\n3 c",
+        "a 0\\nb 1\\nc 2",
+        "0 a\\n0 b\\n0 c"
+      ],
+      "answer": 0,
+      "explanation": "enumerate 默认从 0 开始计数，依次返回 (索引, 元素) 元组，解包为 i 和 ch，因此输出索引从 0 开始。",
+      "error_tag": "概念混淆",
+      "variant_group": "enumerate默认起始值"
+    },
+    {
+      "kp": "py.flow.enumerate",
+      "type": "single_choice",
+      "question": "下面代码的输出是什么？\n\nfor i, ch in enumerate('abc', start=1):\n    print(i, ch)",
+      "options": [
+        "0 a\\n1 b\\n2 c",
+        "1 a\\n2 b\\n3 c",
+        "1 a\\n1 b\\n1 c",
+        "报错，因为第二个位置参数不能直接传整数"
+      ],
+      "answer": 1,
+      "explanation": "enumerate 的第二个参数是起始值，start=1 表示计数从 1 开始，因此输出 1 a、2 b、3 c。该参数可以位置传参也可关键字传参。",
+      "error_tag": "记忆缺失",
+      "variant_group": "enumerate默认起始值"
+    },
+    {
+      "kp": "py.flow.enumerate",
+      "type": "multi_choice",
+      "question": "下面哪些说法关于 enumerate 是正确的？（多选）",
+      "options": [
+        "enumerate 是内置函数，不需要 import",
+        "enumerate 返回的是迭代器，可以传给 list() 转成列表",
+        "enumerate 的第二个参数用于指定起始计数",
+        "enumerate 会修改原可迭代对象"
+      ],
+      "answer": [
+        0,
+        1,
+        2
+      ],
+      "explanation": "enumerate 是内置函数无需导入，返回迭代器，可指定起始值。它不会修改原对象，只是遍历。",
+      "error_tag": "概念混淆",
+      "variant_group": "enumerate基本性质"
+    },
+    {
+      "kp": "py.flow.enumerate",
+      "type": "multi_choice",
+      "question": "关于下面代码，哪些描述正确？（多选）\n\npairs = list(enumerate(['a', 'b'], 10))",
+      "options": [
+        "pairs 的值是 [(10, 'a'), (11, 'b')]",
+        "pairs 的值是 [(0, 'a'), (1, 'b')]",
+        "起始计数被设为 10",
+        "pairs 是一个迭代器，可以反复遍历"
+      ],
+      "answer": [
+        0,
+        2
+      ],
+      "explanation": "start=10 使计数从 10 开始，因此得到 [(10,'a'),(11,'b')]。list() 转换后 pairs 是列表而非迭代器，可反复遍历。",
+      "error_tag": "边界错误",
+      "variant_group": "enumerate默认起始值"
+    },
+    {
+      "kp": "py.flow.enumerate",
+      "type": "multi_choice",
+      "question": "在哪些场景下使用 enumerate 是合适的？（多选）",
+      "options": [
+        "需要在遍历列表的同时获知每个元素的下标",
+        "需要在遍历字符串时找出某个字符出现的所有位置",
+        "想对两个等长列表做元素级配对遍历",
+        "想按索引修改列表中的元素并需要知道当前索引"
+      ],
+      "answer": [
+        0,
+        1,
+        3
+      ],
+      "explanation": "enumerate 适用于需要索引与元素的场景（查找位置、按索引修改等）。两列表元素级配对是 zip 的典型用途，不是 enumerate 的强项。",
+      "error_tag": "概念混淆",
+      "variant_group": "enumerate适用场景"
+    },
+    {
+      "kp": "py.flow.enumerate",
+      "type": "multi_choice",
+      "question": "关于 enumerate 与迭代器的一次性特征，下列说法正确的有？（多选）",
+      "options": [
+        "对同一个 enumerate 对象重复 for 循环，第二次不会产出元素",
+        "如果想多次使用，应先转成 list 保存",
+        "enumerate 每次 for 都会自动重置，可以无限次复用",
+        "迭代器被耗尽后再调用 next() 会抛 StopIteration"
+      ],
+      "answer": [
+        0,
+        1,
+        3
+      ],
+      "explanation": "enumerate 返回的迭代器只能消费一次，耗尽后再遍历得到空，耗尽后 next() 抛 StopIteration。需要复用时应转 list。",
+      "error_tag": "边界错误",
+      "variant_group": "enumerate返回类型"
+    },
+    {
+      "kp": "py.flow.enumerate",
+      "type": "fill_blank",
+      "question": "补全代码，使其在遍历 nums 时同时得到索引 i 和元素 v：\n\nfor i, v in ____(nums):\n    print(i, v)",
+      "options": [],
+      "answer": [
+        "enumerate",
+        "enumerate "
+      ],
+      "explanation": "enumerate 正是同时产出索引和元素的函数，填入 enumerate 即可完成解包。",
+      "error_tag": "记忆缺失",
+      "variant_group": "enumerate基本用法"
+    },
+    {
+      "kp": "py.flow.enumerate",
+      "type": "fill_blank",
+      "question": "下面代码希望索引从 100 开始，请补全缺失的关键字参数名：\n\nfor i, v in enumerate(seq, ____=100):\n    print(i, v)",
+      "options": [],
+      "answer": [
+        "start"
+      ],
+      "explanation": "enumerate 的起始计数参数名为 start，写成 start=100 即从 100 开始计数。",
+      "error_tag": "记忆缺失",
+      "variant_group": "enumerate默认起始值"
+    },
+    {
+      "kp": "py.flow.enumerate",
+      "type": "code_reading",
+      "question": "阅读代码，写出运行输出：\n\nwords = ['a', 'bb', 'ccc']\nfor i, w in enumerate(words, 1):\n    print(f'{i}:{w}')",
+      "options": [],
+      "answer": "1:a\n2:bb\n3:ccc",
+      "explanation": "start=1 使计数从 1 开始，配合 f-string 输出 i:w，得到 1:a、2:bb、3:ccc。",
+      "error_tag": "边界错误",
+      "variant_group": "enumerate默认起始值"
+    },
+    {
+      "kp": "py.flow.enumerate",
+      "type": "code_reading",
+      "question": "阅读代码，写出运行输出：\n\nd = {'x': 1, 'y': 2}\nfor i, k in enumerate(d):\n    print(i, k)",
+      "options": [],
+      "answer": "0 x\n1 y",
+      "explanation": "遍历字典默认迭代键，enumerate 因此产出 (索引, 键)。输出 0 x 和 1 y，值是键而不是值，也不是键值对。",
+      "error_tag": "概念混淆",
+      "variant_group": "enumerate适用范围"
+    },
+    {
+      "kp": "py.flow.enumerate",
+      "type": "scenario",
+      "question": "工程场景：你在维护一个函数，需要遍历一个可能很长的生成器，找出所有值等于目标值的下标，并在找到后立即返回第一个匹配下标。有同事建议先写 `pairs = list(enumerate(gen))` 再查找。请说明这种做法是否合适，并给出更合适的写法思路。",
+      "options": [],
+      "answer": null,
+      "explanation": "把 enumerate 包在生成器上再 list() 会一次性把所有元素读入内存，对大生成器不友好。更好的做法是直接在 for 循环里使用 enumerate，惰性遍历，找到即可 break 返回，不用构建完整列表。",
+      "error_tag": "概念混淆",
+      "variant_group": "enumerate与生成器",
+      "required_keywords": [
+        "惰性遍历",
+        "生成器",
+        "enumerate",
+        "break",
+        "内存"
+      ]
+    },
+    {
+      "kp": "py.flow.enumerate",
+      "type": "scenario",
+      "question": "工程场景：一段代码先执行 `it = enumerate(data)`，随后在调试中多次用 `for i, x in it:` 打印内容，发现第二次循环什么都不输出。请解释原因并给出一种修复方式。",
+      "options": [],
+      "answer": null,
+      "explanation": "enumerate 返回一次性的迭代器，第一次 for 后即被耗尽，再遍历得到空。若需要多处遍历，可先 `pairs = list(enumerate(data))` 保存，或每次需要时重新调用 enumerate(data)。",
+      "error_tag": "边界错误",
+      "variant_group": "enumerate返回类型",
+      "required_keywords": [
+        "迭代器",
+        "耗尽",
+        "一次性",
+        "list",
+        "enumerate"
+      ]
+    },
+    {
+      "kp": "py.flow.enumerate",
+      "type": "single_choice",
+      "question": "关于 enumerate 的返回值，下列说法正确的是？",
+      "options": [
+        "它返回一个列表，元素是 (索引, 元素) 元组",
+        "它返回一个迭代器，每次产出 (索引, 元素) 元组",
+        "它返回一个字典，键是索引、值是元素",
+        "它返回一个字符串，内容是索引和元素拼接"
+      ],
+      "answer": 1,
+      "explanation": "enumerate 返回的是一个惰性迭代器对象，每次迭代产出一个 (索引, 元素) 元组，而不是列表或字典，因此不能直接下标访问。",
+      "error_tag": "概念混淆",
+      "variant_group": "enumerate返回类型"
+    },
+    {
+      "kp": "py.flow.enumerate",
+      "type": "single_choice",
+      "question": "下面代码的输出是什么？\n\nitems = ['x', 'y']\ne = enumerate(items)\nprint(list(e))\nprint(list(e))",
+      "options": [
+        "[(0, 'x'), (1, 'y')] 然后 [(0, 'x'), (1, 'y')]",
+        "[(0, 'x'), (1, 'y')] 然后 []",
+        "[] 然后 [(0, 'x'), (1, 'y')]",
+        "两次都报错，因为 enumerate 不能转 list"
+      ],
+      "answer": 1,
+      "explanation": "enumerate 返回迭代器，迭代器只能被消费一次。第一次 list() 耗尽后，第二次再转就得到空列表。",
+      "error_tag": "边界错误",
+      "variant_group": "enumerate返回类型"
+    },
+    {
+      "kp": "py.flow.enumerate",
+      "type": "single_choice",
+      "question": "下面哪种写法最能正确地在遍历时同时得到位置和元素，且符合 Python 惯用法？",
+      "options": [
+        "for i in range(len(seq)):\n    print(i, seq[i])",
+        "for i, item in enumerate(seq):\n    print(i, item)",
+        "i = 0\nfor item in seq:\n    print(i, item)\n    i += 1",
+        "for item, i in enumerate(seq):\n    print(i, item)"
+      ],
+      "answer": 1,
+      "explanation": "enumerate 直接产出 (索引, 元素)，是同时拿索引和元素的惯用写法。选项 0 虽能工作但更啰嗦；选项 2 容易忘记自增；选项 3 解包顺序反了，i 实际是元素。",
+      "error_tag": "概念混淆",
+      "variant_group": "遍历获取索引的惯用法"
+    },
+    {
+      "kp": "py.flow.enumerate",
+      "type": "single_choice",
+      "question": "下面代码的输出是什么？\n\nfor i, v in enumerate('ab'):\n    pass\nprint(i, v)",
+      "options": [
+        "1 b",
+        "0 a",
+        "报错，i 和 v 在循环外不可见",
+        "None None"
+      ],
+      "answer": 0,
+      "explanation": "Python 的 for 循环变量在循环结束后仍然保留最后一次迭代的值，所以 i 是 1、v 是 'b'。",
+      "error_tag": "概念混淆",
+      "variant_group": "循环变量作用域"
+    },
+    {
+      "kp": "py.flow.enumerate",
+      "type": "single_choice",
+      "question": "关于 enumerate 与 zip、range 的关系，下列说法正确的是？",
+      "options": [
+        "enumerate 只能用于列表，不能用于字符串或字典",
+        "enumerate 可以作用于任何可迭代对象，包括字符串、列表、生成器",
+        "enumerate 遍历字典时会自动把键值对作为元素返回",
+        "enumerate 必须配合 len() 使用才能得到索引"
+      ],
+      "answer": 1,
+      "explanation": "enumerate 接受任意可迭代对象。遍历字典时，迭代的是键（默认行为），元素是键而不是键值对；它不需要 len()。",
+      "error_tag": "概念混淆",
+      "variant_group": "enumerate适用范围"
+    },
+    {
+      "kp": "py.flow.enumerate",
+      "type": "single_choice",
+      "question": "下面代码的输出是什么？\n\nresult = [i for i, c in enumerate('hello') if c == 'l']\nprint(result)",
+      "options": [
+        "[2, 3]",
+        "[1, 2]",
+        "['l', 'l']",
+        "[2, 3, 4]"
+      ],
+      "answer": 0,
+      "explanation": "字符串 'hello' 中字符 'l' 出现在索引 2 和 3，列表推导式配合 enumerate 收集满足条件的索引。",
+      "error_tag": "边界错误",
+      "variant_group": "enumerate配合推导式"
+    },
+    {
+      "kp": "py.flow.enumerate",
+      "type": "single_choice",
+      "question": "下面代码的输出是什么？\n\nfor i, (a, b) in enumerate([(1, 2), (3, 4)]):\n    print(i, a, b)",
+      "options": [
+        "0 1 2\\n1 3 4",
+        "1 1 2\\n2 3 4",
+        "0 (1, 2)\\n1 (3, 4)",
+        "报错，不能同时解包两层"
+      ],
+      "answer": 0,
+      "explanation": "enumerate 产出 (索引, (a, b))，外层解包得到索引和元组，再对元组二次解包得到 a、b，输出 0 1 2 和 1 3 4。",
+      "error_tag": "概念混淆",
+      "variant_group": "enumerate嵌套解包"
+    },
+    {
+      "kp": "py.flow.enumerate",
+      "type": "single_choice",
+      "question": "关于 enumerate 的 start 参数，下面说法错误的是？",
+      "options": [
+        "start 可以是负数，如 enumerate(seq, start=-1)",
+        "start 只能是 0 或 1",
+        "start 可以是任意整数",
+        "start 可以省略，默认为 0"
+      ],
+      "answer": 1,
+      "explanation": "start 可以是任意整数（含负数），并非只能是 0 或 1。因此‘只能是 0 或 1’这一说法错误。",
+      "error_tag": "记忆缺失",
+      "variant_group": "enumerate默认起始值"
+    }
+  ]
+}

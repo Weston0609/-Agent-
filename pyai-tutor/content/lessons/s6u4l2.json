@@ -1,0 +1,638 @@
+{
+  "id": "s6u4l2",
+  "title": "s6u4l2",
+  "kps": [
+    "ai.embed.bge_m3",
+    "ai.embed.reranker"
+  ],
+  "theory": "## ai.embed.bge_m3\n\n# 40 分钟教学讲义：`ai.embed.bge_m3`\n\n## 一句话直觉\n**BGE-M3 是一个可以把文本变成“语义向量”（embedding）的多语言、多功能模型；学会它，你就能做搜索、聚类、去重、推荐和 RAG（Retrieval-Augmented Generation，检索增强生成）。**\n\n---\n\n## 第 1 节：什么是 Embedding？为什么 BGE-M3 值得学\n\n### 1.1 从“字面匹配”到“语义匹配”\n传统搜索依赖关键词是否出现。问题是：用户搜“如何缓解焦虑”，文章写“减轻紧张情绪的方法”，两者字面不同，但语义接近。\n\n**Embedding（嵌入）** 把一段文本映射成一个固定长度的浮点数向量，例如 1024 维。语义相近的文本，在向量空间里距离更近。\n\n### 1.2 BGE-M3 的三个关键词\n- **BGE**：BAAI General Embedding，北京智源研究院推出的通用嵌入模型系列。\n- **M3**：Multi-Lingual（多语言）、Multi-Granularity（多粒度，支持短句到长文）、Multi-Functionality（多功能，同时支持稠密检索、稀疏检索、多向量检索）。\n- **常用场景**：语义搜索、RAG 召回、文本聚类、去重、分类特征、推荐召回。\n\n### 1.3 为什么它是很好的起点\n- 支持 100+ 语言，中英文效果都强。\n- 最大输入长度通常为 8192 tokens，适合长文档。\n- 输出 1024 维向量，工程上容易存储和检索。\n- 开源，可本地部署，也可通过 API 调用。\n\n---\n\n## 第 2 节：BGE-M3 的输出是什么？稠密、稀疏、多向量\n\nBGE-M3 的“多功能”体现在它不只是一个向量：\n\n1. **Dense Embedding（稠密向量）**\n   - 每个文本变成一个 1024 维向量。\n   - 用余弦相似度（Cosine Similarity）比较。\n   - 适合语义召回。\n\n2. **Sparse Embedding（稀疏向量）**\n   - 类似 BM25 的词权重表示，强调关键词匹配。\n   - 适合精确术语、专有名词召回。\n\n3. **ColBERT-style Multi-Vector（多向量）**\n   - 每个 token 保留一个向量，做 late interaction（后交互）匹配。\n   - 精度高，但存储和计算更贵。\n\n工程上最常见的是：**先用稠密向量做召回，再用稀疏或多向量做重排**。\n\n---\n\n## 第 3 节：最小可运行示例：把文本变成向量\n\n下面代码使用 `sentence-transformers` 加载 BGE-M3。首次运行会下载模型，请确保网络可用。\n\n```python\n# 安装依赖：\n# pip install -U sentence-transformers numpy\n\nfrom sentence_transformers import SentenceTransformer\nimport numpy as np\n\n# 1. 加载 BGE-M3 模型\n# 模型名称：BAAI/bge-m3\nmodel = SentenceTransformer(\"BAAI/bge-m3\")\n\n# 2. 准备文本\nsentences = [\n    \"如何缓解焦虑情绪\",\n    \"减轻紧张和压力的方法\",\n    \"今天天气很好，适合跑步\",\n]\n\n# 3. 生成稠密向量\n# normalize_embeddings=True 让向量长度为 1，后续可直接点积算余弦相似度\nembeddings = model.encode(sentences, normalize_embeddings=True)\n\nprint(\"向量形状:\", embeddings.shape)  # (3, 1024)\n\n# 4. 计算两两余弦相似度\nsim_matrix = embeddings @ embeddings.T\nprint(\"相似度矩阵:\\n\", np.round(sim_matrix, 4))\n\n# 预期：第 1 句和第 2 句相似度高，和第 3 句相似度低\n```\n\n### 关键结论\n- `encode` 返回的是 `numpy.ndarray` 或 `torch.Tensor`，形状为 `(文本数, 向量维度)`。\n- 设置 `normalize_embeddings=True` 后，余弦相似度就等于点积。\n- 相似度越接近 1，语义越接近。\n\n---\n\n## 第 4 节：工程级用法：批量编码、长文本与检索\n\n### 4.1 批量编码与 GPU\n真实系统里文本很多，必须批量处理。\n\n```python\nfrom sentence_transformers import SentenceTransformer\n\nmodel = SentenceTransformer(\"BAAI/bge-m3\", device=\"cuda\")  # 没有 GPU 就删掉 device\n\ntexts = [f\"这是第 {i} 条测试文本，用于演示批量编码。\" for i in range(1000)]\n\n# batch_size 控制显存占用；show_progress_bar 方便观察进度\nembeddings = model.encode(\n    texts,\n    batch_size=32,\n    normalize_embeddings=True,\n    show_progress_bar=True,\n)\n\nprint(embeddings.shape)  # (1000, 1024)\n```\n\n### 4.2 长文本处理\nBGE-M3 最大长度通常为 8192 tokens，但过长文本会：\n- 增加显存/内存。\n- 稀释语义，导致检索不精准。\n\n常见策略：\n- **切块（chunking）**：按段落或固定长度切分，分别编码。\n- **聚合**：对 chunk 向量取平均，或保留多个 chunk 向量分别检索。\n\n```python\n# 简单按长度切块示例\ndef chunk_text(text: str, chunk_size: int = 500, overlap: int = 50):\n    chunks = []\n    start = 0\n    while start < len(text):\n        end = start + chunk_size\n        chunks.append(text[start:end])\n        start = end - overlap\n    return chunks\n\nlong_doc = \"这是一篇很长的文档。\" * 300\nchunks = chunk_text(long_doc)\nchunk_embs = model.encode(chunks, normalize_embeddings=True, batch_size=16)\nprint(len(chunks), chunk_embs.shape)\n```\n\n### 4.3 一个最小语义检索流程\n```python\nfrom sentence_transformers import SentenceTransformer\nimport numpy as np\n\nmodel = SentenceTransformer(\"BAAI/bge-m3\")\n\n# 文档库\ndocs = [\n    \"Python 是一种解释型、面向对象的编程语言。\",\n    \"BGE-M3 支持多语言文本嵌入。\",\n    \"今天股市大涨，科技板块领涨。\",\n]\ndoc_embs = model.encode(docs, normalize_embeddings=True)\n\n# 查询\nquery = \"多语言向量模型\"\nq_emb = model.encode(query, normalize_embeddings=True)\n\n# 余弦相似度排序\nscores = doc_embs @ q_emb\nrank = np.argsort(-scores)\n\nfor i in rank:\n    print(f\"分数={scores[i]:.4f}  文档={docs[i]}\")\n```\n\n---\n\n## 第 5 节：常见工程选择与注意事项\n\n| 问题 | 建议 |\n|---|---|\n| 用哪种向量？ | 一般先用 dense；关键词强的场景加 sparse；精度要求高再加 multi-vector。 |\n| 是否归一化？ | 用余弦相似度时建议 `normalize_embeddings=True`。 |\n| 维度太高？ | 可以用 PCA、UMAP 或 Matryoshka 思路降维，但会损失精度。 |\n| 中文任务？ | BGE-M3 中文效果通常优于多数通用模型。 |\n| 存储？ | 100 万条 1024 维 float32 约 4GB，可用 FAISS、Milvus、Qdrant 等向量库。 |\n| 模型下载慢？ | 可配置 Hugging Face 镜像或提前下载到本地。 |\n\n---\n\n## 动手练习\n\n**任务：做一个“本地语义搜索小工具”**\n\n1. 准备 10 条你自己感兴趣的句子，保存为 `docs = [...]`。\n2. 用 `BAAI/bge-m3` 给它们生成归一化向量。\n3. 输入一个查询句，计算与每条文档的余弦相似度。\n4. 按相似度从高到低打印前 3 条。\n5. 额外挑战：把文档换成一段长文，先切块再检索。\n\n**提交标准**：代码可运行；能解释为什么某条结果排第一；尝试把 `normalize_embeddings` 改为 `False`，观察结果是否变化。\n\n---\n\n## 小结\n- BGE-M3 是把文本变成语义向量的多语言、多功能模型。\n- 最常用的是 1024 维稠密向量，配合余弦相似度做语义检索。\n- 工程上要关注批量编码、长文本切块、向量归一化和向量库存储。\n- 学会它，你就具备搭建 RAG、语义搜索和文本聚类的基础能力。\n\n## ai.embed.reranker\n\n## 一句话直觉\n\n**重排序器（Reranker）** 是检索系统里的“精读裁判”：先用便宜又快的方式粗筛出一小批候选，再让一个更贵但更准的模型逐条精读并重新打分排序，让真正相关的答案排到最前面。\n\n---\n\n## 1. 为什么需要 Reranker？\n\n在检索增强生成（RAG，Retrieval-Augmented Generation）里，常见流程是：\n\n1. 把文档切块（chunk）；\n2. 用嵌入模型（Embedding Model）把每个 chunk 变成一个向量；\n3. 用户提问时，把问题也变成向量，用余弦相似度（Cosine Similarity）找最像的 Top-K。\n\n问题在于：**向量检索本质是“双塔（Bi-Encoder）”**——问题和文档分别编码，彼此看不到对方。它快，但精度有限，容易把“字面像、语义偏”的内容排到前面。\n\n**重排序器（Reranker）** 通常基于**交叉编码器（Cross-Encoder）**：把 query 和每个候选文档拼在一起送进同一个模型，让模型直接判断“这两段文字到底有多相关”。它慢，但准得多，所以只用在少量候选上。\n\n---\n\n## 2. 双塔 vs 交叉编码器\n\n| 维度 | Bi-Encoder（双塔） | Cross-Encoder（交叉编码器） |\n|------|------|------|\n| 输入 | query、doc 分别编码 | query + doc 拼接后一起编码 |\n| 速度 | 快，可预计算 | 慢，必须实时算 |\n| 精度 | 一般 | 高 |\n| 典型用途 | 召回（Recall） | 重排（Rerank） |\n\n所以工程上的经典结构是：**用 Bi-Encoder 召回 Top-100，用 Cross-Encoder 重排取 Top-5。**\n\n---\n\n## 3. Reranker 的打分方式\n\nCross-Encoder 输出的是一个分数（logit 或概率），表示 query-doc 的相关性。常见做法：\n\n- **分类式**：模型输出相关 / 不相关，用 logit 或 softmax 概率当分数；\n- **回归式**：直接输出一个连续相关性分数；\n- **生成式**：让大模型给 0~10 分，但贵且不稳定。\n\n实践中，`sentence-transformers` 的 `CrossEncoder` 是最常用的轻量方案。\n\n---\n\n## 4. 工程接入的典型管道\n\n```\n用户 Query\n   │\n   ▼\n[Embedding 召回]  → Top-100 候选\n   │\n   ▼\n[Reranker 重排]   → Top-5 高分\n   │\n   ▼\n[LLM 生成答案]\n```\n\n要点：\n- 召回数量要足够大（如 50~200），否则重排无从发挥；\n- 重排后只取很小的 K（如 3~10）喂给 LLM，控制上下文长度；\n- Reranker 可以本地小模型，也可以调用 Cohere Rerank、BGE Reranker 等 API。\n\n---\n\n## 5. 最小可运行示例\n\n下面用 `sentence-transformers` 演示：先用小模型做粗召回，再用 Cross-Encoder 重排。\n\n```python\n# pip install sentence-transformers\nfrom sentence_transformers import SentenceTransformer, CrossEncoder, util\n\n# 1) 双塔：用于召回\nbi = SentenceTransformer(\"all-MiniLM-L6-v2\")\n\n# 2) 交叉编码器：用于重排\ncross = CrossEncoder(\"cross-encoder/ms-marco-MiniLM-L-6-v2\")\n\ndocs = [\n    \"猫喜欢晒太阳。\",\n    \"Python 是一门编程语言。\",\n    \"狗需要每天遛。\",\n    \"太阳是一颗恒星。\",\n    \"如何用 Python 读取 CSV 文件？\",\n]\nquery = \"怎样在 Python 中处理表格数据？\"\n\n# Step 1: 向量召回 Top-3\nq_emb = bi.encode(query, convert_to_tensor=True)\nd_emb = bi.encode(docs, convert_to_tensor=True)\nhits = util.semantic_search(q_emb, d_emb, top_k=3)[0]\ncandidates = [docs[h[\"corpus_id\"]] for h in hits]\nprint(\"召回:\", candidates)\n\n# Step 2: Reranker 重排\npairs = [(query, d) for d in candidates]\nscores = cross.predict(pairs)\n\nranked = sorted(zip(candidates, scores), key=lambda x: x[1], reverse=True)\nprint(\"重排后:\")\nfor text, s in ranked:\n    print(round(float(s), 4), text)\n```\n\n运行后你会看到：召回里可能混进了“太阳/狗”这类字面相近的句子，重排后真正相关的“Python 读取 CSV”会被顶到最前。\n\n---\n\n## 6. 什么时候该用 Reranker？\n\n- 检索质量直接决定 RAG 答案质量；\n- 候选数量不大（几十到几百），延迟可接受；\n- 愿意用一点额外算力换明显精度提升。\n\n反之，如果只是做海量初筛、对延迟极敏感，就先用双塔，不必上 Reranker。\n",
+  "quiz": [
+    {
+      "kp": "ai.embed.bge_m3",
+      "type": "single_choice",
+      "question": "在构建多语言检索系统时，团队选择了 BGE-M3 作为嵌入模型。相比只输出单一稠密向量的模型，BGE-M3 的一个关键特点是？",
+      "options": [
+        "它同时支持稠密向量、稀疏向量和多向量（ColBERT 风格）三种检索表示",
+        "它只能输出稀疏向量，无法进行语义相似度计算",
+        "它输出的向量维度固定为 768，因此只能用于英文语料",
+        "它必须先经过微调才能生成任何向量表示"
+      ],
+      "answer": 0,
+      "explanation": "BGE-M3 的核心设计是多功能（Multi-Functionality），可同时产出稠密、稀疏和多向量表示，从而支持多种检索方式。B 项误解为仅稀疏，C 项把维度与语言能力错误绑定，D 项忽略了它可直接推理使用。",
+      "error_tag": "概念误解",
+      "variant_group": "bge_m3_特性"
+    },
+    {
+      "kp": "ai.embed.bge_m3",
+      "type": "single_choice",
+      "question": "某检索系统使用 BGE-M3 做混合检索：先分别用稠密向量和稀疏向量召回候选，再做融合排序。这种做法的合理性主要来自 BGE-M3 的哪一特性？",
+      "options": [
+        "它会在内部自动完成所有重排序，无需外部融合",
+        "它能在同一模型、同一次推理中提供多种互补的向量表示",
+        "它的稀疏向量与稠密向量必须二选一使用，不能同时输出",
+        "它只适用于单语言场景，混合检索没有意义"
+      ],
+      "answer": 1,
+      "explanation": "BGE-M3 的多种表示由同一模型产出，稠密擅长语义、稀疏擅长关键词匹配，二者互补，便于混合检索。A 项夸大了模型的自动重排能力，C 项与多表示输出的事实相反，D 项忽略了其多语言特性。",
+      "error_tag": "应用场景误判",
+      "variant_group": "bge_m3_混合检索"
+    },
+    {
+      "kp": "ai.embed.bge_m3",
+      "type": "single_choice",
+      "question": "在相同语料上比较「仅稠密向量」与「稠密+稀疏混合」两种检索方案，若使用 BGE-M3，最可能观察到的现象是？",
+      "options": [
+        "混合方案在包含大量专有名词、型号等精确匹配需求的查询上通常表现更好",
+        "混合方案一定在所有查询上都优于纯稠密，没有例外",
+        "纯稠密方案无法处理任何查询",
+        "混合方案会导致向量维度冲突而无法建索引"
+      ],
+      "answer": 0,
+      "explanation": "稀疏表示擅长精确词匹配，因此在含专有名词、编号的查询上混合方案通常有优势；但并非绝对全面优于稠密（B 项过于绝对）。C、D 项均无依据。",
+      "error_tag": "效果误判",
+      "variant_group": "bge_m3_混合检索"
+    },
+    {
+      "kp": "ai.embed.bge_m3",
+      "type": "single_choice",
+      "question": "一位开发者想用 BGE-M3 对长文档做检索，但他把每篇长文原封不动地编码成一个向量。相比合理的分块策略，这种做法的主要风险是？",
+      "options": [
+        "向量维度会变成原来的数倍，浪费存储",
+        "长文语义被压缩进一个向量且可能被截断，细粒度信息丢失，检索定位不准",
+        "模型会因此自动切换到稀疏模式，稠密结果失效",
+        "文档越长，模型推理速度越快，结果更准"
+      ],
+      "answer": 1,
+      "explanation": "整篇长文单一向量会稀释语义并可能触发截断，降低检索精度。A 项误认为向量维度随长度变化；C、D 项与事实不符。",
+      "error_tag": "工程实践误解",
+      "variant_group": "bge_m3_长文本"
+    },
+    {
+      "kp": "ai.embed.bge_m3",
+      "type": "single_choice",
+      "question": "关于选择 BGE-M3 而非单语嵌入模型的理由，下列哪项最恰当？",
+      "options": [
+        "它只支持中文，因此中文效果必然最好",
+        "它面向多语言场景设计，一套模型即可覆盖多语种检索需求，降低维护成本",
+        "它完全不依赖任何训练数据，因此是零成本方案",
+        "它只能用 GPU 推理，说明效果一定更好"
+      ],
+      "answer": 1,
+      "explanation": "BGE-M3 的多语言定位是相对单语模型的重要优势。A 项错误限定语种；C 项混淆了「预训练模型」与「无需训练数据」；D 项把硬件要求与效果优劣错误关联。",
+      "error_tag": "概念误解",
+      "variant_group": "bge_m3_多语言"
+    },
+    {
+      "kp": "ai.embed.bge_m3",
+      "type": "single_choice",
+      "question": "某团队计划用 BGE-M3 构建检索系统，并在向量数据库中存储其稠密向量。下列哪种说法是正确的？",
+      "options": [
+        "稠密向量可以直接存入支持向量检索的数据库，用近似最近邻等方式查询",
+        "稠密向量必须先转成稀疏向量才能存入向量数据库",
+        "稠密向量只能存成文本文件，无法建立索引",
+        "稠密向量必须与稀疏向量维度一致才能一起存储"
+      ],
+      "answer": 0,
+      "explanation": "稠密向量可直接用于向量数据库的相似度检索（如 ANN）。B 项混淆了两类表示的用途；C、D 项与常见的向量库使用方式不符。",
+      "error_tag": "工程实践误解",
+      "variant_group": "bge_m3_多表示使用"
+    },
+    {
+      "kp": "ai.embed.bge_m3",
+      "type": "single_choice",
+      "question": "在评估 BGE-M3 的检索质量时，下列哪种做法最有助于区分其稠密通道与稀疏通道各自的贡献？",
+      "options": [
+        "把所有通道的输出混在一起，只看最终准确率",
+        "分别用稠密、稀疏、多向量通道单独评测，再评测融合后的结果",
+        "只评测稀疏通道，因为稠密通道没有意义",
+        "只评测多向量通道，因为它一定最好"
+      ],
+      "answer": 1,
+      "explanation": "分通道评测再加融合评测，才能识别各通道的贡献。A 项无法归因；C、D 项凭主观偏好排除其他通道，不符合评估原则。",
+      "error_tag": "评估方法错误",
+      "variant_group": "bge_m3_评估"
+    },
+    {
+      "kp": "ai.embed.bge_m3",
+      "type": "single_choice",
+      "question": "下列关于 BGE-M3 的说法中，哪一项是错误的？",
+      "options": [
+        "它支持多语言检索",
+        "它能输出稠密、稀疏等多种表示",
+        "它的稀疏表示完全等同于传统 BM25 的词频统计，没有任何学习成分",
+        "它可用于长文档场景"
+      ],
+      "answer": 2,
+      "explanation": "BGE-M3 的稀疏表示是模型学习得到的词权重，与纯统计的 BM25 不同，因此 C 项错误。A、B、D 均符合其特性。",
+      "error_tag": "概念误解",
+      "variant_group": "bge_m3_特性"
+    },
+    {
+      "kp": "ai.embed.bge_m3",
+      "type": "single_choice",
+      "question": "某团队在资源受限的环境下部署 BGE-M3，只打算使用稠密向量检索。相比同时启用三种表示，他们最可能获得的好处是？",
+      "options": [
+        "完全丧失多语言能力",
+        "降低存储与计算开销（无需保存稀疏权重和多向量），检索流程也更简单",
+        "稠密向量的语义质量会因此下降",
+        "模型将无法处理超过 512 token 的文本"
+      ],
+      "answer": 1,
+      "explanation": "只启用一种表示可减少存储和计算，并简化流程；模型本身的多语言能力与长度能力不受影响。A、C、D 项把「少用表示」错误地等同于「能力被削弱」。",
+      "error_tag": "性能权衡误解",
+      "variant_group": "bge_m3_多表示使用"
+    },
+    {
+      "kp": "ai.embed.bge_m3",
+      "type": "single_choice",
+      "question": "若把 BGE-M3 的稠密向量与稀疏向量拼接成一个超长特征向量再送进向量数据库，最可能出现的问题是？",
+      "options": [
+        "稠密与稀疏的性质不同，简单拼接会破坏各自的相似度语义，且维度与存储代价大增",
+        "这是官方推荐做法，效果一定最好",
+        "拼接后稀疏向量会自动变成稠密向量",
+        "拼接后模型会自动重新训练以适配新维度"
+      ],
+      "answer": 0,
+      "explanation": "稠密与稀疏表示的相似度计算方式不同，简单拼接通常不是合理做法，还会带来维度与存储问题。B 项把它当成推荐做法；C、D 项与事实不符。",
+      "error_tag": "工程实践误解",
+      "variant_group": "bge_m3_混合检索"
+    },
+    {
+      "kp": "ai.embed.bge_m3",
+      "type": "single_choice",
+      "question": "关于 BGE-M3 的适用场景，下列哪项描述最不准确？",
+      "options": [
+        "适合多语言语义检索",
+        "适合需要关键词与语义混合匹配的检索",
+        "适合长文档检索",
+        "它专为图像检索设计，文本任务不适用"
+      ],
+      "answer": 3,
+      "explanation": "BGE-M3 是文本嵌入模型，用于文本检索任务，D 项说其专为图像设计不准确。A、B、C 均符合其定位。",
+      "error_tag": "应用场景误判",
+      "variant_group": "bge_m3_特性"
+    },
+    {
+      "kp": "ai.embed.bge_m3",
+      "type": "single_choice",
+      "question": "某同学认为「既然 BGE-M3 能输出稀疏向量，那它就是一个纯词袋模型，无法理解同义词」。这一判断的问题在于？",
+      "options": [
+        "正确，稀疏向量一定与词袋等价",
+        "错误，它同时具备稠密语义表示，稀疏只是其多项能力之一",
+        "正确，只要模型输出稀疏向量就说明没有语义能力",
+        "错误，因为稀疏向量比稠密向量更能理解同义词"
+      ],
+      "answer": 1,
+      "explanation": "BGE-M3 具备稠密语义表示，稀疏只是可选输出之一，因此不能据此判定其为纯词袋。A、C 项把「有稀疏输出」等同于「只有词袋能力」；D 项颠倒了稀疏与稠密的能力特点。",
+      "error_tag": "概念误解",
+      "variant_group": "bge_m3_特性"
+    },
+    {
+      "kp": "ai.embed.bge_m3",
+      "type": "single_choice",
+      "question": "一位工程师说：「BGE-M3 支持超过 100 种语言，所以它对中文和英文必须使用不同的模型文件分别加载。」这个说法的问题在于？",
+      "options": [
+        "正确，多语言模型每个语种都有独立权重文件",
+        "正确，但只有欧洲语言共享同一份权重",
+        "错误，多语言能力来自同一套参数，可统一处理多种语言而无需分语种加载",
+        "错误，BGE-M3 其实只支持英文"
+      ],
+      "answer": 2,
+      "explanation": "BGE-M3 是单一多语言模型，多语言能力由同一组参数提供，不需要按语种分别加载。A、B 项把「多语言」误解为多份模型；D 项与事实相反。",
+      "error_tag": "概念误解",
+      "variant_group": "bge_m3_多语言"
+    },
+    {
+      "kp": "ai.embed.bge_m3",
+      "type": "single_choice",
+      "question": "关于 BGE-M3 的输入长度能力，下列哪种理解最准确？",
+      "options": [
+        "它只能处理单句，长度不能超过 32 个 token",
+        "它支持较长的输入（可达数千 token 级别），因此适合长文档检索",
+        "它只接受图片输入，不能处理文本",
+        "输入长度不影响检索效果，可以无限长"
+      ],
+      "answer": 1,
+      "explanation": "BGE-M3 支持较长文本输入（常见说法为最多约 8192 token），适合长文档场景。A 项把长度上限说得过小；C 项混淆了模型类型；D 项忽略了模型仍有最大长度限制。",
+      "error_tag": "参数记忆错误",
+      "variant_group": "bge_m3_长文本"
+    },
+    {
+      "kp": "ai.embed.bge_m3",
+      "type": "single_choice",
+      "question": "使用 BGE-M3 生成向量时，若把一段远超模型最大输入长度的长文档直接送入，最可能发生什么？",
+      "options": [
+        "模型会自动按语义分段并对每段分别生成向量并拼接",
+        "超出部分通常会被截断，导致信息丢失，影响检索召回",
+        "模型会报错并拒绝处理任何输入",
+        "模型会先把文档压缩成一句话再编码"
+      ],
+      "answer": 1,
+      "explanation": "超出最大长度的部分一般会被截断，从而丢失信息。A 项把外部常见做法（分块）误认为模型内置；C 项过于绝对；D 项并非该模型的行为。",
+      "error_tag": "行为误判",
+      "variant_group": "bge_m3_长文本"
+    },
+    {
+      "kp": "ai.embed.bge_m3",
+      "type": "single_choice",
+      "question": "在一个语义检索任务中，若只使用 BGE-M3 的稠密向量而完全不用其稀疏和多向量表示，下列说法正确的是？",
+      "options": [
+        "模型会拒绝生成稠密向量，必须先提供稀疏目标",
+        "仍然可以正常使用，只是放弃了模型提供的其余检索能力",
+        "稠密向量必须与稀疏向量维度相同才能使用",
+        "只有英文语料才能只取稠密向量"
+      ],
+      "answer": 1,
+      "explanation": "多种表示是可选能力，用户完全可以只用稠密向量做常规语义检索，只是没有利用稀疏与多向量的互补优势。A 项把可选项当成必需；C 项混淆了两类表示的维度概念；D 项无依据。",
+      "error_tag": "概念误解",
+      "variant_group": "bge_m3_多表示使用"
+    },
+    {
+      "kp": "ai.embed.bge_m3",
+      "type": "single_choice",
+      "question": "某团队需要为「关键词精确匹配 + 语义相似」的混合检索选择模型。以下关于 BGE-M3 的描述，哪一项是它相对单稠密模型的主要优势？",
+      "options": [
+        "它无需任何向量化即可直接进行关键词匹配，因此不需要索引",
+        "它能在同一次编码中同时得到可用于关键词匹配的稀疏表示和用于语义匹配的稠密表示",
+        "它只能做语义匹配，关键词匹配仍需另选模型",
+        "它的稀疏表示与稠密表示必须用两套完全独立的模型分别加载"
+      ],
+      "answer": 1,
+      "explanation": "BGE-M3 一次编码即可获得稀疏与稠密等多种表示，便于统一构建混合检索。A 项误解为无需向量化/索引；C 项与多表示能力相反；D 项误认为需要两套模型。",
+      "error_tag": "应用场景误判",
+      "variant_group": "bge_m3_混合检索"
+    },
+    {
+      "kp": "ai.embed.bge_m3",
+      "type": "single_choice",
+      "question": "在多语言文档库中，用 BGE-M3 为中文文档建库、再用英文查询检索，下列哪种说法最合理？",
+      "options": [
+        "必须先把英文查询翻译成中文，否则向量空间不兼容",
+        "可以直接跨语言检索，因为模型的多语言表示落在可比较的语义空间中",
+        "跨语言检索只在同一语系（如英法）之间有效，中英之间无效",
+        "必须为每种语言单独训练一个投影矩阵才能比较相似度"
+      ],
+      "answer": 1,
+      "explanation": "BGE-M3 的多语言设计使不同语言的语义表示可以直接比较，支持跨语言检索。A、D 项引入了不必要的额外步骤；C 项错误限定了语系范围。",
+      "error_tag": "应用场景误判",
+      "variant_group": "bge_m3_多语言"
+    },
+    {
+      "kp": "ai.embed.bge_m3",
+      "type": "single_choice",
+      "question": "关于 BGE-M3 中「多向量（multi-vector）」表示的理解，下列哪项最贴近其用途？",
+      "options": [
+        "它把整段文本压缩成一个标量分数，用于直接排序",
+        "它为文本中的多个 token 保留各自的向量，可用于更细粒度的匹配（类似 ColBERT 的后期交互）",
+        "它把多个文档的向量求平均得到一个文档向量",
+        "它要求所有 token 向量维度必须为 1"
+      ],
+      "answer": 1,
+      "explanation": "多向量表示保留 token 级向量，用于细粒度后期交互匹配。A 项描述的是打分而非多向量；C 项描述的是聚合；D 项与向量维度概念不符。",
+      "error_tag": "概念误解",
+      "variant_group": "bge_m3_多向量"
+    },
+    {
+      "kp": "ai.embed.bge_m3",
+      "type": "single_choice",
+      "question": "某项目在部署 BGE-M3 时，希望同时获得稠密、稀疏和多向量输出。合理的工程做法是？",
+      "options": [
+        "分别下载三个不同的 BGE-M3 模型文件，各跑一次推理",
+        "用同一个 BGE-M3 模型在一次推理中按需输出所需表示，再分别用于相应检索通道",
+        "必须先训练一个额外的分类器，否则无法得到稀疏向量",
+        "只能通过调用外部在线 API，本地无法部署"
+      ],
+      "answer": 1,
+      "explanation": "BGE-M3 的多功能性使得同一模型可输出多种表示，无需多份模型或额外训练。A 项误认为每种表示对应独立模型；C、D 项引入了并不存在的前置条件。",
+      "error_tag": "工程实践误解",
+      "variant_group": "bge_m3_多表示使用"
+    },
+    {
+      "kp": "ai.embed.reranker",
+      "type": "single_choice",
+      "question": "在 RAG 检索流程中，reranker（重排序器）主要解决的核心问题是？",
+      "options": [
+        "把用户查询翻译成多种语言以便多语言检索",
+        "对初步召回的候选文档按与查询的相关性重新精细打分排序",
+        "把文档切分成更小的块以便存入向量数据库",
+        "为文档生成向量表示以便做近似最近邻搜索"
+      ],
+      "answer": 1,
+      "explanation": "reranker 的作用是在召回（retrieval）阶段拿到一批候选后，用更精细（通常是交叉编码器）的方式重新评估查询与每个候选的相关性并重排，从而提升最终送入生成模型的上下文质量。A 是翻译，C 是分块，D 是嵌入/向量化，都不是重排序的职责。",
+      "error_tag": "概念混淆",
+      "variant_group": "reranker_基本作用"
+    },
+    {
+      "kp": "ai.embed.reranker",
+      "type": "single_choice",
+      "question": "关于双编码器（bi-encoder）召回与交叉编码器（cross-encoder）重排的区别，下列说法正确的是？",
+      "options": [
+        "双编码器把查询和文档分别编码后算相似度，速度快可预计算；交叉编码器把查询和文档拼在一起联合编码，精度高但慢",
+        "交叉编码器把查询和文档分别编码后算相似度，速度快；双编码器把两者拼接后联合编码，精度高但慢",
+        "两者都必须把查询和文档拼接后一起输入模型，因此速度相同",
+        "两者都把文档预先编码成向量存起来，因此都支持对海量文档直接排序"
+      ],
+      "answer": 0,
+      "explanation": "双编码器（bi-encoder）对查询和文档独立编码得到向量，文档向量可离线预计算，检索时只需向量相似度，因而能对上百万文档快速召回；交叉编码器（cross-encoder）将查询与文档拼接后联合编码，能建模两者细粒度交互，精度更高但需要为每个（查询, 文档）对前向计算，无法预计算，因此只适合对少量候选重排。",
+      "error_tag": "概念混淆",
+      "variant_group": "双编码器vs交叉编码器"
+    },
+    {
+      "kp": "ai.embed.reranker",
+      "type": "single_choice",
+      "question": "把重排模型的多样性（diversity）纳入排序时，主要想缓解什么问题？",
+      "options": [
+        "候选文档中高度相似的内容占据前几名，导致上下文冗余",
+        "重排模型内存占用过高",
+        "查询语句拼写错误",
+        "向量维度太少导致召回失败"
+      ],
+      "answer": 0,
+      "explanation": "纯相关性排序可能把内容几乎相同的多个文档排到最前，造成上下文冗余、信息覆盖不足。引入多样性（如 MMR 类思路）可以在相关性与内容差异间取得平衡，缓解冗余问题。B、C、D 与该目标无关。",
+      "error_tag": "概念混淆",
+      "variant_group": "reranker_多样性"
+    },
+    {
+      "kp": "ai.embed.reranker",
+      "type": "single_choice",
+      "question": "代码意图题：某流程先用向量检索取回若干候选，再对每个候选与查询计算相关性得分，最后按得分降序取前 k 个送入生成模型。这一流程中「按得分降序取前 k 个」属于哪个阶段？",
+      "options": [
+        "索引构建阶段",
+        "召回阶段",
+        "重排后截断阶段",
+        "分块阶段"
+      ],
+      "answer": 2,
+      "explanation": "召回阶段只负责从库中捞出一批候选；对这些候选计算精细相关性并排序、截断，是重排（reranking）阶段的工作。索引构建是把文档向量化入库，分块是把长文切短。",
+      "error_tag": "概念混淆",
+      "variant_group": "reranker_阶段识别"
+    },
+    {
+      "kp": "ai.embed.reranker",
+      "type": "multi_choice",
+      "question": "下列哪些做法有助于降低交叉编码器重排的延迟？（多选）",
+      "options": [
+        "减少送入重排的候选文档数量",
+        "使用更小或经过蒸馏的重排模型",
+        "对每个候选文档做多轮重复打分取平均",
+        "把重排计算批量化以充分利用硬件"
+      ],
+      "answer": [
+        0,
+        1,
+        3
+      ],
+      "explanation": "重排延迟大致正比于候选数量与每对前向开销。减少候选数、用更小/蒸馏模型、批量化都能降低延迟。C 的重复打分只会成倍增加计算量，适得其反。",
+      "error_tag": "策略选择错误",
+      "variant_group": "reranker_延迟优化"
+    },
+    {
+      "kp": "ai.embed.reranker",
+      "type": "multi_choice",
+      "question": "关于重排中「候选集大小（top-k 召回数量）」的选择，下列说法正确的有哪些？（多选）",
+      "options": [
+        "召回数量过小可能漏掉相关文档，重排也无从补救",
+        "召回数量过大虽然提升了召回上限，但会增加重排开销",
+        "只要算力足够，把召回数量设为全库规模总是最优",
+        "需要在召回质量与重排成本之间做权衡来选取合适的值"
+      ],
+      "answer": [
+        0,
+        1,
+        3
+      ],
+      "explanation": "召回数量影响两件事：召回上限（漏召回）与重排成本。数量太小会漏掉相关文档，重排无法挽回；数量太大则延迟、算力成本上升。因此需要权衡。C 声称越大越好、无视成本，是错误的。",
+      "error_tag": "边界错误",
+      "variant_group": "reranker_候选集规模"
+    },
+    {
+      "kp": "ai.embed.reranker",
+      "type": "multi_choice",
+      "question": "下列哪些属于重排模型可能用到的输入特征或信号？（多选）",
+      "options": [
+        "查询文本与文档文本",
+        "查询与文档的词法/语义交互特征",
+        "文档的发布时间等元数据（若模型或策略使用）",
+        "生成模型输出答案后得到的用户点击日志（在打分时实时获取）"
+      ],
+      "answer": [
+        0,
+        2,
+        3
+      ],
+      "explanation": "重排打分通常以查询-文档对为主要输入，并可能融合元数据（如时间、来源可信度）与历史行为信号（如点击率，作为离线特征）。但「生成模型输出后实时得到的用户点击」在打分时刻尚不存在，不可能作为即时输入。B 的「词法/语义交互特征」是交叉编码器内部学到的，可作为概念上的一类信号；本题按常见教材把主要输入列为查询与文档文本及可用元数据，故不选 B（B 与 A 在表述上存在包含关系，作为干扰项处理）。",
+      "error_tag": "概念混淆",
+      "variant_group": "reranker_输入信号"
+    },
+    {
+      "kp": "ai.embed.reranker",
+      "type": "multi_choice",
+      "question": "下列哪些是引入 reranker 后可能带来的收益？（多选）",
+      "options": [
+        "提升相关文档在最终上下文中的排名",
+        "降低生成模型幻觉的可能性（上下文更相关）",
+        "降低召回阶段的向量计算成本",
+        "提升端到端回答质量的相关性指标"
+      ],
+      "answer": [
+        0,
+        1,
+        3
+      ],
+      "explanation": "重排能让更相关的文档排到前面，从而提升送生成模型的上下文质量，进而可能减少幻觉、提升回答相关性指标（A、B、D）。它作用于召回之后，并不会减少召回阶段本身（向量计算）的成本（C 错）。",
+      "error_tag": "概念混淆",
+      "variant_group": "reranker_收益评估"
+    },
+    {
+      "kp": "ai.embed.reranker",
+      "type": "fill_blank",
+      "question": "在 RAG 管线中，先用向量检索粗略召回一批候选，再用一个模型对这些候选按相关性精细排序，这个精细排序的阶段通常称为______。",
+      "options": [],
+      "answer": [
+        "重排",
+        "重排序",
+        "rerank",
+        "reranking",
+        "Rerank",
+        "Reranking"
+      ],
+      "explanation": "该阶段即重排（reranking/rerank），目的是在召回基础上精细调整候选顺序，把最相关的文档排到最前。",
+      "error_tag": "记忆缺失",
+      "variant_group": "reranker_基本作用"
+    },
+    {
+      "kp": "ai.embed.reranker",
+      "type": "fill_blank",
+      "question": "召回阶段使用的模型通常对查询和文档分别编码（双编码器），而重排阶段常用的模型把查询和文档拼接后联合编码，这类模型称为______编码器。",
+      "options": [],
+      "answer": [
+        "交叉",
+        "cross",
+        "cross-encoder",
+        "cross encoder",
+        "Cross",
+        "Cross-Encoder"
+      ],
+      "explanation": "把查询与文档拼接后联合编码的模型称为交叉编码器（cross-encoder），它能建模两者细粒度的交互，精度高但计算开销大，适合重排而非全库检索。",
+      "error_tag": "记忆缺失",
+      "variant_group": "双编码器vs交叉编码器"
+    },
+    {
+      "kp": "ai.embed.reranker",
+      "type": "code_reading",
+      "question": "阅读下列伪代码（非真实 API，仅表示流程）：\n\ncandidates = 向量检索(query)      # 返回 100 个候选\nscored = []\nfor doc in candidates:\n    s = 重排模型打分(query, doc)   # 每个 (query, doc) 独立打分\n    scored.append((s, doc))\nscored.sort(降序)\ntop5 = scored[:5]\n上下文 = [doc for _, doc in top5]\n\n问题：如果把循环里的候选集合从 100 个改为整个文档库（比如 100 万条），最直接的后果是什么？",
+      "options": [],
+      "answer": "重排需要为每个（查询, 文档）对单独做一次前向计算，候选从 100 增到 100 万会使计算量增加约一万倍，延迟和算力开销急剧上升，因此不可取；重排应只作用于召回得到的小候选集。",
+      "explanation": "交叉编码器无法预计算文档侧表示，必须为每一对（查询, 文档）前向计算一次。候选数放大会导致打分次数线性增长，延迟与成本无法接受。正确做法是让召回阶段把候选缩小到可控规模，再交给重排。",
+      "error_tag": "边界错误",
+      "variant_group": "reranker_候选集规模"
+    },
+    {
+      "kp": "ai.embed.reranker",
+      "type": "code_reading",
+      "question": "阅读下列伪代码（非真实 API，仅表示流程）：\n\n# 方案 A\ndocs = 向量检索(query, top_k=100)\nranked = 重排(query, docs)\n最终 = ranked[:5]\n\n# 方案 B\ndocs = 向量检索(query, top_k=5)\n最终 = docs\n\n问题：相对方案 B，方案 A 在效果上的主要优势是什么？",
+      "options": [],
+      "answer": "方案 A 先召回 100 个候选再重排取前 5，能利用召回阶段较宽的候选集捞回被粗排排到后面、但实际相关的文档，并由重排在精细打分后把它们提到前面，因而最终上下文的相关性通常优于只取召回头 5 个的方案 B。",
+      "explanation": "方案 B 直接取召回的前 5，若粗排把相关文档排在 5 名之后就会被漏掉。方案 A 给重排提供了更大的候选池，重排有能力把被粗排低估的相关文档救回来。代价是重排的计算开销。",
+      "error_tag": "策略选择错误",
+      "variant_group": "reranker_收益评估"
+    },
+    {
+      "kp": "ai.embed.reranker",
+      "type": "single_choice",
+      "question": "某系统先用向量检索召回 top-100 文档，再用 reranker 打分。如果要提升端到端质量同时又控制延迟，下列做法最合理的是？",
+      "options": [
+        "把 reranker 应用到整个文档库的全部文档上",
+        "先减小召回数量到 top-5 再重排，以减少重排候选数",
+        "保持召回数量不变，只对召回的候选做重排并按分数截取最终 top-k",
+        "去掉召回阶段，直接让 reranker 对全库排序"
+      ],
+      "answer": 2,
+      "explanation": "重排序的价值正是在「召回一批候选后」再精细筛选。它本身开销较大，应只作用于召回的小候选集，然后截取 top-k 送入生成。A、D 让 reranker 面对全库，代价不可接受；B 在重排前就砍到 top-5，会丢失召回阶段本可捞回的相关文档，削弱重排的补救作用。",
+      "error_tag": "策略选择错误",
+      "variant_group": "reranker_候选集规模"
+    },
+    {
+      "kp": "ai.embed.reranker",
+      "type": "scenario",
+      "question": "某在线问答系统原流程为：向量召回 top-50 → 直接拼接前 5 篇送入大模型生成。上线后发现用户抱怨回答时常「答非所问」，且离线分析表明真正相关的文档经常排在第 5 名之后。团队想在改动最小的前提下提升回答质量。请说明你会如何调整流程，并解释为什么这样调整会奏效。",
+      "options": [],
+      "answer": null,
+      "explanation": "问题根因是召回排序不够精细，相关文档落在前 5 之外被截断丢弃。最小改动是在召回之后加入重排：保留（或适当扩大）召回的候选集（如 top-50），用重排模型对候选做精细相关性打分并按分数重排，再从重排结果中截断取前若干篇送入生成。这样能让被粗排低估的相关文档重新排到前面，改善上下文相关性，从而减少答非所问。需注意候选集不宜过小（否则重排无从补救），也不宜过大（重排开销上升）。",
+      "error_tag": "策略选择错误",
+      "variant_group": "reranker_管线位置",
+      "required_keywords": [
+        "重排",
+        "召回",
+        "候选集",
+        "相关性打分",
+        "截断"
+      ]
+    },
+    {
+      "kp": "ai.embed.reranker",
+      "type": "single_choice",
+      "question": "使用交叉编码器做重排时，模型对一对（查询, 文档）输出的分数通常代表？",
+      "options": [
+        "该文档在向量数据库中的存储编号",
+        "查询与文档的相关性/匹配程度得分",
+        "该文档被切成了多少个文本块",
+        "文档被生成模型引用后的准确率"
+      ],
+      "answer": 1,
+      "explanation": "重排模型输出的是查询与候选文档之间的相关性得分（relevance score），据此对候选排序。它不是存储编号，不是分块数量，也不是生成阶段才产生的引用准确率。",
+      "error_tag": "概念混淆",
+      "variant_group": "reranker_输出含义"
+    },
+    {
+      "kp": "ai.embed.reranker",
+      "type": "single_choice",
+      "question": "关于 reranker 在 RAG 管线中的位置，下列描述正确的是？",
+      "options": [
+        "它位于文档分块之前，用于决定如何切分原文",
+        "它位于初步召回之后、把上下文交给生成模型之前",
+        "它位于生成模型之后，用于对生成答案做二次校验",
+        "它取代了向量数据库，直接负责持久化存储"
+      ],
+      "answer": 1,
+      "explanation": "典型 RAG 管线是：分块 → 嵌入/索引 → 召回 → 重排 → 生成。reranker 处于召回之后、生成之前，起到「精选上下文」的作用。它不负责分块、不负责生成后校验，也不是存储组件。",
+      "error_tag": "概念混淆",
+      "variant_group": "reranker_管线位置"
+    },
+    {
+      "kp": "ai.embed.reranker",
+      "type": "single_choice",
+      "question": "某团队发现引入重排后离线相关性指标提升了，但线上 P99 延迟超标。在不放弃重排的前提下，最应该优先考虑的是？",
+      "options": [
+        "把重排模型换成更小的模型或减少重排候选数量",
+        "把重排模型放到生成模型之后执行",
+        "关闭向量召回只保留重排",
+        "把重排结果缓存到磁盘并永久复用"
+      ],
+      "answer": 0,
+      "explanation": "重排延迟主要由「候选数 × 每对的前向开销」决定。换更小/更快的重排模型，或减少重排候选数，是降低延迟最直接的手段。B 把重排放到生成之后逻辑上不成立；C 去掉召回会让重排无从下手；D 的「永久缓存」对动态查询没有意义。",
+      "error_tag": "策略选择错误",
+      "variant_group": "reranker_延迟优化"
+    },
+    {
+      "kp": "ai.embed.reranker",
+      "type": "single_choice",
+      "question": "下列哪种情况最能体现「引入 reranker 收益有限」？",
+      "options": [
+        "召回阶段已经能稳定把最相关文档排在前 1，且用户对排序不敏感",
+        "召回阶段经常把相关文档排到 50 名开外",
+        "查询语句很长且语义复杂，与文档用词差异大",
+        "文档库中有大量语义相近但主题不同的干扰项"
+      ],
+      "answer": 0,
+      "explanation": "重排的价值在于修正召回阶段的排序错误、提升相关文档的排名。如果召回排序已经很好（相关文档已在前 1）且下游对顺序不敏感，重排带来的增益就很小。B、C、D 都是召回排序质量差、需要重排补救的场景。",
+      "error_tag": "收益判断错误",
+      "variant_group": "reranker_收益评估"
+    },
+    {
+      "kp": "ai.embed.reranker",
+      "type": "single_choice",
+      "question": "对一批候选文档做重排时，通常使用什么作为排序依据？",
+      "options": [
+        "文档的创建时间从新到旧",
+        "文档长度从长到短",
+        "查询与文档的相关性得分从高到低",
+        "文档在向量库中的插入顺序"
+      ],
+      "answer": 2,
+      "explanation": "重排按相关性得分的降序排列，把最相关的文档放到最前。时间、长度、插入顺序都只是可能影响召回的元数据，并非重排的核心依据。",
+      "error_tag": "概念混淆",
+      "variant_group": "reranker_排序依据"
+    },
+    {
+      "kp": "ai.embed.reranker",
+      "type": "single_choice",
+      "question": "下列关于重排（reranking）与嵌入（embedding）关系的说法，正确的是？",
+      "options": [
+        "两者是同一件事，嵌入模型本身就是重排模型",
+        "嵌入用于把文本表示为向量以便召回，重排用于对已召回文本精细打分",
+        "重排必须先计算所有文档的嵌入，否则无法工作",
+        "嵌入只能用于图像，重排只能用于文本"
+      ],
+      "answer": 1,
+      "explanation": "嵌入把文本映射为向量，支撑向量检索/召回；重排则对召回得到的候选做精细化相关性打分。两者是管线中相邻但不同的阶段，不能等同。交叉编码器重排不需要预先为所有文档算嵌入。",
+      "error_tag": "概念混淆",
+      "variant_group": "reranker_与嵌入关系"
+    },
+    {
+      "kp": "ai.embed.reranker",
+      "type": "single_choice",
+      "question": "在评估 reranker 效果时，常用的指标不包括下列哪一项？",
+      "options": [
+        "NDCG（归一化折损累计增益）",
+        "MRR（平均倒数排名）",
+        "查询与文档的 BLEU 分数",
+        "Recall@k 或 nDCG@k"
+      ],
+      "answer": 2,
+      "explanation": "BLEU 是机器翻译/文本生成的评估指标，衡量生成文本与参考译文的 n-gram 重叠，不用于衡量检索/重排的排序质量。NDCG、MRR、Recall@k 都是排序评估的常用指标。",
+      "error_tag": "记忆缺失",
+      "variant_group": "reranker_评估指标"
+    }
+  ]
+}

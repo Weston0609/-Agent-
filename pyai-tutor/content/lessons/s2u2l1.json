@@ -1,0 +1,633 @@
+{
+  "id": "s2u2l1",
+  "title": "s2u2l1",
+  "kps": [
+    "py.iter.protocol",
+    "py.iter.iter_next"
+  ],
+  "theory": "## py.iter.protocol\n\n# Python 迭代协议（Iterator Protocol）\n\n> **一句话直觉**：迭代协议是 Python `for` 循环背后的“契约”——只要对象按约定提供 `__iter__` 和 `__next__`，Python 就能自动把它“遍历”出来，无需继承任何特殊基类。\n\n本讲属于课程 `s2u2l1`，是起点知识点。学完之后你将能：读懂 `for x in obj` 到底在做什么、自己写一个可迭代对象、理解生成器与迭代器之间的关系、并知道在工程中如何用 `iter()`/`next()`/`StopIteration` 写出健壮的代码。\n\n---\n\n## 1. 从 `for` 循环说起：迭代协议（Iteration Protocol）是什么\n\nPython 的 `for` 并不认识你的类，它只认两个“魔术方法”（magic method / dunder method）：\n\n- `__iter__`：返回一个**迭代器**（iterator）。\n- `__next__`：迭代器每调用一次，返回下一个元素；没有元素时抛 `StopIteration`。\n\n**结论 1**：`for x in obj` 等价于先 `it = iter(obj)`，再反复 `next(it)`，直到捕获 `StopIteration`。\n\n```python\n# 手动模拟 for 循环的内部机制\nnums = [10, 20]\nit = iter(nums)          # 调用 nums.__iter__()\nprint(next(it))          # 10\nprint(next(it))          # 20\ntry:\n    next(it)             # 没有更多元素了\nexcept StopIteration:    # 迭代协议用这个异常表示“结束”\n    print(\"迭代结束\")\n```\n\n---\n\n## 2. 可迭代对象（Iterable） vs 迭代器（Iterator）\n\n- **可迭代对象**：实现了 `__iter__`，可以被 `iter()` 转换。列表、字符串、字典都是。\n- **迭代器**：同时实现了 `__iter__` 和 `__next__`。它的 `__iter__` 通常 `return self`。\n\n**结论 2**：迭代器一定是可迭代对象，但可迭代对象不一定是迭代器。\n\n```python\nnums = [1, 2, 3]\nprint(hasattr(nums, \"__iter__\"))    # True，可迭代\nprint(hasattr(nums, \"__next__\"))    # False，列表本身不是迭代器\n\nit = iter(nums)\nprint(hasattr(it, \"__iter__\"))      # True\nprint(hasattr(it, \"__next__\"))      # True，真迭代器\nprint(iter(it) is it)               # True：迭代器的 __iter__ 返回自身\n```\n\n---\n\n## 3. 亲手实现一个迭代器\n\n下面写一个“倒数计数器”，从 `n` 迭代到 `1`。\n\n```python\nclass Countdown:\n    \"\"\"一个从 n 倒数到 1 的迭代器。\"\"\"\n    def __init__(self, n):\n        self.current = n\n\n    def __iter__(self):          # 迭代器协议要求：返回自身\n        return self\n\n    def __next__(self):          # 返回下一个值，或抛 StopIteration\n        if self.current <= 0:\n            raise StopIteration  # 告诉 for：结束了\n        value = self.current\n        self.current -= 1\n        return value\n\nfor x in Countdown(3):\n    print(x)                     # 3, 2, 1\n```\n\n**结论 3**：`StopIteration` 不是错误，而是“正常终止信号”。`for` 会静默吞掉它。\n\n---\n\n## 4. 惰性求值（lazy evaluation）与内存优势\n\n迭代器是**惰性**的：下一个元素只在被请求时才计算。这对处理大文件、无限序列很关键。\n\n```python\n# 生成器（generator）是写迭代器最省事的方式\n# 函数里出现 yield 就自动实现了 __iter__ 和 __next__\ndef fib():\n    a, b = 0, 1\n    while True:                  # 无限序列！\n        yield a\n        a, b = b, a + b\n\nit = fib()\nfor _ in range(6):\n    print(next(it))              # 0 1 1 2 3 5\n# 只计算用到的部分，不会撑爆内存\n```\n\n**结论 4**：能用生成器表达“逐次生成”的逻辑时，优先使用它——代码短，内存省。\n\n---\n\n## 5. 工程视角：`iter()` 的三种用法\n\n`iter()` 除了常规调用外，还有一种“哨兵模式”（sentinel form）：`iter(callable, sentinel)`，一直调用 `callable` 直到返回等于 `sentinel` 的值。\n\n```python\nimport random\n\n# 逐行读文件（经典用法，避免 .readlines() 一次性加载）\nwith open(\"demo.txt\", \"w\") as f:\n    f.write(\"a\\nb\\nc\\n\")\nwith open(\"demo.txt\") as f:\n    for line in f:               # 文件对象本身就是迭代器\n        print(line.strip())\n\n# 哨兵模式：不断取值直到命中停止条件\nit = iter(lambda: random.randint(1, 6), 6)\nprint(list(it))                 # 随机数序列，遇到 6 停止\n```\n\n**结论 5**：`iter(obj)` 把可迭代对象升级为迭代器；`iter(callable, sentinel)` 可以把你手写的“取一次”逻辑变成一个迭代器——这是工程里处理流式输入、传感器采样、网络响应时非常实用的 idioms。\n\n---\n\n## 小结表\n\n| 概念 | 关键方法 | 生命周期 | 典型例子 |\n|------|----------|----------|----------|\n| 可迭代对象 Iterable | `__iter__` | 可被多次遍历 | list、str、dict |\n| 迭代器 Iterator | `__iter__` + `__next__` | 一次性、有状态 | `iter([1,2])`、生成器 |\n| 生成器 Generator | 含 `yield` 的函数 | 惰性 | `fib()` |\n\n记住一句话：**`for` 只跟协议打交道，不跟类型打交道**。任何实现了协议的对象都能被 `for`、`sum`、`list()`、解构赋值等消费。\n\n```python\n\"\"\"\n演示 Python 迭代协议：手写一个可迭代对象 + 生成器 + iter 哨兵模式。\n运行：python demo.py\n\"\"\"\n\nclass NumberBox:\n    \"\"\"可迭代对象：只实现 __iter__，返回一个独立的迭代器。\n    这样即使多次 for 循环也不会互相干扰。\"\"\"\n    def __init__(self, *items):\n        self._items = list(items)\n\n    def __iter__(self):\n        return NumberBoxIterator(self._items)\n\n\nclass NumberBoxIterator:\n    \"\"\"真正的迭代器：实现 __iter__ 和 __next__。\"\"\"\n    def __init__(self, items):\n        self._items = items\n        self._index = 0\n\n    def __iter__(self):\n        return self\n\n    def __next__(self):\n        if self._index >= len(self._items):\n            raise StopIteration\n        value = self._items[self._index]\n        self._index += 1\n        return value\n\n\n# 1) 常规迭代\nbox = NumberBox(10, 20, 30)\nfor n in box:\n    print(\"for:\", n)\n\n# 2) 可重复迭代：证明 NumberBox 是“可迭代”而不是“迭代器”本身\nprint(\"two passes:\", list(box), list(box))\n\n# 3) 手动用 iter / next\nit = iter(box)\nprint(\"next:\", next(it), next(it))\n\n# 4) 生成器版本：等价但更短\ndef evens(limit):\n    for i in range(0, limit, 2):\n        yield i\n\nprint(\"generator:\", list(evens(10)))\n\n# 5) iter(callable, sentinel) 哨兵模式\nimport random\nrandom.seed(0)\nget_dice = lambda: random.randint(1, 6)\nstream = iter(get_dice, 4)      # 一直掷骰子，直到出现 4 停止\nprint(\"dice until 4:\", list(stream))\n```\n\n## py.iter.iter_next\n\n# 迭代器与 next()：Python 数据流的引擎\n\n## 一句话直觉\n\n学它是因为：Python 的 for 循环、生成器、文件读取、深度学习中的数据加载，**底层都靠迭代器（iterator）和 next() 驱动**——理解它们，你才能写出真正高效的流水线代码。\n\n---\n\n## 1. 什么是可迭代对象与迭代器？\n\n在 Python 中，**可迭代对象（iterable）** 是任何能交给 `for` 循环的东西，比如 `list`、`str`、`dict`、文件对象。\n**迭代器（iterator）** 是真正“记住当前走到哪”的对象——它内部保存状态，每次调用 `next()` 就吐出下一个元素。\n\n关键规则：\n- 可迭代对象需要实现 `__iter__()`，返回一个迭代器。\n- 迭代器需要实现 `__next__()`，返回下一个元素；没有元素时抛出 `StopIteration`。\n\n```python\n# 列表是可迭代对象，但本身不是迭代器\nnums = [10, 20, 30]\nprint(hasattr(nums, '__iter__'))   # True\nprint(hasattr(nums, '__next__'))   # False\n\n# iter() 把可迭代对象变成迭代器\nit = iter(nums)\nprint(hasattr(it, '__next__'))     # True\n```\n\n---\n\n## 2. next()：手动推进一步\n\n`next(iterator)` 是驱动迭代器的核心函数：每调用一次，取下一个值；取完后再调用，会抛出 `StopIteration` 异常。\n\n`next(iterator, default)` 可以给一个默认值，取完时不抛异常而是返回默认值。\n\n```python\nit = iter([1, 2, 3])\nprint(next(it))   # 1\nprint(next(it))   # 2\nprint(next(it))   # 3\nprint(next(it, 'END'))  # END —— 用默认值避免异常\n```\n\n---\n\n## 3. for 循环背后的秘密\n\n`for x in obj:` 的等价逻辑是：先 `iter(obj)` 拿到迭代器，然后不断 `next()`，直到 `StopIteration` 结束。\n\n理解这一点，你就明白为什么：\n- 迭代器只能遍历一次（状态被消耗了）。\n- 生成器函数天然就是迭代器生产者。\n\n```python\n# 手动模拟 for 循环\nit = iter(['a', 'b', 'c'])\nwhile True:\n    try:\n        val = next(it)\n        print(val)\n    except StopIteration:\n        break\n```\n\n---\n\n## 4. 生成器：用 yield 写迭代器\n\n写一个类去实现 `__iter__` / `__next__` 很啰嗦。**生成器（generator）** 用 `yield` 一个关键字就搞定——函数一执行到 `yield` 就“暂停”，下次 `next()` 从暂停处继续。\n\n```python\ndef countdown(n):\n    while n > 0:\n        yield n   # 暂停，把 n 交出去\n        n -= 1\n\nfor x in countdown(3):\n    print(x)   # 3 2 1\n\ng = countdown(2)\nprint(next(g))  # 2\nprint(next(g))  # 1\n```\n\n---\n\n## 5. 工程级用法：惰性流水线\n\n在机器学习 / 数据处理中，迭代器让你**不用一次性把整个数据集加载到内存**。例如逐行读一个大文件、分批（batch）喂给模型，都是迭代器思想。\n\n```python\n# 只读第一行，不把整个文件读进内存\nwith open('big.txt') as f:\n    it = iter(f)\n    first_line = next(it, None)\n    print(first_line)\n\n# 自定义一个批迭代器（batch iterator）\ndef batches(data, size):\n    batch = []\n    for x in data:\n        batch.append(x)\n        if len(batch) == size:\n            yield batch\n            batch = []\n    if batch:            # 最后不足一批也要吐出来\n        yield batch\n\nfor b in batches(range(7), 3):\n    print(b)   # [0,1,2] [3,4,5] [6]\n```\n\n这就是 PyTorch `DataLoader` 的简化思想：**惰性、按需、可组合**。\n\n---\n\n## 6. 小结\n\n- 可迭代对象 → `iter()` → 迭代器 → `next()` → 值 / `StopIteration`。\n- `for` 循环就是 `next()` + `try/except StopIteration` 的语法糖。\n- 生成器用 `yield` 以最简方式写出迭代器。\n- 工程上用迭代器做惰性、流式、低内存的数据处理。\n\n```python\n# 用生成器实现一个“斐波那契迭代器”，并用 next() 手动推进\n\ndef fibonacci(limit):\n    \"\"\"生成不超过 limit 的斐波那契数列。\"\"\"\n    a, b = 0, 1\n    while a <= limit:\n        yield a          # 交出一个值，暂停在这里\n        a, b = b, a + b\n\n# 方式一：for 循环（内部自动调用 iter() 和 next()）\nprint(\"for 循环:\", list(fibonacci(50)))\n\n# 方式二：手动 next()，感受迭代器的状态\nit = iter(fibonacci(50))\nprint(next(it))          # 0\nprint(next(it))          # 1\nprint(next(it))          # 1\n\n# 方式三：带默认值，避免 StopIteration 异常\nprint(next(it, \"NO_MORE\"))\n\n# 演示一个已耗尽的迭代器\nempty_it = iter([])\nprint(next(empty_it, \"EMPTY\"))   # EMPTY\n```\n",
+  "quiz": [
+    {
+      "kp": "py.iter.protocol",
+      "type": "single_choice",
+      "question": "以下代码定义一个可被 for 循环遍历的类，横线处应填入什么？\n\nclass Countdown:\n    def __init__(self, start):\n        self.n = start\n    def __iter__(self):\n        return self\n    def ____(self):\n        if self.n <= 0:\n            raise StopIteration\n        self.n -= 1\n        return self.n + 1",
+      "options": [
+        "__next__",
+        "__iter__",
+        "__getitem__",
+        "__call__"
+      ],
+      "answer": 0,
+      "explanation": "迭代器协议要求对象实现 __iter__（返回迭代器自身）和 __next__（返回下一个值或抛出 StopIteration）。__iter__ 已给出，缺少的是 __next__。__getitem__ 可让对象支持下标遍历，但本类已按迭代器协议实现；__call__ 与迭代无关。",
+      "error_tag": "迭代器协议方法混淆",
+      "variant_group": "iterator_protocol_methods"
+    },
+    {
+      "kp": "py.iter.protocol",
+      "type": "single_choice",
+      "question": "以下哪个对象同时满足「可迭代对象」和「迭代器」两个条件？",
+      "options": [
+        "一个列表 [1, 2, 3]",
+        "一个字符串 \"abc\"",
+        "一个实现了 __iter__ 且返回 self、并实现了 __next__ 的对象",
+        "一个只实现了 __getitem__ 的对象"
+      ],
+      "answer": 2,
+      "explanation": "可迭代对象只需实现 __iter__；迭代器需要实现 __iter__（返回自身）和 __next__。列表、字符串是可迭代对象但不是迭代器；只实现 __getitem__ 的对象可通过旧式序列协议被遍历，但也不是迭代器。",
+      "error_tag": "可迭代对象与迭代器混淆",
+      "variant_group": "iterable_vs_iterator"
+    },
+    {
+      "kp": "py.iter.protocol",
+      "type": "single_choice",
+      "question": "关于生成器与迭代器协议的关系，下列说法正确的是？",
+      "options": [
+        "生成器函数调用后返回一个生成器对象，它自动实现了迭代器协议",
+        "生成器只是一种语法糖，不能被 next() 调用",
+        "生成器必须手动实现 __next__ 才能用 for 遍历",
+        "生成器不是可迭代对象"
+      ],
+      "answer": 0,
+      "explanation": "含 yield 的函数是生成器函数，调用它得到生成器对象；生成器自动实现了 __iter__ 和 __next__，因此既是可迭代对象又是迭代器，可以直接用 next() 和 for 遍历，无需手写这两个方法。",
+      "error_tag": "生成器与迭代器协议关系误解",
+      "variant_group": "generator_protocol"
+    },
+    {
+      "kp": "py.iter.protocol",
+      "type": "single_choice",
+      "question": "以下代码输出是什么？\n\nclass C:\n    def __init__(self):\n        self.data = [1, 2]\n    def __iter__(self):\n        return iter(self.data)\n\nc = C()\nprint(list(c))\nprint(list(c))",
+      "options": [
+        "[1, 2]\n[]",
+        "[1, 2]\n[1, 2]",
+        "报错，因为 __iter__ 应返回 self",
+        "[]\n[1, 2]"
+      ],
+      "answer": 1,
+      "explanation": "这里 __iter__ 每次都返回底层列表的一个新迭代器，因此每次调用 list(c) 都能从头遍历得到 [1, 2]。这与迭代器自身的 __iter__ 必须返回 self 不同——可迭代对象的 __iter__ 可以每次返回新的迭代器。",
+      "error_tag": "可迭代对象与迭代器 __iter__ 行为混淆",
+      "variant_group": "iterable_new_iterator"
+    },
+    {
+      "kp": "py.iter.protocol",
+      "type": "single_choice",
+      "question": "以下代码的意图是让类可迭代，但运行 for 循环时报错。最可能的原因是？\n\nclass Bag:\n    def __init__(self):\n        self.items = [1, 2, 3]\n    def __next__(self):\n        return self.items.pop()\n\nfor x in Bag():\n    print(x)",
+      "options": [
+        "没有定义 __iter__，对象不是可迭代对象，for 会抛 TypeError",
+        "pop() 方法不存在",
+        "for 循环不能遍历自定义类",
+        "缺少 __init__"
+      ],
+      "answer": 0,
+      "explanation": "只有 __next__ 而没有 __iter__，对象不满足可迭代对象协议，iter() 无法调用它，for 循环会抛 TypeError: not iterable。需要补充 __iter__（返回迭代器，例如 self）。",
+      "error_tag": "缺少 __iter__ 导致不可迭代",
+      "variant_group": "iterator_protocol_methods"
+    },
+    {
+      "kp": "py.iter.protocol",
+      "type": "single_choice",
+      "question": "下面哪个表达式能判断 obj 是否为迭代器（而非仅可迭代）？",
+      "options": [
+        "hasattr(obj, '__iter__')",
+        "hasattr(obj, '__next__') and hasattr(obj, '__iter__')",
+        "isinstance(obj, list)",
+        "len(obj) > 0"
+      ],
+      "answer": 1,
+      "explanation": "迭代器需同时具备 __iter__ 和 __next__。仅检查 __iter__ 只能判断可迭代；isinstance(obj, list) 只针对列表；len(obj) 与是否为迭代器无关。",
+      "error_tag": "迭代器判定条件不完整",
+      "variant_group": "iterable_vs_iterator"
+    },
+    {
+      "kp": "py.iter.protocol",
+      "type": "single_choice",
+      "question": "以下代码运行结果是？\n\nit = iter([1])\nprint(next(it))\nprint(next(it, 'end'))",
+      "options": [
+        "1\nend",
+        "1\n报错 StopIteration",
+        "1\nNone",
+        "报错，因为第二次调用不合法"
+      ],
+      "answer": 0,
+      "explanation": "next(iterator, default) 在迭代器耗尽时返回给定默认值而不是抛 StopIteration。第一次 next 取到 1，第二次已耗尽，返回 'end'。",
+      "error_tag": "next 默认值参数不了解",
+      "variant_group": "stopiteration_basics"
+    },
+    {
+      "kp": "py.iter.protocol",
+      "type": "single_choice",
+      "question": "一个可迭代对象和一个迭代器最重要的区别是？",
+      "options": [
+        "可迭代对象一定实现了 __next__",
+        "迭代器一定实现了 __getitem__",
+        "可迭代对象的 __iter__ 通常每次返回一个新的迭代器，而迭代器的 __iter__ 返回自身",
+        "两者完全相同，没有区别"
+      ],
+      "answer": 2,
+      "explanation": "可迭代对象只需能产生迭代器，其 __iter__ 通常每次返回新迭代器，因而可以被多次遍历；迭代器既实现 __iter__ 又实现 __next__，其 __iter__ 返回自身，遍历一次后耗尽。",
+      "error_tag": "可迭代对象与迭代器核心区别不清",
+      "variant_group": "iterable_vs_iterator"
+    },
+    {
+      "kp": "py.iter.protocol",
+      "type": "single_choice",
+      "question": "以下哪种写法能让 for 循环遍历一个「每次从头开始」的可迭代对象，即使它内部保存的是列表？",
+      "options": [
+        "在 __iter__ 中返回 iter(self.data)，每次调用得到新迭代器",
+        "在 __iter__ 中返回 self，并让类实现 __next__ 从列表中逐个弹出元素",
+        "在 __iter__ 中返回 self.data 本身（列表）",
+        "在 __iter__ 中什么都不返回"
+      ],
+      "answer": 0,
+      "explanation": "在 __iter__ 中返回 iter(self.data) 会每次产生新的迭代器，因此对象可多次从头遍历。返回 self 并在 __next__ 中弹出元素会消耗列表，第二次遍历就为空。返回列表本身不满足迭代器要求（__iter__ 应返回迭代器）。不返回则得到 None，for 会报错。",
+      "error_tag": "可迭代对象实现方式选择错误",
+      "variant_group": "iterable_new_iterator"
+    },
+    {
+      "kp": "py.iter.protocol",
+      "type": "single_choice",
+      "question": "以下代码输出是什么？\n\nit = iter([1, 2, 3])\nfor x in it:\n    if x == 2:\n        break\nprint(list(it))",
+      "options": [
+        "[1, 2, 3]",
+        "[3]",
+        "[]",
+        "[2, 3]"
+      ],
+      "answer": 1,
+      "explanation": "for 循环在 x == 2 时 break，此时迭代器已消耗 1 和 2，剩余元素 3。因此 list(it) 得到 [3]。迭代器状态在 break 后保留。",
+      "error_tag": "迭代器状态在 break 后的保留",
+      "variant_group": "iterator_exhaustion"
+    },
+    {
+      "kp": "py.iter.protocol",
+      "type": "single_choice",
+      "question": "关于 __iter__ 方法的返回要求，下列说法正确的是？",
+      "options": [
+        "必须返回一个列表",
+        "必须返回一个迭代器对象",
+        "可以返回任意非 None 值",
+        "必须返回整数下标"
+      ],
+      "answer": 1,
+      "explanation": "可迭代对象的 __iter__ 必须返回一个迭代器对象，供 for/iter() 使用。返回列表（本身可迭代但非迭代器）、返回任意值或整数都不符合迭代器协议。",
+      "error_tag": "__iter__ 返回值类型误解",
+      "variant_group": "iterable_new_iterator"
+    },
+    {
+      "kp": "py.iter.protocol",
+      "type": "single_choice",
+      "question": "以下代码中 it 是迭代器。下面哪段代码的等价写法正确？\n\nfor x in it:\n    print(x)",
+      "options": [
+        "while True:\n    x = next(it)\n    print(x)",
+        "while True:\n    try:\n        x = next(it)\n    except StopIteration:\n        break\n    print(x)",
+        "for _ in range(len(it)):\n    print(next(it))",
+        "print(list(it))"
+      ],
+      "answer": 1,
+      "explanation": "for 循环的底层是：获取迭代器，反复 next()，捕获 StopIteration 后退出。选项 A 缺少异常处理会报错；选项 C 中迭代器没有 len；选项 D 虽然能输出元素但不打印每个值，语义不同。",
+      "error_tag": "for 循环与迭代器协议等价转换错误",
+      "variant_group": "for_loop_mechanism"
+    },
+    {
+      "kp": "py.iter.protocol",
+      "type": "single_choice",
+      "question": "执行以下代码，输出是什么？\n\nit = iter([10, 20, 30])\nprint(next(it))\nprint(next(it))\nprint(list(it))",
+      "options": [
+        "10\n20\n[10, 20, 30]",
+        "10\n20\n[30]",
+        "10\n20\n[]",
+        "报错，因为迭代器不能两次使用"
+      ],
+      "answer": 1,
+      "explanation": "迭代器是「一次性」的，每次 next 消耗一个元素。前两次 next 取走 10 和 20，list(it) 只能取到剩余元素 30。迭代器耗尽后不会重置，但也不会报错。",
+      "error_tag": "迭代器消耗特性误解",
+      "variant_group": "iterator_exhaustion"
+    },
+    {
+      "kp": "py.iter.protocol",
+      "type": "single_choice",
+      "question": "以下代码运行结果是？\n\nclass R:\n    def __init__(self):\n        self.i = 0\n    def __iter__(self):\n        return self\n    def __next__(self):\n        if self.i >= 3:\n            raise StopIteration\n        self.i += 1\n        return self.i\n\nprint(list(R()))\nprint(list(R()))",
+      "options": [
+        "[1, 2, 3]\n[1, 2, 3]",
+        "[1, 2, 3]\n[]",
+        "[]\n[]",
+        "报错，因为每次创建新对象"
+      ],
+      "answer": 0,
+      "explanation": "每处 list(R()) 都创建了一个全新的 R 实例，其 i 从 0 开始，所以两次都得到 [1, 2, 3]。注意与复用同一个迭代器对象不同。",
+      "error_tag": "新建实例与复用迭代器混淆",
+      "variant_group": "iterator_exhaustion"
+    },
+    {
+      "kp": "py.iter.protocol",
+      "type": "single_choice",
+      "question": "关于 for 循环遍历一个可迭代对象，下列说法正确的是？",
+      "options": [
+        "for 循环会先调用该对象的 __iter__ 获得迭代器，再反复调用 next",
+        "for 循环直接调用对象的 __next__ 方法",
+        "for 循环要求对象必须是列表或元组",
+        "for 循环结束后迭代器会自动重置"
+      ],
+      "answer": 0,
+      "explanation": "for 循环的标准流程是：对可迭代对象调用 iter() 得到迭代器，然后反复调用 next() 直到捕获 StopIteration。对象本身不必是 __next__ 实现者；不必是列表/元组；迭代器耗尽后不会自动重置。",
+      "error_tag": "for 循环机制理解偏差",
+      "variant_group": "for_loop_mechanism"
+    },
+    {
+      "kp": "py.iter.protocol",
+      "type": "single_choice",
+      "question": "以下代码运行结果是？\n\nclass MyIter:\n    def __iter__(self):\n        return self\n    def __next__(self):\n        return 1\n\nit = MyIter()\nprint(next(it))\nprint(next(it))",
+      "options": [
+        "1\n1",
+        "1\n报错 StopIteration",
+        "1\n1 然后无限重复",
+        "报错，因为没有定义 __init__"
+      ],
+      "answer": 0,
+      "explanation": "__next__ 每次直接返回 1，从不抛出 StopIteration，因此每次 next 都返回 1。这个迭代器是无限的，不会报错（除非用 for 循环会一直运行）。",
+      "error_tag": "未抛 StopIteration 的后果",
+      "variant_group": "infinite_iterator"
+    },
+    {
+      "kp": "py.iter.protocol",
+      "type": "single_choice",
+      "question": "一个对象实现了 __getitem__ 但没有实现 __iter__，那么 for x in obj 会怎样？",
+      "options": [
+        "抛出 TypeError，因为缺少 __iter__",
+        "Python 会从下标 0 开始依次调用 __getitem__，直到 IndexError",
+        "只遍历一次后停止",
+        "没有任何输出，直接跳过"
+      ],
+      "answer": 1,
+      "explanation": "旧式序列协议允许对象只实现 __getitem__ 就能被迭代：Python 从索引 0 开始调用 __getitem__，遇到 IndexError 停止。这是 __iter__ 出现之前的机制，仍被支持。",
+      "error_tag": "旧式迭代协议误解",
+      "variant_group": "getitem_iteration"
+    },
+    {
+      "kp": "py.iter.protocol",
+      "type": "single_choice",
+      "question": "以下代码输出是什么？\n\nlst = [1, 2, 3]\nprint(hasattr(lst, '__next__'))\nprint(hasattr(iter(lst), '__next__'))",
+      "options": [
+        "True\nTrue",
+        "False\nTrue",
+        "True\nFalse",
+        "False\nFalse"
+      ],
+      "answer": 1,
+      "explanation": "列表是可迭代对象但不是迭代器，没有 __next__；iter(lst) 返回的 list_iterator 是迭代器，拥有 __next__。因此分别是 False 和 True。",
+      "error_tag": "可迭代对象与迭代器属性混淆",
+      "variant_group": "iterable_vs_iterator"
+    },
+    {
+      "kp": "py.iter.protocol",
+      "type": "single_choice",
+      "question": "以下哪种做法最可能导致迭代器在被部分消费后，再遍历时「少了前面的元素」？",
+      "options": [
+        "每次遍历前重新调用 iter() 获取新的迭代器",
+        "保存了迭代器对象并在多个循环中重复使用同一个迭代器",
+        "使用 list() 从头构建新列表",
+        "在循环外先对可迭代对象调用 len()"
+      ],
+      "answer": 1,
+      "explanation": "迭代器是有状态的、一次性的。如果保存同一个迭代器对象并在多个循环中复用，前面的循环已经消耗了部分元素，后续循环就只能看到剩余元素。每次调用 iter() 会得到新的迭代器，不会出现该问题。",
+      "error_tag": "迭代器复用错误",
+      "variant_group": "iterator_exhaustion"
+    },
+    {
+      "kp": "py.iter.protocol",
+      "type": "single_choice",
+      "question": "自定义迭代器时，__iter__ 方法通常应该返回什么？",
+      "options": [
+        "一个新的列表副本",
+        "迭代器对象自身（return self）",
+        "None",
+        "被迭代对象的长度"
+      ],
+      "answer": 1,
+      "explanation": "迭代器协议要求迭代器的 __iter__ 返回迭代器自身，这样 for 循环中 iter(it) 返回的就是同一个可继续消费的迭代器。返回列表副本、None 或长度都不符合协议。",
+      "error_tag": "迭代器 __iter__ 返回值错误",
+      "variant_group": "iterator_protocol_methods"
+    },
+    {
+      "kp": "py.iter.protocol",
+      "type": "single_choice",
+      "question": "以下代码中，哪一个调用会抛出异常？\n\nit = iter(\"ab\")",
+      "options": [
+        "next(it) 第一次",
+        "next(it) 第二次",
+        "next(it) 第三次",
+        "iter(it)"
+      ],
+      "answer": 2,
+      "explanation": "\"ab\" 只有两个字符，前两次 next 返回 'a'、'b'，第三次已耗尽，抛出 StopIteration。iter(it) 对迭代器调用会返回自身（迭代器本身也是可迭代对象），不抛异常。",
+      "error_tag": "StopIteration 时机判断错误",
+      "variant_group": "stopiteration_basics"
+    },
+    {
+      "kp": "py.iter.iter_next",
+      "type": "single_choice",
+      "question": "关于迭代器协议中的 __next__ 方法，下列说法正确的是？",
+      "options": [
+        "它接收一个可迭代对象作为参数，并返回该对象的第一个元素",
+        "它无参数调用，每次返回下一个元素，元素耗尽时应抛出 StopIteration",
+        "__next__ 是一个类方法，需要显式传入 cls 参数",
+        "它必须返回一个列表，否则会被解释器认为迭代结束"
+      ],
+      "answer": 1,
+      "explanation": "迭代器协议的 __next__ 方法不接受额外参数（除 self），每次调用返回下一个元素；当没有更多元素时，必须抛出 StopIteration 来通知调用方迭代结束。选项 A 混淆了 iter() 与 next()；C 把实例方法说成类方法；D 错误地要求返回列表。",
+      "error_tag": "概念混淆",
+      "variant_group": "iter_protocol_basic"
+    },
+    {
+      "kp": "py.iter.iter_next",
+      "type": "single_choice",
+      "question": "以下关于内置函数 next() 的用法，哪一项是错误的？",
+      "options": [
+        "next(it) 返回迭代器 it 的下一个元素",
+        "next(it, default) 在迭代器耗尽时返回 default 而不抛异常",
+        "next(it) 在迭代器耗尽时会抛出 StopIteration",
+        "next(it, default) 在迭代器耗尽时会抛出 StopIteration 而不是返回 default"
+      ],
+      "answer": 3,
+      "explanation": "next(it, default) 提供默认值时，迭代器耗尽会返回 default 而非抛异常，这正是它的用途。A、B、C 都正确描述了 next() 的行为，只有 D 说反了。",
+      "error_tag": "边界错误",
+      "variant_group": "next_builtin_usage"
+    },
+    {
+      "kp": "py.iter.iter_next",
+      "type": "single_choice",
+      "question": "下面关于 for 循环内部机制的描述，哪一项最准确？",
+      "options": [
+        "for 循环直接在原对象上调用 __next__，不经过 iter()",
+        "for 循环先对对象调用 iter() 获得迭代器，然后反复调用其 __next__，直到捕获 StopIteration",
+        "for 循环每次循环都重新调用一次 iter() 以获得新的迭代器",
+        "for 循环通过索引下标访问元素，与迭代器协议无关"
+      ],
+      "answer": 1,
+      "explanation": "for 语句先调用 iter(对象) 得到迭代器（只调用一次），然后循环调用 next()，直到捕获 StopIteration 才结束。它不会每次循环重新 iter()，也不依赖索引。",
+      "error_tag": "概念混淆",
+      "variant_group": "for_loop_protocol"
+    },
+    {
+      "kp": "py.iter.iter_next",
+      "type": "multi_choice",
+      "question": "关于迭代器对象的特征，下列描述正确的有？（多选）",
+      "options": [
+        "迭代器必须实现 __next__ 方法",
+        "迭代器的 __iter__ 方法通常返回它自身",
+        "迭代器是有状态的，会记录当前遍历位置",
+        "迭代器可以被多次完整遍历而无需重建",
+        "所有可迭代对象都必须是迭代器"
+      ],
+      "answer": [
+        0,
+        1,
+        2
+      ],
+      "explanation": "迭代器需要 __next__，其 __iter__ 一般返回自身，且内部保存状态以记录位置，A、B、C 正确。D 错误：迭代器是单向的，耗尽后不能自动重复遍历。E 错误：可迭代对象只需实现 __iter__ 产出迭代器，自身不必是迭代器。",
+      "error_tag": "概念混淆",
+      "variant_group": "iterator_characteristics"
+    },
+    {
+      "kp": "py.iter.iter_next",
+      "type": "multi_choice",
+      "question": "下列哪些情况会使对迭代器调用 next() 抛出 StopIteration？（多选）",
+      "options": [
+        "已经取完所有元素后再次调用 next()",
+        "对一个空的迭代器第一次调用 next()",
+        "生成器函数内部执行到 return 后再次调用 next()",
+        "调用 next(it, default) 且迭代器已耗尽",
+        "对一个尚未开始遍历的迭代器调用 next()"
+      ],
+      "answer": [
+        0,
+        1,
+        2
+      ],
+      "explanation": "A、B、C 都会在没有剩余元素时抛出 StopIteration。D 不会抛出，因为有 default 时会返回默认值。E 也不会抛出，尚未开始遍历的迭代器首次调用通常会返回第一个元素。",
+      "error_tag": "边界错误",
+      "variant_group": "stopiteration_scenarios"
+    },
+    {
+      "kp": "py.iter.iter_next",
+      "type": "multi_choice",
+      "question": "关于内置函数 next() 与 __next__ 方法的关系，下列说法正确的有？（多选）",
+      "options": [
+        "next(it) 本质上是调用 it.__next__() 并返回其结果",
+        "定义 __next__ 后，对象就能被 next() 直接使用",
+        "next(it, default) 会在捕获 StopIteration 后返回 default",
+        "next() 只接受迭代器，不接收其他任何对象"
+      ],
+      "answer": [
+        0,
+        1,
+        2
+      ],
+      "explanation": "next(it) 内部就是调用 it 的 __next__；实现了 __next__ 的对象即可用 next() 调用；带默认值时 next 捕获 StopIteration 并返回 default，A、B、C 正确。D 不准确，因为 next() 只要求对象具备 __next__，并不局限于严格意义的迭代器名称，且它总要求该属性存在。",
+      "error_tag": "概念混淆",
+      "variant_group": "next_builtin_usage"
+    },
+    {
+      "kp": "py.iter.iter_next",
+      "type": "multi_choice",
+      "question": "下面哪些对象是迭代器（可直接用 next() 取值）？（多选）",
+      "options": [
+        "iter([1, 2, 3]) 的返回值",
+        "[1, 2, 3] 这个列表本身",
+        "(x for x in range(3)) 这个生成器表达式的结果",
+        "range(3) 这个 range 对象"
+      ],
+      "answer": [
+        0,
+        2
+      ],
+      "explanation": "iter([1,2,3]) 返回列表迭代器，生成器表达式产生生成器，二者都是迭代器，可用于 next()。列表是可迭代对象但不是迭代器；range 对象是可迭代对象，同样不是迭代器（需先 iter()）。",
+      "error_tag": "概念混淆",
+      "variant_group": "iterable_vs_iterator"
+    },
+    {
+      "kp": "py.iter.iter_next",
+      "type": "fill_blank",
+      "question": "函数 next(it, default) 在迭代器 it 耗尽时会返回 ______ 而不是抛出异常。",
+      "options": [],
+      "answer": [
+        "default",
+        "默认值",
+        "传入的 default 值"
+      ],
+      "explanation": "next() 的第二个参数是默认值，当迭代器耗尽时返回该默认值而不是抛出 StopIteration，常用于安全取值。",
+      "error_tag": "记忆缺失",
+      "variant_group": "next_default_boundary"
+    },
+    {
+      "kp": "py.iter.iter_next",
+      "type": "fill_blank",
+      "question": "迭代器的 __next__ 方法在没有更多元素时，应抛出的异常是 ______。",
+      "options": [],
+      "answer": [
+        "StopIteration",
+        "StopIteration 异常",
+        "StopIteration 异常对象"
+      ],
+      "explanation": "迭代器协议规定，__next__ 在元素耗尽时必须抛出 StopIteration，这样 for、next 等机制才能正确识别遍历结束。",
+      "error_tag": "记忆缺失",
+      "variant_group": "stopiteration_scenarios"
+    },
+    {
+      "kp": "py.iter.iter_next",
+      "type": "code_reading",
+      "question": "阅读代码，回答问题：\n\nit = iter([1, 2, 3])\nfor x in it:\n    print(x)\nprint(next(it, 'done'))\n\n输出结果是什么？为什么？",
+      "options": [],
+      "answer": "输出：1、2、3、done。for 循环遍历了迭代器 it 的全部元素，迭代结束后 it 已耗尽；随后 next(it, 'done') 因迭代器已耗尽而返回默认值 'done'，不抛异常。",
+      "explanation": "关键点在于 for 循环会耗尽同一个迭代器对象，循环结束后 it 处于耗尽状态，因此带默认值的 next() 返回默认值。这考察「for 耗尽迭代器」和「next 默认值」两个知识点的结合。",
+      "error_tag": "边界错误",
+      "variant_group": "for_loop_protocol"
+    },
+    {
+      "kp": "py.iter.iter_next",
+      "type": "code_reading",
+      "question": "阅读代码，回答问题：\n\nclass Counter:\n    def __init__(self, n):\n        self.n = n\n        self.i = 0\n    def __iter__(self):\n        return self\n    def __next__(self):\n        if self.i >= self.n:\n            raise StopIteration\n        self.i += 1\n        return self.i\n\nc = Counter(2)\nprint(list(c))\nprint(list(c))\n\n两次打印结果分别是什么？为什么？",
+      "options": [],
+      "answer": "第一次打印 [1, 2]，第二次打印 []。因为 Counter 的 __iter__ 返回自身，该对象同时是可迭代对象又是迭代器，其遍历状态保存在 self.i 上；第一次 list(c) 把内部计数耗尽后，第二次再遍历时 self.i 已等于 n，__next__ 立即抛出 StopIteration，因此第二次得到空列表。",
+      "explanation": "这考察「迭代器有状态且耗尽后不能自动重置」这一核心概念。__iter__ 返回自身导致同一对象的遍历状态被复用，这是常见的陷阱。",
+      "error_tag": "概念混淆",
+      "variant_group": "exhausted_iterator"
+    },
+    {
+      "kp": "py.iter.iter_next",
+      "type": "scenario",
+      "question": "工程师写了一个可迭代对象类，__iter__ 返回一个列表迭代器，但发现同一实例被 for 循环遍历两次时，第二次得到空结果。请分析最可能的原因，并给出修复思路。",
+      "options": [],
+      "answer": "原因：__iter__ 返回的是缓存/共享的同一个迭代器（例如把迭代器保存在实例属性上并反复返回），迭代器是单向有状态的，第一次遍历耗尽后再返回同一个已耗尽的迭代器，导致第二次遍历为空。修复：每次调用 __iter__ 都返回一个全新的迭代器（例如 return iter(self._data) 或 return self._data[:] 的迭代），而不是复用同一个迭代器对象。",
+      "explanation": "考察对「迭代器有状态、可迭代对象应每次产生新迭代器」的工程理解。共享迭代器是常见 bug 来源，正确做法是每次 __iter__ 返回新的迭代器。",
+      "error_tag": "概念混淆",
+      "variant_group": "iterable_vs_iterator",
+      "required_keywords": [
+        "迭代器",
+        "有状态",
+        "可迭代对象",
+        "__iter__",
+        "新迭代器"
+      ]
+    },
+    {
+      "kp": "py.iter.iter_next",
+      "type": "single_choice",
+      "question": "下面代码执行后，输出是什么？\n\nit = iter([10, 20])\nprint(next(it))\nprint(next(it, 'end'))\nprint(next(it, 'end'))",
+      "options": [
+        "10\\n20\\nend",
+        "10\\n20\\nStopIteration",
+        "10\\nend\\nend",
+        "20\\nend\\nend"
+      ],
+      "answer": 0,
+      "explanation": "第一次 next(it) 返回 10；第二次 next(it, 'end') 返回 20（迭代器仍有元素，default 不生效）；第三次元素已耗尽，返回默认值 'end'。所以输出为 10、20、end。",
+      "error_tag": "边界错误",
+      "variant_group": "next_default_boundary"
+    },
+    {
+      "kp": "py.iter.iter_next",
+      "type": "single_choice",
+      "question": "一个对象要成为「可迭代对象」（可以被 for 循环遍历），以下哪种做法是充分的？",
+      "options": [
+        "实现 __next__ 方法即可",
+        "实现 __iter__ 方法，并且它返回一个迭代器对象",
+        "实现 __len__ 方法，且返回长度大于 0",
+        "实现 __getitem__ 方法并返回值，但参数必须是整数索引"
+      ],
+      "answer": 1,
+      "explanation": "可迭代对象需要实现 __iter__，其返回值是一个迭代器（即实现了 __next__ 的对象）。仅实现 __next__ 得到的是迭代器而非可迭代对象；__len__ 不足以支持迭代；__getitem__ 虽可支持老式序列迭代，但只要不是整数索引或中断方式不当就不是充分且标准的做法。",
+      "error_tag": "概念混淆",
+      "variant_group": "iterable_vs_iterator"
+    },
+    {
+      "kp": "py.iter.iter_next",
+      "type": "single_choice",
+      "question": "下面关于「迭代器」和「可迭代对象」的区别，说法正确的是？",
+      "options": [
+        "列表是迭代器，因为它可以被遍历",
+        "迭代器一定是可迭代对象，但可迭代对象不一定是迭代器",
+        "可迭代对象一定是迭代器，但迭代器不一定是可迭代对象",
+        "两者是完全等价的，只是叫法不同"
+      ],
+      "answer": 1,
+      "explanation": "迭代器实现了 __iter__（返回自身）和 __next__，因此它自身就是可迭代对象；而像 list 这样的可迭代对象能通过 iter() 产出迭代器，但它本身并不实现 __next__，所以不是迭代器。故 B 正确。",
+      "error_tag": "概念混淆",
+      "variant_group": "iterable_vs_iterator"
+    },
+    {
+      "kp": "py.iter.iter_next",
+      "type": "single_choice",
+      "question": "对于一个已经耗尽的迭代器，再次对其调用 next() 会发生什么？",
+      "options": [
+        "自动从头开始重新迭代",
+        "返回 None",
+        "抛出 StopIteration 异常",
+        "抛出 RuntimeError 异常"
+      ],
+      "answer": 2,
+      "explanation": "迭代器是有状态的单向对象，一旦耗尽，后续调用 __next__ 会持续抛出 StopIteration。它不会自动重置，也不会返回 None。要重新遍历需重新获取迭代器。",
+      "error_tag": "记忆缺失",
+      "variant_group": "exhausted_iterator"
+    },
+    {
+      "kp": "py.iter.iter_next",
+      "type": "single_choice",
+      "question": "调用 iter(obj) 时，如果 obj 不是可迭代对象，会发生什么？",
+      "options": [
+        "返回 obj 自身作为迭代器",
+        "抛出 TypeError",
+        "返回 None",
+        "返回一个空的迭代器"
+      ],
+      "answer": 1,
+      "explanation": "当 iter() 收到的对象既没有 __iter__ 也不支持序列协议（__getitem__）时，会抛出 TypeError（'object is not iterable'）。不会返回自身、None 或空迭代器。",
+      "error_tag": "概念混淆",
+      "variant_group": "iter_builtin_errors"
+    },
+    {
+      "kp": "py.iter.iter_next",
+      "type": "single_choice",
+      "question": "下面代码输出是什么？\n\ndef gen():\n    yield 1\n    yield 2\n\ng = gen()\nprint(next(g))\nprint(next(g, 'X'))\nprint(next(g, 'X'))",
+      "options": [
+        "1\\n2\\nX",
+        "1\\n2\\nStopIteration",
+        "1\\nX\\nX",
+        "1\\n1\\n2"
+      ],
+      "answer": 0,
+      "explanation": "生成器是迭代器。前两次 next 依次得到 1 和 2；生成器此时已耗尽，第三次带默认值调用返回 'X'，所以输出为 1、2、X。",
+      "error_tag": "边界错误",
+      "variant_group": "generator_next"
+    },
+    {
+      "kp": "py.iter.iter_next",
+      "type": "single_choice",
+      "question": "关于迭代器被耗尽后的状态，以下描述正确的是？",
+      "options": [
+        "迭代器耗尽后，其内部会保留一个可克隆的副本供再次遍历",
+        "一旦迭代器耗尽，它始终保持耗尽状态，除非重新创建或重置",
+        "对已耗尽的迭代器调用 next 会返回最后一个元素",
+        "已耗尽的迭代器在被 for 循环遍历时会自动恢复"
+      ],
+      "answer": 1,
+      "explanation": "标准迭代器没有自动重置机制，耗尽后一直保持耗尽状态。除非重新调用 iter() 获取新迭代器或像某些含 reset 语义的对象主动重置，否则不会恢复。A、C、D 均为常见误解。",
+      "error_tag": "概念混淆",
+      "variant_group": "exhausted_iterator"
+    },
+    {
+      "kp": "py.iter.iter_next",
+      "type": "single_choice",
+      "question": "下面哪种写法是内置函数 next() 的正确调用形式？",
+      "options": [
+        "next(iterator)",
+        "next(iterator, 5, 10)",
+        "next()",
+        "next(iterator, start=0)"
+      ],
+      "answer": 0,
+      "explanation": "next() 接受一个迭代器以及可选的 default（第二个位置参数），不接受关键字参数 start，也不允许三个参数或无参调用。因此只有 next(iterator) 是正确形式。",
+      "error_tag": "记忆缺失",
+      "variant_group": "next_builtin_usage"
+    }
+  ]
+}

@@ -1,0 +1,623 @@
+{
+  "id": "s2u4l4",
+  "title": "s2u4l4",
+  "kps": [
+    "py.typehint.mypy",
+    "py.typehint.pyright"
+  ],
+  "theory": "## py.typehint.mypy\n\n## 一句话直觉\n\nPython 类型注解（type hint）默认只是“文档”，运行时不会报错；而 **mypy** 是一个静态类型检查器（static type checker），它在程序运行之前读取这些注解并告诉你“这里类型对不上”。学习 mypy，就是把类型注解从注释升级为**可自动验证的契约**。\n\n---\n\n## 1. 为什么需要 mypy：类型注解本身不检查\n\nPython 官方文档明确写道：\n\n> The Python runtime does not enforce function and variable type annotations. They can be used by third party tools such as type checkers, IDEs, linters, etc.\n\n也就是说：\n\n```python\ndef add(a: int, b: int) -> int:\n    return a + b\n\nprint(add(\"hello\", \"world\"))  # 运行时照样跑，结果是 'helloworld'\n```\n\n注解 `int` 没有阻止字符串传入。mypy 的作用就是**在运行前**发现这种错误。\n\n---\n\n## 2. 安装并运行 mypy\n\nmypy 是一个独立工具，推荐安装在虚拟环境中。\n\n```bash\npip install mypy\nmypy your_script.py\n```\n\n一个典型输出：\n\n```\nerror: Argument 1 to \"add\" has incompatible type \"str\"; expected \"int\"  [arg-type]\nFound 1 error in 1 file (checked 1 source file)\n```\n\n关键点：\n\n- 注解 = 契约；\n- mypy = 契约检查器；\n- Python 解释器 = 不管契约的执行者。\n\n---\n\n## 3. 基本类型注解语法\n\n### 3.1 函数参数与返回值\n\n```python\ndef surface_area_of_cube(edge_length: float) -> str:\n    return f\"The surface area of the cube is {6 * edge_length ** 2}.\"\n```\n\n- `edge_length: float`：参数期望是浮点数；\n- `-> str`：函数期望返回字符串。\n\n### 3.2 变量注解\n\n```python\ncount: int = 0\nname: str = \"mypy\"\nratio: float\n```\n\nPEP 526 规定：冒号后一个空格，等号两侧各一个空格。\n\n### 3.3 容器类型\n\nPython 3.9+ 可以直接用内置泛型：\n\n```python\nnames: list[str] = [\"a\", \"b\"]\nmapping: dict[str, int] = {\"a\": 1}\npair: tuple[str, int] = (\"a\", 1)\n```\n\n---\n\n## 4. 进阶类型：别名、NewType、复合类型\n\n### 4.1 类型别名（type alias）\n\nPython 3.12+ 推荐用 `type` 语句：\n\n```python\ntype Vector = list[float]\n\ndef scale(scalar: float, vector: Vector) -> Vector:\n    return [scalar * num for num in vector]\n```\n\n旧版本可写成 `Vector = list[float]` 或 `Vector: TypeAlias = list[float]`。\n\n### 4.2 NewType：语义上不同的类型\n\n```python\nfrom typing import NewType\n\nUserId = NewType(\"UserId\", int)\n\ndef get_user_name(user_id: UserId) -> str:\n    return f\"user-{user_id}\"\n\nget_user_name(UserId(42))     # OK\nget_user_name(42)             # mypy 报错\n```\n\n### 4.3 复合签名简化\n\n```python\nfrom collections.abc import Sequence\n\ntype Address = tuple[str, int]\ntype ConnectionOptions = dict[str, str]\ntype Server = tuple[Address, ConnectionOptions]\n\ndef broadcast_message(message: str, servers: Sequence[Server]) -> None:\n    ...\n```\n\nmypy 会把它当作展开后的 `Sequence[tuple[tuple[str, int], dict[str, str]]]` 检查。\n\n---\n\n## 5. 工程实践要点\n\n- **stub 文件（.pyi）**：PEP 484 建议为无注解的第三方库提供 `.pyi`，mypy 会优先读取 stub 而不是 `.py`。\n- **抑制检查**：在文件顶部加 `# type: ignore`，可让类型检查器忽略整个文件；也可在具体行使用。\n- **IDE / CI 集成**：mypy 常配合 VS Code、PyCharm、pre-commit、GitHub Actions 使用。\n- **渐进式**：可以先只注释公共 API，再逐步收紧；对老代码友好。\n- **官方口径**：类型检查器是**可选、独立的工具**，Python 解释器不因注解改变行为。\n\n---\n\n## 6. 一个最小可运行示例\n\n下面这段代码可以直接保存为 `demo.py`，然后用 `mypy demo.py` 检查。\n\n```python\n\"\"\"demo.py —— 用 mypy 检查的小例子。\n\n运行：\n    pip install mypy\n    mypy demo.py\n    python demo.py\n\"\"\"\nfrom typing import NewType\n\n\nUserId = NewType(\"UserId\", int)\n\n\ndef surface_area_of_cube(edge_length: float) -> str:\n    # 类型注解仅是契约，运行时不强制\n    return f\"The surface area of the cube is {6 * edge_length ** 2}.\"\n\n\ndef get_user_name(user_id: UserId) -> str:\n    return f\"user-{user_id}\"\n\n\ndef add(a: int, b: int) -> int:\n    return a + b\n\n\nif __name__ == \"__main__\":\n    # 正确调用：mypy 通过\n    print(surface_area_of_cube(2.0))\n    print(get_user_name(UserId(42)))\n    print(add(1, 2))\n\n    # 下面这行 Python 能跑，但 mypy 会报 arg-type 错误：\n    # print(add(\"hello\", \"world\"))\n\n    # 下面这行 Python 能跑，但 mypy 会报 NewType 不匹配：\n    # print(get_user_name(42))\n```\n\n## py.typehint.pyright\n\n# Python 类型注解（Type Hints）与 Pyright 静态检查\n\n> **一句话直觉**：类型注解是写给\"未来的自己、同事和 IDE\"看的注释，Pyright 是一个不用运行代码就能帮你发现类型错误的检查器——它们让 Python 从\"运行时才发现 bug\"升级为\"写代码时就发现 bug\"。\n\n---\n\n## 1. 为什么需要类型注解？\n\nPython 是动态类型（dynamic typing）语言：变量在运行时才知道类型。这很灵活，但项目一大就容易出现\"这个函数到底该传什么\"的困惑。\n\n**类型注解（type hint）** 让你在源码里写明\"我期望的类型\"。注意：**Python 运行时并不强制检查注解**——官方文档明确说它们主要用于第三方工具（type checkers、IDE、linters）。\n\n```python\n# 没有注解，调用者不知道 edge_length 该传什么\ndef surface_area_of_cube(edge_length):\n    return 6 * edge_length ** 2\n\n# 有注解，签名即文档\ndef surface_area_of_cube(edge_length: float) -> float:\n    return 6 * edge_length ** 2\n```\n\n注解的价值：\n- **IDE 自动补全与悬浮提示** 变得精确；\n- **静态类型检查器（static type checker）** 可以在你没有运行代码时发现错误；\n- **重构更安全**：改了一个函数签名，工具会帮你找出所有不匹配的调用点。\n\n---\n\n## 2. 基础语法：函数、变量与返回值\n\n`typing` 模块自 Python 3.5 加入标准库。基本规则：\n\n- 参数：`name: Type`\n- 返回值：`-> Type`\n- 变量：`name: Type = value`\n- 无返回：`-> None`\n\n```python\nfrom typing import Optional\n\ndef greet(name: str, times: int = 1) -> str:\n    return (\"Hello, \" + name + \"! \") * times\n\ndef find_user(user_id: int) -> Optional[str]:\n    # Optional[str] 等价于 str | None\n    return \"Alice\" if user_id == 1 else None\n```\n\n基础类型直接用内置名字：`int`、`float`、`str`、`bool`、`bytes`、`None`。容器用 `list[int]`、`dict[str, int]`、`tuple[str, int]`（Python 3.9+ 可直接用内置泛型）。\n\n---\n\n## 3. 进阶：别名、NewType 与联合类型\n\n**类型别名（type alias）** 用来给复杂类型起名字。Python 3.12 引入 `type` 语句：\n\n```python\n# Python 3.12+\ntype Vector = list[float]\ntype Server = tuple[tuple[str, int], dict[str, str]]\n\n# 旧版兼容写法\nfrom typing import TypeAlias\nVector: TypeAlias = list[float]\n```\n\n**NewType** 创建\"看起来像但类型检查器视为不同\"的类型，用来区分逻辑上不同的值：\n\n```python\nfrom typing import NewType\n\nUserId = NewType(\"UserId\", int)\n\n# 求两个 UserId 的和在语义上没意义，NewType 帮你暴露这种错误\ndef get_user_name(user_id: UserId) -> str:\n    return f\"user-{user_id}\"\n\nuid: UserId = UserId(42)      # 需要显式转换\nname = get_user_name(uid)     # OK\n# get_user_name(42)           # 类型检查器会报错\n```\n\n**联合类型（union）** 用 `X | Y`（3.10+）代替 `Union[X, Y]`：\n\n```python\ndef parse(value: int | str) -> int:\n    return int(value)\n```\n\n---\n\n## 4. Pyright：不运行代码就能查错\n\n**Pyright** 是微软开发的静态类型检查器，也是 VS Code 的 Pylance 引擎。它扫描源码、根据注解和推断推理类型，报告不一致。\n\n**安装与运行**：\n\n```bash\n# 安装（npm 或 pip 均可）\npip install pyright\n\n# 检查整个项目\npyright .\n\n# 检查单个文件\npyright example.py\n```\n\n**Pyright 能帮我们发现什么？**\n\n```python\ndef add(a: int, b: int) -> int:\n    return a + b\n\nadd(1, 2)         # OK\nadd(\"1\", 2)       # Pyright 报告：Argument of type \"str\" cannot be assigned to parameter \"a\" of type \"int\"\nadd(1)            # Pyright 报告：缺少参数 b\nadd(1, 2, 3)      # Pyright 报告：参数过多\ntotal: str = add(1, 2)   # Pyright 报告：int 不能赋给 str\n```\n\n**配置**：在项目根目录建 `pyrightconfig.json`：\n\n```json\n{\n  \"include\": [\"src\"],\n  \"exclude\": [\"**/node_modules\", \"**/__pycache__\"],\n  \"typeCheckingMode\": \"strict\"\n}\n```\n\n`typeCheckingMode` 可选 `off`、`basic`、`standard`、`strict`。新项目建议直接 `strict`。\n\n---\n\n## 5. 工程实践：从注解到 CI 门禁\n\n工程级项目的典型做法：\n\n1. **所有对外函数、公共类显式注解**（对内代码可依赖推断）；\n2. **关键数据模型用 `dataclass` 或 `pydantic` 配合注解**；\n3. **把 Pyright 放进 CI**，PR 有类型错误就阻塞合并；\n4. **渐进式迁移**：老代码先用 `basic`，新模块用 `strict`，逐步收紧。\n\n```python\nfrom dataclasses import dataclass\n\n@dataclass\nclass Point:\n    x: float\n    y: float\n\n    def translate(self, dx: float, dy: float) -> \"Point\":\n        return Point(self.x + dx, self.y + dy)\n```\n\nPyright 会检查 `Point(\"a\", 1.0)` 这类构造错误、方法参数错误以及访问不存在属性的错误。\n\n---\n\n## 6. 小结与心智模型\n\n| 概念 | 角色 |\n|---|---|\n| 类型注解 | 源码中声明期望类型 |\n| `typing` 模块 | 提供复杂类型工具 |\n| Pyright | 静态读取注解并报告不一致 |\n| 运行时 | **不**校验注解，注解不影响执行 |\n\n记住一句话：**注解是契约，Pyright 是契约的审计员**。\n\n```python\n# example.py —— 直接 `pyright example.py` 或 `python example.py` 均可运行\nfrom typing import Optional, NewType\nfrom dataclasses import dataclass\n\n# 1) 基础函数注解\ndef surface_area_of_cube(edge_length: float) -> float:\n    return 6 * edge_length ** 2\n\n# 2) Optional 表示可能为 None\ndef find_user(user_id: int) -> Optional[str]:\n    return \"Alice\" if user_id == 1 else None\n\n# 3) 类型别名（简化复杂签名）\ntype Vector = list[float]\n\ndef scale(scalar: float, vector: Vector) -> Vector:\n    return [scalar * num for num in vector]\n\n# 4) NewType 区分逻辑上不同的值\nUserId = NewType(\"UserId\", int)\n\ndef get_user_name(user_id: UserId) -> str:\n    return f\"user-{user_id}\"\n\n# 5) dataclass 配合注解\ntype Address = tuple[str, int]\ntype ConnectionOptions = dict[str, str]\ntype Server = tuple[Address, ConnectionOptions]\n\n@dataclass\nclass Point:\n    x: float\n    y: float\n\n    def translate(self, dx: float, dy: float) -> \"Point\":\n        return Point(self.x + dx, self.y + dy)\n\n\nif __name__ == \"__main__\":\n    print(surface_area_of_cube(2.0))            # 24.0\n    print(find_user(1), find_user(2))           # Alice None\n    print(scale(2.0, [1.0, -4.2, 5.4]))         # [2.0, -8.4, 10.8]\n    print(get_user_name(UserId(42351)))         # user-42351\n    print(Point(0.0, 0.0).translate(1.5, 2.5))  # Point(x=1.5, y=2.5)\n\n    # 下面这些行 Pyright 会报错，但 Python 运行时不一定报错：\n    # surface_area_of_cube(\"2\")                 # 参数类型错误\n    # get_user_name(42351)                      # 应传 UserId，不是裸 int\n    # Point(\"a\", 1.0)                            # 构造参数类型错误\n```\n",
+  "quiz": [
+    {
+      "kp": "py.typehint.mypy",
+      "type": "single_choice",
+      "question": "在 Python 中，下列关于类型注解的说法正确的是？",
+      "options": [
+        "类型注解在运行时会被强制检查，类型不匹配会抛出 TypeError",
+        "类型注解本质上是元数据，运行时默认不做类型检查，需要借助 mypy 等工具静态检查",
+        "只有 Python 3.5 以上版本才允许写类型注解，3.4 及以下会报 SyntaxError",
+        "类型注解只能用在内置类型上，用户自定义类不能作为注解"
+      ],
+      "answer": 1,
+      "explanation": "Python 的类型注解不会在运行时强制检查，它们是可供静态检查工具（如 mypy）读取的元数据，运行时仅存储在 __annotations__ 中。",
+      "error_tag": "概念误解",
+      "variant_group": "typehint_basic"
+    },
+    {
+      "kp": "py.typehint.mypy",
+      "type": "single_choice",
+      "question": "有以下代码：\n\ndef add(x: int, y: int) -> int:\n    return x + y\n\nadd('a', 'b')\n\n关于这段代码，说法正确的是？",
+      "options": [
+        "运行时会抛出 TypeError，因为传入了字符串",
+        "运行时正常返回 'ab'，类型注解不参与运行",
+        "解释器会在定义 add 时报错",
+        "只有在开启 -X typehints 后才会报错"
+      ],
+      "answer": 1,
+      "explanation": "Python 不会在运行时校验类型注解，'a' + 'b' 会正常拼接成 'ab'。static 检查工具如 mypy 才会报告类型错误。",
+      "error_tag": "运行时与静态检查混淆",
+      "variant_group": "typehint_runtime"
+    },
+    {
+      "kp": "py.typehint.mypy",
+      "type": "single_choice",
+      "question": "关于 mypy 的 --strict 选项，下列说法正确的是？",
+      "options": [
+        "--strict 会启用一系列更严格的检查选项，如禁止未注解的函数、禁止隐式 Optional 等",
+        "--strict 会强制 Python 解释器在运行时做类型检查",
+        "--strict 只能用于 Python 3.10 及以上版本",
+        "--strict 会把所有 Any 替换为 object"
+      ],
+      "answer": 0,
+      "explanation": "--strict 是 mypy 的一组严格模式选项的集合，用于提升检查强度，不会影响运行时行为。",
+      "error_tag": "mypy 选项功能误解",
+      "variant_group": "mypy_strict"
+    },
+    {
+      "kp": "py.typehint.mypy",
+      "type": "single_choice",
+      "question": "在 Python 中，若希望一个函数参数可以接受多种类型，下面的注解写法最常见的是？",
+      "options": [
+        "def f(x: Union[int, str]) -> None: ...",
+        "def f(x: int or str) -> None: ...",
+        "def f(x: (int, str)) -> None: ...",
+        "def f(x: int | str) -> None 只能在 Python 2 中使用"
+      ],
+      "answer": 0,
+      "explanation": "Union[int, str] 表示参数可以是 int 或 str；Python 3.10+ 也可用 int | str，但 Union 更通用。",
+      "error_tag": "联合类型写法错误",
+      "variant_group": "typehint_union"
+    },
+    {
+      "kp": "py.typehint.mypy",
+      "type": "single_choice",
+      "question": "以下关于 # type: ignore 注释的说法，正确的是？",
+      "options": [
+        "# type: ignore 会让 mypy 忽略该行所有类型错误",
+        "# type: ignore 会让 Python 运行时跳过该行代码",
+        "# type: ignore 只能用在函数定义行",
+        "# type: ignore 会改变变量的推断类型"
+      ],
+      "answer": 0,
+      "explanation": "# type: ignore 是给 mypy 的抑制注释，用于忽略该行的类型错误，不影响运行时执行。",
+      "error_tag": "抑制注释语义误解",
+      "variant_group": "typehint_ignore"
+    },
+    {
+      "kp": "py.typehint.mypy",
+      "type": "single_choice",
+      "question": "有以下代码：\n\ndef greet(name: str = None) -> str:\n    return 'hi ' + name\n\nmypy 在默认（非 strict）配置下最可能的行为是？",
+      "options": [
+        "报告默认值 None 与参数类型 str 不兼容",
+        "无错误，因为默认值可被忽略",
+        "报告 'hi ' + name 可能为 str 与 None 相加",
+        "报告 greet 缺少返回值注解"
+      ],
+      "answer": 0,
+      "explanation": "mypy 会检查默认值是否与参数类型兼容，把 None 作为 str 的默认值会报 \"Incompatible default for argument\"。",
+      "error_tag": "默认值与类型不匹配",
+      "variant_group": "mypy_default_value"
+    },
+    {
+      "kp": "py.typehint.mypy",
+      "type": "single_choice",
+      "question": "关于 .pyi 存根文件（stub file）的作用，下列说法正确的是？",
+      "options": [
+        ".pyi 文件用于给没有类型注解的库提供类型信息，供 mypy 等工具使用",
+        ".pyi 文件是 Python 编译后的字节码文件",
+        ".pyi 文件在运行时会被自动导入以加速执行",
+        ".pyi 文件只能存放变量，不能声明函数"
+      ],
+      "answer": 0,
+      "explanation": "stub 文件（.pyi）提供纯类型声明，不包含实现，运行时不会被自动导入，用于让静态检查器了解无注解库的类型。",
+      "error_tag": "stub 文件概念误解",
+      "variant_group": "typehint_stub"
+    },
+    {
+      "kp": "py.typehint.mypy",
+      "type": "single_choice",
+      "question": "在 mypy 中，Any 类型与 object 类型的关键区别是？",
+      "options": [
+        "Any 可赋值给任何类型且可调用任意方法，object 只能调用所有对象共有的方法",
+        "Any 是 object 的子类，object 是 Any 的子类",
+        "Any 只能在 Python 2 使用，object 只能在 Python 3 使用",
+        "Any 会在运行时做类型检查，object 不会"
+      ],
+      "answer": 0,
+      "explanation": "Any 是静态检查的逃生舱，与所有类型互相兼容；object 是最宽泛的具体类型，只包含所有对象都有的操作。",
+      "error_tag": "Any 与 object 混淆",
+      "variant_group": "typehint_any"
+    },
+    {
+      "kp": "py.typehint.mypy",
+      "type": "single_choice",
+      "question": "下面关于 Callable 注解的说法，正确的是？",
+      "options": [
+        "Callable[[int, str], bool] 表示接受 int 和 str 两个参数并返回 bool 的可调用对象",
+        "Callable[int] 表示接受任意参数并返回 int 的可调用对象",
+        "Callable 只能用于函数，不能用于类",
+        "Callable 等价于 typing.Any"
+      ],
+      "answer": 0,
+      "explanation": "Callable[[参数类型...], 返回类型] 描述可调用对象的签名；Callable[...] 中的中括号参数列表是必需的（或使用省略号表示任意参数）。",
+      "error_tag": "Callable 语法误解",
+      "variant_group": "typehint_callable"
+    },
+    {
+      "kp": "py.typehint.mypy",
+      "type": "single_choice",
+      "question": "下面的代码中，mypy 会如何处理变量 a 的类型？\n\na = []\na.append(1)\n",
+      "options": [
+        "推断为 List[Any]，因为初始值没有提供元素类型",
+        "推断为 List[int]，因为之后 append 了 int",
+        "推断为 list，无法用于 mypy",
+        "报错，因为空列表不能作为变量初始值"
+      ],
+      "answer": 0,
+      "explanation": "空列表字面量在没有上下文时，mypy 通常推断其元素为 Any（在 strict 下可能要求显式注解），后续 append 不会改变推断。",
+      "error_tag": "容器类型推断错误",
+      "variant_group": "mypy_container_inference"
+    },
+    {
+      "kp": "py.typehint.mypy",
+      "type": "single_choice",
+      "question": "关于 mypy 的 reveal_type 用法，下列说法正确的是？",
+      "options": [
+        "reveal_type(x) 会让 mypy 打印出 x 的推断类型，但该调用是用于调试的，运行时一般应删除",
+        "reveal_type 是内置函数，运行时会打印类型",
+        "reveal_type 会修改 x 的类型",
+        "reveal_type 只能用于模块顶层"
+      ],
+      "answer": 0,
+      "explanation": "reveal_type 是 mypy 识别的特殊调用，用于输出推断类型便于调试；Python 运行时并没有该内置函数，通常会配合 # type: ignore 或删除。",
+      "error_tag": "调试工具使用错误",
+      "variant_group": "mypy_reveal_type"
+    },
+    {
+      "kp": "py.typehint.mypy",
+      "type": "single_choice",
+      "question": "以下哪种情况最适合在项目中使用 mypy 的 per-module 配置？",
+      "options": [
+        "整个项目统一使用 --strict，无需区分模块",
+        "只对核心业务模块启用严格检查，对第三方或旧代码放宽检查",
+        "希望 mypy 在运行时自动修复类型错误",
+        "想让 mypy 只检查单元测试文件"
+      ],
+      "answer": 1,
+      "explanation": "mypy 支持在配置文件中对不同模块设置不同严格程度，适合渐进式引入类型检查：核心模块严格、旧代码或第三方放宽。",
+      "error_tag": "配置策略误解",
+      "variant_group": "mypy_per_module"
+    },
+    {
+      "kp": "py.typehint.mypy",
+      "type": "single_choice",
+      "question": "使用 mypy 检查如下代码，最可能的输出是什么？\n\ndef f(x: int) -> str:\n    return x\n",
+      "options": [
+        "无错误，因为返回值是 int 也可当 str 用",
+        "报告 \"Incompatible return value type (got \"int\", expected \"str\")\"",
+        "报告 NameError: name 'str' is not defined",
+        "报告语法错误，函数必须有返回值"
+      ],
+      "answer": 1,
+      "explanation": "mypy 会检查函数声明的返回类型与实际返回表达式类型是否兼容，返回 int 但声明为 str 会报 \"Incompatible return value type\"。",
+      "error_tag": "mypy 错误信息不熟悉",
+      "variant_group": "mypy_return_type"
+    },
+    {
+      "kp": "py.typehint.mypy",
+      "type": "single_choice",
+      "question": "下列哪种情况最适合使用 Optional[int] 作为注解？",
+      "options": [
+        "参数只在 0 和 1 之间取值，表示布尔",
+        "参数可能为 None，也可能是 int",
+        "参数必须是正整数，其它值无效",
+        "参数只能是 int 的子类"
+      ],
+      "answer": 1,
+      "explanation": "Optional[int] 等价于 Union[int, None]，表示值可以是 int 或 None，与是否为正整数或子类无关。",
+      "error_tag": "Optional 语义误解",
+      "variant_group": "typehint_optional"
+    },
+    {
+      "kp": "py.typehint.mypy",
+      "type": "single_choice",
+      "question": "下面代码中，mypy 会如何理解变量 x 的类型？\n\nx: int = 0\nx = 'hello'\n",
+      "options": [
+        "x 的类型会被推断为 Union[int, str]",
+        "x 第一次被标注为 int，第二次赋值 str 时 mypy 会报告类型不兼容",
+        "x 是 Any 类型，mypy 不会报告",
+        "Python 会抛出 SyntaxError"
+      ],
+      "answer": 1,
+      "explanation": "显式注解 x: int 之后，x 的类型被固定为 int；再赋 str 会与声明的类型冲突，mypy 会报 \"Incompatible types in assignment\"。",
+      "error_tag": "变量注解推断错误",
+      "variant_group": "mypy_assignment"
+    },
+    {
+      "kp": "py.typehint.mypy",
+      "type": "single_choice",
+      "question": "关于 mypy 检查的代码范围，下列说法正确的是？",
+      "options": [
+        "mypy 只会检查带有类型注解的函数和变量，未注解的代码默认不检查",
+        "只要文件扩展名为 .py，mypy 就会对所有代码做严格类型检查",
+        "mypy 需要运行时才生效，不能在 CI 中离线运行",
+        "mypy 只能检查 Python 2 代码"
+      ],
+      "answer": 0,
+      "explanation": "mypy 默认对未注解的函数体不做严格检查，只有显式注解或推断出的类型才会被检查；可以开启 --disallow-untyped-defs 等选项加强。",
+      "error_tag": "mypy 检查范围误解",
+      "variant_group": "mypy_scope"
+    },
+    {
+      "kp": "py.typehint.mypy",
+      "type": "single_choice",
+      "question": "在一个项目里，你希望 mypy 把某个 import 的第三方包视为 Any，从而跳过它的类型检查，最合适的做法是？",
+      "options": [
+        "在 import 语句后加 # type: ignore，并在 mypy 配置中开启 follow_imports=skip 或对该模块设置 ignore_missing_imports",
+        "把该包的源码文件全部改名为 .pyi 并删除实现",
+        "在代码中不用 import，用 __import__ 动态加载",
+        "在项目根目录放一个空 setup.py"
+      ],
+      "answer": 0,
+      "explanation": "mypy 支持通过 per-module 配置或 follow_imports=skip 忽略特定模块；ignore_missing_imports 也可让缺桩的包不报错。",
+      "error_tag": "mypy 配置不熟悉",
+      "variant_group": "mypy_config"
+    },
+    {
+      "kp": "py.typehint.mypy",
+      "type": "single_choice",
+      "question": "下列哪项最能说明函数返回类型注解 -> None 的含义？",
+      "options": [
+        "函数可以返回任意值，但推荐返回 None",
+        "函数不返回任何有意义的值，等价于返回 None",
+        "函数必须显式写 return None，否则 mypy 会报错",
+        "函数不能有 return 语句"
+      ],
+      "answer": 1,
+      "explanation": "-> None 表示函数返回 None；即使函数体没有显式 return，也隐式返回 None，mypy 不会因此报错。",
+      "error_tag": "返回值注解语义误解",
+      "variant_group": "typehint_none_return"
+    },
+    {
+      "kp": "py.typehint.mypy",
+      "type": "single_choice",
+      "question": "在 Python 中，List[int] 与 list[int] 的主要区别是什么？",
+      "options": [
+        "List[int] 只能在 Python 2 使用，list[int] 只能在 Python 3 使用",
+        "List[int] 来自 typing 模块，list[int] 是 Python 3.9+ 内建泛型写法，二者语义基本一致",
+        "list[int] 会在运行时创建新类型，List[int] 不会",
+        "List[int] 表示可变列表，list[int] 表示不可变列表"
+      ],
+      "answer": 1,
+      "explanation": "typing.List[int] 与内建泛型 list[int]（3.9+）语义相同，均表示元素为 int 的列表；后者需要较新版本的 Python。",
+      "error_tag": "泛型写法混淆",
+      "variant_group": "typehint_generic_syntax"
+    },
+    {
+      "kp": "py.typehint.mypy",
+      "type": "single_choice",
+      "question": "有如下代码：\n\nfrom typing import List\n\ndef total(xs: List[int]) -> int:\n    return sum(xs)\n\nresult = total([1, 2, 3])\n\n关于 mypy 对 result 的类型推断，正确的是？",
+      "options": [
+        "result 被推断为 Any，因为没有显式注解",
+        "result 被推断为 int，因为函数的返回类型是 int",
+        "result 被推断为 List[int]",
+        "mypy 会报错，因为没有给 result 加注解"
+      ],
+      "answer": 1,
+      "explanation": "mypy 会根据被调用函数的返回类型注解自动推断变量的类型，因此 result 为 int。",
+      "error_tag": "类型推断机制误解",
+      "variant_group": "mypy_inference"
+    },
+    {
+      "kp": "py.typehint.pyright",
+      "type": "single_choice",
+      "question": "在使用 Pyright 对 Python 代码做静态类型检查时，下列关于它与 Mypy 关系的说法，哪一项最准确？",
+      "options": [
+        "Pyright 是 Mypy 的插件，必须先安装 Mypy 才能运行",
+        "Pyright 与 Mypy 是相互独立、可同时使用的两类静态类型检查器",
+        "Pyright 只能检查运行时报错，不能做静态类型推断",
+        "Pyright 是 Python 官方内置模块，导入即可使用"
+      ],
+      "answer": 1,
+      "explanation": "Pyright 与 Mypy 是两套独立实现的静态类型检查工具，都读取 PEP 484 风格的类型注解，但推断规则与默认严格度存在差异，可同时用于同一项目做交叉检查。Pyright 并非 Python 标准库的一部分，也不需要依赖 Mypy 运行。",
+      "error_tag": "概念混淆",
+      "variant_group": "pyright_basic_positioning"
+    },
+    {
+      "kp": "py.typehint.pyright",
+      "type": "single_choice",
+      "question": "在 VS Code 中使用 Pyright 的官方扩展时，若要调整类型检查的严格程度，最恰当的做法是什么？",
+      "options": [
+        "在代码每个文件顶部加 # type: ignore，整文件忽略检查",
+        "修改 Python 解释器的版本，解释器越新检查越严格",
+        "通过配置中的类型检查模式（如 off/basic/strict）来调节",
+        "无法调整，Pyright 的严格程度由操作系统决定"
+      ],
+      "answer": 2,
+      "explanation": "Pyright 的严格程度由配置项（例如 VS Code 设置里的类型检查模式）决定，可在 off、basic、strict 等档位间切换；# type: ignore 是局部压制的临时手段，不能作为整体调节方式。",
+      "error_tag": "概念混淆",
+      "variant_group": "pyright_config_strictness"
+    },
+    {
+      "kp": "py.typehint.pyright",
+      "type": "fill_blank",
+      "question": "在 Pyright 中，若希望某个表达式被当作指定的类型而不做运行时转换，可使用 typing 模块提供的 ____ 函数来实现类型断言式的转换。",
+      "options": [],
+      "answer": [
+        "cast",
+        "typing.cast",
+        "cast()"
+      ],
+      "explanation": "`typing.cast(T, value)` 会告诉静态检查器把 value 视作类型 T，且不会做任何运行时转换，常用于检查器无法推断而开发者确知的场景。",
+      "error_tag": "记忆缺失",
+      "variant_group": "pyright_cast_usage"
+    },
+    {
+      "kp": "py.typehint.pyright",
+      "type": "fill_blank",
+      "question": "要让 Pyright 忽略某一行的类型错误，可以在该行末尾加上注释 ____（写出完整注释标记）。",
+      "options": [],
+      "answer": [
+        "# type: ignore",
+        "#type: ignore",
+        "# type:ignore"
+      ],
+      "explanation": "`# type: ignore` 是标准的单行类型检查忽略注释，Mypy 与 Pyright 都支持；应尽量只用在确有理由的个别行上。",
+      "error_tag": "记忆缺失",
+      "variant_group": "pyright_suppress_scope"
+    },
+    {
+      "kp": "py.typehint.pyright",
+      "type": "fill_blank",
+      "question": "在 Python 3.9+ 中，若一个函数可能返回整数也可能不返回有效值（即可能返回 None），其返回类型注解可写成 Optional[int]，也可以使用竖线语法写成 ____。",
+      "options": [],
+      "answer": [
+        "int | None",
+        "int|None"
+      ],
+      "explanation": "PEP 604 引入了 `X | Y` 语法来表达联合类型，`int | None` 与 `Optional[int]` 等价，Pyright 在合适的 Python 版本目标下都支持。",
+      "error_tag": "记忆缺失",
+      "variant_group": "pyright_none_narrowing"
+    },
+    {
+      "kp": "py.typehint.pyright",
+      "type": "code_reading",
+      "question": "阅读以下代码并回答：Pyright 对 get_name 的返回值会在哪里报错，为什么？\n\nfrom typing import Optional\n\ndef get_name(user: Optional[dict]) -> str:\n    if user is None:\n        return None\n    return user[\"name\"]\n\nn = get_name({\"name\": \"Ann\"})\nprint(n.upper())",
+      "options": [],
+      "answer": "会在 get_name 中 `return None` 那一处报「返回类型不兼容 / 可能为 None」类的错误，因为函数声明返回 str，但该分支返回 None；由于返回类型没有被声明为 Optional[str]，调用方也无法预知可能得到 None，因此后续 n.upper() 也处于不安全的假设之下。修正方式是把返回类型改为 Optional[str]，或在 None 分支改为返回空字符串等合法 str，再让调用方做相应判断。",
+      "explanation": "Pyright 依据函数返回注解做契约检查：声明 str 就要求所有 return 分支都产出 str。返回 None 违反契约，而契约错误会在使用点连带造成风险。",
+      "error_tag": "边界错误",
+      "variant_group": "pyright_return_optional"
+    },
+    {
+      "kp": "py.typehint.pyright",
+      "type": "code_reading",
+      "question": "阅读以下代码并回答：Pyright 最可能对哪一行提出属性访问相关的报错，原因是什么？\n\nclass Point:\n    def __init__(self, x: int) -> None:\n        self.x = x\n\np = Point(1)\nprint(p.y)",
+      "options": [],
+      "answer": "会在 `print(p.y)` 这一行报错，因为 Point 中没有定义属性 y（实例属性 x 已通过 self.x 声明），Pyright 依据类的属性集合判断 p.y 不存在，因此给出「类型 Point 上不存在属性 y」一类的错误。",
+      "explanation": "Pyright 会根据类定义推断对象上可访问的属性集合。访问未声明的属性会被识别为错误，这也是它擅长发现的一类拼写或设计问题。",
+      "error_tag": "概念混淆",
+      "variant_group": "pyright_attr_access"
+    },
+    {
+      "kp": "py.typehint.pyright",
+      "type": "code_reading",
+      "question": "阅读以下代码并回答：如果 Pyright 在 strict 模式下检查 sum_all，它是否会对 `total += n` 报错？请说明判断依据。\n\ndef sum_all(nums: list[int]) -> int:\n    total = 0\n    for n in nums:\n        total += n\n    return total",
+      "options": [],
+      "answer": "不会报错。因为 total 初始化为 0（int），迭代源 nums 声明为 list[int]，for 循环中的 n 因而被推断为 int，`total += n` 是 int 与 int 相加，结果仍是 int，与返回注解 int 一致。",
+      "explanation": "该例是 Pyright 能正确推断的典型场景：初始化值的类型、容器元素类型和返回注解三者自洽，所以即使在较严格模式下也不会报错。",
+      "error_tag": "概念混淆",
+      "variant_group": "pyright_inference_container"
+    },
+    {
+      "kp": "py.typehint.pyright",
+      "type": "scenario",
+      "question": "团队打算在一个已有较多历史代码的 Python 仓库中引入 Pyright。上线要求是「新增代码必须通过类型检查，历史代码允许逐步修复」。你会怎么配置和推进这一过程？请说明理由。",
+      "options": [],
+      "answer": null,
+      "explanation": "新增代码需严格、历史代码渐进修复，是团队落地的核心矛盾；通过限定检查范围（按目录/文件）并把新增部分调至严格模式，再对遗留问题用局部忽略或 cast 过渡、逐步修复，可以避免一次性大规模改动阻塞开发。",
+      "error_tag": "概念混淆",
+      "variant_group": "pyright_adoption_strategy",
+      "required_keywords": [
+        "Pyright",
+        "类型检查",
+        "严格模式",
+        "渐进修复",
+        "局部忽略"
+      ]
+    },
+    {
+      "kp": "py.typehint.pyright",
+      "type": "scenario",
+      "question": "同事在提交前反复收到 Pyright 关于「表达式可能为 None」的报错。他打算在每个使用点都加 # type: ignore 来清掉告警。你作为评审，会给出怎样的建议？请说明理由以及更好的替代做法。",
+      "options": [],
+      "answer": null,
+      "explanation": "大量使用 `# type: ignore` 只是掩盖了真正的不确定性，没有解决可空性设计问题。更合适的做法是先通过 `if x is not None` 等控制流收窄，或修改类型注解表达真实的 Optional 契约，仅在确实无法静态化时用 cast 或局部忽略，并留下理由说明。",
+      "error_tag": "概念混淆",
+      "variant_group": "pyright_suppress_scope",
+      "required_keywords": [
+        "类型收窄",
+        "Optional",
+        "控制流分析",
+        "类型注解",
+        "cast"
+      ]
+    },
+    {
+      "kp": "py.typehint.pyright",
+      "type": "single_choice",
+      "question": "关于 Pyright 报告的「变量已被声明为某类型但被赋了不兼容的值」，下列哪种理解最符合静态类型检查的定位？",
+      "options": [
+        "这类报错总是运行时会崩溃的充分证据，必须立刻修",
+        "这类报错提示的是契约层面的不一致，可能在某些运行路径下才真正出问题",
+        "只要运行时没崩，就说明 Pyright 的报错完全无效，可以全部忽略",
+        "Pyright 只检查语法，不做任何跨行推断"
+      ],
+      "answer": 1,
+      "explanation": "静态检查是在分析所有可能的运行路径，因此报出的问题未必在本次执行中触发，但不代表它不存在。把它理解为契约不一致更准确：可能在某些分支下才暴露。它远超语法检查，会做跨行的类型推断。",
+      "error_tag": "概念混淆",
+      "variant_group": "pyright_basic_positioning"
+    },
+    {
+      "kp": "py.typehint.pyright",
+      "type": "single_choice",
+      "question": "在 Pyright 的配置中使用 include / exclude 之类的路径设置，主要作用是什么？",
+      "options": [
+        "决定哪些文件参与类型检查，从而控制检查范围",
+        "决定运行时使用哪个 Python 解释器",
+        "决定 Pyright 是否联网更新",
+        "决定代码的格式化缩进宽度"
+      ],
+      "answer": 0,
+      "explanation": "include/exclude 用于选择被检查的文件范围，配合渐进式引入非常关键。它与运行解释器、网络或格式化缩进无关。",
+      "error_tag": "概念混淆",
+      "variant_group": "pyright_config_strictness"
+    },
+    {
+      "kp": "py.typehint.pyright",
+      "type": "single_choice",
+      "question": "阅读以下代码，Pyright 在默认（basic）模式下最可能报告什么类型的提示？\n\ndef greet(name: str) -> str:\n    return \"hi \" + name\n\ngreet(123)",
+      "options": [
+        "没有提示，因为运行时能自动把 123 转成字符串",
+        "实参类型与形参声明不匹配（int 传给 str 参数）",
+        "返回值缺少类型注解",
+        "函数名 greet 与内置函数冲突"
+      ],
+      "answer": 1,
+      "explanation": "name 标注为 str，传入 123 是 int，属于参数类型不兼容。Python 运行时会抛 TypeError 而不是自动转换，所以「运行时能转换」的说法错误；返回值已有注解；函数名也不与内置函数冲突。",
+      "error_tag": "概念混淆",
+      "variant_group": "pyright_arg_type_mismatch"
+    },
+    {
+      "kp": "py.typehint.pyright",
+      "type": "single_choice",
+      "question": "下列哪一项最能体现 Pyright 相比纯运行测试的独特价值？",
+      "options": [
+        "它能在不运行代码的情况下指出某个分支返回值与注解不符",
+        "它能替代所有单元测试",
+        "它能自动修复业务逻辑 bug",
+        "它能保证程序在所有输入下都不出错"
+      ],
+      "answer": 0,
+      "explanation": "静态类型检查的价值在于不运行即可发现契约与类型问题，例如某个分支的返回值与声明不符。它不能替代测试，也不自动修业务 bug，更无法保证所有输入都正确。",
+      "error_tag": "概念混淆",
+      "variant_group": "pyright_capability_scope"
+    },
+    {
+      "kp": "py.typehint.pyright",
+      "type": "single_choice",
+      "question": "关于 Pyright 对「可能为 None」的处理，下列哪种写法最能帮助它确认变量在使用时不为 None？",
+      "options": [
+        "在使用前直接赋值 x = None",
+        "在使用前用 if x is not None: 进行收窄判断",
+        "把变量注解改成 None",
+        "在使用处加注释 # noqa"
+      ],
+      "answer": 1,
+      "explanation": "Pyright 支持基于控制流的类型收窄：在 `if x is not None:` 分支内会把 Optional[T] 收窄为 T，从而允许安全使用。直接赋 None 只会让类型更糟，注解成 None 也不能通过检查，# noqa 通常用于屏蔽 linter 而非类型检查。",
+      "error_tag": "概念混淆",
+      "variant_group": "pyright_none_narrowing"
+    },
+    {
+      "kp": "py.typehint.pyright",
+      "type": "single_choice",
+      "question": "在使用 Pyright 检查一个包含列表推导的函数时，哪项描述最符合它对容器元素类型的推断方式？",
+      "options": [
+        "总是把列表元素推断为 Any，因为推导式无法静态分析",
+        "会尝试从推导式的表达式与迭代源推断出列表的元素类型",
+        "把整个列表推断为 tuple",
+        "必须显式写 List[Any] 注解，否则一定报错"
+      ],
+      "answer": 1,
+      "explanation": "Pyright 会结合推导式中的产出表达式和迭代对象来推断容器元素类型，而不是一律退化成 Any 或 tuple；在能推断时不会强制要求显式注解。",
+      "error_tag": "概念混淆",
+      "variant_group": "pyright_inference_container"
+    },
+    {
+      "kp": "py.typehint.pyright",
+      "type": "single_choice",
+      "question": "当 Pyright 报告一行代码存在类型错误，但你确信该行因为动态生成而无法被静态分析时，最合适的最小干预手段是？",
+      "options": [
+        "把整个项目配置改成关闭类型检查",
+        "把该文件扩展名改成 .txt",
+        "在该行加 # type: ignore 或对该表达式使用 cast",
+        "删除该行代码中所有的变量名"
+      ],
+      "answer": 2,
+      "explanation": "局部问题应当局部处理：`# type: ignore` 可压制单行报错，`typing.cast` 可向检查器声明你确信的类型，二者都是最小干预。关闭整个项目的检查会掩盖其它真实问题，改扩展名或删变量名则会破坏代码。",
+      "error_tag": "边界错误",
+      "variant_group": "pyright_suppress_scope"
+    },
+    {
+      "kp": "py.typehint.pyright",
+      "type": "multi_choice",
+      "question": "下列哪些做法有助于让 Pyright 在已有项目中逐步启用更严格的类型检查？（多选）",
+      "options": [
+        "先按目录或文件范围收紧，待修复后再扩大范围",
+        "利用 Pyright 报出的错误清单逐类修复，而不是一次性全项目开启最严模式",
+        "把所有变量注解统一写成 Any 以消除所有报错",
+        "对确实无法静态化的少数位置局部使用忽略或 cast，并留下注释说明原因"
+      ],
+      "answer": [
+        0,
+        1,
+        3
+      ],
+      "explanation": "渐进式收紧、分批修复、局部有理由的压制，都是让严格检查落地的常规策略。把变量一律标成 Any 相当于放弃类型信息，会掩盖问题而非解决，因此不正确。",
+      "error_tag": "概念混淆",
+      "variant_group": "pyright_adoption_strategy"
+    },
+    {
+      "kp": "py.typehint.pyright",
+      "type": "multi_choice",
+      "question": "关于 Pyright 能检查出的问题，下列哪些属于它擅长的范畴？（多选）",
+      "options": [
+        "向声明为 int 的参数传入 str",
+        "访问一个在类中并未定义的属性",
+        "程序在特定输入下产生的业务逻辑错误",
+        "返回值类型与函数注解声明不一致"
+      ],
+      "answer": [
+        0,
+        1,
+        3
+      ],
+      "explanation": "Pyright 关注类型与结构一致性：参数/返回值不匹配、访问未声明属性等都能识别。业务逻辑层面的错误（例如打折算错）超出静态类型检查的范围，需要测试来覆盖。",
+      "error_tag": "概念混淆",
+      "variant_group": "pyright_capability_scope"
+    },
+    {
+      "kp": "py.typehint.pyright",
+      "type": "multi_choice",
+      "question": "在一个函数中，Pyright 判断某个变量在使用点可能为 None 的前提，通常包括下列哪些情况？（多选）",
+      "options": [
+        "变量被注解为 Optional[int] 且尚未经过非 None 的收窄判断",
+        "变量是通过一个可能返回 None 的调用得到的，且调用结果未做判断",
+        "变量在该函数内被无条件地赋为具体的 int 值后就立即使用",
+        "变量来自函数参数且调用方可能传入 None，而函数内未做检查"
+      ],
+      "answer": [
+        0,
+        1,
+        3
+      ],
+      "explanation": "Optional 注解、可能返回 None 的调用结果、未校验的可空参数，都会让 Pyright 在使用点提示可能为 None。若变量在使用前被无条件赋为确定值，控制流分析会认定其非 None，因此第 3 项不会触发该提示。",
+      "error_tag": "边界错误",
+      "variant_group": "pyright_none_narrowing"
+    },
+    {
+      "kp": "py.typehint.pyright",
+      "type": "single_choice",
+      "question": "阅读下面代码，Pyright 通常会就哪一行给出「可能为 None」的提示？\n\ndef head(items: list[int]) -> int:\n    return items[0] if items else None",
+      "options": [
+        "第 1 行，因为 list[int] 写法不被支持",
+        "第 2 行，因为返回类型声明为 int，但分支可能返回 None",
+        "不会提示，因为 if items 已经排除了空列表",
+        "第 2 行，因为 items[0] 索引可能越界"
+      ],
+      "answer": 1,
+      "explanation": "当 items 为空时会返回 None，而函数返回注解是 int，二者不兼容，因此 Pyright 会对返回值行报「可能为 None」类型的错误。`if items` 排除的是空列表分支，但 else 分支返回 None 的现象依然存在。",
+      "error_tag": "边界错误",
+      "variant_group": "pyright_return_optional"
+    }
+  ]
+}

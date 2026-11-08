@@ -1,0 +1,595 @@
+{
+  "id": "s1u4l1",
+  "title": "s1u4l1",
+  "kps": [
+    "py.type.list_basic",
+    "py.type.list_method"
+  ],
+  "theory": "## py.type.list_basic\n\n# Python 列表基础：从直觉到工程\n\n## 一句话直觉\n\n**列表（list）是 Python 里最常用的“有序可变容器”**，它像一排带编号的储物柜：你可以按位置取放东西、随时增删改，还能一次遍历所有内容。学会它，你就能组织批量数据（如成绩、姓名、日志），这是后面学习循环、函数、数据处理的地基。\n\n> 术语说明：\n> - **列表（list）**：Python 内置的一种序列类型，元素有序、可修改。\n> - **容器（container）**：能装多个对象的对象。\n> - **可变（mutable）**：创建后还能修改内容。\n> - **序列（sequence）**：按位置索引访问的容器，如 list、tuple、str。\n\n---\n\n## 1. 创建列表与按位置访问\n\n列表用方括号 `[]` 创建，元素之间用逗号分隔。元素可以是任意类型，也可以混合。\n\n- **索引（index）**：从 `0` 开始，`list[0]` 是第一个，`list[-1]` 是最后一个。\n- **切片（slice）**：`list[start:stop:step]` 取子列表，左闭右开。\n- **长度**：`len(list)`。\n\n```python\n# 创建列表\nscores = [90, 85, 77, 92]\n\n# 按索引访问（从 0 开始）\nprint(scores[0])   # 90\nprint(scores[-1])  # 92，最后一个\n\n# 切片：取前三个\nprint(scores[0:3]) # [90, 85, 77]\n\n# 长度\nprint(len(scores)) # 4\n```\n\n**关键结论**：列表索引从 0 开始，负索引从末尾倒数；切片返回新列表。\n\n---\n\n## 2. 修改列表：增、删、改\n\n列表是**可变**的，所以可以原地修改。常用操作：\n\n- `append(x)`：末尾追加一个元素。\n- `insert(i, x)`：在下标 `i` 处插入。\n- `pop()` / `pop(i)`：删除并返回末尾或指定位置元素。\n- `remove(x)`：删除第一个等于 `x` 的元素。\n- `list[i] = new_value`：按下标替换。\n\n```python\nnums = [1, 2, 3]\n\nnums.append(4)        # 末尾追加\nprint(nums)           # [1, 2, 3, 4]\n\nnums.insert(0, 0)     # 在下标 0 插入 0\nprint(nums)           # [0, 1, 2, 3, 4]\n\nlast = nums.pop()     # 删除末尾并返回\nprint(last, nums)     # 4 [0, 1, 2, 3]\n\nnums.remove(2)        # 删除第一个 2\nprint(nums)           # [0, 1, 3]\n\nnums[0] = 100         # 修改下标 0\nprint(nums)           # [100, 1, 3]\n```\n\n**关键结论**：列表的修改方法大多返回 `None`，直接改原列表，不要写成 `nums = nums.append(4)`。\n\n---\n\n## 3. 遍历列表：for 循环与推导式\n\n遍历列表最常用 `for` 循环；如果想把每个元素变换后生成新列表，用**列表推导式（list comprehension）**更简洁。\n\n```python\nfruits = [\"apple\", \"banana\", \"cherry\"]\n\n# 普通 for 遍历\nfor fruit in fruits:\n    print(fruit)\n\n# 带索引遍历\nfor i, fruit in enumerate(fruits):\n    print(i, fruit)\n\n# 列表推导式：每个元素长度\nlengths = [len(fruit) for fruit in fruits]\nprint(lengths)  # [5, 6, 6]\n```\n\n**关键结论**：`for x in list` 直接拿元素；需要下标时用 `enumerate(list)`；推导式适合“映射/过滤”场景。\n\n---\n\n## 4. 列表与类型提示：`list[int]` 是什么意思\n\nPython 运行时**不会强制检查**类型提示（type hints），但类型检查器（type checker，如 mypy、pyright）、IDE 和 linter 会利用它帮你提前发现错误。\n\n- `list[int]` 表示“元素为 int 的列表”。\n- `list[str]` 表示“元素为 str 的列表”。\n- 函数参数和返回值都可以加类型提示。\n\n```python\ndef total(scores: list[int]) -> int:\n    \"\"\"返回分数总和；类型提示说明 scores 是 int 列表，返回 int\"\"\"\n    return sum(scores)\n\nprint(total([90, 85, 77]))  # 252\n```\n\n**关键结论**：`list[int]` 是写给“人和工具”看的，不是运行时强制；但它能显著提升工程代码的可维护性。\n\n---\n\n## 5. 常见陷阱与工程建议\n\n- **索引越界**：访问 `list[10]` 但长度只有 3，会抛 `IndexError`。\n- **浅拷贝（shallow copy）**：`b = a` 只是别名，改 `b` 会影响 `a`；要独立副本用 `a.copy()` 或 `a[:]`。\n- **循环中删元素**：边遍历边 `remove` 容易漏元素；可倒序遍历或生成新列表。\n- **可变默认参数**：`def f(x, acc=[])` 是经典坑，默认列表会被复用；应写 `acc=None` 再内部创建。\n\n```python\na = [1, 2, 3]\nb = a          # 别名，不是拷贝\nb.append(4)\nprint(a)       # [1, 2, 3, 4]\n\nc = a.copy()   # 浅拷贝\nc.append(5)\nprint(a)       # [1, 2, 3, 4]\nprint(c)       # [1, 2, 3, 4, 5]\n```\n\n**关键结论**：赋值不是拷贝；要独立列表就用 `copy()` 或切片。\n\n---\n\n## 动手练习\n\n**任务**：写一个 Python 脚本 `score_report.py`，完成：\n\n1. 定义列表 `scores = [88, 92, 79, 93, 85]`。\n2. 用函数 `add_score(scores: list[int], value: int) -> None` 在末尾追加一个分数。\n3. 用函数 `average(scores: list[int]) -> float` 返回平均分。\n4. 用列表推导式生成 `passed = [s for s in scores if s >= 60]`。\n5. 打印：原始列表、平均分、及格列表、最高分与最低分。\n\n**提示**：\n- 平均分用 `sum(scores) / len(scores)`。\n- 最高分 `max(scores)`，最低分 `min(scores)`。\n- 运行后观察输出，尝试修改分数再运行。\n\n完成后，你已掌握列表的创建、访问、修改、遍历和类型提示，可以进入下一课学习元组（tuple）与字典（dict）。\n\n```python\n# score_report.py\n# 一个可运行的列表示例：创建、修改、遍历、类型提示\n\ndef add_score(scores: list[int], value: int) -> None:\n    \"\"\"在列表末尾追加一个分数\"\"\"\n    scores.append(value)\n\n\ndef average(scores: list[int]) -> float:\n    \"\"\"返回平均分；类型提示说明 scores 是 int 列表，返回 float\"\"\"\n    return sum(scores) / len(scores)\n\n\n# 1. 创建列表\nscores = [88, 92, 79, 93, 85]\n\n# 2. 追加分数\nadd_score(scores, 90)\n\n# 3. 计算平均分\navg = average(scores)\n\n# 4. 列表推导式：过滤及格分数\npassed = [s for s in scores if s >= 60]\n\n# 5. 打印结果\nprint(\"原始列表:\", scores)\nprint(\"平均分:\", avg)\nprint(\"及格列表:\", passed)\nprint(\"最高分:\", max(scores))\nprint(\"最低分:\", min(scores))\n\n# 额外演示：索引、切片、修改\nprint(\"第一个分数:\", scores[0])\nprint(\"最后一个分数:\", scores[-1])\nprint(\"前三个分数:\", scores[:3])\nscores[0] = 95\nprint(\"修改后列表:\", scores)\n```\n\n## py.type.list_method\n\n# Python 列表方法：从零基础到工程级\n\n## 一句话直觉\n\n列表（list）是 Python 里最常用的\"容器\"，而**列表方法**就是你对这个容器进行增删改查、排序、复制的\"操作面板\"——掌握它，你就能用一行代码完成别人写十行的数据处理。\n\n---\n\n## 1. 什么是列表方法？为什么它无处不在？\n\n列表（list）是 Python 内置的可变（mutable）有序序列。每个列表对象都自带一批**方法（method）**——也就是\"绑定在对象上的函数\"，调用格式是 `列表.方法名(参数)`。\n\n列表方法的特点：\n- **原地修改（in-place）**：多数方法（如 `append`、`sort`、`extend`）直接改动原列表，返回 `None`。\n- **返回新对象**：少数方法（如 `copy`）返回新列表。\n\n```python\nnums = [3, 1, 2]\nresult = nums.sort()   # 原地排序，返回值是 None\nprint(nums)            # [1, 2, 3]\nprint(result)          # None —— 别把返回值当排序结果用\n```\n\n> 关键结论：**凡是\"原地修改\"的方法都返回 `None`，千万不要写 `nums = nums.sort()`**。\n\n---\n\n## 2. 增删改：最常用的几个方法\n\n- `append(x)`：在尾部追加**一个**元素。\n- `insert(i, x)`：在下标 `i` 前插入 `x`。\n- `extend(iterable)`：把另一个可迭代对象（iterable）的所有元素逐个追加。\n- `remove(x)`：删除**第一个**等于 `x` 的元素，找不到会抛 `ValueError`。\n- `pop(i=-1)`：弹出并返回下标 `i` 的元素（默认末尾）。\n- `clear()`：清空列表。\n\n```python\nfruits = [\"apple\", \"banana\"]\nfruits.append(\"cherry\")           # 尾部追加\nfruits.insert(1, \"blueberry\")     # 插到下标 1 前\nfruits.extend([\"date\", \"elder\"])  # 批量追加\nprint(fruits)\n# ['apple', 'blueberry', 'banana', 'cherry', 'date', 'elder']\n\nlast = fruits.pop()               # 弹出末尾\nfruits.remove(\"banana\")           # 删除第一个 'banana'\nprint(last, fruits)\n# elder ['apple', 'blueberry', 'cherry', 'date']\n```\n\n> 关键结论：**`append(x)` 把 `x` 当一个元素；`extend(x)` 把 `x` 里的每个元素都加进来**。传字符串给 `append` 是加一整个字符串，而 `extend` 会把它拆成字符。\n\n---\n\n## 3. 查找与统计：index、count、in\n\n- `index(x)`：返回第一个 `x` 的下标，找不到抛 `ValueError`。\n- `count(x)`：返回 `x` 出现的次数。\n- `x in lst`：成员判断，返回布尔值（不是方法，但几乎总是搭配使用）。\n\n```python\nscores = [88, 92, 88, 75, 92, 88]\nprint(scores.count(88))    # 3\nprint(scores.index(75))    # 3\nprint(88 in scores)        # True\n\n# 安全查找：不想抛异常就先判断\nif 100 in scores:\n    print(scores.index(100))\nelse:\n    print(\"100 not found\")\n```\n\n> 关键结论：**`index` 找不到会抛异常**，生产中常先用 `in` 或配合 `try/except` 使用。\n\n---\n\n## 4. 排序与反转：sort、reverse、key 参数\n\n- `sort(key=None, reverse=False)`：**原地**排序。\n- `reverse()`：**原地**反转。\n- 想得到新列表用内置函数 `sorted(lst)`（返回新列表，原列表不变）。\n\n`key` 接收一个函数，用于计算排序依据，这是工程里最常用的技巧。\n\n```python\npeople = [(\"Alice\", 30), (\"Bob\", 25), (\"Cara\", 35)]\npeople.sort(key=lambda p: p[1])          # 按年龄升序\nprint(people)                            # [('Bob', 25), ('Alice', 30), ('Cara', 35)]\n\npeople.sort(key=lambda p: p[1], reverse=True)  # 按年龄降序\nprint(people)                            # [('Cara', 35), ('Alice', 30), ('Bob', 25)]\n\nnums = [1, 2, 3]\nnums.reverse()\nprint(nums)                              # [3, 2, 1]\n```\n\n> 关键结论：**排序规则复杂时，用 `key=` 而不是自己写比较函数**。`key` 只被调用一次每个元素，比 `cmp` 风格高效得多。\n\n---\n\n## 5. 复制与踩坑：copy、切片、别名陷阱\n\n- `copy()`：返回**浅拷贝（shallow copy）**，嵌套的可变对象仍共享。\n- `lst[:]` 等价于浅拷贝。\n- 想深拷贝用 `copy.deepcopy`。\n\n```python\nimport copy\n\na = [[1, 2], [3, 4]]\nb = a.copy()          # 浅拷贝：外层新，内层共享\nb[0].append(99)\nprint(a)              # [[1, 2, 99], [3, 4]] —— a 也被改了！\n\nc = copy.deepcopy(a)  # 深拷贝：完全独立\nc[0].append(100)\nprint(a)              # 不受影响\n```\n\n> 关键结论：**`=` 只是别名，`copy()` 只复制一层，嵌套结构要 `deepcopy`**。\n\n---\n\n## 6. 方法速查表\n\n| 方法 | 作用 | 是否原地 | 返回 |\n|---|---|---|---|\n| `append(x)` | 尾部加一个元素 | 是 | None |\n| `extend(it)` | 追加可迭代对象全部元素 | 是 | None |\n| `insert(i, x)` | 在下标 i 前插入 | 是 | None |\n| `remove(x)` | 删除第一个 x | 是 | None |\n| `pop(i=-1)` | 弹出下标 i 的元素 | 是 | 被弹出的元素 |\n| `clear()` | 清空 | 是 | None |\n| `index(x)` | 返回第一个 x 的下标 | 否 | int |\n| `count(x)` | 统计 x 出现次数 | 否 | int |\n| `sort(key, reverse)` | 原地排序 | 是 | None |\n| `reverse()` | 原地反转 | 是 | None |\n| `copy()` | 浅拷贝 | 否 | 新 list |\n\n---\n\n## 动手练习\n\n**任务：写一个\"学生成绩分析器\"**\n\n给定如下数据（每个元素是 `(姓名, 分数)` 元组）：\n\n```python\nstudents = [\n    (\"Alice\", 88),\n    (\"Bob\", 72),\n    (\"Cara\", 95),\n    (\"Dan\", 88),\n    (\"Eve\", 60),\n]\n```\n\n请在本地写一段脚本完成：\n\n1. 用 `append` 追加一个新学生 `(\"Frank\", 80)`。\n2. 用 `sort(key=..., reverse=True)` 按分数从高到低排序。\n3. 用 `pop()` 取出分数最高的学生并打印。\n4. 打印输出分数 88 出现了几次（用 `count` 需要对分数列表或用循环）。\n5. 用 `copy()` 复制一份，再给副本 `insert(0, (\"Zoe\", 100))`，验证原列表是否变化。\n\n**挑战（可选）**：把第 4 步用一行 `sum` + 生成器表达式实现，体会列表方法之外的另一种风格。\n\n```python\n# 可直接运行：演示列表常用方法\nstudents = [\n    (\"Alice\", 88),\n    (\"Bob\", 72),\n    (\"Cara\", 95),\n    (\"Dan\", 88),\n    (\"Eve\", 60),\n]\n\n# 1. 追加\nstudents.append((\"Frank\", 80))\n\n# 2. 按分数降序排序（原地）\nstudents.sort(key=lambda s: s[1], reverse=True)\nprint(\"Sorted:\", students)\n\n# 3. 弹出最高分\ntop = students.pop(0)\nprint(\"Top student:\", top)\n\n# 4. 统计 88 分的个数\ncount_88 = sum(1 for _, score in students if score == 88)\nprint(\"Count of 88:\", count_88)\n\n# 5. 浅拷贝后修改副本\nsnapshot = students.copy()\nsnapshot.insert(0, (\"Zoe\", 100))\nprint(\"Original :\", students)\nprint(\"Snapshot :\", snapshot)\n```\n",
+  "quiz": [
+    {
+      "kp": "py.type.list_basic",
+      "type": "single_choice",
+      "question": "以下代码执行后，变量 b 的值是什么？\n\na = [1, 2, 3]\nb = a\nb.append(4)",
+      "options": [
+        "[1, 2, 3]",
+        "[1, 2, 3, 4]",
+        "[4]",
+        "报错，因为 b 未定义"
+      ],
+      "answer": 1,
+      "explanation": "b = a 并不会复制列表，而是让 b 与 a 指向同一个列表对象。对 b 调用 append 会修改这个共享对象，所以 a 和 b 都变成 [1, 2, 3, 4]。这是列表可变性最常见的陷阱。",
+      "error_tag": "概念混淆",
+      "variant_group": "list_assign_alias"
+    },
+    {
+      "kp": "py.type.list_basic",
+      "type": "single_choice",
+      "question": "要真正得到一个与 a 完全独立（修改互不影响）的新列表，下列哪种写法不正确？\n\na = [1, 2, 3]",
+      "options": [
+        "b = a[:]",
+        "b = list(a)",
+        "b = copy.copy(a)",
+        "b = a"
+      ],
+      "answer": 3,
+      "explanation": "b = a 只是新增一个名字指向同一个列表对象，二者共享内存。切片 a[:]、list(a) 以及 copy.copy(a) 都会创建一个浅拷贝的新列表，对顶层元素的修改互不影响。",
+      "error_tag": "概念混淆",
+      "variant_group": "list_assign_alias"
+    },
+    {
+      "kp": "py.type.list_basic",
+      "type": "single_choice",
+      "question": "代码 x = [1, 2, 3]; x.remove(2) 执行后，x 是什么？",
+      "options": [
+        "[1, 3]",
+        "[1, 2]",
+        "[2, 3]",
+        "报错，remove 只能删下标"
+      ],
+      "answer": 0,
+      "explanation": "remove(value) 按值删除第一个匹配的元素，这里删除 2，剩下 [1, 3]。若按位置删除应用 del 或 pop(index)。",
+      "error_tag": "概念混淆",
+      "variant_group": "list_remove"
+    },
+    {
+      "kp": "py.type.list_basic",
+      "type": "multi_choice",
+      "question": "下列哪些写法会产生一个新的列表对象，而不会修改原列表 a = [3, 1, 2]？（多选）",
+      "options": [
+        "b = a[:]",
+        "b = sorted(a)",
+        "a.sort()",
+        "b = list(a)",
+        "a.reverse()"
+      ],
+      "answer": [
+        0,
+        1,
+        3
+      ],
+      "explanation": "a[:] 与 list(a) 是浅拷贝，产生新列表；sorted(a) 返回排序后的新列表，不改变原列表。而 a.sort() 与 a.reverse() 都是原地修改 a 本身并返回 None。",
+      "error_tag": "概念混淆",
+      "variant_group": "list_copy_vs_inplace"
+    },
+    {
+      "kp": "py.type.list_basic",
+      "type": "multi_choice",
+      "question": "关于列表与元组，下列描述正确的有哪些？（多选）",
+      "options": [
+        "列表是可变的，可以增删改元素",
+        "元组是不可变的，创建后不能修改其顶层元素",
+        "列表和元组都支持索引和切片",
+        "元组不能被迭代"
+      ],
+      "answer": [
+        0,
+        1,
+        2
+      ],
+      "explanation": "列表可变、元组不可变，这是两者的核心区别；但二者都是序列，都支持索引、切片和迭代。因此「元组不能被迭代」是错误的。",
+      "error_tag": "概念混淆",
+      "variant_group": "list_vs_tuple"
+    },
+    {
+      "kp": "py.type.list_basic",
+      "type": "multi_choice",
+      "question": "执行 a = [1, 2, 3, 4]; b = a[1:3] 之后，下列哪些说法正确？（多选）",
+      "options": [
+        "b 的值为 [2, 3]",
+        "修改 b 的顶层元素不会影响 a",
+        "b 与 a 是同一个对象",
+        "a 会被修改为 [2, 3]"
+      ],
+      "answer": [
+        0,
+        1
+      ],
+      "explanation": "切片 a[1:3] 取下标 1、2 得到 [2, 3]，并生成一个新的列表对象，因此修改 b 不影响 a；a 本身保持不变。b 与 a 不是同一个对象，a 也不会被改变。",
+      "error_tag": "概念混淆",
+      "variant_group": "list_slice"
+    },
+    {
+      "kp": "py.type.list_basic",
+      "type": "multi_choice",
+      "question": "关于列表推导式 [x for x in range(5) if x % 2 == 0]，下列哪些说法正确？（多选）",
+      "options": [
+        "结果列表是 [0, 2, 4]",
+        "if 子句用于过滤元素",
+        "range(5) 产生 0 到 4",
+        "结果列表是 [1, 3]"
+      ],
+      "answer": [
+        0,
+        1,
+        2
+      ],
+      "explanation": "range(5) 产生 0,1,2,3,4；if x % 2 == 0 只保留偶数，即 0,2,4。if 子句在这里起过滤作用。结果不是 [1,3]。",
+      "error_tag": "概念混淆",
+      "variant_group": "list_comprehension"
+    },
+    {
+      "kp": "py.type.list_basic",
+      "type": "fill_blank",
+      "question": "请补全代码，使 result 为 [10, 20, 30, 40, 50] 中每个元素的平方构成的列表。\n\nnums = [10, 20, 30, 40, 50]\nresult = [____ for n in nums]",
+      "options": [],
+      "answer": [
+        "n*n",
+        "n**2",
+        "n * n",
+        "n ** 2"
+      ],
+      "explanation": "列表推导式的表达式部分应计算元素的平方，即 n*n 或 n**2，从而得到 [100, 400, 900, 1600, 2500]。",
+      "error_tag": "记忆缺失",
+      "variant_group": "list_comprehension"
+    },
+    {
+      "kp": "py.type.list_basic",
+      "type": "fill_blank",
+      "question": "请写出表达式，使 nums = [1, 2, 3, 4, 5] 的最后一个元素被取出（只写表达式，例如 nums.xxx 或 nums[...]）。",
+      "options": [],
+      "answer": [
+        "nums[-1]",
+        "nums[len(nums)-1]"
+      ],
+      "explanation": "取最后一个元素可用负索引 nums[-1]，或正索引 nums[len(nums)-1]。前者更简洁且是常用写法。",
+      "error_tag": "边界错误",
+      "variant_group": "list_index"
+    },
+    {
+      "kp": "py.type.list_basic",
+      "type": "code_reading",
+      "question": "阅读代码，写出输出结果：\n\na = [1, 2, 3]\nb = a\nc = a[:]\nb[0] = 100\nprint(a, c)",
+      "options": [],
+      "answer": "输出：[100, 2, 3] [1, 2, 3]",
+      "explanation": "b = a 让 b 与 a 共享同一对象，修改 b[0] 会同时改变 a，所以 a 变成 [100, 2, 3]。c = a[:] 是浅拷贝，与 a 独立，因此 c 保持原来的 [1, 2, 3]。",
+      "error_tag": "概念混淆",
+      "variant_group": "list_assign_alias"
+    },
+    {
+      "kp": "py.type.list_basic",
+      "type": "code_reading",
+      "question": "阅读代码，写出输出结果：\n\nnums = [1, 2, 3, 4, 5]\nprint(nums[1:4:2])",
+      "options": [],
+      "answer": "输出：[2, 4]",
+      "explanation": "切片 nums[1:4:2] 表示从下标 1 开始（含），到下标 4 结束（不含），步长为 2。先确定范围 [2, 3, 4]（下标 1,2,3），再每隔 2 个取一个，得到下标 1 的 2 和下标 3 的 4。",
+      "error_tag": "边界错误",
+      "variant_group": "list_slice"
+    },
+    {
+      "kp": "py.type.list_basic",
+      "type": "scenario",
+      "question": "在一个任务管理程序中，你从配置文件读入了一份默认可用的标签列表 tags = ['work', 'home']，并把它赋给两个用户 u1_tags = tags 和 u2_tags = tags。之后给 u1 追加了一个标签 u1_tags.append('urgent')。结果发现 u2 的标签也多了 'urgent'。请解释原因，并说明如何修改代码让两个用户各自维护独立的标签列表。",
+      "options": [],
+      "answer": null,
+      "explanation": "u1_tags = tags 和 u2_tags = tags 都是引用赋值，三个变量指向同一个列表对象，任何一方修改都会体现在其他变量上，这就是别名（aliasing）现象。要让每个用户独立，应在赋值时做浅拷贝，例如 u1_tags = tags[:] 或 list(tags) 或 import copy 后 copy.copy(tags)，这样每个变量指向不同的列表对象。",
+      "error_tag": "概念混淆",
+      "variant_group": "list_assign_alias",
+      "required_keywords": [
+        "引用赋值",
+        "别名",
+        "同一列表对象",
+        "浅拷贝",
+        "copy.copy"
+      ]
+    },
+    {
+      "kp": "py.type.list_basic",
+      "type": "single_choice",
+      "question": "执行下面的代码后，输出是什么？\n\nnums = [1, 2, 3, 4, 5]\nprint(nums[-2])",
+      "options": [
+        "4",
+        "5",
+        "2",
+        "报错 IndexError"
+      ],
+      "answer": 0,
+      "explanation": "负索引从末尾计数，-1 表示最后一个元素 5，-2 表示倒数第二个元素 4。因此输出 4。",
+      "error_tag": "边界错误",
+      "variant_group": "list_index"
+    },
+    {
+      "kp": "py.type.list_basic",
+      "type": "single_choice",
+      "question": "对于列表 nums = [1, 2, 3]，访问 nums[3] 会发生什么？",
+      "options": [
+        "返回 None",
+        "返回 3",
+        "抛出 IndexError",
+        "自动扩展列表并返回 0"
+      ],
+      "answer": 2,
+      "explanation": "列表下标从 0 开始，有效范围是 -3 到 2。nums[3] 越界，Python 会抛出 IndexError，而不是返回 None 或自动扩容。若需要安全访问，应先用长度判断或用切片。",
+      "error_tag": "边界错误",
+      "variant_group": "list_index"
+    },
+    {
+      "kp": "py.type.list_basic",
+      "type": "single_choice",
+      "question": "下面哪个切片结果得到 [3, 4]？\n\nnums = [1, 2, 3, 4, 5]",
+      "options": [
+        "nums[2:3]",
+        "nums[2:4]",
+        "nums[3:4]",
+        "nums[1:3]"
+      ],
+      "answer": 1,
+      "explanation": "切片遵循「含头不含尾」，nums[2:4] 取下标 2 和 3 的元素，即 [3, 4]。nums[2:3] 只取到 [3]；nums[3:4] 是 [4]；nums[1:3] 是 [2, 3]。",
+      "error_tag": "边界错误",
+      "variant_group": "list_slice"
+    },
+    {
+      "kp": "py.type.list_basic",
+      "type": "single_choice",
+      "question": "表达式 [1, 2, 3][::-1] 的结果是？",
+      "options": [
+        "[1, 2, 3]",
+        "[3, 2, 1]",
+        "[1, 3]",
+        "报错，切片步长不能为负"
+      ],
+      "answer": 1,
+      "explanation": "切片的第三个参数是步长，[::-1] 表示从头到尾以步长 -1 取值，即反转列表，得到 [3, 2, 1]。步长为负是合法且常用的反转写法。",
+      "error_tag": "概念混淆",
+      "variant_group": "list_slice"
+    },
+    {
+      "kp": "py.type.list_basic",
+      "type": "single_choice",
+      "question": "下面代码的输出是什么？\n\na = [1, 2, 3]\nb = a[:]\nb.append(4)\nprint(a)",
+      "options": [
+        "[1, 2, 3]",
+        "[1, 2, 3, 4]",
+        "[4]",
+        "报错"
+      ],
+      "answer": 0,
+      "explanation": "a[:] 产生一个浅拷贝的新列表，b 与 a 指向不同对象。对 b 追加元素不会影响 a，所以 a 仍为 [1, 2, 3]。注意这与 b = a 有本质区别。",
+      "error_tag": "概念混淆",
+      "variant_group": "list_assign_alias"
+    },
+    {
+      "kp": "py.type.list_basic",
+      "type": "single_choice",
+      "question": "关于列表推导式，下面哪段代码能生成 [0, 4, 16, 36]？",
+      "options": [
+        "[x*x for x in range(4)]",
+        "[x*x for x in range(0, 8, 2)]",
+        "[x*2 for x in range(4)]",
+        "[x*x for x in range(1, 5)]"
+      ],
+      "answer": 1,
+      "explanation": "range(0, 8, 2) 产生 0, 2, 4, 6，平方后是 0, 4, 16, 36。range(4) 是 0..3，平方为 0,1,4,9；[x*2 ...] 是翻倍不是平方；range(1,5) 平方是 1,4,9,16。",
+      "error_tag": "概念混淆",
+      "variant_group": "list_comprehension"
+    },
+    {
+      "kp": "py.type.list_basic",
+      "type": "single_choice",
+      "question": "执行 len([1, [2, 3], 4]) 的结果是？",
+      "options": [
+        "3",
+        "4",
+        "2",
+        "报错"
+      ],
+      "answer": 0,
+      "explanation": "len 只统计列表顶层元素个数。外层列表有三个元素：1、内层列表 [2, 3] 和 4，因此返回 3。嵌套列表并不展开计数。",
+      "error_tag": "概念混淆",
+      "variant_group": "list_len"
+    },
+    {
+      "kp": "py.type.list_basic",
+      "type": "single_choice",
+      "question": "下面代码的输出是什么？\n\nnums = [1, 2, 3]\nnums.insert(1, 99)\nprint(nums)",
+      "options": [
+        "[99, 1, 2, 3]",
+        "[1, 99, 2, 3]",
+        "[1, 2, 99, 3]",
+        "[1, 2, 3, 99]"
+      ],
+      "answer": 1,
+      "explanation": "insert(index, value) 在指定下标处插入元素，原下标及之后的元素向后移动。nums.insert(1, 99) 把 99 放在下标 1，得到 [1, 99, 2, 3]。",
+      "error_tag": "记忆缺失",
+      "variant_group": "list_insert"
+    },
+    {
+      "kp": "py.type.list_method",
+      "type": "single_choice",
+      "question": "执行以下代码后，列表 a 的值是什么？\n\na = [1, 2, 3]\na.append([4, 5])\nprint(a)",
+      "options": [
+        "[1, 2, 3, 4, 5]",
+        "[1, 2, 3, [4, 5]]",
+        "[1, 2, 3, 4, 5, [4, 5]]",
+        "报错，因为 append 只能接受一个元素"
+      ],
+      "answer": 1,
+      "explanation": "append 把参数作为单个元素整体追加到列表末尾，不会把可迭代对象展开。若想展开应使用 extend。",
+      "error_tag": "概念混淆",
+      "variant_group": "append_vs_extend"
+    },
+    {
+      "kp": "py.type.list_method",
+      "type": "single_choice",
+      "question": "以下哪段代码能把列表 nums = [3, 1, 2] 原地按升序排列，并且返回值为 None？",
+      "options": [
+        "sorted(nums)",
+        "nums.sort()",
+        "nums = sorted(nums)",
+        "nums.reverse()"
+      ],
+      "answer": 1,
+      "explanation": "list.sort() 原地排序并返回 None；sorted() 返回新列表，原列表不变。",
+      "error_tag": "概念混淆",
+      "variant_group": "sort_vs_sorted"
+    },
+    {
+      "kp": "py.type.list_method",
+      "type": "multi_choice",
+      "question": "下列关于 list.sort() 与 sorted() 的说法，正确的有？（多选）",
+      "options": [
+        "sort() 是列表的方法，sorted() 是内置函数",
+        "sort() 原地排序，返回 None",
+        "sorted() 返回新列表，原列表不变",
+        "两者都只能用于列表",
+        "两者都支持 reverse 和 key 参数"
+      ],
+      "answer": [
+        0,
+        1,
+        2,
+        4
+      ],
+      "explanation": "sorted() 可作用于任意可迭代对象，而 sort() 只属于列表，故「两者都只能用于列表」错误。二者都支持 key 与 reverse。",
+      "error_tag": "概念混淆",
+      "variant_group": "sort_vs_sorted"
+    },
+    {
+      "kp": "py.type.list_method",
+      "type": "fill_blank",
+      "question": "请补全代码，使得列表 a = [3, 1, 2] 被原地按降序排列，且不产生新列表：\n\na.______(reverse=True)",
+      "options": [],
+      "answer": [
+        "sort",
+        "sort()"
+      ],
+      "explanation": "list.sort 支持 reverse 参数，reverse=True 时原地降序排列并返回 None。",
+      "error_tag": "记忆缺失",
+      "variant_group": "sort_vs_sorted"
+    },
+    {
+      "kp": "py.type.list_method",
+      "type": "fill_blank",
+      "question": "下面代码想要删除列表中第一个值为 'x' 的元素，请补全方法名：\n\nlst.______('x')",
+      "options": [],
+      "answer": [
+        "remove"
+      ],
+      "explanation": "remove 按值删除第一个匹配项；若只想去掉某个下标，应使用 pop 或 del。",
+      "error_tag": "记忆缺失",
+      "variant_group": "remove_vs_pop"
+    },
+    {
+      "kp": "py.type.list_method",
+      "type": "code_reading",
+      "question": "阅读代码，写出输出结果：\n\nlst = [1, 2, 3]\nresult = lst.append(4)\nprint(result)\nprint(lst)",
+      "options": [],
+      "answer": "先输出 None，再输出 [1, 2, 3, 4]",
+      "explanation": "append 原地修改列表并返回 None，因此 result 是 None，而 lst 已被追加 4。",
+      "error_tag": "概念混淆",
+      "variant_group": "append_return_value"
+    },
+    {
+      "kp": "py.type.list_method",
+      "type": "code_reading",
+      "question": "阅读代码，写出输出结果：\n\na = [1, 2, 3]\nb = a\nb.append(4)\nprint(a)",
+      "options": [],
+      "answer": "[1, 2, 3, 4]",
+      "explanation": "b = a 只复制引用，两个名字指向同一个列表对象，通过 b 的修改在 a 上同样可见。若需独立副本应使用 a.copy() 或 a[:]。",
+      "error_tag": "概念混淆",
+      "variant_group": "reference_vs_copy"
+    },
+    {
+      "kp": "py.type.list_method",
+      "type": "code_reading",
+      "question": "阅读代码，写出输出结果：\n\nlst = [10, 20, 30]\nlst.insert(10, 99)\nprint(lst)",
+      "options": [],
+      "answer": "[10, 20, 30, 99]",
+      "explanation": "insert 的下标超出范围时不会报错，而是把元素追加到列表末尾，因此 99 被放在最后。",
+      "error_tag": "边界错误",
+      "variant_group": "insert_position"
+    },
+    {
+      "kp": "py.type.list_method",
+      "type": "code_reading",
+      "question": "阅读代码，写出输出结果：\n\nlst = [1, 2, 3]\nlst.clear()\nprint(len(lst))",
+      "options": [],
+      "answer": "0",
+      "explanation": "clear() 移除列表中所有元素，使列表变为空列表，长度为 0。",
+      "error_tag": "记忆缺失",
+      "variant_group": "clear_list"
+    },
+    {
+      "kp": "py.type.list_method",
+      "type": "scenario",
+      "question": "在订单处理服务中，你要把一批新订单逐条合并进现有的 all_orders 列表。批里有 5 个订单，你打算用循环逐条 all_orders.append(order) 合并，同事建议改用 all_orders.extend(batch)。从列表方法语义角度说明两者的区别，并给出你选择哪种做法的理由。",
+      "options": [],
+      "answer": null,
+      "explanation": "append 把参数作为单个元素整体加入；extend 则遍历可迭代对象，将其中的元素逐个展开追加。用 append(batch) 会导致列表里出现嵌套子列表，而 extend(batch) 才等价于逐条合并。",
+      "error_tag": "概念混淆",
+      "variant_group": "append_vs_extend",
+      "required_keywords": [
+        "append",
+        "extend",
+        "可迭代对象",
+        "单个元素",
+        "逐条合并"
+      ]
+    },
+    {
+      "kp": "py.type.list_method",
+      "type": "scenario",
+      "question": "某个函数接收一个列表参数，内部需要排序，但调用方发现调用后自己的列表顺序被改变了，怀疑函数有副作用。请说明最可能使用了哪种排序方式，以及若要保持调用方列表不变应如何重写。",
+      "options": [],
+      "answer": null,
+      "explanation": "排序改变原列表说明用了 list.sort()，它是原地方法。要保持调用方数据不变，可改用 sorted(列表) 返回新列表，或先 lst.copy() 再对副本调用 sort。",
+      "error_tag": "概念混淆",
+      "variant_group": "sort_vs_sorted",
+      "required_keywords": [
+        "list.sort",
+        "lst.copy"
+      ]
+    },
+    {
+      "kp": "py.type.list_method",
+      "type": "single_choice",
+      "question": "执行以下代码后，输出是什么？\n\nlst = [1, 2, 3, 4]\nprint(lst.pop())",
+      "options": [
+        "1",
+        "4",
+        "[1, 2, 3]",
+        "[1, 2, 3, 4]"
+      ],
+      "answer": 1,
+      "explanation": "pop() 不传参数时移除并返回最后一个元素，因此返回 4，同时列表变为 [1, 2, 3]。",
+      "error_tag": "边界错误",
+      "variant_group": "pop_behavior"
+    },
+    {
+      "kp": "py.type.list_method",
+      "type": "single_choice",
+      "question": "列表 a = [1, 2, 3]，执行 a.insert(1, 99) 后 a 的值是？",
+      "options": [
+        "[99, 1, 2, 3]",
+        "[1, 99, 2, 3]",
+        "[1, 2, 99, 3]",
+        "[1, 2, 3, 99]"
+      ],
+      "answer": 1,
+      "explanation": "insert(index, value) 将元素插入到指定下标处，原有该位置及之后的元素整体后移，因此 99 落在下标 1。",
+      "error_tag": "概念混淆",
+      "variant_group": "insert_position"
+    },
+    {
+      "kp": "py.type.list_method",
+      "type": "single_choice",
+      "question": "以下代码会输出什么？\n\nlst = [1, 2, 3, 2, 1]\nprint(lst.index(2))",
+      "options": [
+        "1",
+        "3",
+        "[1, 3]",
+        "报错，因为 2 出现了两次"
+      ],
+      "answer": 0,
+      "explanation": "list.index(x) 返回第一个值为 x 的元素下标，重复出现不会报错，返回最先匹配的位置 1。",
+      "error_tag": "边界错误",
+      "variant_group": "index_semantics"
+    },
+    {
+      "kp": "py.type.list_method",
+      "type": "single_choice",
+      "question": "关于 list.remove(x)，下列说法正确的是？",
+      "options": [
+        "移除下标为 x 的元素",
+        "移除列表中第一个值等于 x 的元素",
+        "移除列表中所有值等于 x 的元素",
+        "返回被移除的元素"
+      ],
+      "answer": 1,
+      "explanation": "remove(x) 按值删除，只删除第一个匹配项且返回 None；按位置删除应使用 pop(index) 或 del。",
+      "error_tag": "概念混淆",
+      "variant_group": "remove_vs_pop"
+    },
+    {
+      "kp": "py.type.list_method",
+      "type": "single_choice",
+      "question": "执行下面代码后，lst 的值是？\n\nlst = [1, 2, 3]\nlst.extend('ab')\nprint(lst)",
+      "options": [
+        "[1, 2, 3, 'ab']",
+        "[1, 2, 3, 'a', 'b']",
+        "[1, 2, 3, 'a', 'b', 'ab']",
+        "报错，extend 只接受列表"
+      ],
+      "answer": 1,
+      "explanation": "extend 接受任意可迭代对象，并逐元素追加。字符串是字符序列，所以 'a' 和 'b' 分别被追加。",
+      "error_tag": "边界错误",
+      "variant_group": "append_vs_extend"
+    },
+    {
+      "kp": "py.type.list_method",
+      "type": "single_choice",
+      "question": "以下哪段代码会修改原列表 a？\n\na = [3, 1, 2]",
+      "options": [
+        "b = a + [4]",
+        "b = a.copy()",
+        "a.sort()",
+        "b = sorted(a)"
+      ],
+      "answer": 2,
+      "explanation": "只有 list.sort() 是原地修改。a + [4]、a.copy()、sorted(a) 都产生新对象，不改变原列表。",
+      "error_tag": "概念混淆",
+      "variant_group": "inplace_vs_new"
+    },
+    {
+      "kp": "py.type.list_method",
+      "type": "multi_choice",
+      "question": "下列哪些操作会使列表 lst = [1, 2, 3] 变为 [1, 2, 3, 4]？（多选）",
+      "options": [
+        "lst.append(4)",
+        "lst.extend([4])",
+        "lst.insert(len(lst), 4)",
+        "lst + [4]",
+        "lst = lst + [4]"
+      ],
+      "answer": [
+        0,
+        1,
+        2,
+        4
+      ],
+      "explanation": "前三者与最后一项都能让变量指向含 4 的列表。第四项 lst + [4] 只是产生新列表而未赋值，原变量仍为 [1,2,3]。",
+      "error_tag": "概念混淆",
+      "variant_group": "append_vs_extend"
+    },
+    {
+      "kp": "py.type.list_method",
+      "type": "multi_choice",
+      "question": "关于列表的 pop 方法，下列说法正确的有？（多选）",
+      "options": [
+        "pop() 默认删除并返回最后一个元素",
+        "pop(i) 删除并返回下标 i 处的元素",
+        "pop 越界会引发 IndexError",
+        "pop 删除元素后返回 None",
+        "pop 可以按值删除元素"
+      ],
+      "answer": [
+        0,
+        1,
+        2
+      ],
+      "explanation": "pop 按下标删除并返回被删元素，不返回 None；按下标越界会报 IndexError。按值删除应使用 remove。",
+      "error_tag": "概念混淆",
+      "variant_group": "pop_behavior"
+    }
+  ]
+}

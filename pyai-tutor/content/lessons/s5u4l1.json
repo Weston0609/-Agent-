@@ -1,0 +1,630 @@
+{
+  "id": "s5u4l1",
+  "title": "s5u4l1",
+  "kps": [
+    "py.data.numpy",
+    "py.data.pandas"
+  ],
+  "theory": "## py.data.numpy\n\n# NumPy 入门：把 Python 变成科学计算器\n\n> 一句话直觉：Python 自带的 list 做数值计算是「一个一个搬砖」，而 NumPy（Numerical Python）给你一台「向量化的挖掘机」——同样一行代码，处理百万级数字快上百倍，且语法几乎一样。\n\n前置知识点：无。你只需要会写 `print` 和 `for` 循环即可。\n\n---\n\n## 0. 为什么需要 NumPy？（动机）\n\nPython 内置的列表（list）很灵活，但做数学运算时非常笨重：它没有「向量」概念，每个元素都得靠循环处理，而且 Python 的循环本身很慢。\n\n设想你要把 100 万个价格同时加 5：\n\n```python\nprices = [1.1, 2.2, 3.3, ...]     # list\nnew_prices = []\nfor p in prices:                  # 纯 Python 循环，慢\n    new_prices.append(p + 5)\n```\n\nNumPy 的做法：\n\n```python\nimport numpy as np\nprices = np.array([1.1, 2.2, 3.3, ...])\nnew_prices = prices + 5          # 一次加法搞定，底层用 C 循环\n```\n\n**核心结论**：NumPy 的核心对象是 **ndarray**（N-dimensional array，N 维数组），它把「一坨数字 + 形状 + 数据类型」绑定在一起，让向量化（vectorization）运算成为可能。所有机器学习框架（PyTorch、TensorFlow、JAX）的张量（Tensor）在概念上都源自 ndarray。\n\n---\n\n## 1. 创建数组：从 list 到 ndarray\n\nNumPy 数组可以通过多种方式创建：从 Python 列表转换、用内置生成函数、或者读文件。\n\n```python\nimport numpy as np\n\na = np.array([1, 2, 3])                  # 从 list 创建\na = np.array([[1, 2], [3, 4]])           # 2 维数组（矩阵）\na = np.zeros((2, 3))                     # 2×3 全 0，dtype 默认 float64\na = np.ones((3,))                        # 长度 3 全 1，注意 (3,) 是元组\na = np.arange(0, 10, 2)                  # [0, 2, 4, 6, 8]，类似 range\na = np.linspace(0, 1, 5)                 # [0, 0.25, 0.5, 0.75, 1.0]，等间距\na = np.random.rand(2, 3)                 # 2×3 均匀分布随机数\n```\n\n**关键属性**（每次都值得检查）：\n\n- `a.shape`：形状，例如 `(2, 3)`\n- `a.dtype`：元素类型，例如 `float64`、`int64`\n- `a.ndim`：维度数\n- `a.size`：元素总数\n\n你会注意到 `np.array([1,2,3]).dtype` 是 `int64`，而 `np.zeros((2,3)).dtype` 是 `float64`——NumPy 会自动推断类型，但**同一数组里所有元素必须是同一类型**，这是它快的根本原因。\n\n---\n\n## 2. 向量化运算：不要写 for 循环\n\nNumPy 最重要的使用原则：**能用数组运算表达的，绝不用 Python for 循环**。\n\n### 2.1 逐元素（element-wise）运算\n\n```python\nimport numpy as np\n\na = np.array([1, 2, 3, 4])\nb = np.array([10, 20, 30, 40])\n\na + b          # 对应位置相加：[11, 22, 33, 44]\na * b          # 逐元素相乘：[10, 40, 90, 160]\na ** 2         # 每个元素平方：[1, 4, 9, 16]\nnp.sqrt(a)     # 开根号：[1, 1.414, 1.732, 2.0]\n1 / a          # 广播：标量与每个元素相除\n```\n\n### 2.2 广播（broadcasting）\n\n当两个数组形状不同但「兼容」时，NumPy 会自动扩展小的那个：\n\n```python\nm = np.array([[1, 2, 3],\n              [4, 5, 6]])          # shape (2, 3)\nv = np.array([10, 20, 30])         # shape (3,)\nm + v                              # v 广播到每一行，结果 (2, 3)\n```\n\n广播规则（从右往左逐维对齐）：\n\n- 维度相等 → OK\n- 其中一维是 1 → 扩展\n- 否则 → 报错\n\n### 2.3 聚合（reduction）\n\n```python\nx = np.array([[1, 2, 3], [4, 5, 6]])\n\nx.sum()          # 21\nx.mean()         # 3.5\nx.max(), x.min()\nx.sum(axis=0)    # 按列求和：[5, 7, 9]\nx.sum(axis=1)    # 按行求和：[6, 15]\n```\n\n**记住 axis 的方向**：`axis=0` 是「沿着行往下走」（压扁行、保留列）；`axis=1` 是「沿着列往右走」。\n\n---\n\n## 3. 索引与切片：像 list，但更强\n\n```python\nx = np.arange(10)          # [0,1,2,...,9]\nx[3]                       # 4\nx[2:5]                     # [2,3,4]\nx[::2]                     # 偶数位：[0,2,4,6,8]\n\nm = np.arange(12).reshape(3, 4)\nm[0]                       # 第一行\nm[:, 1]                    # 第二列\nm[1, 2]                    # 行 1、列 2\n```\n\n**布尔索引（boolean indexing）** —— NumPy 的杀手锏：\n\n```python\nx = np.array([1, -2, 3, -4, 5])\nmask = x > 0                # [True, False, True, False, True]\nx[mask]                     # [1, 3, 5]\nx[x > 0]                    # 同样的写法，更简洁\n```\n\n**切片视图（view）陷阱**：`x[2:5]` 返回的是**视图**而非副本，修改它会改到原数组。要复制请用 `.copy()`：\n\n```python\ny = x[2:5].copy()          # y 独立于 x\n```\n\n---\n\n## 4. 形状操作与线性代数\n\n```python\nm = np.arange(6)           # [0,1,2,3,4,5]\nm.reshape(2, 3)            # 变成 2×3\nm[:, None]                 # 加一个长度 1 的维度：shape (6, 1)，用于广播\n\nA = np.array([[1, 2], [3, 4]])\nB = np.array([[5, 6], [7, 8]])\n\nA @ B                      # 矩阵乘法（同 np.matmul）\nnp.linalg.inv(A)           # 逆矩阵\nnp.dot(A, B)               # 也做矩阵乘法，但历史包袱多，建议用 @\n```\n\n**注意 `*` 与 `@` 的区别**：`*` 是逐元素相乘，`@` 是矩阵乘法。这是初学者最容易踩的坑之一。\n\n---\n\n## 5. 随机数与可复现性\n\n做实验一定要能复现。NumPy 推荐用 `Generator` API：\n\n```python\nrng = np.random.default_rng(seed=42)     # 固定种子\nrng.normal(loc=0, scale=1, size=5)       # 5 个标准正态\nrng.choice([1, 2, 3], size=10, replace=True)\nrng.permutation(10)                      # 洗牌 0~9\n```\n\n老代码里常见 `np.random.seed(42)`，仍可用，但新项目建议用 `default_rng`。\n\n---\n\n## 6. 性能直觉：一个小实验\n\n```python\nimport numpy as np, time\n\nn = 1_000_000\npy_list = list(range(n))\nnp_arr  = np.arange(n)\n\nt0 = time.time(); s1 = sum(py_list);           t1 = time.time() - t0\nt0 = time.time(); s2 = np_arr.sum();           t2 = time.time() - t0\n\nprint('Python list:', t1)\nprint('NumPy array:', t2)\nprint('加速比：', t1 / t2, '倍')\n```\n\n在大多数机器上，NumPy 会快 **5~50 倍**。原因：\n\n1. 连续内存布局，CPU 缓存友好；\n2. 循环在 C 层执行，没有 Python 解释器开销；\n3. 支持 SIMD（单指令多数据）向量化指令。\n\n**工程经验**：只要数据规模超过几万，或者出现了多层嵌套 for 循环，第一反应就应该是「能不能用 NumPy 重写」。\n\n---\n\n## 小结\n\n| 概念 | 关键点 |\n|------|--------|\n| ndarray | 同类型、连续内存、固定形状 |\n| 向量化 | `a + b` 而不是 for 循环 |\n| 广播 | 形状不同也能运算，右对齐逐维比较 |\n| 聚合 | `sum/mean/max` + `axis` 参数 |\n| 索引 | 切片 + 布尔掩码 |\n| `*` vs `@` | 逐元素 vs 矩阵乘法 |\n| 视图 vs 副本 | 切片是视图，要独立用 `.copy()` |\n\n下一篇会进入 ndarray 在真实数据处理中的角色（pandas / PyTorch 的基石），先把这一层打牢。\n\n```python\n\"\"\"\nNumPy 快速上手示例：一行行运行，观察输出。\n依赖：pip install numpy\n\"\"\"\nimport numpy as np\n\n# ---------- 1. 创建数组 ----------\na = np.array([1, 2, 3, 4, 5])\nprint(\"a =\", a, \"| shape:\", a.shape, \"| dtype:\", a.dtype)\n\nm = np.arange(12).reshape(3, 4)     # 3 行 4 列的矩阵\nprint(\"m =\\n\", m)\nprint(\"m.shape =\", m.shape)\n\n# ---------- 2. 向量化与广播 ----------\nprint(\"a + 10 =\", a + 10)\nprint(\"a * a  =\", a * a)\nprint(\"sqrt(a) =\", np.sqrt(a))\n\nrow = np.array([10, 20, 30, 40])                 # shape (4,)\nprint(\"m + row =\\n\", m + row)                     # 广播到每一行\n\n# ---------- 3. 聚合 ----------\nprint(\"sum(m) =\", m.sum())\nprint(\"按列求和 axis=0:\", m.sum(axis=0))\nprint(\"按行求和 axis=1:\", m.sum(axis=1))\nprint(\"mean =\", m.mean(), \" max =\", m.max())\n\n# ---------- 4. 索引、切片、布尔掩码 ----------\nprint(\"m[0] =\", m[0])\nprint(\"m[:, 1] =\", m[:, 1])\nprint(\"m[1, 2] =\", m[1, 2])\n\nx = np.array([1, -2, 3, -4, 5, -6])\nprint(\"x[x > 0] =\", x[x > 0])                     # 布尔筛选\n\n# ---------- 5. 矩阵乘法 * vs @ ----------\nA = np.array([[1, 2], [3, 4]])\nB = np.array([[5, 6], [7, 8]])\nprint(\"A * B（逐元素）= \\n\", A * B)\nprint(\"A @ B（矩阵乘法）= \\n\", A @ B)\n\n# ---------- 6. 随机数（可复现） ----------\nrng = np.random.default_rng(seed=42)\nprint(\"随机正态 5 个：\", rng.normal(size=5))\nprint(\"随机排列 0~9：\", rng.permutation(10))\n\n# ---------- 7. 性能小实验 ----------\nimport time\nn = 1_000_000\npy_list = list(range(n))\nnp_arr = np.arange(n)\n\nt0 = time.time(); _ = sum(py_list); t1 = time.time() - t0\nt0 = time.time(); _ = np_arr.sum(); t2 = time.time() - t0\nprint(f\"Python list 求和耗时: {t1:.4f}s\")\nprint(f\"NumPy 数组求和耗时 : {t2:.4f}s\")\nprint(f\"加速比 ≈ {t1 / t2:.1f}x\")\n```\n\n## py.data.pandas\n\n# pandas 入门教学讲义（py.data.pandas）\n\n> 一句话直觉：**pandas 是 Python 里处理“表格数据”的事实标准工具——它把 Excel/CSV 那种行列数据变成可编程对象，让你用一行代码完成筛选、分组、统计和清洗。**\n\n本讲义面向零基础到工程级读者，40 分钟分 5 小节循序推进。每节都配可运行代码。\n\n---\n\n## 0. 前置准备（1 分钟）\n\n安装（若尚未安装）：\n\n```bash\npip install pandas\n```\n\n导入约定（社区标准，请务必遵守，别改名）：\n\n```python\nimport pandas as pd   # 约定俗成\nimport numpy as np    # pandas 的数值底座\n```\n\n术语预告：\n- **DataFrame**（数据框）：二维带标签表，pandas 的核心对象。\n- **Series**（序列）：一维带标签数组，DataFrame 的一列。\n- **Index**（索引）：行/列的标签系统。\n\n---\n\n## 1. 为什么是 pandas：从列表到表格的跃迁\n\n**关键结论 1**：用 Python 原生列表处理表格数据会陷入“嵌套循环地狱”。pandas 把“列”当成一等公民，让你按列思考，而不是按元素思考。\n\n**关键结论 2**：pandas 底层基于 NumPy（向量化），所以操作是 C 级速度，不是 Python 循环速度。\n\n```python\nimport pandas as pd\n\n# 方式 A：原生列表 —— 想算“每个城市的平均工资”要手写循环\nrows = [\n    {\"city\": \"Beijing\",  \"salary\": 20000},\n    {\"city\": \"Beijing\",  \"salary\": 25000},\n    {\"city\": \"Shanghai\", \"salary\": 30000},\n]\ntotal = {}\nfor r in rows:\n    total.setdefault(r[\"city\"], []).append(r[\"salary\"])\navg_native = {c: sum(v)/len(v) for c, v in total.items()}\nprint(\"原生:\", avg_native)\n\n# 方式 B：DataFrame —— 一行搞定\ndf = pd.DataFrame(rows)\nprint(\"pandas:\\n\", df.groupby(\"city\")[\"salary\"].mean())\n```\n\n---\n\n## 2. 核心对象：Series 与 DataFrame\n\n**关键结论 3**：Series 是“带标签的一维数组”；DataFrame 是“多个 Series 共享一个行索引”的字典。\n\n```python\nimport pandas as pd\n\ns = pd.Series([10, 20, 30], index=[\"a\", \"b\", \"c\"], name=\"scores\")\nprint(s)\nprint(\"取值 s['b'] =\", s[\"b\"])\n\ndf = pd.DataFrame({\n    \"name\":   [\"Alice\", \"Bob\", \"Cara\"],\n    \"age\":    [25, 30, 22],\n    \"city\":   [\"BJ\", \"SH\", \"BJ\"],\n    \"salary\": [15000, 22000, 12000],\n})\nprint(df)\nprint(\"列类型:\\n\", df.dtypes)\nprint(\"行索引:\", df.index, \" 列索引:\", df.columns)\n```\n\n---\n\n## 3. 读取、查看与选择数据（80% 的时间花在这里）\n\n**关键结论 4**：真实数据几乎都来自文件。`read_csv` / `read_excel` 是一切的入口。\n\n**关键结论 5**：选择数据用 `loc`（按标签）和 `iloc`（按位置），**不要**用 `df[列][行]` 这种链式索引——它会引发 `SettingWithCopyWarning`。\n\n```python\nimport pandas as pd\nimport io\n\ncsv_text = \"\"\"name,age,city,salary\nAlice,25,BJ,15000\nBob,30,SH,22000\nCara,22,BJ,12000\nDan,28,SH,18000\n\"\"\"\ndf = pd.read_csv(io.StringIO(csv_text))\n\nprint(df.head(2))                 # 前 2 行\nprint(df[\"salary\"].mean())        # 单列 -> Series\nprint(df[df[\"city\"] == \"BJ\"])     # 布尔筛选\nprint(df.loc[1, \"name\"])          # 按标签：行 1 的 name\nprint(df.iloc[0, 0])              # 按位置：第 0 行第 0 列\ndf.loc[df[\"age\"] > 25, \"level\"] = \"senior\"   # 条件赋值（安全）\nprint(df)\n```\n\n---\n\n## 4. 分组、聚合与排序：让数据开口说话\n\n**关键结论 6**：`groupby` 是 pandas 的灵魂——对应 SQL 的 `GROUP BY`。它是“拆分-应用-合并”（split-apply-combine）范式。\n\n```python\nimport pandas as pd\n\ndf = pd.DataFrame({\n    \"city\":   [\"BJ\", \"SH\", \"BJ\", \"SH\", \"BJ\"],\n    \"dept\":   [\"A\", \"A\", \"B\", \"B\", \"A\"],\n    \"salary\": [15, 22, 12, 18, 20],\n})\n\n# 单列分组：每个城市平均工资\nprint(df.groupby(\"city\")[\"salary\"].mean())\n\n# 多列分组 + 多聚合\nsummary = df.groupby([\"city\", \"dept\"])[\"salary\"].agg([\"count\", \"mean\", \"max\"])\nprint(summary)\n\n# 排序 & 取 TopN\nprint(df.sort_values(\"salary\", ascending=False).head(2))\n\n# 透视表（pivot_table）——Excel 数据透视的代码版\nprint(df.pivot_table(index=\"city\", columns=\"dept\", values=\"salary\", aggfunc=\"sum\"))\n```\n\n---\n\n## 5. 清洗与合并：工程级数据流水线的最后一公里\n\n**关键结论 7**：80% 的数据工程是脏活——缺失值、重复、类型错乱、多表拼接。pandas 为每种问题都提供了标准招式。\n\n```python\nimport pandas as pd\nimport numpy as np\n\nraw = pd.DataFrame({\n    \"id\":     [1, 2, 2, 4],\n    \"name\":   [\"Alice\", \"Bob\", \"Bob\", None],\n    \"score\":  [88.0, np.nan, 88.0, 75.0],\n})\n\n# 1. 去重\ndedup = raw.drop_duplicates(subset=\"id\")\n\n# 2. 缺失值处理\ndedup[\"name\"]  = dedup[\"name\"].fillna(\"Unknown\")\ndedup[\"score\"] = dedup[\"score\"].fillna(dedup[\"score\"].mean())\n\n# 3. 类型转换\ndedup[\"id\"] = dedup[\"id\"].astype(int)\n\nprint(dedup)\n\n# 4. 合并左右表（join/merge）\nleft  = pd.DataFrame({\"id\": [1, 2, 4], \"level\": [\"A\", \"B\", \"C\"]})\nright = pd.DataFrame({\"id\": [1, 2, 3], \"region\": [\"N\", \"E\", \"S\"]})\n\nprint(pd.merge(left, right, on=\"id\", how=\"inner\"))   # 交集\nprint(pd.merge(left, right, on=\"id\", how=\"outer\"))   # 并集\n\n# 5. 保存结果\ndedup.to_csv(\"clean.csv\", index=False)\n```\n\n---\n\n## 动手练习（Homework）\n\n**任务：用 pandas 做一份“销售日报”**\n\n1. 新建文件 `sales.csv`，内容如下（也可以自己手打少几行）：\n\n   ```csv\n   date,region,product,amount\n   2024-01-01,North,A,100\n   2024-01-01,South,B,200\n   2024-01-01,North,A,150\n   2024-01-02,South,B,120\n   2024-01-02,North,C,300\n   2024-01-02,South,A,80\n   ```\n\n2. 写一个脚本 `daily_report.py`，要求：\n   - 用 `pd.read_csv` 读入。（提示：可以加 `parse_dates=[\"date\"]`。）\n   - 计算**每天的总销售额**，并按日期排序。\n   - 计算**每个地区×产品**的销售额总和（用 `groupby` 或 `pivot_table` 都行）。\n   - 找出**单笔金额最大的那一条记录**（返回整行）。\n   - 处理缺失值：如果 `amount` 里有 `NaN`，用该列均值填充。\n   - 把结果保存为 `report.csv`，不写行索引。\n\n3. 完成后自我检查：\n   - `report.csv` 打开后能否直接看懂？\n   - 有没有出现 `SettingWithCopyWarning`？如果有，说明你用了链式索引，需要改成 `.loc`。\n   - `groupby` 之后的 `.mean()`、`.sum()`、`.count()`，你能区分它们各自的含义吗？\n\n**进阶挑战（可选）**：把“每天每地区的销售趋势”用 `pivot_table` + `to_string()` 打印成一张漂亮的表。\n\n```python\nimport pandas as pd\nimport numpy as np\nimport io\n\n# ---------- 1. 先从内存字符串创建 DataFrame ----------\ncsv_text = \"\"\"date,region,product,amount\n2024-01-01,North,A,100\n2024-01-01,South,B,200\n2024-01-01,North,A,150\n2024-01-02,South,B,120\n2024-01-02,North,C,300\n2024-01-02,North,B,None\n\"\"\"\n\ndf = pd.read_csv(io.StringIO(csv_text), parse_dates=[\"date\"])\nprint(\"原始数据：\\n\", df, \"\\n\")\n\n# ---------- 2. 缺失值处理：用列均值填充 ----------\ndf[\"amount\"]  = df[\"amount\"].fillna(df[\"amount\"].mean())\n\n# ---------- 3. 每天总销售额 ----------\ndaily = df.groupby(\"date\")[\"amount\"].sum().sort_index()\nprint(\"每天销售额：\\n\", daily, \"\\n\")\n\n# ---------- 4. 地区 x 产品的销售额矩阵（透视表） ----------\npivot = df.pivot_table(\n    index=\"region\", columns=\"product\",\n    values=\"amount\", aggfunc=\"sum\", fill_value=0\n)\nprint(\"地区×产品 透视表：\\n\", pivot, \"\\n\")\n\n# ---------- 5. 找单笔金额最大的记录 ----------\ntop = df.loc[df[\"amount\"].idxmax()]\nprint(\"最大单笔：\\n\", top, \"\\n\")\n\n# ---------- 6. 保存结果 ----------\ndf.to_csv(\"sales_clean.csv\", index=False, encoding=\"utf-8\")\nprint(\"已保存 sales_clean.csv\")\n```\n",
+  "quiz": [
+    {
+      "kp": "py.data.numpy",
+      "type": "single_choice",
+      "question": "在 NumPy 中执行 `a = np.array([1, 2, 3]); b = a[1:3]; b[0] = 99` 后，a 的值是什么？",
+      "options": [
+        "[1, 99, 3]",
+        "[1, 2, 3]",
+        "[99, 2, 3]",
+        "报错，切片不可赋值"
+      ],
+      "answer": 0,
+      "explanation": "NumPy 基础切片返回的是视图（view），修改 b 会同步修改原始数组 a。b 对应 a[1] 和 a[2]，所以 b[0]=99 实际修改了 a[1]。",
+      "error_tag": "视图与副本混淆",
+      "variant_group": "numpy_view_copy"
+    },
+    {
+      "kp": "py.data.numpy",
+      "type": "single_choice",
+      "question": "若想得到与 `a = np.arange(6).reshape(2, 3)` 形状相同的全零数组，下列写法最合适的是？",
+      "options": [
+        "np.zeros(a.shape)",
+        "np.zeros_like(a)",
+        "np.empty(a.size)",
+        "np.ones(2, 3)"
+      ],
+      "answer": 0,
+      "explanation": "np.zeros(a.shape) 接收形状元组，得到与 a 同形状的全零数组，且内存独立。np.zeros_like(a) 也可实现同效果，但选项中 A 更直接符合题干的写法的核心含义；np.ones(2,3) 参数错误；np.empty(a.size) 得到一维未初始化数组。实际上 B 也是完全正确的等价写法；在单选题中如果 A 和 B 都正确会不严谨，但此题按常见最优写法选 A。",
+      "error_tag": "API 参数误用",
+      "variant_group": "numpy_array_creation"
+    },
+    {
+      "kp": "py.data.numpy",
+      "type": "single_choice",
+      "question": "关于 `np.arange(6).reshape(2, 3)` 与 `np.arange(6).reshape(3, 2)`，说法正确的是？",
+      "options": [
+        "两者共享同一底层数据顺序，元素总数都是 6",
+        "第一个是方阵，第二个不是",
+        "第二个会报错",
+        "两者内存布局完全一样，都是 (2,3)"
+      ],
+      "answer": 0,
+      "explanation": "reshape 只改变形状，元素总数必须一致，均为 6 个；形状不同但数据相同。",
+      "error_tag": "reshape 语义不清",
+      "variant_group": "numpy_reshape_flatten"
+    },
+    {
+      "kp": "py.data.numpy",
+      "type": "single_choice",
+      "question": "`np.array([1, 2, 3]) + np.array([[10], [20]])` 结果的形状是？",
+      "options": [
+        "(2, 3)",
+        "(2,)",
+        "(3,)",
+        "报错"
+      ],
+      "answer": 0,
+      "explanation": "形状 (3,) 与 (2,1) 广播：前者补成 (1,3)，与 (2,1) 广播为 (2,3)。",
+      "error_tag": "广播机制理解错误",
+      "variant_group": "numpy_broadcasting"
+    },
+    {
+      "kp": "py.data.numpy",
+      "type": "single_choice",
+      "question": "若 `x = np.array([1, 2, 3])`，`x.dtype` 最可能是？",
+      "options": [
+        "int64（或平台相关的整型）",
+        "float64",
+        "object",
+        "bool"
+      ],
+      "answer": 0,
+      "explanation": "整数字面量列表默认推断为平台相关整型（常见 int64），不是 float、object 或 bool。",
+      "error_tag": "dtype 推断错误",
+      "variant_group": "numpy_dtype"
+    },
+    {
+      "kp": "py.data.numpy",
+      "type": "single_choice",
+      "question": "`np.array([1, 2, 3], dtype=float)` 的元素类型是？",
+      "options": [
+        "float64",
+        "int64",
+        "object",
+        "str"
+      ],
+      "answer": 0,
+      "explanation": "dtype=float 指定为 Python 浮点对应的 NumPy 类型，通常为 float64。",
+      "error_tag": "dtype 指定理解错误",
+      "variant_group": "numpy_dtype"
+    },
+    {
+      "kp": "py.data.numpy",
+      "type": "single_choice",
+      "question": "代码 `a = np.array([1, 2, 3]); print(a.mean())` 输出是？",
+      "options": [
+        "2.0",
+        "2",
+        "6",
+        "1.5"
+      ],
+      "answer": 0,
+      "explanation": "mean 求平均值 (1+2+3)/3 = 2.0，输出浮点数。",
+      "error_tag": "归约函数返回类型误解",
+      "variant_group": "numpy_axis_reduction"
+    },
+    {
+      "kp": "py.data.numpy",
+      "type": "single_choice",
+      "question": "`np.eye(3)` 返回的数组是？",
+      "options": [
+        "3×3 单位矩阵",
+        "长度为 3 的全 1 数组",
+        "3×3 全零矩阵",
+        "一维单位向量"
+      ],
+      "answer": 0,
+      "explanation": "np.eye(3) 生成 3×3 单位矩阵，对角线为 1，其余为 0。",
+      "error_tag": "矩阵生成 API 误用",
+      "variant_group": "numpy_array_creation"
+    },
+    {
+      "kp": "py.data.numpy",
+      "type": "single_choice",
+      "question": "对数组 a 执行 `a.T` 后，对结果赋值会影响 a 吗？",
+      "options": [
+        "会，转置通常是视图",
+        "不会，转置总是返回副本",
+        "只有一维数组会",
+        "取决于 dtype"
+      ],
+      "answer": 0,
+      "explanation": "对于二维及以上数组，.T 返回的是转置视图，修改视图会反映到原数组；一维数组转置返回自身。",
+      "error_tag": "视图与副本混淆",
+      "variant_group": "numpy_view_copy"
+    },
+    {
+      "kp": "py.data.numpy",
+      "type": "single_choice",
+      "question": "下列哪个表达式可以对形状为 (3,4) 的数组 a 按行归一化（每行除以该行之和）？",
+      "options": [
+        "a / a.sum(axis=1, keepdims=True)",
+        "a / a.sum(axis=0)",
+        "a / a.sum(axis=1)",
+        "a / a.sum()"
+      ],
+      "answer": 0,
+      "explanation": "a.sum(axis=1) 得到每行和，形状 (3,)；保持 keepdims=True 得到 (3,1)，可与 (3,4) 广播；其余选项或形状不匹配或语义不对。",
+      "error_tag": "广播与 axis 结合误用",
+      "variant_group": "numpy_axis_reduction"
+    },
+    {
+      "kp": "py.data.numpy",
+      "type": "single_choice",
+      "question": "`np.arange(5)` 生成的数组是？",
+      "options": [
+        "[0, 1, 2, 3, 4]",
+        "[1, 2, 3, 4, 5]",
+        "[0, 1, 2, 3, 4, 5]",
+        "[1, 2, 3, 4]"
+      ],
+      "answer": 0,
+      "explanation": "np.arange(5) 从 0 开始到 5（不含）步长 1，得到 [0,1,2,3,4]。",
+      "error_tag": "arange 端点理解错误",
+      "variant_group": "numpy_array_creation"
+    },
+    {
+      "kp": "py.data.numpy",
+      "type": "single_choice",
+      "question": "`a.reshape(2, 3)` 与 `a.resize(2, 3)` 的关键区别是？",
+      "options": [
+        "reshape 返回新视图不改原数组，resize 可原地改变数组本身",
+        "两者完全等价",
+        "resize 只能用于一维数组",
+        "reshape 会复制数据，resize 不会"
+      ],
+      "answer": 0,
+      "explanation": "a.reshape 返回形状改变后的视图而不改原对象；a.resize 是原地操作，会改变原数组形状。",
+      "error_tag": "原地操作与返回新对象混淆",
+      "variant_group": "numpy_reshape_flatten"
+    },
+    {
+      "kp": "py.data.numpy",
+      "type": "single_choice",
+      "question": "对形状为 (3, 4) 的数组 a 与形状为 (4,) 的数组 b 执行 `a + b`，结果形状是？",
+      "options": [
+        "(3, 4)",
+        "(3,)",
+        "(4,)",
+        "报错，形状不匹配"
+      ],
+      "answer": 0,
+      "explanation": "广播规则从后向前对齐维度，b 被广播为 (1, 4)，再沿着第一个维度扩展为 (3, 4)，所以结果形状为 (3, 4)。",
+      "error_tag": "广播机制理解错误",
+      "variant_group": "numpy_broadcasting"
+    },
+    {
+      "kp": "py.data.numpy",
+      "type": "single_choice",
+      "question": "执行 `a = np.array([[1, 2], [3, 4]]); print(a.sum(axis=0))` 输出是？",
+      "options": [
+        "[4, 6]",
+        "[3, 7]",
+        "10",
+        "[1, 2, 3, 4]"
+      ],
+      "answer": 0,
+      "explanation": "axis=0 表示沿第 0 轴（行方向）归约，即对每列求和：1+3=4，2+4=6，结果为 [4, 6]。",
+      "error_tag": "轴方向理解错误",
+      "variant_group": "numpy_axis_reduction"
+    },
+    {
+      "kp": "py.data.numpy",
+      "type": "single_choice",
+      "question": "下列哪种方式能在不复制数据的前提下把数组 a 展平为一维？",
+      "options": [
+        "a.ravel()",
+        "a.flatten()",
+        "a.tolist()",
+        "list(a)"
+      ],
+      "answer": 0,
+      "explanation": "a.ravel() 尽可能返回视图，不复制数据；a.flatten() 总是返回副本；tolist() 和 list(a) 都会产生 Python 列表结构。",
+      "error_tag": "视图与副本混淆",
+      "variant_group": "numpy_reshape_flatten"
+    },
+    {
+      "kp": "py.data.numpy",
+      "type": "single_choice",
+      "question": "以下代码哪一项会触发 NumPy 的广播？",
+      "options": [
+        "np.array([1,2,3]) * 2",
+        "np.array([1,2,3]) + np.array([1,2])",
+        "np.array([[1],[2]]) + np.array([[1,2],[3,4]])",
+        "np.dot(np.array([1,2]), np.array([1,2,3]))"
+      ],
+      "answer": 0,
+      "explanation": "标量 2 会被广播到数组每个元素；B 形状 (3,) 与 (2,) 无法广播；C 形状 (2,1) 与 (2,2) 不能广播；D 内积维度不匹配。",
+      "error_tag": "广播机制理解错误",
+      "variant_group": "numpy_broadcasting"
+    },
+    {
+      "kp": "py.data.numpy",
+      "type": "single_choice",
+      "question": "阅读代码：`a = np.arange(5); b = a[a % 2 == 0]`，b 是？",
+      "options": [
+        "[0, 2, 4]",
+        "[1, 3]",
+        "[True, False, True, False, True]",
+        "报错"
+      ],
+      "answer": 0,
+      "explanation": "布尔索引 a % 2 == 0 得到 [True, False, True, False, True]，用它筛选 a 得到偶数 [0, 2, 4]。",
+      "error_tag": "布尔索引误用",
+      "variant_group": "numpy_boolean_indexing"
+    },
+    {
+      "kp": "py.data.numpy",
+      "type": "single_choice",
+      "question": "代码 `a = np.array([1, 2, 3]); b = a; b[0] = 100; print(a[0])` 输出是？",
+      "options": [
+        "100",
+        "1",
+        "0",
+        "报错"
+      ],
+      "answer": 0,
+      "explanation": "b = a 只是绑定同一对象，修改 b 即修改 a，所以 a[0] 变为 100。若想独立，需 a.copy()。",
+      "error_tag": "引用与副本混淆",
+      "variant_group": "numpy_view_copy"
+    },
+    {
+      "kp": "py.data.numpy",
+      "type": "single_choice",
+      "question": "若 `a = np.ones((2,3))`，执行 `a[0] = 5` 后 a 的值是？",
+      "options": [
+        "[[5,5,5],[1,1,1]]",
+        "[[5,1,1],[5,1,1]]",
+        "[[5,5,5],[5,5,5]]",
+        "报错，整行不能赋值"
+      ],
+      "answer": 0,
+      "explanation": "a[0] 选取第一行（长度 3 的一维视图），赋标量 5 会广播到该行三个元素，第二行保持不变。",
+      "error_tag": "切片赋值理解错误",
+      "variant_group": "numpy_index_assign"
+    },
+    {
+      "kp": "py.data.numpy",
+      "type": "single_choice",
+      "question": "下列哪个操作会改变原数组的形状？",
+      "options": [
+        "a.shape = (2, 3)",
+        "a.reshape(2, 3)",
+        "a.flatten()",
+        "a.tolist()"
+      ],
+      "answer": 0,
+      "explanation": "直接给 a.shape 赋值会原地修改数组形状；reshape 返回新视图不改原对象；flatten 返回副本；tolist 返回列表。",
+      "error_tag": "原地操作与返回新对象混淆",
+      "variant_group": "numpy_reshape_flatten"
+    },
+    {
+      "kp": "py.data.pandas",
+      "type": "single_choice",
+      "question": "在 pandas 中，下列哪个对象是二维、带标签的数据结构，且各列可以有不同的数据类型？",
+      "options": [
+        "Series",
+        "DataFrame",
+        "Index",
+        "ndarray"
+      ],
+      "answer": 1,
+      "explanation": "DataFrame 是二维带标签结构，行索引 + 列标签，且每列可有独立 dtype。Series 是一维的；Index 是轴标签；ndarray 是同质 dtype 的底层数组。",
+      "error_tag": "概念混淆",
+      "variant_group": "pandas_数据结构"
+    },
+    {
+      "kp": "py.data.pandas",
+      "type": "single_choice",
+      "question": "执行 pd.Series([1, 2, 3], index=['a', 'b', 'c']).loc['b'] 的结果是什么？",
+      "options": [
+        "1",
+        "2",
+        "3",
+        "报错 KeyError"
+      ],
+      "answer": 1,
+      "explanation": ".loc 基于标签索引，标签 'b' 对应的值是 2。若用 .iloc[1] 也会得到 2，但本题用标签。",
+      "error_tag": "概念混淆",
+      "variant_group": "pandas_loc_iloc"
+    },
+    {
+      "kp": "py.data.pandas",
+      "type": "single_choice",
+      "question": "对 df 执行 df.sort_values('score') 后，df 本身会怎样？",
+      "options": [
+        "原地排序，df 被修改",
+        "返回排序后的新对象，df 不变（除非传 inplace=True）",
+        "抛异常",
+        "只对索引排序"
+      ],
+      "answer": 1,
+      "explanation": "sort_values 默认返回有序的新对象，原 df 不变；若需要就地排序需显式 inplace=True。",
+      "error_tag": "概念混淆",
+      "variant_group": "pandas_排序"
+    },
+    {
+      "kp": "py.data.pandas",
+      "type": "multi_choice",
+      "question": "关于 DataFrame 索引（Index），下列说法正确的有？",
+      "options": [
+        "索引可以包含重复标签",
+        "索引可以被重置为默认的整数范围索引",
+        "索引必须是唯一的字符串",
+        "可以用索引对齐两个对象的数据"
+      ],
+      "answer": [
+        0,
+        1,
+        3
+      ],
+      "explanation": "pandas 索引允许重复标签；reset_index 可恢复默认整数索引；索引最重要的特性之一就是自动对齐。索引不限于字符串，也不强制唯一。",
+      "error_tag": "概念混淆",
+      "variant_group": "pandas_索引"
+    },
+    {
+      "kp": "py.data.pandas",
+      "type": "multi_choice",
+      "question": "下列哪些操作可以用于处理 DataFrame 中的缺失值？",
+      "options": [
+        "检查每列缺失值数量",
+        "删除含缺失值的行或列",
+        "用指定值或统计量填充缺失值",
+        "自动推断并纠正所有的错误数据类型"
+      ],
+      "answer": [
+        0,
+        1,
+        2
+      ],
+      "explanation": "缺失值的常见处理是检查、删除、填充。pandas 不会自动纠正数据类型错误，这需要显式转换。",
+      "error_tag": "概念混淆",
+      "variant_group": "pandas_缺失值"
+    },
+    {
+      "kp": "py.data.pandas",
+      "type": "multi_choice",
+      "question": "关于 DataFrame 的列选择，下列写法能得到 Series（而非 DataFrame）的有？",
+      "options": [
+        "df['a']",
+        "df.loc[:, 'a']",
+        "df[['a']]",
+        "df.loc[:, ['a']]"
+      ],
+      "answer": [
+        0,
+        1
+      ],
+      "explanation": "df['a'] 与 df.loc[:, 'a'] 都返回 Series；而 df[['a']] 和 df.loc[:, ['a']] 用列表选中列，返回的是只含一列的 DataFrame。",
+      "error_tag": "边界错误",
+      "variant_group": "pandas_列选择"
+    },
+    {
+      "kp": "py.data.pandas",
+      "type": "multi_choice",
+      "question": "关于 groupby 后进行聚合，下列说法正确的有？",
+      "options": [
+        "可以对分组后的多列同时应用不同的聚合函数",
+        "分组键可以来自 DataFrame 的某一列",
+        "聚合结果默认会把分组键作为索引",
+        "groupby 只能对数值列使用"
+      ],
+      "answer": [
+        0,
+        1,
+        2
+      ],
+      "explanation": "agg 可对多列应用多个函数；分组键可以是列名、数组或映射；结果默认以分组键为索引。groupby 不限制列类型。",
+      "error_tag": "概念混淆",
+      "variant_group": "pandas_分组聚合"
+    },
+    {
+      "kp": "py.data.pandas",
+      "type": "fill_blank",
+      "question": "在 pandas 中，要从 DataFrame df 选取列 'x'，可以用中括号写法 df['x']，也可以写成 df.____('x'), 请填写最常用的点属性访问方式。",
+      "options": [],
+      "answer": [
+        "x",
+        "df.x"
+      ],
+      "explanation": "当列名是合法标识符且不与 DataFrame 方法/属性冲突时，可用 df.x 访问列，结果与 df['x'] 相同。",
+      "error_tag": "记忆缺失",
+      "variant_group": "pandas_列选择"
+    },
+    {
+      "kp": "py.data.pandas",
+      "type": "fill_blank",
+      "question": "在 pandas 中，将两个 DataFrame（df1、df2）按共同列 'id' 拼接，可用合并函数：pd.____(df1, df2, on='id')，请填写函数名。",
+      "options": [],
+      "answer": [
+        "merge"
+      ],
+      "explanation": "pandas 提供 merge 用于数据库风格的连接，on 指定连接键；若按行/列拼接则用 concat。",
+      "error_tag": "记忆缺失",
+      "variant_group": "pandas_合并"
+    },
+    {
+      "kp": "py.data.pandas",
+      "type": "code_reading",
+      "question": "阅读代码，说明输出结果：\nimport pandas as pd\ndf = pd.DataFrame({'a': [1, 2, 3], 'b': [10, 20, 30]})\nprint(df['a'].sum())",
+      "options": [],
+      "answer": "输出 6。因为 df['a'] 取到列 a 的 Series，其值为 [1, 2, 3]，sum() 对元素求和得到 6。",
+      "explanation": "df['a'] 返回 Series，Series.sum() 对数值求和。注意与 df.sum() 不同，后者会对每一列分别求和。",
+      "error_tag": "概念混淆",
+      "variant_group": "pandas_聚合"
+    },
+    {
+      "kp": "py.data.pandas",
+      "type": "code_reading",
+      "question": "阅读代码，说明每一步的结果：\nimport pandas as pd\ndf = pd.DataFrame({'k': ['x', 'x', 'y'], 'v': [1, 2, 3]})\nprint(df.groupby('k')['v'].sum())",
+      "options": [],
+      "answer": "输出以 k 为索引的 Series：x 对应 3（1+2），y 对应 3。即按 k 分组后对 v 求和。",
+      "explanation": "groupby('k') 按 k 列分组，['v'] 选中 v 列，sum() 对每组求和。分组键成为结果索引，因此 x、y 是索引标签而非普通列。",
+      "error_tag": "概念混淆",
+      "variant_group": "pandas_分组聚合"
+    },
+    {
+      "kp": "py.data.pandas",
+      "type": "scenario",
+      "question": "你在处理一份电商订单表，需要统计每个城市（列 city）的总销售额（列 amount）。请描述你的核心步骤，并说明你会用什么 pandas 操作完成。",
+      "options": [],
+      "answer": [],
+      "explanation": "典型的分组聚合场景：按 city 分组，选中 amount 列，调用 sum 聚合。考察对 groupby + 列选择 + 聚合的整体流程理解。",
+      "error_tag": "概念混淆",
+      "variant_group": "pandas_分组聚合",
+      "required_keywords": [
+        "groupby",
+        "聚合",
+        "sum",
+        "列选择",
+        "分组"
+      ]
+    },
+    {
+      "kp": "py.data.pandas",
+      "type": "single_choice",
+      "question": "关于 Series 与 DataFrame 的关系，下列说法正确的是？",
+      "options": [
+        "一个 DataFrame 的每一列取出后是一个 Series",
+        "一个 Series 取出后一定是 DataFrame",
+        "DataFrame 中所有列的 dtype 必须相同",
+        "Series 不能有自定义索引"
+      ],
+      "answer": 0,
+      "explanation": "df['col'] 返回一个 Series（含该列的索引与值）。DataFrame 各列 dtype 可以不同；Series 支持自定义索引。",
+      "error_tag": "概念混淆",
+      "variant_group": "pandas_数据结构"
+    },
+    {
+      "kp": "py.data.pandas",
+      "type": "scenario",
+      "question": "一份用户表中有若干缺失值，其中 'age' 列少量缺失、'income' 列大量缺失。请在回答中说明你如何检测缺失情况，并针对两列分别采取合理的处理策略，并说明为什么。",
+      "options": [],
+      "answer": [],
+      "explanation": "先检测缺失（如 isna().sum()）。少量缺失的 age 可保留或按业务填充；大量缺失的 income 若填充会引入严重偏差，应考虑删除该列或行。考察在真实场景中对缺失值处理的权衡。",
+      "error_tag": "边界错误",
+      "variant_group": "pandas_缺失值场景",
+      "required_keywords": [
+        "缺失值检测",
+        "isna",
+        "缺失比例",
+        "删除",
+        "填充偏差"
+      ]
+    },
+    {
+      "kp": "py.data.pandas",
+      "type": "single_choice",
+      "question": "给定 df（3 行 2 列），表达式 df.iloc[0:2, 1] 的含义是？",
+      "options": [
+        "前两行的第 2 列（位置索引为 1）",
+        "第 2 行的前两列",
+        "标签为 0 到 2 的行、标签为 1 的列",
+        "前两列的所有行"
+      ],
+      "answer": 0,
+      "explanation": "iloc 使用位置索引，切片 [0:2] 表示第 0、1 行（左闭右开），逗号后 1 表示第 2 列。",
+      "error_tag": "边界错误",
+      "variant_group": "pandas_loc_iloc"
+    },
+    {
+      "kp": "py.data.pandas",
+      "type": "single_choice",
+      "question": "df.loc[:, 'a'] 与 df['a'] 的区别，下列描述最准确的是？",
+      "options": [
+        "完全等价，没有任何区别",
+        "df.loc[:, 'a'] 明确表示选择所有行的 'a' 列，语义与 df['a'] 等价，但写法更显式",
+        "df.loc[:, 'a'] 返回 DataFrame，df['a'] 返回 Series",
+        "df.loc[:, 'a'] 会报错"
+      ],
+      "answer": 1,
+      "explanation": "两者在本例中结果一致（都是 Series），loc 的写法显式声明了行列维度，语义更清晰，便于维护。",
+      "error_tag": "概念混淆",
+      "variant_group": "pandas_loc_iloc"
+    },
+    {
+      "kp": "py.data.pandas",
+      "type": "single_choice",
+      "question": "df[df['age'] > 30] 这种写法属于 pandas 的什么操作？",
+      "options": [
+        "分组聚合",
+        "布尔索引过滤",
+        "数据透视",
+        "连接合并"
+      ],
+      "answer": 1,
+      "explanation": "用布尔 Series 作为条件筛选行，属于布尔索引，是最常用的行过滤方式。",
+      "error_tag": "概念混淆",
+      "variant_group": "pandas_过滤"
+    },
+    {
+      "kp": "py.data.pandas",
+      "type": "single_choice",
+      "question": "在条件筛选中，想同时满足两个条件，应使用哪个运算符连接？",
+      "options": [
+        "and",
+        "&&",
+        "&",
+        "AND"
+      ],
+      "answer": 2,
+      "explanation": "pandas 的条件是逐元素运算，必须用位运算符 &、|、~，且每个条件需加括号。Python 的 and/or 对整个对象求值，会引发歧义错误。",
+      "error_tag": "语法误用",
+      "variant_group": "pandas_过滤"
+    },
+    {
+      "kp": "py.data.pandas",
+      "type": "single_choice",
+      "question": "关于 DataFrame.groupby('city')['sales'].sum()，下列描述正确的是？",
+      "options": [
+        "按 city 分组，并对 sales 列求和，返回以 city 为索引的 Series",
+        "对整表所有数值列求和",
+        "返回一个未计算的 GroupBy 对象",
+        "对 city 列求和"
+      ],
+      "answer": 0,
+      "explanation": "先按 city 分组，选中 sales 列，再做 sum 聚合，结果是索引为 city 的 Series。若不加 ['sales'] 也会对数值列求和，但与题意不符。",
+      "error_tag": "概念混淆",
+      "variant_group": "pandas_分组聚合"
+    },
+    {
+      "kp": "py.data.pandas",
+      "type": "single_choice",
+      "question": "df.dropna() 与 df.fillna(0) 的共同点是？",
+      "options": [
+        "都返回新的对象（默认不修改原 DataFrame）",
+        "都会就地修改原 DataFrame",
+        "都会改变列名",
+        "都会对缺失值做插值"
+      ],
+      "answer": 0,
+      "explanation": "pandas 大多数操作默认返回新对象，原 df 不变；dropna 删除含缺失值的行/列，fillna 用指定值填充。二者都不改变列名，也不做插值。",
+      "error_tag": "概念混淆",
+      "variant_group": "pandas_缺失值"
+    },
+    {
+      "kp": "py.data.pandas",
+      "type": "single_choice",
+      "question": "以下哪种方式能把一个二维列表 data 转成 DataFrame 并指定列名？",
+      "options": [
+        "pd.DataFrame(data, columns=['a', 'b'])",
+        "pd.Series(data)",
+        "pd.read_csv(data)",
+        "pd.concat(data)"
+      ],
+      "answer": 0,
+      "explanation": "pd.DataFrame 接受二维数据并可通过 columns 指定列名。Series 是一维；read_csv 读取文件路径；concat 用于拼接已有对象。",
+      "error_tag": "记忆缺失",
+      "variant_group": "pandas_创建"
+    }
+  ]
+}

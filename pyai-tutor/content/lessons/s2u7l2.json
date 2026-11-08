@@ -1,0 +1,633 @@
+{
+  "id": "s2u7l2",
+  "title": "s2u7l2",
+  "kps": [
+    "py.test.mock",
+    "py.test.parametrize"
+  ],
+  "theory": "## py.test.mock\n\n# py.test.mock 教学讲义\n\n## 一句话直觉\n\n**学 `py.test.mock`（即 `unittest.mock` 在 pytest 下的用法），是为了在不启动数据库、不发真实网络请求、不依赖外部服务的前提下，依然能对代码的行为做完整、可重复、快速的自动化测试。**\n\n简单说：它让你\"假装\"某个对象已经存在、已经返回了某个结果，从而把测试聚焦在你真正要验证的逻辑上。\n\n---\n\n## 第 1 节：为什么需要 Mock（模拟对象）？\n\n在真实项目里，函数往往依赖：\n\n- 数据库连接\n- HTTP API\n- 时间（`datetime.now()`）\n- 随机数\n- 文件系统\n- 第三方 SDK\n\n如果测试真的去调用它们，就会出现：慢、不稳定、有副作用、需要凭证。  \n**Mock（模拟对象）** 就是替身：它长得像真对象，行为可被人为指定，还能记录\"有没有被调用、调用了几次、参数是什么\"。\n\n`unittest.mock` 是 Python 标准库自带的 mock 框架，pytest 直接兼容它；社区还有 `pytest-mock` 插件，提供更简洁的 `mocker` fixture（夹具）。本讲义使用标准库 `unittest.mock`，无需额外安装。\n\n```python\n# demo1.py\nfrom unittest.mock import Mock\n\n# 创建一个 Mock 对象\nm = Mock()\n\n# 默认情况下，Mock 调用会返回一个新的 Mock\nresult = m(1, 2, 3)\nprint(\"返回值是 Mock 吗？\", isinstance(result, Mock))  # True\n\n# 它可以记录调用信息\nm.assert_called_once_with(1, 2, 3)\nprint(\"调用次数:\", m.call_count)          # 1\nprint(\"最后一次调用参数:\", m.call_args)   # call(1, 2, 3)\n```\n\n**结论：** Mock 是\"万能替身\"，默认什么都能调，返回值还是 Mock，同时悄悄记录每次调用。\n\n---\n\n## 第 2 节：`return_value` 与 `side_effect`——控制 Mock 的行为\n\nMock 默认返回另一个 Mock，但测试通常需要它返回**具体的值**或**抛出异常**。\n\n- `return_value`：调用时返回什么\n- `side_effect`：调用时执行什么（函数、异常、可迭代对象）\n\n```python\n# demo2.py\nfrom unittest.mock import Mock\n\n# 1) return_value：固定返回值\nfake_db = Mock()\nfake_db.get_user.return_value = {\"id\": 1, \"name\": \"Alice\"}\nprint(fake_db.get_user(1))  # {'id': 1, 'name': 'Alice'}\n\n# 2) side_effect 为函数：可以动态返回\nfake_db.get_age.side_effect = lambda uid: uid * 10\nprint(fake_db.get_age(3))   # 30\n\n# 3) side_effect 为异常：模拟失败\ndef boom(*args, **kwargs):\n    raise ConnectionError(\"数据库连不上\")\n\nfake_db.query.side_effect = boom\ntry:\n    fake_db.query(\"SELECT 1\")\nexcept ConnectionError as e:\n    print(\"捕获异常:\", e)\n\n# 4) side_effect 为可迭代对象：每次调用返回下一个值\nfake_db.next_id.side_effect = [101, 102, 103]\nprint(fake_db.next_id(), fake_db.next_id(), fake_db.next_id())  # 101 102 103\n```\n\n**结论：** `return_value` 管\"返回什么\"，`side_effect` 管\"发生什么\"——异常、动态逻辑、序列轮询都靠它。\n\n---\n\n## 第 3 节：`patch`——把真实依赖临时替换成 Mock\n\n光创建 Mock 不够，关键是让**被测代码真正用上它**。做法是用 `unittest.mock.patch` **打补丁（patch）**，它会在 `with` 块或装饰器范围内临时替换某个名字，结束后自动还原。\n\n**重要规则：patch 的是\"被测模块里引用的名字\"，不是\"定义的地方\"。**\n\n```python\n# app.py\nimport requests\n\ndef fetch_status(url: str) -> int:\n    resp = requests.get(url)\n    return resp.status_code\n```\n\n```python\n# demo3.py\nfrom unittest.mock import patch\nimport app\n\n# 关键：patch 的是 app 模块里的 requests，而不是 requests 库本身\nwith patch(\"app.requests.get\") as fake_get:\n    fake_get.return_value.status_code = 200\n    print(app.fetch_status(\"https://example.com\"))  # 200\n    fake_get.assert_called_once_with(\"https://example.com\")\n\n# 出了 with，requests.get 自动还原\n```\n\n也可以写成装饰器：\n\n```python\n# demo3b.py\nfrom unittest.mock import patch\nimport app\n\n@patch(\"app.requests.get\")\ndef test_fetch_status(fake_get):\n    fake_get.return_value.status_code = 404\n    assert app.fetch_status(\"https://x\") == 404\n```\n\n**结论：** `patch` 是 mock 的\"接线员\"——把 Mock 接到被测代码真正调用的那个名字上，用完自动还原。\n\n---\n\n## 第 4 节：pytest 里更舒服的写法——`pytest-mock` 与 `mocker`\n\n如果你的项目允许安装插件，`pytest-mock` 提供 `mocker` fixture，写法更短，且自动清理，不需要 `with`：\n\n```python\n# test_app_with_mocker.py\n# 需先安装: pip install pytest-mock\nimport app\n\ndef test_fetch_status(mocker):\n    fake_get = mocker.patch(\"app.requests.get\")\n    fake_get.return_value.status_code = 200\n    assert app.fetch_status(\"https://example.com\") == 200\n    fake_get.assert_called_once()\n```\n\n`mocker` 相比原生 `patch` 的好处：\n\n- 不用 `with`，代码更平\n- 自动在测试结束后还原\n- 还能 `mocker.spy(obj, \"method\")` 只记录调用、不改变原行为\n\n**没有插件也没关系**：`unittest.mock` 已经够用，pytest 会原样识别 `assert` 和异常，测试依然好写。\n\n**结论：** 原生 `patch` 是底座；`pytest-mock` 的 `mocker` 是便捷外壳，两者语义一致，按项目依赖选择即可。\n\n---\n\n## 第 5 节：断言调用——Mock 的另一半价值\n\nMock 不只\"返回东西\"，它还能证明\"你的代码确实按预期调用了依赖\"。常用断言方法：\n\n| 方法 | 含义 |\n|---|---|\n| `assert_called()` | 至少被调用过一次 |\n| `assert_called_once()` | 恰好一次 |\n| `assert_called_with(*a, **kw)` | 最后一次调用参数匹配 |\n| `assert_called_once_with(*a, **kw)` | 恰好一次且参数匹配 |\n| `assert_any_call(*a, **kw)` | 曾经以某参数调用过 |\n| `assert_not_called()` | 从未调用 |\n| `.call_args_list` | 所有调用记录 |\n\n```python\n# demo5.py\nfrom unittest.mock import Mock\n\nnotifier = Mock()\nnotifier.send(\"a@x.com\", \"欢迎\")\nnotifier.send(\"b@x.com\", \"欢迎\")\n\nnotifier.assert_called()                          # 至少一次\nassert notifier.call_count == 2                   # 两次\nnotifier.assert_any_call(\"a@x.com\", \"欢迎\")        # 曾用过这组参数\nassert notifier.call_args_list[1].args == (\"b@x.com\", \"欢迎\")\n```\n\n**结论：** 断言调用让你能验证\"协作关系\"，这是纯返回值断言无法覆盖的。\n\n---\n\n## 小结\n\n1. Mock 是依赖替身，让测试快、稳、可重复。\n2. `return_value` 决定返回什么，`side_effect` 决定发生什么。\n3. `patch` 负责把 Mock 接到被测代码实际引用的名字上。\n4. `pytest-mock` 的 `mocker` 是更顺手的封装，语义不变。\n5. 断言调用能验证代码与依赖的交互行为。\n\n```python\n# full_example.py\n# 运行: python full_example.py\n# 依赖: 仅标准库 unittest.mock\n\nfrom unittest.mock import patch, Mock\n\n# ---------- 被测代码 ----------\nclass WeatherClient:\n    def get_temp(self, city: str) -> int:\n        raise NotImplementedError(\"真实环境中会发 HTTP 请求\")\n\n\ndef is_hot(city: str, client: WeatherClient, threshold: int = 30) -> bool:\n    \"\"\"判断城市是否炎热：温度 > 阈值。\"\"\"\n    return client.get_temp(city) > threshold\n\n\n# ---------- 测试 ----------\n\ndef test_is_hot_true():\n    fake = Mock(spec=WeatherClient)          # spec 限制为 WeatherClient 的接口\n    fake.get_temp.return_value = 35\n    assert is_hot(\"Beijing\", fake) is True\n    fake.get_temp.assert_called_once_with(\"Beijing\")\n\n\ndef test_is_hot_false():\n    fake = Mock(spec=WeatherClient)\n    fake.get_temp.return_value = 20\n    assert is_hot(\"Beijing\", fake) is False\n\n\ndef test_api_failure_bubbles_up():\n    fake = Mock(spec=WeatherClient)\n    fake.get_temp.side_effect = ConnectionError(\"网络不通\")\n    try:\n        is_hot(\"Beijing\", fake)\n    except ConnectionError as e:\n        assert \"网络不通\" in str(e)\n    else:\n        raise AssertionError(\"应当抛出 ConnectionError\")\n\n\ndef test_patch_module_reference():\n    \"\"\"演示 patch 替换\"定义处的引用\"。\"\"\"\n    with patch(\"__main__.is_hot\", return_value=True) as fake_is_hot:\n        assert is_hot(\"Anywhere\", Mock()) is True\n        fake_is_hot.assert_called_once()\n\n\nif __name__ == \"__main__\":\n    test_is_hot_true()\n    test_is_hot_false()\n    test_api_failure_bubbles_up()\n    test_patch_module_reference()\n    print(\"全部测试通过 ✅\")\n```\n\n## py.test.parametrize\n\n# pytest.parametrize：一次写测试，多次跑数据\n\n> 一句话直觉：**当同一个测试逻辑需要对很多组输入验证时，`@pytest.mark.parametrize` 让你只写一个测试函数，就能自动跑出 N 条独立测试用例，失败时还能精确告诉你\"是哪组数据挂了\"。**\n\n---\n\n## 0. 为什么需要它（Why）\n\n假设你要测试一个加法函数 `add(a, b)`，想验证：\n\n- `1 + 1 == 2`\n- `2 + 3 == 5`\n- `0 + 0 == 0`\n- `-1 + 1 == 0`\n\n最朴素的写法是写四个测试函数，或者在一个函数里写四个 `assert`。前者重复、啰嗦；后者一旦第一个 `assert` 失败，后面就不再执行，你只能一次次修复再重跑。\n\n`pytest.parametrize`（参数化）解决的正是这个问题：**把\"测试数据\"从\"测试逻辑\"中剥离出来**。逻辑写一遍，数据用列表给一串，pytest 自动为每一组数据生成一条独立的测试记录。\n\n这是 pytest（Python 生态最流行的测试框架）最常用、也最能提升代码质量的功能之一。\n\n---\n\n## 1. 最小可用示例：看懂基本写法\n\n`parametrize` 是一个装饰器（decorator），通过 `pytest.mark.parametrize` 使用。它的签名核心是：\n\n```python\n@pytest.mark.parametrize(\"参数名\", [值1, 值2, ...])\n```\n\n- 第一个参数是字符串，表示要注入的**参数名**（可以多个，用逗号分隔）。\n- 第二个参数是一个**可迭代对象**（iterable），每个元素对应一条测试用例。\n\n```python\n# test_add.py\nimport pytest\n\ndef add(a, b):\n    return a + b\n\n@pytest.mark.parametrize(\"a, b, expected\", [\n    (1, 1, 2),\n    (2, 3, 5),\n    (0, 0, 0),\n    (-1, 1, 0),\n])\ndef test_add(a, b, expected):\n    # pytest 会依次把每一行元组填进 a / b / expected\n    assert add(a, b) == expected\n```\n\n在终端运行 `pytest -v test_add.py`，你会看到类似输出：\n\n```\ntest_add.py::test_add[1-1-2] PASSED\ntest_add.py::test_add[2-3-5] PASSED\ntest_add.py::test_add[0-0-0] PASSED\ntest_add.py::test_add[-1-1-0] PASSED\n```\n\n方括号里 `[1-1-2]` 就是 pytest 自动生成的**用例 ID**（test case ID）。四条数据 → 四个独立的测试条目，某一条挂了不影响其它条继续跑。\n\n> **关键点**：参数名中逗号周围的空格会被 pytest 忽略，`\"a, b, expected\"` 和 `\"a,b,expected\"` 等价。\n\n---\n\n## 2. 进阶：三层参数化能力\n\n### 2.1 多参数 vs 单参数\n\n有时你只想参数化一个参数：\n\n```python\nimport pytest\n\ndef is_even(n):\n    return n % 2 == 0\n\n@pytest.mark.parametrize(\"n\", [2, 4, 6, 8])\ndef test_is_even(n):\n    assert is_even(n)\n```\n\n此时每条数据是一个标量，pytest 也能正确处理。\n\n### 2.2 参数化叠加（stacking）\n\n多个 `parametrize` 装饰器叠加会做**笛卡尔积**（Cartesian product）：\n\n```python\nimport pytest\n\ndef mul(a, b):\n    return a * b\n\n@pytest.mark.parametrize(\"a\", [1, 2])\n@pytest.mark.parametrize(\"b\", [10, 100])\ndef test_mul(a, b):\n    # 会生成 2 × 2 = 4 条用例：\n    # (a=1,b=10), (a=1,b=100), (a=2,b=10), (a=2,b=100)\n    assert mul(a, b) == a * b\n```\n\n这让「相同的逻辑 × 不同的输入维度」组合变得极其简洁。\n\n### 2.3 给用例起可读的名字：`ids`\n\n默认的 ID 是把参数值拼起来，可读性常常很差（比如对象会显示成内存地址）。用 `ids` 参数自定义：\n\n```python\nimport pytest\n\ndef login(username, password):\n    return username == \"admin\" and password == \"123456\"\n\n@pytest.mark.parametrize(\n    \"username, password, ok\",\n    [\n        (\"admin\", \"123456\", True),\n        (\"admin\", \"wrong\",  False),\n        (\"guest\", \"123456\", False),\n    ],\n    ids=[\"correct-creds\", \"wrong-password\", \"wrong-user\"],\n)\ndef test_login(username, password, ok):\n    assert login(username, password) is ok\n```\n\n失败时输出会写成 `test_login[wrong-password]` 而不是一串原始值，排查问题轻松得多。\n\n### 2.4 在数据里加标记：`pytest.param`\n\n当某条数据你希望带上额外信息（如 `xfail` 预期失败、自定义 id）时，用 `pytest.param(...)` 包裹：\n\n```python\nimport pytest\n\ndef parse_int(s):\n    return int(s)\n\n@pytest.mark.parametrize(\"s, expected\", [\n    (\"1\", 1),\n    pytest.param(\"abc\", None, marks=pytest.mark.xfail(reason=\"非法输入\")),\n])\ndef test_parse_int(s, expected):\n    # 第二条预期会抛异常，pytest 会记为 xfail 而不是 failure\n    assert parse_int(s) == expected\n```\n\n---\n\n## 3. 内部机制：pytest 到底做了什么\n\n理解机制能避免很多困惑。\n\n当你写：\n\n```python\n@pytest.mark.parametrize(\"x\", [1, 2, 3])\ndef test_f(x): ...\n```\n\npytest 在**收集阶段（collection）**会做三件事：\n\n1. 把 `parametrize` 存下来的数据展开成一个\"用例列表\"。\n2. 对每一组数据，复制测试函数的一份\"虚拟副本\"，并绑定好该组参数。\n3. 给每条用例生成一个唯一 ID（默认 = 把参数值用 `-` 串起来），用于报告和 `-k` 过滤。\n\n所以在 `pytest -v` 里你看到的是 N 条独立的用例，而不是同一个函数被运行 N 次。\n\n这带来几个直接好处：\n\n- **隔离性**：任何一条用例崩了不影响其它用例的执行与汇报。\n- **可选择性**：`pytest -k \"1-1-2\"` 只跑你想跑的用例。\n- **报告清晰**：失败时会直接指出是哪一组数据挂了。\n\n---\n\n## 4. 工程实践建议\n\n- **数据外置**：数据规模大时，把列表放进模块级常量或单独的数据文件（JSON/YAML/CSV），测试函数只负责逻辑，保持可读。\n- **用 `ids` 代替猜 ID**：数据是复杂对象时一定加 `ids`，否则报告里的用例名会难以阅读。\n- **参数名用英文标识符**：参数名本质是 Python 参数，用 `a, b, expected`、`input_, want_err` 这类清晰命名，别用中文。\n- **断言写清楚**：宁可 `assert result == expected, f\"{x} 处理结果不对\"`，让失败信息自带上下文。\n- **和 fixture 配合**：`parametrize` 常和 fixture（如数据库连接、临时目录）一起用，数据驱动 + 环境准备是 pytest 的两大支柱。\n- **别滥用叠加**：多层叠加会让用例数指数级增长，注意总数量保持在可接受的运行时长内。\n\n---\n\n## 5. 小结\n\n| 概念 | 作用 |\n| --- | --- |\n| `@pytest.mark.parametrize` | 把测试数据和测试逻辑分离 |\n| 参数名 | 字符串，逗号分隔多个名字 |\n| 数据列表 | 每个元素是一条用例的参数 |\n| 叠加多个装饰器 | 生成笛卡尔积 |\n| `ids=` | 自定义可读的用例名 |\n| `pytest.param` | 单条数据附加 marks / id |\n\n记住一句话：**`parametrize` = 循环 + 独立测试报告，且写起来是一个装饰器。**\n\n---\n\n## 动手练习\n\n**任务**：为一个字符串处理函数写参数化测试。\n\n在本地新建文件 `test_slugify.py`，实现并测试一个 `slugify(text)` 函数：把字符串转成 URL 友好的 slug（小写、空格换成连字符、去掉首尾空白），然后用 `pytest.mark.parametrize` 至少覆盖以下 5 组数据：\n\n| 输入 | 期望输出 |\n| --- | --- |\n| `\"Hello World\"` | `\"hello-world\"` |\n| `\"  Python Rocks  \"` | `\"python-rocks\"` |\n| `\"already-slug\"` | `\"already-slug\"` |\n| `\"A B C\"` | `\"a-b-c\"` |\n| `\"\"` | `\"\"` |\n\n**要求**：\n\n1. 使用 `@pytest.mark.parametrize` 一次写全 5 组数据，不要写 5 个测试函数。\n2. 用 `ids=[...]` 给每条用例起一个可读的名字。\n3. 运行 `pytest -v test_slugify.py`，确认 5 条都 PASSED。\n4. **进阶**：再故意加一条错误数据（例如把 `\"Hello World\"` 期望值写成 `\"hello_world\"`），观察失败时 pytest 报告里显示的用例 ID，理解 ID 的生成方式。\n\n提示：实现 `slugify` 只需要 `text.strip().lower().replace(\" \", \"-\")`。\n",
+  "quiz": [
+    {
+      "kp": "py.test.mock",
+      "type": "single_choice",
+      "question": "使用 unittest.mock 的 Mock 对象时，下面哪种说法是正确的？",
+      "options": [
+        "访问 mock 对象上任意未定义的属性都会抛 AttributeError",
+        "访问 mock 对象上任意未定义的属性都会自动创建一个新的 Mock",
+        "mock 对象只能访问预先通过 configure_mock 设置的属性",
+        "mock 对象上未定义的属性会返回 None"
+      ],
+      "answer": 1,
+      "explanation": "Mock 的特点是惰性创建子属性：访问不存在的属性时会自动生成新的 Mock 并记录在 mock_calls 相关结构中，而不是报错或返回 None。",
+      "error_tag": "概念混淆",
+      "variant_group": "mock_attribute_creation"
+    },
+    {
+      "kp": "py.test.mock",
+      "type": "single_choice",
+      "question": "下列代码执行后，输出是什么？\n\nfrom unittest.mock import Mock\nm = Mock()\nm(1, 2, key='a')\nprint(m.called)",
+      "options": [
+        "True",
+        "False",
+        "None",
+        "抛出异常"
+      ],
+      "answer": 0,
+      "explanation": "调用 mock 对象后，其 called 属性会变为 True。",
+      "error_tag": "概念混淆",
+      "variant_group": "mock_called"
+    },
+    {
+      "kp": "py.test.mock",
+      "type": "single_choice",
+      "question": "创建 Mock(spec=SomeClass) 后，访问 SomeClass 中不存在的属性，会发生什么？",
+      "options": [
+        "返回一个新的 Mock",
+        "抛出 AttributeError",
+        "返回 None",
+        "自动将该属性加入 spec"
+      ],
+      "answer": 1,
+      "explanation": "spec 会限制 mock 可用的属性集合，访问未在 spec 中定义的属性会抛 AttributeError。",
+      "error_tag": "概念混淆",
+      "variant_group": "mock_spec"
+    },
+    {
+      "kp": "py.test.mock",
+      "type": "single_choice",
+      "question": "使用 autospec=True 打补丁时，相比普通 patch 的主要好处是？",
+      "options": [
+        "会自动重置 mock 的调用记录",
+        "会生成签名与被替换对象一致的 mock，参数不匹配时会报错",
+        "会强制 patch 目标必须存在",
+        "会自动把 mock 的返回值转换成真实类型"
+      ],
+      "answer": 1,
+      "explanation": "autospec 根据目标对象的签名生成 mock，可校验调用参数，避免因接口不匹配造成的假阳性测试。",
+      "error_tag": "概念混淆",
+      "variant_group": "patch_autospec"
+    },
+    {
+      "kp": "py.test.mock",
+      "type": "single_choice",
+      "question": "在某次调用后，m.call_args 的值最可能是什么？",
+      "options": [
+        "((1, 2), {'k': 3})",
+        "call(1, 2, k=3)",
+        "(1, 2, {'k': 3})",
+        "['call', 1, 2, {'k': 3}]"
+      ],
+      "answer": 0,
+      "explanation": "call_args 返回一个 call 对象（本质是二元组），第一个元素是位置参数元组，第二个元素是关键字参数字典。",
+      "error_tag": "概念混淆",
+      "variant_group": "call_args_shape"
+    },
+    {
+      "kp": "py.test.mock",
+      "type": "single_choice",
+      "question": "reset_mock() 与设置 m.reset_mock.return_value 之间的关系，正确的是？",
+      "options": [
+        "reset_mock() 会清空 return_value 和 side_effect",
+        "reset_mock() 默认只重置调用记录，不清空 return_value 与 side_effect",
+        "reset_mock() 会删除 mock 上所有子属性",
+        "reset_mock() 无法被再次调用"
+      ],
+      "answer": 1,
+      "explanation": "reset_mock() 默认重置调用相关信息，return_value 与 side_effect 可通过参数选择是否重置；子 mock 默认也会被递归重置，但不会删除。",
+      "error_tag": "概念混淆",
+      "variant_group": "reset_mock"
+    },
+    {
+      "kp": "py.test.mock",
+      "type": "single_choice",
+      "question": "关于 patch.object(target, 'attr') 与 patch('module.attr') 的说法，正确的是？",
+      "options": [
+        "patch.object 只能用于类属性，patch 只能用于模块属性",
+        "patch.object 直接引用目标对象，patch 通过字符串解析路径",
+        "两者完全等价，可以互相替换",
+        "patch.object 不支持 new 参数"
+      ],
+      "answer": 1,
+      "explanation": "patch.object 接收目标对象和属性名，patch 接收点分字符串并逐级解析；前者可避免拼写路径错误，后者更灵活。",
+      "error_tag": "概念混淆",
+      "variant_group": "patch_object_vs_patch"
+    },
+    {
+      "kp": "py.test.mock",
+      "type": "single_choice",
+      "question": "下面哪种做法最适合让 Mock 的某方法在第一次调用返回值 A，第二次调用返回值 B？",
+      "options": [
+        "m.method.return_value = [A, B]",
+        "m.method.side_effect = [A, B]",
+        "m.method.return_value = A 再设置 B",
+        "m.method.assert_called_with(A, B)"
+      ],
+      "answer": 1,
+      "explanation": "side_effect 设置为列表时，每次调用按顺序取出一个元素作为返回值；return_value 设置为列表只会整体返回该列表。",
+      "error_tag": "概念混淆",
+      "variant_group": "side_effect_sequence"
+    },
+    {
+      "kp": "py.test.mock",
+      "type": "single_choice",
+      "question": "在测试中希望验证某个函数是否被以关键字参数调用，应该使用哪个断言？",
+      "options": [
+        "assert_called_with",
+        "assert_called_once",
+        "assert_any_call",
+        "assert_called"
+      ],
+      "answer": 0,
+      "explanation": "assert_called_with 校验最近一次调用是否匹配给定参数（位置或关键字），其他选项只校验调用次数或是否被调用过。",
+      "error_tag": "概念混淆",
+      "variant_group": "assert_called_with"
+    },
+    {
+      "kp": "py.test.mock",
+      "type": "single_choice",
+      "question": "关于 PropertyMock 的用途，下列说法正确的是？",
+      "options": [
+        "用于替换普通方法，返回值固定",
+        "用于在 mock 对象上模拟属性，可设置其返回值",
+        "只能用于 patch 装饰器，不能用作上下文管理器",
+        "不能与 spec 一起使用"
+      ],
+      "answer": 1,
+      "explanation": "PropertyMock 模拟属性访问，常通过 patch 将该属性替换为 PropertyMock 并设置 return_value。",
+      "error_tag": "概念混淆",
+      "variant_group": "property_mock"
+    },
+    {
+      "kp": "py.test.mock",
+      "type": "single_choice",
+      "question": "测试类方法时，想 patch 掉类的某个实例方法并检查是否被调用，下列做法最恰当的是？",
+      "options": [
+        "patch 该实例方法的引用为 Mock，并在调用后使用 assert_called_once_with 校验",
+        "直接修改实例的 __dict__ 而不使用 patch",
+        "使用 assert_called_with 来检查 mock 的返回值",
+        "用 MagicMock 替换整个类并忽略实例化"
+      ],
+      "answer": 0,
+      "explanation": "patch 替换目标方法后可通过 mock 的 assert_called_once_with 等断言校验调用；assert_called_with 校验的是调用参数而非返回值。",
+      "error_tag": "概念混淆",
+      "variant_group": "patch_method_call"
+    },
+    {
+      "kp": "py.test.mock",
+      "type": "single_choice",
+      "question": "关于 patch 的 create 参数，下列哪种说法是正确的？",
+      "options": [
+        "create=True 时，如果属性原本不存在，patch 也会创建它",
+        "create=True 时会自动断言属性必须不存在",
+        "create 参数默认值为 True",
+        "create 参数用于控制是否创建新的 Mock 类型"
+      ],
+      "answer": 0,
+      "explanation": "默认 patch 要求属性存在；设置 create=True 后即使属性不存在也会被创建，方便替换不存在的目标。",
+      "error_tag": "概念混淆",
+      "variant_group": "patch_create"
+    },
+    {
+      "kp": "py.test.mock",
+      "type": "single_choice",
+      "question": "关于 Mock 的 return_value，下列说法正确的是？",
+      "options": [
+        "return_value 必须是可调用对象",
+        "设置 return_value 后调用 mock 返回该值",
+        "return_value 只能设置一次，再次调用会抛异常",
+        "return_value 与 side_effect 不能同时使用"
+      ],
+      "answer": 1,
+      "explanation": "Mock(return_value=x)() 返回 x，它可以是任意对象；side_effect 与 return_value 可以同时设置，side_effect 优先。",
+      "error_tag": "概念混淆",
+      "variant_group": "mock_return_value"
+    },
+    {
+      "kp": "py.test.mock",
+      "type": "single_choice",
+      "question": "当 Mock 设置了 side_effect 为一个列表 [ValueError, 3] 时，第一次和第二次调用的行为分别是？",
+      "options": [
+        "第一次返回 3，第二次抛出 ValueError",
+        "第一次抛出 ValueError，第二次返回 3",
+        "两次都抛出 ValueError",
+        "两次都返回 3"
+      ],
+      "answer": 1,
+      "explanation": "side_effect 为可迭代对象时，每次调用依次取出一个元素：异常类会被抛出，非异常值会作为返回值。",
+      "error_tag": "概念混淆",
+      "variant_group": "mock_side_effect_iterable"
+    },
+    {
+      "kp": "py.test.mock",
+      "type": "single_choice",
+      "question": "使用 patch 作为上下文管理器时，最低要求指定哪个参数？",
+      "options": [
+        "只能是模块路径字符串",
+        "只能是被替换的对象引用",
+        "既可以是字符串（形如 'module.attr'）也可以是对象引用",
+        "必须同时提供 new 参数"
+      ],
+      "answer": 2,
+      "explanation": "patch 的目标既可以用 '模块.属性' 字符串指定，也可以直接传入对象引用；new 参数可选，默认为 MagicMock。",
+      "error_tag": "概念混淆",
+      "variant_group": "patch_target"
+    },
+    {
+      "kp": "py.test.mock",
+      "type": "single_choice",
+      "question": "关于 patch 的 new 参数，下列说法正确的是？",
+      "options": [
+        "new 参数必须是 Mock 实例",
+        "new 参数可以是任意对象，用于替换目标属性",
+        "new 参数只能是函数",
+        "不指定 new 时会抛 TypeError"
+      ],
+      "answer": 1,
+      "explanation": "new 用于指定替换后的对象，可以是任意对象（函数、类、Mock、常量等）；不指定时默认使用 MagicMock。",
+      "error_tag": "概念混淆",
+      "variant_group": "patch_new"
+    },
+    {
+      "kp": "py.test.mock",
+      "type": "single_choice",
+      "question": "编写测试时对被测模块中通过 'from a import b' 导入的名字打补丁，应该 patch 哪里？",
+      "options": [
+        "patch 原定义处 'a.b'",
+        "patch 使用处所在模块中的 'b'",
+        "patch 原定义处与使用处都必须 patch",
+        "patch 任何一处效果都一样"
+      ],
+      "answer": 1,
+      "explanation": "from ... import 会在使用模块中绑定名字，所以必须 patch 使用方模块中持有的那个引用。",
+      "error_tag": "概念混淆",
+      "variant_group": "patch_import_target"
+    },
+    {
+      "kp": "py.test.mock",
+      "type": "single_choice",
+      "question": "MagicMock 与 Mock 的主要区别是？",
+      "options": [
+        "MagicMock 不能设置 return_value",
+        "MagicMock 默认支持魔术方法（如 __len__、__enter__）",
+        "MagicMock 只能用于类，不能用于函数",
+        "Mock 支持魔术方法而 MagicMock 不支持"
+      ],
+      "answer": 1,
+      "explanation": "MagicMock 预配置了常见魔术方法，因此可支持 len()、with、迭代等协议；两者都支持 return_value。",
+      "error_tag": "概念混淆",
+      "variant_group": "magicmock_vs_mock"
+    },
+    {
+      "kp": "py.test.mock",
+      "type": "single_choice",
+      "question": "调用 m.assert_called_once_with(1, 2) 时，若 m 实际被调用了两次，会发生什么？",
+      "options": [
+        "断言通过并返回 True",
+        "抛出 AssertionError",
+        "抛出 TypeError",
+        "断言失败但不抛异常，只返回 False"
+      ],
+      "answer": 1,
+      "explanation": "assert_called_once_with 要求恰好调用一次且参数匹配，否则抛出 AssertionError。",
+      "error_tag": "概念混淆",
+      "variant_group": "assert_called_once_with"
+    },
+    {
+      "kp": "py.test.mock",
+      "type": "single_choice",
+      "question": "关于 mock_calls、call_args、method_calls 的区别，下列描述正确的是？",
+      "options": [
+        "call_args 记录所有调用，mock_calls 只记录最后一次调用",
+        "mock_calls 记录对 mock 及其子 mock 的所有调用，call_args 是最后一次调用参数",
+        "method_calls 仅记录对 mock 本身直接调用，不包含子属性",
+        "三者完全等价，只是命名不同"
+      ],
+      "answer": 1,
+      "explanation": "mock_calls 聚合所有调用（包括子 mock），call_args 表示最近一次调用的参数，method_calls 记录对方法和属性的调用。",
+      "error_tag": "概念混淆",
+      "variant_group": "mock_call_records"
+    },
+    {
+      "kp": "py.test.parametrize",
+      "type": "single_choice",
+      "question": "在使用 pytest 的 @pytest.mark.parametrize 时，下面哪种写法能正确地把三组参数分别喂给同一条测试函数？",
+      "options": [
+        "@pytest.mark.parametrize('x', [1, 2, 3])",
+        "@pytest.mark.parametrize('x, y', [(1, 10), (2, 20), (3, 30)])",
+        "def test_add(x=1, y=10): ...",
+        "@pytest.mark.parametrize('x, y', [1, 10, 2, 20, 3, 30])"
+      ],
+      "answer": 1,
+      "explanation": "@pytest.mark.parametrize 第一个参数是逗号分隔的形参名字符串，第二个参数是一个可迭代对象，其每个元素对应一次调用。写成元组列表 [(1,10),(2,20),(3,30)] 才会生成三次用例；选项 0 只参数化了一个名称，选项 3 的扁平列表无法解包成 (x, y) 而会报参数数量不匹配的错误。",
+      "error_tag": "概念混淆",
+      "variant_group": "parametrize_basic_shape"
+    },
+    {
+      "kp": "py.test.parametrize",
+      "type": "single_choice",
+      "question": "运行下面的测试后，pytest 会收集到几条测试用例？\n\nimport pytest\n\n@pytest.mark.parametrize('v', [1, 2])\n@pytest.mark.parametrize('w', ['a', 'b', 'c'])\ndef test_combo(v, w):\n    assert True",
+      "options": [
+        "5 条",
+        "2 条",
+        "3 条",
+        "6 条"
+      ],
+      "answer": 3,
+      "explanation": "多个 parametrize 装饰器叠加时，参数是笛卡尔积关系，用例数等于各层列表长度之积：2 × 3 = 6。常见误解是相加得到 5，或者只取最内层列表长度。",
+      "error_tag": "边界错误",
+      "variant_group": "parametrize_stacking_product"
+    },
+    {
+      "kp": "py.test.parametrize",
+      "type": "single_choice",
+      "question": "某个参数化的测试用例的某组数据被标记为 xfail。运行结果最可能是？",
+      "options": [
+        "该组数据被视为通过，不影响最终退出码",
+        "该组数据若断言失败则报告为 xfailed（预期失败）",
+        "整个测试函数的其他参数集也被一并标记为预期失败",
+        "xfail 不能用于单个参数集，只能标记整个函数"
+      ],
+      "answer": 1,
+      "explanation": "通过 pytest.param(..., marks=pytest.mark.xfail) 可以只对某一组数据声明预期失败，不影响同函数其他参数集。这是参数化与标记结合的典型用法。",
+      "error_tag": "概念混淆",
+      "variant_group": "parametrize_param_object"
+    },
+    {
+      "kp": "py.test.parametrize",
+      "type": "multi_choice",
+      "question": "关于 pytest.mark.parametrize 的用法，下列哪些说法是正确的？（多选）",
+      "options": [
+        "第二个参数可以是任意可迭代对象，包括生成器、列表、元组",
+        "参数名与被测函数的形参名之间必须一致",
+        "同一个测试函数上叠加多个 parametrize 会得到笛卡尔积",
+        "参数化只能用于模块级函数，不能用于类方法",
+        "parametrize 的参数名可以引用 fixture，从而对 fixture 做参数化"
+      ],
+      "answer": [
+        0,
+        1,
+        2,
+        4
+      ],
+      "explanation": "parametrize 接受任意可迭代对象；参数名需与函数签名匹配；多层叠加是笛卡尔积；参数名若与 fixture 同名，可以对 fixture 参数化（fixture 可直接使用该参数）。类方法同样可以参数化，所以「只能用于模块级函数」是错误的。",
+      "error_tag": "概念混淆",
+      "variant_group": "parametrize_usage_semantics"
+    },
+    {
+      "kp": "py.test.parametrize",
+      "type": "multi_choice",
+      "question": "下面哪些关于 ids 与 pytest.param(id=...) 的说法正确？（多选）",
+      "options": [
+        "ids 参数作用于整个 parametrize 的所有参数集",
+        "pytest.param(id=...) 作用于单个参数集，优先级高于同级参数化的 ids 列表",
+        "如果同时给了 ids 列表和 pytest.param(id=...)，可能出现数量不匹配报错",
+        "id 里包含空格或方括号一定会导致收集失败",
+        "ids 只能是字符串列表，不能是函数"
+      ],
+      "answer": [
+        0,
+        1,
+        2
+      ],
+      "explanation": "ids 是逐个参数集命名的列表/可调用对象，作用于该层参数化的全部参数集；pytest.param 的 id 只作用于某个具体参数集，优先级更高。当层内同时提供 ids 列表与部分 param 已带 id 时，长度/覆盖关系可能引发冲突。id 中含空格会触发 pytest 的非致命告警但不一定失败；ids 也可以是可调用对象。",
+      "error_tag": "概念混淆",
+      "variant_group": "parametrize_ids"
+    },
+    {
+      "kp": "py.test.parametrize",
+      "type": "multi_choice",
+      "question": "在工程中，下面哪些是使用参数化相较手写多份测试函数的优点？（多选）",
+      "options": [
+        "每份数据都作为独立用例出现在报告中，失败定位更清晰",
+        "便于对某一组数据单独指定 skip/xfail 标记",
+        "可以减少重复样板代码，让测试更易维护",
+        "能保证所有参数集的断言一定全部正确",
+        "会显著加快测试执行速度"
+      ],
+      "answer": [
+        0,
+        1,
+        2
+      ],
+      "explanation": "参数化的核心价值是「数据驱动 + 独立用例 + 可单独加标记」，能减少样板。它本身不保证断言的正确性，也不会自动提速（用例总数通常不变，甚至因为笛卡尔积而增加）。",
+      "error_tag": "概念混淆",
+      "variant_group": "parametrize_value"
+    },
+    {
+      "kp": "py.test.parametrize",
+      "type": "multi_choice",
+      "question": "关于参数化与 fixture 的交互，下列哪些说法正确？（多选）",
+      "options": [
+        "当 parametrize 的参数名与某个 fixture 同名时，该 fixture 会针对每组参数被调用",
+        "fixture 内部可以通过 request.param 拿到当前参数值",
+        "参数化 fixture 时，间接参数化可通过 indirect=True 让参数传递给 fixture 而非直接给测试函数",
+        "fixture 参数化不能和测试函数参数化共存",
+        "parametrize 只能参数化测试函数，不能影响 fixture"
+      ],
+      "answer": [
+        0,
+        1,
+        2
+      ],
+      "explanation": "参数名与 fixture 同名即可参数化该 fixture；fixture 里用 request.param 取值；indirect=True 可让参数走 fixture 路径。fixture 参数化与函数参数化可以共存，所以最后两项错误。",
+      "error_tag": "概念混淆",
+      "variant_group": "parametrize_fixture_interaction"
+    },
+    {
+      "kp": "py.test.parametrize",
+      "type": "fill_blank",
+      "question": "补全下面的代码，使得同一测试函数对 add(1,2)、add(3,4) 两组数据各运行一次：\n\nimport pytest\n\n@pytest.mark.parametrize('a, b, expected', [(1, 2, 3), (3, 4, 7)])\ndef test_add(a, b, expected):\n    assert a + b == ______",
+      "options": [],
+      "answer": [
+        "expected"
+      ],
+      "explanation": "参数化的第三列 expected 就是本组期望值，断言应与它比较：assert a + b == expected。",
+      "error_tag": "记忆缺失",
+      "variant_group": "parametrize_basic_shape"
+    },
+    {
+      "kp": "py.test.parametrize",
+      "type": "fill_blank",
+      "question": "补全下面的代码，将参数集命名为 'add-positive' 和 'add-negative' 以便在报告中区分：\n\nimport pytest\n\n@pytest.mark.parametrize('a, b, expected',\n                         [(1, 2, 3), (-1, -2, -3)],\n                         ids=______)\ndef test_add(a, b, expected):\n    assert a + b == expected",
+      "options": [],
+      "answer": [
+        "['add-positive', 'add-negative']",
+        "[\"add-positive\", \"add-negative\"]"
+      ],
+      "explanation": "ids 接受与参数集一一对应的字符串列表（或可调用对象），因此传入 ['add-positive', 'add-negative'] 就能在节点 ID 中显示自定义名称。",
+      "error_tag": "记忆缺失",
+      "variant_group": "parametrize_ids"
+    },
+    {
+      "kp": "py.test.parametrize",
+      "type": "code_reading",
+      "question": "阅读下面的代码，回答问题：\n\nimport pytest\n\n@pytest.mark.parametrize('x', [1, 2, 3])\n@pytest.mark.parametrize('y', ['a', 'b'])\ndef test_mix(x, y):\n    assert True\n\n若使用 pytest -v 运行，会收集到多少条用例？请说明理由。",
+      "options": [],
+      "answer": "共 6 条。两层 parametrize 叠加是笛卡尔积：3 个 x 与 2 个 y 组合成 3×2=6 条用例。",
+      "explanation": "多个 parametrize 装饰器的参数相互独立并做乘积组合，因此收集到的用例数是各层数据个数之积。注意最简单的（错误的）答案是 5（把个数相加），或 2/3（只取某一层个数）。",
+      "error_tag": "边界错误",
+      "variant_group": "parametrize_stacking_product"
+    },
+    {
+      "kp": "py.test.parametrize",
+      "type": "code_reading",
+      "question": "阅读下面的代码，回答问题：\n\nimport pytest\n\n@pytest.mark.parametrize('x, y', [(1, 2, 3)])\ndef test_add(x, y):\n    assert x + y == 3\n\n运行 pytest 时会看到什么现象？为什么？",
+      "options": [],
+      "answer": "在收集阶段就报错，提示参数数量不匹配：'x, y' 需要 2 个参数，但提供的元组有 3 个元素。",
+      "explanation": "parametrize 要求每组数据的元素个数与参数名个数一致，否则 pytest 在收集阶段就会报错，不会进入测试执行。",
+      "error_tag": "边界错误",
+      "variant_group": "parametrize_argcount_mismatch"
+    },
+    {
+      "kp": "py.test.parametrize",
+      "type": "scenario",
+      "question": "你负责一个价格计算的测试模块，同一套校验逻辑需要针对「正常价、打折价、会员价、负价」四组数据验证。团队里有人为这四种情况各写了一份几乎相同的测试函数。你决定改用参数化重构，请说明你会怎么组织这四组数据，以及重构后如何在报告里方便定位失败的那一组。",
+      "options": [],
+      "answer": "把四组输入与期望值集中在一个数据列表（模块常量或外部数据文件）里，用 @pytest.mark.parametrize 装饰单个测试函数；为每组数据用 ids 或 pytest.param(id=...) 起可读的名字（如 normal、discount、member、negative），这样节点 ID 与报告中会显示对应名称，失败时可直接定位；必要时对负价这类边界情况用 pytest.param(..., marks=pytest.mark.xfail) 或单独的标记区分。",
+      "explanation": "场景考察的是把重复的非参数化测试迁移为数据驱动参数化的做法。要点是：集中数据、用 parametrize 引用、给参数集起可读 id 以便定位失败，并可用 pytest.param 对个别数据附加标记。",
+      "error_tag": "概念混淆",
+      "variant_group": "parametrize_refactor_scenario",
+      "required_keywords": [
+        "pytest.param",
+        "迁移"
+      ]
+    },
+    {
+      "kp": "py.test.parametrize",
+      "type": "single_choice",
+      "question": "关于 pytest.mark.parametrize 中 ids 参数的作用，下列说法正确的是？",
+      "options": [
+        "ids 用于给形参赋默认值",
+        "ids 用来自定义每个参数集在测试报告和用例节点 ID 中显示的后缀名称",
+        "ids 必须与参数名列表一一对应，否则测试无法收集",
+        "ids 用于控制用例的执行顺序"
+      ],
+      "answer": 1,
+      "explanation": "ids 提供的是每个参数集的标识名，方便在 -k 选择或报告中分辨是哪一组数据。它不是默认值机制（那是函数签名的事），不控制执行顺序，也不是必需的。",
+      "error_tag": "概念混淆",
+      "variant_group": "parametrize_ids"
+    },
+    {
+      "kp": "py.test.parametrize",
+      "type": "scenario",
+      "question": "某测试里参数化数据来自一个可能有几十项的列表，运行后报告中很多用例名字都是 test_validate[10]、[11] 这样难以辨认。团队希望在排查失败时能从报告名字直接看出是哪种输入。你会怎么改？如果部分数据还希望在某些条件下跳过，又如何处理？",
+      "options": [],
+      "answer": "使用 @pytest.mark.parametrize 的 ids 参数为每组数据指定可读名称，或者把每组数据写成 pytest.param(value, id='可读名') 的形式；这两种方式都会把可读名写入节点 ID 的方括号中，便于定位。对需要条件性地跳过/预期失败的个别数据，可以写成 pytest.param(..., marks=pytest.mark.skipif(...)) 或 pytest.mark.xfail，从而只影响对应参数集。",
+      "explanation": "场景的核心是以可读 id 替换默认的数值后缀，并可对个别参数集附加 skip/xfail 标记。关键在于把命名与标记收敛在参数化定义处。",
+      "error_tag": "记忆缺失",
+      "variant_group": "parametrize_ids",
+      "required_keywords": [
+        "pytest.param",
+        "ids",
+        "id",
+        "skip",
+        "xfail"
+      ]
+    },
+    {
+      "kp": "py.test.parametrize",
+      "type": "single_choice",
+      "question": "某个被参数化的测试用到了参数化产生的多组数据中的某一组时，出现了一个断言失败。默认情况下 pytest 的行为是？",
+      "options": [
+        "遇到第一个失败就停止整个测试函数的后续参数集",
+        "把该参数集作为一次独立的失败报告，其他参数集继续执行",
+        "把整个测试函数标记为 error 而不是 failed",
+        "直接中断整个测试会话"
+      ],
+      "answer": 1,
+      "explanation": "参数化的每一组数据被视为一个独立的测试项，失败不会连累同函数的其他参数集，除非使用了 -x 之类的中断选项。",
+      "error_tag": "概念混淆",
+      "variant_group": "parametrize_failure_isolation"
+    },
+    {
+      "kp": "py.test.parametrize",
+      "type": "single_choice",
+      "question": "在参数化时，如果某个参数集的取值是一个 pytest.param 对象，下面哪项说法正确？",
+      "options": [
+        "pytest.param 只能给值，不能传 marks 或 id",
+        "pytest.param 可以携带值、id 和 marks 等元信息，用于给特定参数集打标记",
+        "pytest.param 会把整个对象原样传给被测函数，不会解包",
+        "pytest.param 已被弃用，应该改用元组"
+      ],
+      "answer": 1,
+      "explanation": "pytest.param(value, id=..., marks=...) 允许为单个参数集附加 id 和标记（如 pytest.mark.skip、xfail），是给个别数据加元信息的标准做法。",
+      "error_tag": "记忆缺失",
+      "variant_group": "parametrize_param_object"
+    },
+    {
+      "kp": "py.test.parametrize",
+      "type": "single_choice",
+      "question": "关于参数名列表的写法，下列哪一组写法是等价的？\n\n甲：@pytest.mark.parametrize('x, y', [(1, 2)])\n乙：@pytest.mark.parametrize(['x', 'y'], [(1, 2)])",
+      "options": [
+        "甲和乙等价，两种写法都合法",
+        "只有甲合法，乙会报错",
+        "只有乙合法，甲会报错",
+        "两者都不合法，必须写成 'x y'"
+      ],
+      "answer": 0,
+      "explanation": "第一个参数可以是逗号分隔的字符串，也可以是字符串列表/元组；pytest 会做等价解析。写成 'x y'（空格分隔）在部分版本中也可接受，但用逗号或序列更稳妥。",
+      "error_tag": "概念混淆",
+      "variant_group": "parametrize_argnames_form"
+    },
+    {
+      "kp": "py.test.parametrize",
+      "type": "single_choice",
+      "question": "在使用 pytest 参数化时，若某组参数集里的元素个数与形参名个数不符，会发生什么？",
+      "options": [
+        "pytest 自动补齐缺失的值为 None",
+        "pytest 自动截断多余的值",
+        "该用例在收集阶段报错，提示参数数量不匹配",
+        "pytest 忽略该组数据继续运行其他组"
+      ],
+      "answer": 2,
+      "explanation": "参数数量必须与形参名数量一致，否则在收集阶段就会报错。pytest 不会自动补 None 也不会静默截断。",
+      "error_tag": "边界错误",
+      "variant_group": "parametrize_argcount_mismatch"
+    },
+    {
+      "kp": "py.test.parametrize",
+      "type": "single_choice",
+      "question": "某测试被参数化后，名称中带有方括号，例如 test_div[1-2]。若要只运行参数值为 (1, 2) 对应的那一条用例，下面哪种方式最合适？",
+      "options": [
+        "pytest test_div.py -k 'test_div[1-2]'",
+        "pytest test_div.py::test_div[1-2]",
+        "pytest test_div.py -m 'test_div[1-2]'",
+        "pytest test_div.py --param 1 2"
+      ],
+      "answer": 1,
+      "explanation": "带方括号的节点 ID 可以直接用 :: 定位到具体参数集。-k 虽然也可做子串匹配，但方括号内的字符在表达式中有特殊语义，容易误匹配；-m 是标记选择；--param 不是 pytest 选项。",
+      "error_tag": "记忆缺失",
+      "variant_group": "parametrize_node_id_selection"
+    },
+    {
+      "kp": "py.test.parametrize",
+      "type": "single_choice",
+      "question": "下面哪种做法最符合「参数化应由数据驱动、便于扩展」的理念？",
+      "options": [
+        "为每组数据复制粘贴一份测试函数",
+        "在测试函数体内用 for 循环遍历所有数据并 assert",
+        "把数据放在模块级列表或外部文件，用 parametrize 引用它",
+        "只用一组数据，靠人工修改代码来换用例"
+      ],
+      "answer": 2,
+      "explanation": "parametrize 让每份数据成为独立用例，便于定位失败，且数据可与代码分离（模块常量、fixture、文件加载）。for 循环断言会导致一处失败就中断后面的检查，且报告里只有一条用例。",
+      "error_tag": "概念混淆",
+      "variant_group": "parametrize_data_driven"
+    },
+    {
+      "kp": "py.test.parametrize",
+      "type": "single_choice",
+      "question": "如果一个参数化用例给参数起了名字（id），该 id 会出现在哪里？",
+      "options": [
+        "只出现在 HTML 报告里，终端看不到",
+        "出现在用例的节点 ID（方括号内）和测试报告标题中",
+        "只出现在 assert 失败信息的附加说明里",
+        "不会出现在任何地方，id 仅用于内部排序"
+      ],
+      "answer": 1,
+      "explanation": "自定义 id 会替换默认的数值后缀，出现在节点 ID 的方括号中，也会显示在 -v 输出和报告中，方便快速辨认失败的是哪组数据。",
+      "error_tag": "记忆缺失",
+      "variant_group": "parametrize_ids"
+    }
+  ]
+}

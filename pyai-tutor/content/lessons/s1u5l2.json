@@ -1,0 +1,632 @@
+{
+  "id": "s1u5l2",
+  "title": "s1u5l2",
+  "kps": [
+    "py.func.args_positional",
+    "py.func.args_keyword"
+  ],
+  "theory": "## py.func.args_positional\n\n# 位置参数：函数最基础也最重要的传参方式\n\n## 一句话直觉\n\n**位置参数（positional arguments）** 是函数调用时按“顺序”一一对应传进去的实参——就像排队买奶茶，柜台只认“第 1 个、第 2 个……”，不看名字。\n\n它是 Python 函数调用的起点：不理解位置参数，就理解不了默认值、`*args`、关键字参数、甚至装饰器。\n\n---\n\n## 1. 什么是位置参数？\n\n定义函数时，写在括号里的参数叫 **形参（parameter）**；调用时传进去的值叫 **实参（argument）**。\n\n当调用时只按顺序写值，Python 就按定义时的顺序依次绑定——这就是位置参数。\n\n```python\ndef greet(name, city):          # name, city 是形参\n    return f\"你好，{name}！欢迎来到{city}。\"\n\nprint(greet(\"小明\", \"北京\"))    # \"小明\" → name, \"北京\" → city\n# 输出: 你好，小明！欢迎来到北京。\n```\n\n**关键结论**：位置参数是“按顺序绑定”，顺序错了，结果就错了。\n\n```python\nprint(greet(\"北京\", \"小明\"))\n# 输出: 你好，北京！欢迎来到小明。   ← 语义完全反了\n```\n\n> 工程级提示：位置参数数量必须与定义完全一致，多了少了都会 `TypeError`。\n\n---\n\n## 2. 数量必须匹配（这是最容易踩的坑）\n\n```python\ndef add(a, b):\n    return a + b\n\nprint(add(1, 2))    # 3\n# add(1)            # TypeError: missing 1 required positional argument: 'b'\n# add(1, 2, 3)      # TypeError: takes 2 positional arguments but 3 were given\n```\n\n**关键结论**：位置参数是“必填”的，除非给它一个默认值（下一节讲）。\n\n---\n\n## 3. 位置参数 + 默认值\n\n给形参赋默认值后，它变成 **可选位置参数（optional positional argument）**，调用时可以省略。\n\n```python\ndef greet(name, city=\"北京\"):     # city 有默认值\n    return f\"你好，{name}！欢迎来到{city}。\"\n\nprint(greet(\"小明\"))              # 你好，小明！欢迎来到北京。\nprint(greet(\"小明\", \"上海\"))      # 你好，小明！欢迎来到上海。\n# print(greet(\"小明\", \"上海\", \"额外\"))  # TypeError: too many\n```\n\n**语法规则**：默认值参数必须排在非默认值参数后面。\n\n```python\ndef bad(a=1, b):   # SyntaxError: non-default argument follows default argument\n    ...\n```\n\n**关键结论**：默认值只是“可省略”，一旦传入仍按位置绑定。\n\n---\n\n## 4. 关键字参数：位置参数的“名字版”\n\n调用时用 `名字=值` 的形式，叫 **关键字参数（keyword arguments）**。它和位置参数可以混用，但位置参数必须在前。\n\n```python\ndef greet(name, city):\n    return f\"你好，{name}！欢迎来到{city}。\"\n\nprint(greet(\"小明\", city=\"上海\"))   # OK\nprint(greet(name=\"小明\", city=\"上海\"))  # OK，全关键字\n# greet(city=\"上海\", \"小明\")        # SyntaxError: positional argument follows keyword argument\n```\n\n**关键结论**：位置参数解决“顺序调用”，关键字参数解决“可读性”和“跳过默认值”。两者配合才是完整图景。\n\n---\n\n## 5. 运行时真正发生了什么（工程级视角）\n\nPython 的函数对象有 `__code__.co_varnames` 记录形参顺序，调用时解释器按顺序把实参塞进去。理解这一点，就能理解后面 `*args`、`**kwargs`、`functools.partial` 为什么那样设计。\n\n```python\ndef f(a, b, c):\n    return a, b, c\n\nprint(f.__code__.co_varnames)   # ('a', 'b', 'c')\n```\n\n常见错误（提前预览）：\n- 忘记传参 → `TypeError: missing ...`\n- 顺序写反 → 程序不报错但结果错，这是最危险的\n- 默认值写成可变对象（如 `[]`）→ 多次调用共享同一个对象\n\n```python\ndef append_bad(item, box=[]):   # 危险！\n    box.append(item)\n    return box\n\nprint(append_bad(1))   # [1]\nprint(append_bad(2))   # [1, 2]  ← 不是 [2]\n```\n\n正确写法：\n\n```python\ndef append_good(item, box=None):\n    if box is None:\n        box = []\n    box.append(item)\n    return box\n\nprint(append_good(1))  # [1]\nprint(append_good(2))  # [2]\n```\n\n**关键结论**：位置参数是最底层、最常用的传参机制；默认值参数要小心可变对象。\n\n---\n\n## 动手练习\n\n写一个函数 `format_student(name, age, city=\"未知\")`，返回字符串：\n\n> `姓名：<name>，年龄：<age>，城市：<city>`\n\n要求：\n\n1. 只用位置参数调用一次：`format_student(\"小明\", 18, \"北京\")`\n2. 用“位置 + 关键字”混合调用一次：`format_student(\"小红\", age=20)`\n3. 故意传错顺序，观察输出，并思考：为什么 Python 不报错？\n4. 写一个小脚本，循环调用 5 次，每次传不同参数，打印结果。\n\n预期输出示例：\n\n```\n姓名：小明，年龄：18，城市：北京\n姓名：小红，年龄：20，城市：未知\n姓名：18，年龄：小明，城市：北京   ← 顺序反了，但不报错\n```\n\n完成后问自己：如果把 `format_student` 的第三个参数改成必填，调用方要改几处？这就是为什么工程上推荐“关键字参数优先”来提升可维护性。\n\n```python\ndef greet(name, city=\"北京\"):\n    \"\"\"位置参数 name 必填；city 是带默认值的位置参数。\"\"\"\n    return f\"你好，{name}！欢迎来到{city}。\"\n\nif __name__ == \"__main__\":\n    # 1) 纯位置参数\n    print(greet(\"小明\", \"上海\"))\n\n    # 2) 省略默认值\n    print(greet(\"小红\"))\n\n    # 3) 位置 + 关键字混用\n    print(greet(\"小刚\", city=\"广州\"))\n\n    # 4) 查看形参顺序\n    print(greet.__code__.co_varnames)  # ('name', 'city')\n```\n\n## py.func.args_keyword\n\n# Python 函数的关键字参数（Keyword Arguments）\n\n> **一句话直觉**：当你调用函数时，如果能用“参数名=值”的方式传参，代码不仅一眼看懂每个值代表什么，还能忽略顺序、给默认值、只在需要时覆盖——这就是关键字参数（keyword arguments）存在的意义。\n\n本讲从“什么是关键字参数”讲到“工程级 API 设计”，共 5 小节。所有示例都可直接复制运行。\n\n---\n\n## 1. 从位置参数（positional arguments）说起\n\n调用函数时最原始的方式是按位置传参：\n\n```python\ndef greet(name, age):\n    return f\"{name} 今年 {age} 岁\"\n\ngreet(\"小明\", 18)   # '小明' 给 name，18 给 age\n```\n\n只要顺序错了，语义就全乱。当参数有 3、4 个以上时，读代码的人必须去翻函数定义才知道 `True` 到底是“是否激活”还是“是否删除”。\n\n**关键字参数**就是你主动把参数名写出来：\n\n```python\ngreet(age=18, name=\"小明\")   # 顺序随便换，结果一致\n```\n\n规则只有一条：**参数名必须和函数定义里的一致**（这里的 `name`、`age`）。\n\n---\n\n## 2. 混用规则：位置参数必须在前\n\nPython 允许两种写法混用，但有顺序要求：**位置参数在前，关键字参数在后**。\n\n```python\ngreet(\"小明\", age=18)   # ✅ 合法\ngreet(name=\"小明\", 18)  # ❌ SyntaxError: positional argument follows keyword argument\n```\n\n一旦你开始用关键字参数，后面的所有实参（arguments）都必须也带名字：\n\n```python\ndef profile(name, age, city):\n    return f\"{name}/{age}/{city}\"\n\nprofile(\"小明\", age=18, city=\"上海\")  # ✅\nprofile(\"小明\", city=\"上海\", age=18)  # ✅ 顺序无关，只要名字对\n```\n\n**工程直觉**：参数少时位置传参够用；一旦参数 ≥3 个或某个参数是布尔/None，就强烈建议用关键字传参提升可读性。\n\n---\n\n## 3. 默认值（default values）：关键字参数的天然搭档\n\n函数定义时给参数提供默认值，调用时就可以不传：\n\n```python\ndef connect(host, port=3306, timeout=5):\n    return f\"连接 {host}:{port}, 超时 {timeout}s\"\n\nconnect(\"db.local\")                       # 用默认 port 和 timeout\nconnect(\"db.local\", timeout=30)           # 只覆盖 timeout，必须用关键字\nconnect(\"db.local\", 5432, timeout=30)     # port 也可以位置传\n```\n\n**关键规则**：带默认值的参数必须排在无默认值参数之后，否则 SyntaxError。\n\n```python\ndef bad(a=1, b):   # ❌ SyntaxError: non-default argument follows default argument\n    ...\n```\n\n> 默认值在函数**定义时**只求值一次，因此千万不要用可变对象（mutable）当默认值——见第 5 节常见误区。\n\n---\n\n## 4. 强制关键字参数（keyword-only arguments）：用 `*` 划清边界\n\n在参数列表中写一个 `*`，它**右边**的参数就变成只能通过关键字传入：\n\n```python\ndef transfer(from_account, to_account, *, amount, currency=\"CNY\"):\n    return f\"从 {from_account} 转 {amount} {currency} 到 {to_account}\"\n\ntransfer(\"A\", \"B\", amount=100)              # ✅\ntransfer(\"A\", \"B\", 100)                     # ❌ TypeError: takes 2 positional arguments but 3 were given\ntransfer(\"A\", \"B\", amount=100, currency=\"USD\")  # ✅\n```\n\n**为什么工程上需要它？**\n\n- 让调用点“自解释”，杜绝 `f(True, False, 1)` 这种难读的调用。\n- 当参数带 `*` 后，未来新增参数可以安全地插入而不破坏已有调用（只要新参数也有默认值）。\n- 这是现代 Python 库（requests、pandas、pydantic）的常见 API 风格。\n\n对称的还有 `/` 用来标记“只能位置传”的参数（Python 3.8+），例如 `def f(a, /, b)` 中 `a` 不能用关键字传。\n\n---\n\n## 5. 参数解包（unpacking）：`*args` 与 `**kwargs` 的关键字侧\n\n`**kwargs` 让函数接收任意数量的关键字参数，在函数内部变成一个 `dict`：\n\n```python\ndef build_config(**kwargs):\n    return kwargs\n\nbuild_config(host=\"db\", port=3306)   # {'host': 'db', 'port': 3306}\n```\n\n调用时也可以用 `**` 把字典“拆开”传入：\n\n```python\nopts = {\"host\": \"db\", \"port\": 3306}\nconnect(**opts)   # 等价于 connect(host=\"db\", port=3306)\n```\n\n**典型工程模式**：装饰器（decorator）和包装器（wrapper）里用 `*args, **kwargs` 透传所有参数，不关心具体签名。\n\n```python\ndef log_calls(fn):\n    def wrapper(*args, **kwargs):\n        print(f\"调用 {fn.__name__} args={args} kwargs={kwargs}\")\n        return fn(*args, **kwargs)\n    return wrapper\n\n@log_calls\ndef add(a, b, c=0):\n    return a + b + c\n\nadd(1, 2, c=3)   # 打印 kwargs={'c': 3}，返回 6\n```\n\n---\n\n## 结尾 · 动手练习\n\n**任务**：写一个 `make_request` 函数，模拟 HTTP 请求配置构造。\n\n要求：\n1. 签名：`make_request(url, *, method=\"GET\", timeout=5, headers=None, **extra)`\n2. `method`、`timeout`、`headers` 必须是强制关键字参数（用 `*` 隔开）。\n3. `headers` 默认值为 `None`，函数体内部若为 `None` 就替换为 `{\"User-Agent\": \"my-client\"}`（不要直接在默认值里写可变字典）。\n4. `**extra` 把额外关键字参数合并进返回的字典中输出。\n5. 返回一个 `dict`，结构：`{\"url\":..., \"method\":..., \"timeout\":..., \"headers\":..., **extra}`。\n\n验证：\n\n```python\nmake_request(\"https://example.com\")\n# {'url':'https://example.com','method':'GET','timeout':5,'headers':{'User-Agent':'my-client'}}\n\nmake_request(\"https://example.com\", method=\"POST\", retries=3, cache=False)\n# 含 'method':'POST'、'retries':3、'cache':False\n\nmake_request(\"https://example.com\", \"POST\")  # ❌ 应抛 TypeError\n```\n\n**进阶要求**：再加一个装饰器 `@log_calls`，打印每次调用收到的 `kwargs`，并用它装饰 `make_request` 验证。\n\n```python\n# 演示：关键字参数、默认值、强制关键字参数、**kwargs\n\ndef make_request(url, *, method=\"GET\", timeout=5, headers=None, **extra):\n    # 注意：绝不能在默认值里写 {}，否则所有调用共享同一个 dict\n    if headers is None:\n        headers = {\"User-Agent\": \"my-client\"}\n    return {\"url\": url, \"method\": method, \"timeout\": timeout,\n            \"headers\": headers, **extra}\n\n\nif __name__ == \"__main__\":\n    # 1) 全省略可选参数\n    print(make_request(\"https://example.com\"))\n\n    # 2) 只覆盖 method 并追加额外字段\n    print(make_request(\"https://example.com\", method=\"POST\", retries=3, cache=False))\n\n    # 3) 位置传 method 会报错（method 是 keyword-only）\n    try:\n        make_request(\"https://example.com\", \"POST\")\n    except TypeError as e:\n        print(\"预期报错:\", e)\n\n    # 4) 字典解包：**opts 等价于逐个关键字传参\n    opts = {\"method\": \"PUT\", \"timeout\": 30}\n    print(make_request(\"https://example.com\", **opts))\n```\n",
+  "quiz": [
+    {
+      "kp": "py.func.args_positional",
+      "type": "single_choice",
+      "question": "观察如下代码：\n\ndef greet(name, greeting):\n    return greeting + ', ' + name\n\nprint(greet('Alice', 'Hello'))\n\n输出是什么？",
+      "options": [
+        "Hello, Alice",
+        "Alice, Hello",
+        "HelloAlice",
+        "报错，因为参数顺序错误"
+      ],
+      "answer": 0,
+      "explanation": "调用时按位置依次把 'Alice' 绑定到 name，把 'Hello' 绑定到 greeting，因此返回 'Hello, Alice'。位置参数按书写顺序一一对应，顺序不同结果不同。",
+      "error_tag": "位置参数绑定顺序理解错误",
+      "variant_group": "positional_binding_order"
+    },
+    {
+      "kp": "py.func.args_positional",
+      "type": "single_choice",
+      "question": "有如下代码：\n\ndef power(base, exp):\n    return base ** exp\n\nprint(power(2, 3))\n\n若想得到 3 的 2 次方，应如何调用？",
+      "options": [
+        "power(3, 2)",
+        "power(2, 3)",
+        "power(base=2, exp=3)",
+        "power(exp=2, base=3) 会报错"
+      ],
+      "answer": 0,
+      "explanation": "位置参数第一个传给 base，第二个传给 exp，所以 power(3, 2) 得到 3 的 2 次方。原题 power(2, 3) 是 2 的 3 次方，不符合需求。",
+      "error_tag": "位置参数与形参对应关系错误",
+      "variant_group": "positional_binding_order"
+    },
+    {
+      "kp": "py.func.args_positional",
+      "type": "single_choice",
+      "question": "有如下调用：\n\ndef f(x, y):\n    return x, y\n\nprint(f(1, 2))\n\n若把参数顺序写反 f(2, 1)，返回值是？",
+      "options": [
+        "(2, 1)",
+        "(1, 2)",
+        "报错",
+        "(1, 1)"
+      ],
+      "answer": 0,
+      "explanation": "位置参数按顺序绑定，f(2, 1) 中 x=2, y=1，返回元组 (2, 1)。与 f(1, 2) 返回值不同。",
+      "error_tag": "位置参数顺序理解错误",
+      "variant_group": "positional_binding_order"
+    },
+    {
+      "kp": "py.func.args_positional",
+      "type": "single_choice",
+      "question": "以下代码：\n\ndef greet(name, msg='Hi'):\n    return msg + ' ' + name\n\nprint(greet('Bob'))\n\n输出是？",
+      "options": [
+        "Hi Bob",
+        "Bob Hi",
+        "Hi",
+        "报错，缺少 msg 参数"
+      ],
+      "answer": 0,
+      "explanation": "name 是必需的位置参数，msg 有默认值。调用 greet('Bob') 时只传一个位置参数，name='Bob'，msg 使用默认 'Hi'，输出 'Hi Bob'。",
+      "error_tag": "默认参数与位置参数配合理解不足",
+      "variant_group": "positional_with_default"
+    },
+    {
+      "kp": "py.func.args_positional",
+      "type": "single_choice",
+      "question": "定义：\n\ndef f(a, b=10, c=20):\n    return a + b + c\n\nprint(f(1, 2, 3))\n\n结果是？",
+      "options": [
+        "6",
+        "13",
+        "23",
+        "33"
+      ],
+      "answer": 0,
+      "explanation": "三个位置实参依次绑定 a=1, b=2, c=3，覆盖默认值，结果 1+2+3=6。位置参数可以覆盖有默认值的形参。",
+      "error_tag": "位置参数覆盖默认值理解错误",
+      "variant_group": "positional_with_default"
+    },
+    {
+      "kp": "py.func.args_positional",
+      "type": "single_choice",
+      "question": "以下函数定义是否有语法错误？\n\ndef f(a=1, b):\n    return a + b",
+      "options": [
+        "有 SyntaxError：非默认参数不能跟在默认参数之后",
+        "没有错误，可以正常调用",
+        "有 TypeError，只在调用时报错",
+        "有错误，但可以通过 f(1, 2) 绕过"
+      ],
+      "answer": 0,
+      "explanation": "Python 规定：定义函数时，带默认值的形参不能出现在不带默认值的形参之前。因此 def f(a=1, b) 是 SyntaxError，在定义时就会报错。",
+      "error_tag": "默认参数与位置参数定义顺序错误",
+      "variant_group": "positional_with_default"
+    },
+    {
+      "kp": "py.func.args_positional",
+      "type": "single_choice",
+      "question": "以下代码：\n\ndef f(a, b, c):\n    print(a, b, c)\n\nf(1, c=3, b=2)",
+      "options": [
+        "输出 1 2 3",
+        "报错，因为位置参数不能与关键字参数混用",
+        "输出 1 3 2",
+        "报错，因为 c 必须在 b 之后"
+      ],
+      "answer": 0,
+      "explanation": "位置参数 1 绑定 a，随后关键字参数 c=3、b=2 分别绑定。Python 允许位置参数与关键字参数混合使用，只要不重复绑定同一个形参。输出 1 2 3。",
+      "error_tag": "位置参数与关键字参数混用规则误解",
+      "variant_group": "positional_vs_keyword"
+    },
+    {
+      "kp": "py.func.args_positional",
+      "type": "single_choice",
+      "question": "以下调用方式：\n\ndef f(a, b):\n    return a - b\n\nprint(f(b=3, a=10))\n\n结果是？",
+      "options": [
+        "7",
+        "-7",
+        "13",
+        "报错，位置参数必须按顺序"
+      ],
+      "answer": 0,
+      "explanation": "使用关键字参数时，绑定按名字而非位置，a=10, b=3，结果 10-3=7。这与位置参数调用 f(10, 3) 结果相同。",
+      "error_tag": "关键字参数绑定与位置参数混淆",
+      "variant_group": "positional_vs_keyword"
+    },
+    {
+      "kp": "py.func.args_positional",
+      "type": "single_choice",
+      "question": "关于位置参数，下列说法错误的是：",
+      "options": [
+        "位置参数在调用时必须严格按照形参顺序传值，不能使用关键字",
+        "位置参数按从左到右顺序绑定",
+        "实参个数必须与形参个数匹配（除非有默认值或可变参数）",
+        "位置参数与关键字参数可以在同一次调用中混用"
+      ],
+      "answer": 0,
+      "explanation": "位置参数在调用时也可以使用关键字方式传递，只要绑定结果唯一即可。'不能使用关键字' 是错误的说法。其他三项均为正确描述。",
+      "error_tag": "位置参数调用方式误解",
+      "variant_group": "positional_vs_keyword"
+    },
+    {
+      "kp": "py.func.args_positional",
+      "type": "single_choice",
+      "question": "以下代码：\n\ndef f(a, b):\n    return a * 10 + b\n\nprint(f(2, 3))\n\n若希望输出 32，应如何调用？",
+      "options": [
+        "f(3, 2)",
+        "f(2, 3)",
+        "f(b=2, a=3)",
+        "f(2, b=3)"
+      ],
+      "answer": 0,
+      "explanation": "f(3, 2) 绑定 a=3, b=2，计算 3*10+2=32。选项三 f(b=2, a=3) 也会得到 32，但本题为单选，最直接的位置调用是 f(3, 2)。原式 f(2, 3) 得到 23。",
+      "error_tag": "位置参数顺序与计算结果关系理解不足",
+      "variant_group": "positional_binding_order"
+    },
+    {
+      "kp": "py.func.args_positional",
+      "type": "single_choice",
+      "question": "以下代码：\n\ndef f(x, y, z):\n    return x, y, z\n\nprint(f(1, 2, 3))\n\n如果把调用改为 f(z=3, x=1, y=2)，返回值是？",
+      "options": [
+        "(1, 2, 3)",
+        "(3, 1, 2)",
+        "(1, 3, 2)",
+        "报错，位置参数顺序被打乱"
+      ],
+      "answer": 0,
+      "explanation": "关键字参数按名字绑定，x=1, y=2, z=3，返回 (1, 2, 3)。与位置调用 f(1, 2, 3) 结果相同。位置参数与关键字参数在绑定结果上可以等价。",
+      "error_tag": "关键字绑定与位置绑定等价性理解不足",
+      "variant_group": "positional_vs_keyword"
+    },
+    {
+      "kp": "py.func.args_positional",
+      "type": "single_choice",
+      "question": "以下代码：\n\ndef f(a, b):\n    return a + b\n\nprint(f(1, b=2))",
+      "options": [
+        "3",
+        "报错，因为第一个参数必须用关键字",
+        "报错，因为位置参数不能与关键字参数混用",
+        "None"
+      ],
+      "answer": 0,
+      "explanation": "第一个实参 1 按位置绑定 a，第二个实参 b=2 按关键字绑定 b，合法调用，返回 3。位置参数可以出现在关键字参数之前。",
+      "error_tag": "位置参数与关键字参数混用规则误解",
+      "variant_group": "positional_vs_keyword"
+    },
+    {
+      "kp": "py.func.args_positional",
+      "type": "single_choice",
+      "question": "以下函数定义：\n\ndef f(a, b, c):\n    return a - b - c\n\nprint(f(10, 3, 2))\n\n结果是多少？",
+      "options": [
+        "5",
+        "9",
+        "11",
+        "-5"
+      ],
+      "answer": 0,
+      "explanation": "按位置绑定 a=10, b=3, c=2，计算 10-3-2=5。位置参数依次赋值，顺序不能随意调换。",
+      "error_tag": "位置参数顺序理解错误",
+      "variant_group": "positional_binding_order"
+    },
+    {
+      "kp": "py.func.args_positional",
+      "type": "single_choice",
+      "question": "调用函数时，位置参数的数量必须与形参数量匹配。以下代码会怎样？\n\ndef add(x, y):\n    return x + y\n\nprint(add(1))",
+      "options": [
+        "TypeError: add() missing 1 required positional argument: 'y'",
+        "返回 1，y 默认为 0",
+        "返回 None",
+        "SyntaxError"
+      ],
+      "answer": 0,
+      "explanation": "位置参数个数少于必需形参个数时，Python 抛出 TypeError，指出缺少一个必需的位置参数。不会有隐式默认值。",
+      "error_tag": "缺少必需位置参数",
+      "variant_group": "positional_arity_mismatch"
+    },
+    {
+      "kp": "py.func.args_positional",
+      "type": "single_choice",
+      "question": "以下代码：\n\ndef show(a, b):\n    print(a, b)\n\nshow(1, 2, 3)",
+      "options": [
+        "TypeError: show() takes 2 positional arguments but 3 were given",
+        "打印 1 2，多余参数被忽略",
+        "打印 1 2 3",
+        "把 3 赋给可变参数"
+      ],
+      "answer": 0,
+      "explanation": "函数只接受两个位置参数，传入三个会触发 TypeError，提示给了 3 个位置参数但只接受 2 个。Python 不会自动忽略多余参数。",
+      "error_tag": "多余位置参数未处理",
+      "variant_group": "positional_arity_mismatch"
+    },
+    {
+      "kp": "py.func.args_positional",
+      "type": "single_choice",
+      "question": "定义函数如下：\n\ndef func(a, b, c):\n    return a + b * c\n\n以下哪种调用方式属于纯位置参数调用？",
+      "options": [
+        "func(1, 2, 3)",
+        "func(a=1, b=2, c=3)",
+        "func(1, c=3, b=2)",
+        "func(1, 2, c=3)"
+      ],
+      "answer": 0,
+      "explanation": "func(1, 2, 3) 全部按位置传参，是最纯粹的位置参数调用。其他选项使用了关键字参数，不属于纯位置调用。",
+      "error_tag": "位置参数与关键字参数混淆",
+      "variant_group": "positional_vs_keyword"
+    },
+    {
+      "kp": "py.func.args_positional",
+      "type": "single_choice",
+      "question": "关于位置参数，以下说法正确的是：",
+      "options": [
+        "实参按从左到右的顺序依次绑定到形参",
+        "实参可以任意顺序，Python 会自动匹配类型",
+        "位置参数必须全部使用关键字方式传递",
+        "位置参数在定义时不需要写形参名"
+      ],
+      "answer": 0,
+      "explanation": "位置参数的核心规则是按顺序一一绑定。Python 不会按类型或名字自动匹配，定义时也必须写形参名。",
+      "error_tag": "位置参数绑定规则理解错误",
+      "variant_group": "positional_binding_order"
+    },
+    {
+      "kp": "py.func.args_positional",
+      "type": "single_choice",
+      "question": "已有函数：\n\ndef rect_area(width, height):\n    return width * height\n\n若调用 rect_area(5, 3)，函数体内部的 width 和 height 分别是？",
+      "options": [
+        "width = 5, height = 3",
+        "width = 3, height = 5",
+        "width = 5, height = 5",
+        "width = 3, height = 3"
+      ],
+      "answer": 0,
+      "explanation": "第一个位置实参 5 绑定到第一个形参 width，第二个位置实参 3 绑定到 height，所以 width=5, height=3。",
+      "error_tag": "位置参数绑定顺序理解错误",
+      "variant_group": "positional_binding_order"
+    },
+    {
+      "kp": "py.func.args_positional",
+      "type": "single_choice",
+      "question": "以下代码：\n\ndef divide(a, b):\n    return a / b\n\nprint(divide(10, 2))\n\n如果把调用改成 divide(2, 10)，结果会怎样变化？",
+      "options": [
+        "从 5.0 变成 0.2",
+        "仍然是 5.0，因为除法交换律",
+        "抛出 ZeroDivisionError",
+        "从 5.0 变成 20.0"
+      ],
+      "answer": 0,
+      "explanation": "位置参数顺序不同，a 和 b 的绑定值互换，10/2=5.0 变成 2/10=0.2。这体现位置参数顺序对结果的直接影响。",
+      "error_tag": "位置参数顺序影响结果理解不足",
+      "variant_group": "positional_binding_order"
+    },
+    {
+      "kp": "py.func.args_positional",
+      "type": "single_choice",
+      "question": "以下函数：\n\ndef repeat(text, times):\n    return text * times\n\n执行 repeat(3, 'ab') 会得到什么？",
+      "options": [
+        "'ababab'",
+        "'333'",
+        "报错，因为参数类型不匹配预期",
+        "'ab' 重复 3 次但返回列表"
+      ],
+      "answer": 0,
+      "explanation": "按位置绑定 text=3, times='ab'，表达式 3 * 'ab' 等价于 'ab' * 3，结果 'ababab'。Python 的 * 对整数和字符串都支持重复。",
+      "error_tag": "位置参数绑定后运算结果误判",
+      "variant_group": "positional_binding_order"
+    },
+    {
+      "kp": "py.func.args_keyword",
+      "type": "single_choice",
+      "question": "阅读以下代码，调用 f(1, 2, 3) 时，形参 a、b、c 分别绑定的值是？\n\ndef f(a, b=10, c=20):\n    return a, b, c\n\nf(1, 2, 3)",
+      "options": [
+        "a=1, b=2, c=3",
+        "a=1, b=10, c=20",
+        "a=1, b=3, c=2",
+        "抛出 TypeError"
+      ],
+      "answer": 0,
+      "explanation": "位置实参按从左到右的顺序依次绑定到位置形参 a、b、c，默认值 b=10、c=20 在此被 2、3 覆盖。",
+      "error_tag": "概念混淆",
+      "variant_group": "keyword_args_basic"
+    },
+    {
+      "kp": "py.func.args_keyword",
+      "type": "single_choice",
+      "question": "以下哪种写法在调用 f(a, b) 时能够正确传参？\n\ndef f(a, b):\n    return a - b",
+      "options": [
+        "f(a=5, b=2)",
+        "f(5, a=2)",
+        "f(b=2, 5)",
+        "f(5, b=2, 3)"
+      ],
+      "answer": 0,
+      "explanation": "关键字实参可单独使用；但一旦使用了关键字实参，后面不能再出现位置实参，因此 f(5, a=2) 中 a 重复；f(b=2, 5) 语法非法；f(5, b=2, 3) 位置实参在关键字实参之后非法。",
+      "error_tag": "边界错误",
+      "variant_group": "keyword_args_order"
+    },
+    {
+      "kp": "py.func.args_keyword",
+      "type": "multi_choice",
+      "question": "以下关于关键字实参的说法，哪些是正确的？（多选）",
+      "options": [
+        "关键字实参按形参名匹配，与传入顺序无关",
+        "关键字实参可以传给 *args 收集的位置参数",
+        "调用时位置实参必须出现在关键字实参之前",
+        "关键字实参可以重复传入同一形参（后者覆盖前者的值）",
+        "使用关键字传参可以提高调用可读性，尤其是参数较多的函数"
+      ],
+      "answer": [
+        0,
+        2,
+        4
+      ],
+      "explanation": "*args 收集的是位置实参，关键字实参无法落入 *args（会进入 **kwargs 或引发错误）；重复传入同一形参会引发 TypeError，不会覆盖。因此只有 0、2、4 正确。",
+      "error_tag": "概念混淆",
+      "variant_group": "keyword_args_basic"
+    },
+    {
+      "kp": "py.func.args_keyword",
+      "type": "multi_choice",
+      "question": "关于仅限关键字形参，以下说法正确的是？（多选）",
+      "options": [
+        "使用单独的 * 可以界定其后形参为仅限关键字",
+        "仅限关键字形参必须提供默认值，否则调用必须显式传入",
+        "在已有 *args 的情况下，其后的形参默认也是仅限关键字形参",
+        "仅限关键字形参可以用位置方式传递，只要顺序正确",
+        "函数内的 **kwargs 也可以接收仅限关键字形参"
+      ],
+      "answer": [
+        0,
+        1,
+        2
+      ],
+      "explanation": "仅限关键字形参不能以位置方式传入（D 错）；**kwargs 收集的是「未匹配任何形参」的关键字实参，已匹配到仅限关键字形参的不在其内（E 错）。A、B、C 均符合 Python 语义。",
+      "error_tag": "概念混淆",
+      "variant_group": "keyword_only_args"
+    },
+    {
+      "kp": "py.func.args_keyword",
+      "type": "multi_choice",
+      "question": "以下哪些调用会引发 TypeError？（多选）\n\ndef f(a, b, c=3):\n    return a, b, c",
+      "options": [
+        "f(1)",
+        "f(1, 2, 3, 4)",
+        "f(1, b=2)",
+        "f(1, a=2, b=3)"
+      ],
+      "answer": [
+        0,
+        1,
+        3
+      ],
+      "explanation": "f(1) 缺少 b；f(1,2,3,4) 多传了位置实参；f(1, a=2, b=3) 中 a 既被位置传入又被关键字传入，属于重复赋值。f(1, b=2) 合法，c 用默认值。",
+      "error_tag": "边界错误",
+      "variant_group": "keyword_args_order"
+    },
+    {
+      "kp": "py.func.args_keyword",
+      "type": "multi_choice",
+      "question": "下列哪些做法有助于避免「可变默认参数」带来的问题？（多选）",
+      "options": [
+        "使用 None 作为默认值，在函数体内判断后再创建新对象",
+        "将可变默认参数改为不可变对象（如元组）",
+        "在函数内部对参数重新赋值为新对象而不是原地修改",
+        "把默认值改成类级别的可变属性，让所有调用共享",
+        "在函数体内使用 default.copy() 后再修改副本"
+      ],
+      "answer": [
+        0,
+        1,
+        2,
+        4
+      ],
+      "explanation": "D 会让多个调用共享同一对象，问题更严重。A、B、C、E 都能避免默认参数被跨调用共享修改。",
+      "error_tag": "记忆缺失",
+      "variant_group": "mutable_default"
+    },
+    {
+      "kp": "py.func.args_keyword",
+      "type": "fill_blank",
+      "question": "在函数定义中，若要声明一个「仅限关键字」的形参 b（a 仍可位置传入），应写成：\ndef f(a, ______ b): ...",
+      "options": [],
+      "answer": [
+        "*",
+        "* ,",
+        "*,",
+        "*,"
+      ],
+      "explanation": "在位置形参之后使用单独的 *，其后的形参即成为仅限关键字形参，必须以关键字方式传入。",
+      "error_tag": "记忆缺失",
+      "variant_group": "keyword_only_args"
+    },
+    {
+      "kp": "py.func.args_keyword",
+      "type": "fill_blank",
+      "question": "调用函数时，若同时存在位置实参和关键字实参，Python 要求位置实参必须放在关键字实参的______。",
+      "options": [],
+      "answer": [
+        "前面",
+        "之前",
+        "左边"
+      ],
+      "explanation": "位置实参必须出现在关键字实参之前，例如 f(1, b=2) 合法，f(b=2, 1) 语法错误。",
+      "error_tag": "记忆缺失",
+      "variant_group": "keyword_args_order"
+    },
+    {
+      "kp": "py.func.args_keyword",
+      "type": "code_reading",
+      "question": "阅读代码，写出 print 的输出：\n\ndef f(a, b, *, c, d=4):\n    return a + b + c + d\n\nprint(f(1, 2, c=3))",
+      "options": [],
+      "answer": "10",
+      "explanation": "a=1、b=2 由位置传入；c 是仅限关键字形参，显式传入 3；d 使用默认值 4。结果为 1+2+3+4=10。",
+      "error_tag": "边界错误",
+      "variant_group": "keyword_only_args"
+    },
+    {
+      "kp": "py.func.args_keyword",
+      "type": "code_reading",
+      "question": "阅读代码，写出 print 的输出：\n\ndef f(x, *args, **kwargs):\n    print(x, args, kwargs)\n\nf(1, 2, 3, y=4, z=5)",
+      "options": [],
+      "answer": "1 (2, 3) {'y': 4, 'z': 5}",
+      "explanation": "1 绑定到 x；多余的位置实参 2、3 被 *args 收集成元组 (2, 3)；关键字实参 y=4、z=5 被 **kwargs 收集成字典。",
+      "error_tag": "概念混淆",
+      "variant_group": "kwargs_basic"
+    },
+    {
+      "kp": "py.func.args_keyword",
+      "type": "code_reading",
+      "question": "阅读代码，判断并说明调用结果：\n\ndef f(a, b=2, *args, c, **kwargs):\n    return a, b, args, c, kwargs\n\nprint(f(1, 3, 5, 7, c=9, d=11))",
+      "options": [],
+      "answer": "(1, 3, (5, 7), 9, {'d': 11})",
+      "explanation": "a=1、b=3 由前两个位置实参绑定；剩余位置实参 5、7 被 *args 收集为 (5, 7)；c=9 是仅限关键字形参；d=11 进入 **kwargs。常见错误是把 5 当成 b 或把 c=9 当成 kwargs 的一部分。",
+      "error_tag": "边界错误",
+      "variant_group": "kwargs_basic"
+    },
+    {
+      "kp": "py.func.args_keyword",
+      "type": "scenario",
+      "question": "你在维护一个公共函数 download(url, timeout, retries)，已有大量调用方使用位置传参。现在团队希望在调用时强制用关键字传 timeout 和 retries，以提高可读性并防止顺序写错。你会如何修改函数签名？请说明修改的理由和可能对现有调用方造成的影响。",
+      "options": [],
+      "answer": null,
+      "explanation": "将签名改为 download(url, *, timeout, retries)，其中 * 之后的形参仅限关键字，任何传入位置实参的旧调用都会抛出 TypeError，因此需要在发布前同步更新所有调用方或提供过渡期兼容层。",
+      "error_tag": "概念混淆",
+      "variant_group": "keyword_only_args",
+      "required_keywords": [
+        "url",
+        "TypeError",
+        "兼容"
+      ]
+    },
+    {
+      "kp": "py.func.args_keyword",
+      "type": "single_choice",
+      "question": "以下代码的输出是什么？\n\ndef f(a, *args, b=0, **kwargs):\n    return a, args, b, kwargs\n\nprint(f(1, 2, 3, b=4, x=5))",
+      "options": [
+        "(1, (2, 3), 4, {'x': 5})",
+        "(1, (2, 3, 4), 0, {'x': 5})",
+        "(1, (2, 3), 0, {'b': 4, 'x': 5})",
+        "抛出 TypeError"
+      ],
+      "answer": 0,
+      "explanation": "1 绑定到 a；额外的位置实参 2、3 被 *args 收集为元组；b=4 是仅限关键字形参（在 *args 之后），因此 b 绑定到 4；x=5 落入 **kwargs。",
+      "error_tag": "概念混淆",
+      "variant_group": "keyword_only_args"
+    },
+    {
+      "kp": "py.func.args_keyword",
+      "type": "scenario",
+      "question": "同事写下如下函数用于向购物车追加商品：\n\ndef add_item(item, cart=[]):\n    cart.append(item)\n    return cart\n\n单元测试单独通过，但线上连续调用后购物车内容异常累积。请分析原因并给出修复方案。",
+      "options": [],
+      "answer": null,
+      "explanation": "默认值 cart=[] 只在函数定义时求值一次，因此所有未传 cart 的调用共享同一个列表。修复方式是把默认值改为 None，并在函数体内 cart = cart if cart is not None else []，或使用其他不可变默认值。",
+      "error_tag": "边界错误",
+      "variant_group": "mutable_default",
+      "required_keywords": [
+        "可变默认参数",
+        "默认参数求值时机",
+        "共享可变对象",
+        "None 哨兵值",
+        "函数体内初始化"
+      ]
+    },
+    {
+      "kp": "py.func.args_keyword",
+      "type": "single_choice",
+      "question": "下列哪个调用会引发 TypeError？\n\ndef f(a, *, b):\n    return a + b",
+      "options": [
+        "f(1, b=2)",
+        "f(1, 2)",
+        "f(a=1, b=2)",
+        "f(b=2, a=1)"
+      ],
+      "answer": 1,
+      "explanation": "形参 b 位于 * 之后，是仅限关键字形参，必须用关键字传递。f(1, 2) 试图用位置实参传给 b，因此 TypeError。其余三种写法都合法。",
+      "error_tag": "边界错误",
+      "variant_group": "keyword_only_args"
+    },
+    {
+      "kp": "py.func.args_keyword",
+      "type": "single_choice",
+      "question": "以下代码的输出是什么？\n\ndef f(x, y, z):\n    print(x, y, z)\n\nf(1, z=3, y=2)",
+      "options": [
+        "1 2 3",
+        "1 3 2",
+        "抛出 TypeError",
+        "1 2 z"
+      ],
+      "answer": 0,
+      "explanation": "关键字实参之间可以任意顺序，绑定时按名字匹配：z=3 绑定到形参 z，y=2 绑定到形参 y。打印顺序按形参顺序为 1 2 3。",
+      "error_tag": "记忆缺失",
+      "variant_group": "keyword_args_order"
+    },
+    {
+      "kp": "py.func.args_keyword",
+      "type": "single_choice",
+      "question": "下列哪项关于位置实参与关键字实参混用的描述是正确的？",
+      "options": [
+        "位置实参必须出现在关键字实参之前",
+        "关键字实参必须出现在位置实参之前",
+        "两者顺序任意",
+        "两者不能混用"
+      ],
+      "answer": 0,
+      "explanation": "Python 规定调用时位置实参必须在关键字实参前，例如 f(1, b=2) 合法，而 f(a=1, 2) 语法非法。",
+      "error_tag": "概念混淆",
+      "variant_group": "keyword_args_order"
+    },
+    {
+      "kp": "py.func.args_keyword",
+      "type": "single_choice",
+      "question": "下列关于 * 号后形参的说法正确的是？",
+      "options": [
+        "* 之后的所有形参都只能通过关键字传递",
+        "* 之后的所有形参只能通过位置传递",
+        "* 仅用于声明可变位置参数",
+        "* 之后只能出现默认参数"
+      ],
+      "answer": 0,
+      "explanation": "在函数定义中单独的 * 用于分隔位置形参与仅限关键字形参，其后形参必须以关键字方式传入（如 f(a, *, b)）。",
+      "error_tag": "概念混淆",
+      "variant_group": "keyword_only_args"
+    },
+    {
+      "kp": "py.func.args_keyword",
+      "type": "single_choice",
+      "question": "以下代码会输出什么？\n\ndef f(a, b=[]):\n    b.append(a)\n    return b\n\nprint(f(1))\nprint(f(2))",
+      "options": [
+        "[1]\n[2]",
+        "[1]\n[1, 2]",
+        "[1, 2]\n[1, 2]",
+        "抛出 TypeError"
+      ],
+      "answer": 1,
+      "explanation": "默认参数 b=[] 只在函数定义时求值一次，因此两次调用共用同一个列表：第一次 append(1) 得 [1]，第二次 append(2) 得 [1, 2]。这是可变默认参数的经典陷阱。",
+      "error_tag": "边界错误",
+      "variant_group": "mutable_default"
+    },
+    {
+      "kp": "py.func.args_keyword",
+      "type": "single_choice",
+      "question": "要实现「必须通过关键字传递」的参数，下列哪种定义方式是正确的？",
+      "options": [
+        "def f(a, *, b): ...",
+        "def f(a, b, *, ): ...",
+        "def f(*, a, b): ... 中 b 只能是关键字",
+        "两者都是合法写法，但只有第一种 b 是仅限关键字"
+      ],
+      "answer": 0,
+      "explanation": "语法上 def f(a, *, b) 中的 b 是仅限关键字形参；而 def f(*, a, b) 一样合法，两者 b 都是仅限关键字形参。第一项的写法更直观地展示了 a 可位置可关键字。注意这题的答案只选 A，其他选项的表述并不准确（B 语法非法）。",
+      "error_tag": "概念混淆",
+      "variant_group": "keyword_only_args"
+    },
+    {
+      "kp": "py.func.args_keyword",
+      "type": "single_choice",
+      "question": "以下哪种情况下使用 **kwargs 能正常工作？\n\ndef f(**kwargs):\n    return kwargs",
+      "options": [
+        "f(1, 2, 3)",
+        "f(a=1, b=2)",
+        "f('x')",
+        "f(*[1, 2])"
+      ],
+      "answer": 1,
+      "explanation": "**kwargs 只能收集额外的关键字实参，因此必须用关键字方式传入。f(1,2,3) 与 f(*[...]) 都是位置实参，会引发 TypeError。",
+      "error_tag": "概念混淆",
+      "variant_group": "kwargs_basic"
+    }
+  ]
+}

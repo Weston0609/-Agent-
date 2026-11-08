@@ -1,0 +1,655 @@
+{
+  "id": "s8u5l3",
+  "title": "s8u5l3",
+  "kps": [
+    "arch.sys.data_platform",
+    "arch.sys.cost_control"
+  ],
+  "theory": "## arch.sys.data_platform\n\n# 数据平台架构入门：从零到工程级\n\n> **一句话直觉**：数据平台（Data Platform）就是让「数据从产生到变成决策」这条流水线可靠、可复用、可治理的一套系统化工程。\n\n---\n\n## 0. 为什么需要数据平台？\n\n一家公司如果只有几个人，用 Excel 和脚本就能分析数据。但当数据源变成几十个、每天产生上亿条记录、十几个团队都要用数据时，「各写各的脚本」就会崩溃：口径不一致、任务互相踩踏、出了错没人知道。\n\n**数据平台（Data Platform）** 就是把数据采集、存储、加工、服务、治理这几件事用统一的架构和工具承载起来，让数据像自来水一样稳定供应。\n\n---\n\n## 1. 数据平台的五层结构\n\n一个典型的数据平台可以拆成五层，从下往上：\n\n1. **数据源层（Data Source）**：业务数据库、日志、埋点、第三方 API。\n2. **采集/接入层（Ingestion）**：把数据搬进来，常见工具有 Flume、Kafka、Flink CDC、Airbyte。\n3. **存储层（Storage）**：原始数据放数据湖（Data Lake），结构化数据放数据仓库（Data Warehouse）。\n4. **计算/加工层（Processing）**：批处理（Batch）用 Spark/Hive，流处理（Stream）用 Flink/Kafka Streams。\n5. **服务与治理层（Serving & Governance）**：BI 报表、指标 API、元数据管理、数据质量、权限。\n\n每一层都通过**接口**解耦：上游只管产出，下游只管消费。这样任何一层替换实现，都不会把整条链路推翻。\n\n```python\n# 用一个最简单的方式理解“分层”——每层只暴露一个函数\nclass DataSource:\n    def read(self):\n        return [{\"id\": 1, \"amount\": 100}, {\"id\": 2, \"amount\": 200}]\n\nclass Ingestion:\n    def __init__(self, source):\n        self.source = source\n    def fetch(self):\n        # 模拟采集：加个采集时间戳\n        return [{**row, \"ingested_at\": \"2024-01-01\"} for row in self.source.read()]\n\nclass Storage:\n    def __init__(self):\n        self.data = []\n    def write(self, rows):\n        self.data.extend(rows)\n    def read_all(self):\n        return self.data\n\n# 串起来\nstore = Storage()\nIngestion(DataSource()).fetch() and store.write(Ingestion(DataSource()).fetch())\nprint(store.read_all())\n```\n\n---\n\n## 2. 数据建模：把「原始数据」变成「可理解的数据」\n\n数据平台最核心的认知是：**原始数据几乎没法直接用**。所以工程上流行一种分层建模方法，最常见的是 **Medallion 架构（奖牌架构）**：\n\n- **Bronze（青铜层）**：原样落地的原始数据，只加时间戳、来源信息，不清洗。\n- **Silver（白银层）**：清洗、去重、标准化后的明细数据。\n- **Gold（黄金层）**：面向业务的聚合表，比如「每日 GMV」「用户留存」。\n\n这套分层的价值是：出错时可以逐层回放，业务指标可以追溯到原始记录。\n\n```python\n# 用三个函数模拟 Medallion 三层\nraw = [\n    {\"user\": \"alice\", \"amount\": \"100\", \"ts\": \"2024-01-01\"},\n    {\"user\": \"bob\",   \"amount\": \"200\", \"ts\": \"2024-01-01\"},\n    {\"user\": \"alice\", \"amount\": \"-50\", \"ts\": \"2024-01-02\"},  # 脏数据\n]\n\n# Bronze: 原样保留\ndef bronze(rows):\n    return [dict(r) for r in rows]\n\n# Silver: 类型转换 + 过滤非法值\ndef silver(rows):\n    cleaned = []\n    for r in rows:\n        try:\n            amt = float(r[\"amount\"])\n        except ValueError:\n            continue\n        if amt <= 0:            # 金额必须为正\n            continue\n        cleaned.append({\"user\": r[\"user\"], \"amount\": amt, \"ts\": r[\"ts\"]})\n    return cleaned\n\n# Gold: 按用户聚合\ndef gold(rows):\n    total = {}\n    for r in rows:\n        total[r[\"user\"]] = total.get(r[\"user\"], 0) + r[\"amount\"]\n    return total\n\nprint(gold(silver(bronze(raw))))   # {'alice': 100.0, 'bob': 200.0}\n```\n\n---\n\n## 3. 数据管道：调度与依赖\n\n数据不会自己流动，需要**调度器（Scheduler）** 按依赖关系触发任务。工业界常用的有 Airflow、Dagster、Prefect。它们共同的关键概念是 **DAG（有向无环图，Directed Acyclic Graph）**：\n\n- 节点（Node）= 一个任务（Task），比如「跑 Silver 层」。\n- 边（Edge）= 依赖关系，比如 Silver 必须在 Bronze 之后。\n\n为什么强调「无环」？因为环会让任务互相等待，永远跑不完。\n\n```python\n# 一个极简 DAG 调度器：按依赖顺序执行任务\ntasks = {\n    \"bronze\": {\"deps\": [],          \"fn\": lambda: \"raw_data\"},\n    \"silver\": {\"deps\": [\"bronze\"],  \"fn\": lambda: \"clean_data\"},\n    \"gold\":   {\"deps\": [\"silver\"],  \"fn\": lambda: \"agg_data\"},\n}\n\ndone = {}\ndef run(name):\n    if name in done:\n        return done[name]\n    for dep in tasks[name][\"deps\"]:\n        run(dep)                # 先跑依赖\n    done[name] = tasks[name][\"fn\"]()\n    print(f\"{name} -> {done[name]}\")\n\nrun(\"gold\")\n# 输出顺序保证：bronze -> silver -> gold\n```\n\n---\n\n## 4. 数据治理：让平台「可持续」\n\n平台规模一大，治理（Governance）就成为生命线，核心有四件事：\n\n1. **元数据（Metadata）**：表是谁建的、字段什么意思、谁在用。\n2. **数据质量（Data Quality）**：非空、唯一、值域、及时性等规则。\n3. **血缘（Lineage）**：一张表错误了，能立刻查到它影响了哪些下游。\n4. **权限与合规（Access Control & Compliance）**：谁能看哪些列（比如手机号要脱敏）。\n\n这四件事用代码抽象，都可以看作「对数据的附加描述」。比如数据质量就是一组断言：\n\n```python\n# 用断言表达数据质量规则\nrows = [{\"id\": 1, \"amount\": 100}, {\"id\": 2, \"amount\": 200}]\n\nrules = [\n    (\"id 唯一\",   lambda r: len({x[\"id\"] for x in r}) == len(r)),\n    (\"amount>0\", lambda r: all(x[\"amount\"] > 0 for x in r)),\n]\n\nfor name, check in rules:\n    assert check(rows), f\"质量校验失败: {name}\"\nprint(\"全部质量规则通过\")\n```\n\n---\n\n## 5. 工程化视角：把上面四件事拼成一个平台\n\n真正落地时，架构师需要回答四个问题：\n\n- **存哪里**：数据湖（廉价对象存储）+ 数据仓库（高性能查询）双轨并行。\n- **怎么算**：批流一体，避免同逻辑维护两套代码。\n- **怎么管**：元数据、血缘、质量、权限统一接入一个 catalog（如 DataHub、OpenMetadata）。\n- **怎么服务**：对外只暴露稳定的指标 API 或数据集，不让业务直接读原始表。\n\n一个常见落地顺序：先做**采集 + 仓库分层**，再加**调度依赖**，最后补**治理**。不要一开始就追求全家桶。\n\n---\n\n## 动手练习\n\n**任务**：用纯 Python 实现一个「迷你数据平台」，跑通一条从原始数据到业务指标的完整链路。\n\n**要求**：\n1. 构造一个列表 `raw`，包含 5 条订单记录（字段：`order_id`、`user`、`amount`、`ts`），其中至少有 1 条 `amount` 为负（脏数据）。\n2. 实现三个函数：`bronze(raw)` 原样返回；`silver(rows)` 过滤掉 `amount<=0` 并转成 `float`；`gold(rows)` 按 `user` 汇总总金额。\n3. 写一个 `pipeline()` 函数，按 `bronze -> silver -> gold` 顺序执行并返回最终结果。\n4. 添加一条数据质量断言：最终每个用户的总额必须大于 0，否则抛 `AssertionError`。\n5. 打印最终指标，并把每一步的数据行数打印出来，方便观察分层过滤效果。\n\n**验收标准**：运行后能正确输出每个用户的总金额，且当把 `silver` 中的过滤条件去掉时，质量断言会失败——证明治理层确实在起作用。\n\n---\n\n> **一句话收尾**：数据平台不是某个工具，而是「采集、存储、加工、服务、治理」五件事通过接口分层协作的工程体系；掌握这套结构，你就能在任何公司把杂乱的数据流变成可信赖的数据资产。\n\n```python\n# mini_data_platform.py —— 可直接运行\n\nraw = [\n    {\"order_id\": 1, \"user\": \"alice\", \"amount\": \"100\", \"ts\": \"2024-01-01\"},\n    {\"order_id\": 2, \"user\": \"bob\",   \"amount\": \"200\", \"ts\": \"2024-01-01\"},\n    {\"order_id\": 3, \"user\": \"alice\", \"amount\": \"-50\", \"ts\": \"2024-01-02\"},\n    {\"order_id\": 4, \"user\": \"carol\", \"amount\": \"300\", \"ts\": \"2024-01-02\"},\n    {\"order_id\": 5, \"user\": \"bob\",   \"amount\": \"150\", \"ts\": \"2024-01-03\"},\n]\n\ndef bronze(rows):\n    \"\"\"Bronze: 原样落地，仅做浅拷贝避免污染源数据。\"\"\"\n    return [dict(r) for r in rows]\n\ndef silver(rows):\n    \"\"\"Silver: 类型转换 + 过滤非法金额。\"\"\"\n    cleaned = []\n    for r in rows:\n        try:\n            amt = float(r[\"amount\"])\n        except (TypeError, ValueError):\n            continue\n        if amt <= 0:\n            continue\n        cleaned.append({**r, \"amount\": amt})\n    return cleaned\n\ndef gold(rows):\n    \"\"\"Gold: 按用户聚合总消费金额。\"\"\"\n    total = {}\n    for r in rows:\n        total[r[\"user\"]] = total.get(r[\"user\"], 0.0) + r[\"amount\"]\n    return total\n\ndef pipeline():\n    b = bronze(raw)\n    s = silver(b)\n    g = gold(s)\n\n    # 数据质量断言：每个用户的总金额必须 > 0\n    assert all(v > 0 for v in g.values()), \"质量校验失败：存在非正的总金额\"\n\n    print(f\"bronze rows = {len(b)}\")\n    print(f\"silver rows = {len(s)}\")\n    print(f\"gold        = {g}\")\n    return g\n\nif __name__ == \"__main__\":\n    pipeline()\n```\n\n## arch.sys.cost_control\n\n# 成本控制（Cost Control）：架构系统的第一道经济防线\n\n> 一句话直觉：**当系统能自动按预算“刹车”，你才不会因为一次流量暴涨或代码死循环而收到一张天价账单。**\n\n---\n\n## 0. 为什么需要“成本控制”作为架构起点\n\n在云原生和 AI 服务时代，计算资源是按量付费的。一个没有成本控制（Cost Control）的系统，就像一辆没有刹车的跑车：跑得越快，出事越惨。\n\n成本控制不是“省钱”那么简单，它是**系统稳定性与业务可持续性的基础**。它回答三个问题：\n\n1. 我最多愿意花多少钱？（预算 Budget）\n2. 当前花了多少？（度量 Metrics）\n3. 超了怎么办？（策略 Policy）\n\n本课从零开始，带你建立一套可运行的成本控制思维和代码骨架。\n\n---\n\n## 1. 预算（Budget）：先画一条不可逾越的红线\n\n预算就是你在一个周期内（比如一天、一个月）允许消耗的最大资源量或金额。\n\n在代码中，我们通常把它表示为一个简单的数据结构：\n\n```python\nfrom dataclasses import dataclass\nfrom datetime import date\n\n@dataclass\nclass Budget:\n    limit: float          # 总预算，单位：元\n    period: str           # 周期：'daily' 或 'monthly'\n    used: float = 0.0     # 已使用金额\n\n    def remaining(self) -> float:\n        \"\"\"返回剩余可用预算。\"\"\"\n        return max(0.0, self.limit - self.used)\n\n# 示例：每天最多花 100 元\nbudget = Budget(limit=100.0, period='daily')\nprint(budget.remaining())  # 100.0\n```\n\n**关键结论**：预算必须是显式的、可查询的、不可为负的。\n\n---\n\n## 2. 度量（Metrics）：没有数据就没有控制\n\n你无法控制你无法测量的东西。成本控制的核心是**实时记录每一次资源消耗**。\n\n最简单的做法：每次调用外部 API 或消耗计算资源时，记录一笔“成本事件”。\n\n```python\nfrom dataclasses import dataclass, field\nfrom typing import List\n\n@dataclass\nclass CostEvent:\n    name: str        # 资源名称，如 'gpt-4-call'\n    amount: float    # 本次花费\n    timestamp: float # Unix 时间戳\n\nclass CostTracker:\n    def __init__(self):\n        self.events: List[CostEvent] = []\n\n    def record(self, name: str, amount: float, ts: float) -> None:\n        \"\"\"记录一笔成本事件。\"\"\"\n        self.events.append(CostEvent(name, amount, ts))\n\n    def total(self) -> float:\n        \"\"\"返回所有事件的总花费。\"\"\"\n        return sum(e.amount for e in self.events)\n\n# 示例\ntracker = CostTracker()\ntracker.record('gpt-4-call', 0.5, 1700000000.0)\ntracker.record('gpt-4-call', 0.3, 1700000060.0)\nprint(tracker.total())  # 0.8\n```\n\n**关键结论**：成本事件是原子记录，必须包含名称、金额和时间。\n\n---\n\n## 3. 策略（Policy）：超预算时自动“刹车”\n\n有了预算和度量，下一步是定义**当花费接近或超过预算时系统的行为**。\n\n常见策略：\n\n- **拒绝（Deny）**：直接禁止新的消耗。\n- **降级（Degrade）**：切换到更便宜的模型或资源。\n- **告警（Alert）**：通知负责人，但不阻止。\n\n下面是一个可运行的策略执行器：\n\n```python\nclass CostController:\n    def __init__(self, budget: Budget, tracker: CostTracker):\n        self.budget = budget\n        self.tracker = tracker\n\n    def can_spend(self, amount: float) -> bool:\n        \"\"\"判断当前是否允许再花费 amount。\"\"\"\n        return self.tracker.total() + amount <= self.budget.limit\n\n    def spend(self, name: str, amount: float, ts: float) -> bool:\n        \"\"\"尝试花费；如果超预算则拒绝并返回 False。\"\"\"\n        if not self.can_spend(amount):\n            print(f'[拒绝] {name} 花费 {amount} 超预算')\n            return False\n        self.tracker.record(name, amount, ts)\n        return True\n\n# 示例\nbudget = Budget(limit=1.0, period='daily')\ntracker = CostTracker()\ncontroller = CostController(budget, tracker)\n\ncontroller.spend('gpt-4-call', 0.6, 1700000000.0)  # True\ncontroller.spend('gpt-4-call', 0.5, 1700000060.0)  # False，超预算\n```\n\n**关键结论**：策略必须是可编程的，并且默认安全（fail-safe）。\n\n---\n\n## 4. 工程级形态：把成本控制接入真实调用链\n\n在真实系统中，成本控制应该作为一个**横切关注点（cross-cutting concern）**，以装饰器或中间件形式包裹昂贵的操作。\n\n```python\nimport functools\nimport time\nfrom typing import Callable\n\ndef cost_controlled(controller: CostController, unit_cost: float):\n    \"\"\"装饰器：每次调用前检查预算，调用后记录成本。\"\"\"\n    def decorator(func: Callable):\n        @functools.wraps(func)\n        def wrapper(*args, **kwargs):\n            if not controller.can_spend(unit_cost):\n                raise RuntimeError('预算不足，调用被拒绝')\n            result = func(*args, **kwargs)\n            controller.spend(func.__name__, unit_cost, time.time())\n            return result\n        return wrapper\n    return decorator\n\n# 示例\ncontroller = CostController(Budget(limit=2.0, period='daily'), CostTracker())\n\n@cost_controlled(controller, unit_cost=0.8)\ndef call_llm(prompt: str) -> str:\n    return f'回答：{prompt}'\n\nprint(call_llm('你好'))  # 正常\nprint(call_llm('再见'))  # 正常\n# 第三次将超预算\n# print(call_llm('第三次'))  # RuntimeError\n```\n\n**关键结论**：成本控制应透明地嵌入调用链，而不是散落在业务代码中。\n\n---\n\n## 5. 可观测性与闭环：让成本控制自己说话\n\n最后，成本控制系统本身也需要被监控。你需要暴露指标：\n\n- 当前周期已花费金额\n- 剩余预算\n- 拒绝次数\n\n```python\nclass ObservableController(CostController):\n    def __init__(self, *args, **kwargs):\n        super().__init__(*args, **kwargs)\n        self.denied_count = 0\n\n    def spend(self, name: str, amount: float, ts: float) -> bool:\n        ok = super().spend(name, amount, ts)\n        if not ok:\n            self.denied_count += 1\n        return ok\n\n    def report(self) -> dict:\n        return {\n            'used': self.tracker.total(),\n            'limit': self.budget.limit,\n            'remaining': self.budget.remaining(),\n            'denied': self.denied_count,\n        }\n\n# 示例\noc = ObservableController(Budget(limit=1.0, period='daily'), CostTracker())\noc.spend('a', 0.6, time.time())\noc.spend('b', 0.6, time.time())\nprint(oc.report())\n# {'used': 0.6, 'limit': 1.0, 'remaining': 0.4, 'denied': 1}\n```\n\n**关键结论**：可观测性让成本控制从“被动封禁”变为“主动运营”。\n\n---\n\n## 动手练习\n\n**任务**：实现一个带“每日重置”功能的成本控制器。\n\n要求：\n\n1. 使用 `datetime.date` 记录当前日期。\n2. 每次 `spend` 前检查是否跨天；如果跨天，自动将已用金额清零。\n3. 写一个简单测试：模拟两天各花费 80 元，每日预算 100 元，第二天应仍可花费。\n\n提示：可以在 `Budget` 中增加 `last_reset_date` 字段，并在 `CostController` 中增加 `_maybe_reset()` 方法。\n\n完成后，你应该能理解：**成本控制不是一次性的检查，而是一个持续运行的状态机。**\n\n```python\nimport functools\nimport time\nfrom dataclasses import dataclass, field\nfrom typing import List, Callable\n\n@dataclass\nclass Budget:\n    limit: float\n    period: str\n    used: float = 0.0\n\n    def remaining(self) -> float:\n        return max(0.0, self.limit - self.used)\n\n@dataclass\nclass CostEvent:\n    name: str\n    amount: float\n    timestamp: float\n\nclass CostTracker:\n    def __init__(self):\n        self.events: List[CostEvent] = []\n\n    def record(self, name: str, amount: float, ts: float) -> None:\n        self.events.append(CostEvent(name, amount, ts))\n\n    def total(self) -> float:\n        return sum(e.amount for e in self.events)\n\nclass CostController:\n    def __init__(self, budget: Budget, tracker: CostTracker):\n        self.budget = budget\n        self.tracker = tracker\n        self.denied_count = 0\n\n    def can_spend(self, amount: float) -> bool:\n        return self.tracker.total() + amount <= self.budget.limit\n\n    def spend(self, name: str, amount: float, ts: float) -> bool:\n        if not self.can_spend(amount):\n            self.denied_count += 1\n            print(f'[拒绝] {name} 花费 {amount} 超预算')\n            return False\n        self.tracker.record(name, amount, ts)\n        return True\n\n    def report(self) -> dict:\n        return {\n            'used': self.tracker.total(),\n            'limit': self.budget.limit,\n            'remaining': self.budget.remaining(),\n            'denied': self.denied_count,\n        }\n\ndef cost_controlled(controller: CostController, unit_cost: float):\n    def decorator(func: Callable):\n        @functools.wraps(func)\n        def wrapper(*args, **kwargs):\n            if not controller.can_spend(unit_cost):\n                raise RuntimeError('预算不足，调用被拒绝')\n            result = func(*args, **kwargs)\n            controller.spend(func.__name__, unit_cost, time.time())\n            return result\n        return wrapper\n    return decorator\n\nif __name__ == '__main__':\n    budget = Budget(limit=2.0, period='daily')\n    tracker = CostTracker()\n    controller = CostController(budget, tracker)\n\n    @cost_controlled(controller, unit_cost=0.8)\n    def call_llm(prompt: str) -> str:\n        return f'回答：{prompt}'\n\n    print(call_llm('你好'))\n    print(call_llm('再见'))\n    try:\n        print(call_llm('第三次'))\n    except RuntimeError as e:\n        print(f'捕获异常：{e}')\n\n    print(controller.report())\n```\n",
+  "quiz": [
+    {
+      "kp": "arch.sys.data_platform",
+      "type": "single_choice",
+      "question": "在设计数据平台时，某团队把原始日志直接写入分析型数据库供 BI 查询，结果写入吞吐骤降、查询也被拖慢。最合理的改进方向是？",
+      "options": [
+        "把分析型数据库换成更强的硬件即可",
+        "引入分层存储与职责分离：原始数据先落到可高吞吐写入的存储，再按需加工进入服务层",
+        "让 BI 查询改为直连业务库",
+        "把日志改成按天全量覆盖写入"
+      ],
+      "answer": 1,
+      "explanation": "数据平台的典型分层思路是采集/存储、加工、服务各司其职；把高吞吐写入与分析查询压在同一个系统上必然冲突。",
+      "error_tag": "架构职责混淆",
+      "variant_group": "data_platform_layering"
+    },
+    {
+      "kp": "arch.sys.data_platform",
+      "type": "single_choice",
+      "question": "某数据平台中，多个下游任务都直接从业务库拉取明细数据做加工。随着下游增多，业务库压力持续上升。最合适的架构调整是？",
+      "options": [
+        "给业务库加只读从库并让下游继续直连",
+        "搭建统一的数据接入层/ODS 层，下游统一从该层获取数据",
+        "限制下游任务只能在夜间运行",
+        "要求每个下游自行缓存数据"
+      ],
+      "answer": 1,
+      "explanation": "统一接入层可以解耦源系统与下游消费，避免点对点抽取带来的重复压力和口径不一致；只读从库仍是点对点。",
+      "error_tag": "耦合与重复抽取",
+      "variant_group": "data_platform_ingestion"
+    },
+    {
+      "kp": "arch.sys.data_platform",
+      "type": "single_choice",
+      "question": "数据平台中，业务方希望快速自助取数，但直接开放底层明细表导致大量慢查询。较合理的平台化方案是？",
+      "options": [
+        "完全禁止自助取数",
+        "提供面向主题的汇总层/数据集市，自助查询走该层",
+        "让业务方自己写优化后的 SQL",
+        "把所有明细表都加上缓存"
+      ],
+      "answer": 1,
+      "explanation": "面向主题的汇总层能在满足自助需求的同时控制查询代价，是数据平台常见的服务层设计。",
+      "error_tag": "服务层设计缺失",
+      "variant_group": "data_platform_serving"
+    },
+    {
+      "kp": "arch.sys.data_platform",
+      "type": "single_choice",
+      "question": "在数据平台中，某任务需要读取另一任务产出的分区数据。以下哪种方式最能保证数据就绪？",
+      "options": [
+        "固定延迟 30 分钟后开始读取",
+        "通过调度系统声明依赖，等待上游产出信号后再执行",
+        "让两个任务同时启动",
+        "让下游任务循环重试直到成功"
+      ],
+      "answer": 1,
+      "explanation": "基于依赖与就绪信号的调度比固定延迟或盲目重试更可靠，是平台调度的核心机制。",
+      "error_tag": "依赖就绪机制不当",
+      "variant_group": "data_platform_orchestration"
+    },
+    {
+      "kp": "arch.sys.data_platform",
+      "type": "single_choice",
+      "question": "数据平台引入元数据管理后，最直接带来的能力是？",
+      "options": [
+        "自动提升查询性能",
+        "可以查询数据血缘、影响范围与资产目录",
+        "自动修复数据错误",
+        "自动生成所有报表"
+      ],
+      "answer": 1,
+      "explanation": "元数据管理的核心价值在于血缘、影响分析与资产发现，性能优化和错误修复属于其他机制。",
+      "error_tag": "元数据价值误解",
+      "variant_group": "data_platform_metadata"
+    },
+    {
+      "kp": "arch.sys.data_platform",
+      "type": "single_choice",
+      "question": "某数据平台的数据质量规则只在出问题后人工补录，导致下游频繁返工。平台化改进方向是？",
+      "options": [
+        "把质量规则写进文档即可",
+        "在加工链路中内嵌质量校验与阻断/告警机制",
+        "让下游自行容错",
+        "只在月末做一次质量检查"
+      ],
+      "answer": 1,
+      "explanation": "质量校验应内嵌到链路中并具备阻断或告警能力，才能前置发现问题；文档和事后检查不足以防止返工。",
+      "error_tag": "质量内建不足",
+      "variant_group": "data_platform_quality"
+    },
+    {
+      "kp": "arch.sys.data_platform",
+      "type": "single_choice",
+      "question": "数据平台中，多个团队各自维护一套相似的维度表，导致口径和编码不一致。较合理的治理方式是？",
+      "options": [
+        "允许各团队继续维护，只要报表能出数",
+        "建立统一的公共维度层并由平台统一维护发布",
+        "把维度表内嵌到每个事实表中",
+        "禁止使用维度表"
+      ],
+      "answer": 1,
+      "explanation": "公共维度层是保证一致性维度与编码统一的关键设计；各团队分治会持续产生口径分叉。",
+      "error_tag": "维度未统一治理",
+      "variant_group": "data_platform_modeling"
+    },
+    {
+      "kp": "arch.sys.data_platform",
+      "type": "single_choice",
+      "question": "某数据平台需要同时支持交互式查询与大批量离线计算。以下哪种架构考虑最合理？",
+      "options": [
+        "所有负载都跑在同一套集群同一队列上",
+        "按负载特征划分资源池/队列，做资源隔离与优先级管理",
+        "只保留离线计算，取消交互式查询",
+        "只保留交互式查询，取消离线计算"
+      ],
+      "answer": 1,
+      "explanation": "不同负载的资源特征不同，平台需要通过资源池与优先级做隔离，避免相互干扰。",
+      "error_tag": "资源隔离缺失",
+      "variant_group": "data_platform_resource"
+    },
+    {
+      "kp": "arch.sys.data_platform",
+      "type": "single_choice",
+      "question": "数据平台中，某张核心表被大量下游依赖，修改其结构前最应该先做的是？",
+      "options": [
+        "直接修改并通知下游",
+        "通过血缘与影响分析评估影响范围，再按兼容方式发布变更",
+        "停止所有下游任务",
+        "复制一张新表但不通知任何人"
+      ],
+      "answer": 1,
+      "explanation": "在变更前进行影响分析并以兼容方式发布，是平台化变更管理的核心；直接修改或静默新建都会带来隐患。",
+      "error_tag": "变更影响分析缺失",
+      "variant_group": "data_platform_lineage"
+    },
+    {
+      "kp": "arch.sys.data_platform",
+      "type": "single_choice",
+      "question": "某数据平台的加工任务每天全量重算所有历史数据，随着数据量增长耗时越来越长。更合理的架构方向是？",
+      "options": [
+        "继续全量重算，只是把任务提前启动",
+        "改为按分区增量加工，只处理变化部分",
+        "把全量结果缓存起来避免重复计算",
+        "减少历史数据保留量以缩短时间"
+      ],
+      "answer": 1,
+      "explanation": "按分区增量加工是应对数据增长的常见架构手段；缓存和提前启动不能从根本上解决计算量问题。",
+      "error_tag": "全量重算未优化",
+      "variant_group": "data_platform_incremental"
+    },
+    {
+      "kp": "arch.sys.data_platform",
+      "type": "single_choice",
+      "question": "数据平台中，业务方提出“想看某指标的实时值”。以下哪种回应最符合平台架构职责划分？",
+      "options": [
+        "让业务方直接连生产库查询",
+        "评估时效需求，若确需实时则通过实时链路产出，否则用准实时/批量链路",
+        "统一告诉业务方只能 T+1",
+        "让业务方自己写脚本抓取"
+      ],
+      "answer": 1,
+      "explanation": "平台应基于需求评估选择合适时效的链路，而非一刀切拒绝或让业务直连生产系统。",
+      "error_tag": "时效需求评估缺失",
+      "variant_group": "data_platform_latency"
+    },
+    {
+      "kp": "arch.sys.data_platform",
+      "type": "single_choice",
+      "question": "某数据平台把数据加工、存储、服务等能力都封装为可复用的服务或组件。这样做最主要的收益是？",
+      "options": [
+        "可以不再需要数据治理",
+        "新业务接入时可复用已有能力，降低重复建设与维护成本",
+        "可以完全避免数据质量问题",
+        "可以不再需要调度系统"
+      ],
+      "answer": 1,
+      "explanation": "平台化的核心收益是能力复用与规模化效率；它不能免除治理和调度，反而更依赖这些基础能力。",
+      "error_tag": "平台化收益误解",
+      "variant_group": "data_platform_capability"
+    },
+    {
+      "kp": "arch.sys.data_platform",
+      "type": "single_choice",
+      "question": "数据平台中同一指标在报表 A 和报表 B 上数值不一致。从平台架构角度看，最根本的改进措施是？",
+      "options": [
+        "要求报表使用者自行核对",
+        "建立统一的指标定义与公共数据模型，各报表基于同一口径产出",
+        "把两个报表合并成一个报表",
+        "让两张报表都改用手工填报"
+      ],
+      "answer": 1,
+      "explanation": "口径不一致通常源于缺乏统一的指标与模型定义，架构上应沉淀公共语义层/指标层，而非在展示端修补。",
+      "error_tag": "指标口径不统一",
+      "variant_group": "data_platform_semantics"
+    },
+    {
+      "kp": "arch.sys.data_platform",
+      "type": "single_choice",
+      "question": "某团队的数据平台每天凌晨批量加工，业务方希望上午 9 点前看到当日数据，但加工任务经常延迟到 10 点。以下最符合平台化思路的改进是？",
+      "options": [
+        "让业务方接受 10 点后再看",
+        "引入流式/增量加工链路，缩短数据从产生到可用的时延",
+        "把加工任务改成手工触发",
+        "只在有需要时才启动加工"
+      ],
+      "answer": 1,
+      "explanation": "时效性问题本质是链路架构问题，采用增量或流式处理可以显著降低端到端延迟；其余选项只是回避或转移问题。",
+      "error_tag": "时效性架构不足",
+      "variant_group": "data_platform_latency"
+    },
+    {
+      "kp": "arch.sys.data_platform",
+      "type": "single_choice",
+      "question": "数据平台中，某张宽表由十几个上游任务共同写入，经常出现数据被覆盖、字段缺失的问题。架构上最合理的做法是？",
+      "options": [
+        "增加写入重试次数",
+        "明确该表的单一数据来源与加工链路，按分层原则组织依赖关系",
+        "给该表加更多索引",
+        "允许多个任务并行写入以提高效率"
+      ],
+      "answer": 1,
+      "explanation": "多写同一张表会带来竞争与不可追溯，平台化要求明确数据血缘与单一加工路径，按分层组织依赖。",
+      "error_tag": "血缘与依赖混乱",
+      "variant_group": "data_platform_lineage"
+    },
+    {
+      "kp": "arch.sys.data_platform",
+      "type": "single_choice",
+      "question": "某数据平台存储成本持续上升，其中大部分是很少被查询的历史明细数据。最符合平台治理思路的做法是？",
+      "options": [
+        "直接删除所有历史数据",
+        "根据访问频率与保留策略做冷热分层，把低频数据迁到低成本存储",
+        "继续扩容以应对增长",
+        "禁止下游查询历史数据"
+      ],
+      "answer": 1,
+      "explanation": "冷热分层与生命周期管理是数据平台成本治理的标准手段；直接删除或禁止查询会破坏数据可用性。",
+      "error_tag": "存储成本治理缺失",
+      "variant_group": "data_platform_cost"
+    },
+    {
+      "kp": "arch.sys.data_platform",
+      "type": "single_choice",
+      "question": "数据平台需要对上游源表结构变更（如新增字段、修改类型）保持稳定。以下哪种做法最有利于平台稳定？",
+      "options": [
+        "让下游直接依赖源表结构，变更时随时调整",
+        "在接入层做 schema 管理与契约校验，变更按约定流程发布",
+        "禁止上游做任何结构变更",
+        "每次变更后重跑全量任务"
+      ],
+      "answer": 1,
+      "explanation": "平台化强调契约与 schema 管理，使变更可控、可追溯；直接依赖源表结构会让下游脆弱。",
+      "error_tag": "schema 变更管理缺失",
+      "variant_group": "data_platform_schema"
+    },
+    {
+      "kp": "arch.sys.data_platform",
+      "type": "single_choice",
+      "question": "某数据平台需要支持批处理和实时两类消费场景，团队打算为两类场景各建一套独立存储与加工链路。主要风险是？",
+      "options": [
+        "硬件成本一定更高",
+        "同一份数据两套口径，容易产生不一致与重复建设",
+        "实时链路一定比批处理慢",
+        "批处理无法处理历史数据"
+      ],
+      "answer": 1,
+      "explanation": "两套独立链路容易造成数据口径分叉与资源重复；平台化通常追求批流统一或共享底层存储与语义。",
+      "error_tag": "批流重复建设",
+      "variant_group": "data_platform_batch_stream"
+    },
+    {
+      "kp": "arch.sys.data_platform",
+      "type": "single_choice",
+      "question": "数据平台中下游任务经常因为上游任务失败而全部失败，且难以定位原因。最有效的平台化改进是？",
+      "options": [
+        "让所有任务合并成一个超大任务",
+        "建立任务依赖调度与数据质量校验，失败可定位、可重跑",
+        "取消所有任务依赖，各自独立执行",
+        "只在失败时人工通知"
+      ],
+      "answer": 1,
+      "explanation": "调度依赖与质量校验是平台可靠性的基础，能实现失败隔离与可恢复；合并任务或取消依赖都会加剧问题。",
+      "error_tag": "调度与质量保障缺失",
+      "variant_group": "data_platform_orchestration"
+    },
+    {
+      "kp": "arch.sys.data_platform",
+      "type": "single_choice",
+      "question": "某数据平台把加工逻辑全部写在报表 SQL 中，导致同一逻辑在多处重复。架构上更合理的做法是？",
+      "options": [
+        "把 SQL 复制到更多报表中以保持一致",
+        "将公共加工逻辑下沉到数据模型/中间层，报表只做展示",
+        "禁止使用 SQL",
+        "让每个报表各自维护自己的逻辑"
+      ],
+      "answer": 1,
+      "explanation": "公共逻辑下沉到模型层可复用、可治理，报表层只负责展示；复制逻辑会放大维护成本与不一致风险。",
+      "error_tag": "逻辑重复未下沉",
+      "variant_group": "data_platform_modeling"
+    },
+    {
+      "kp": "arch.sys.cost_control",
+      "type": "single_choice",
+      "question": "在系统架构设计中，“成本控制”最常见的核心目标是下列哪一项？",
+      "options": [
+        "在满足性能与可靠性要求的前提下，尽量降低资源与运维开销",
+        "把所有组件都改成最便宜的硬件",
+        "完全消除系统的所有开销",
+        "只关注一次性的采购成本"
+      ],
+      "answer": 0,
+      "explanation": "成本控制不是一味压低价格，而是在满足业务指标（性能、可靠性、可用性等）的约束下优化总体拥有成本，包括资源、运维、人力等。",
+      "error_tag": "概念混淆",
+      "variant_group": "cost_control_goal"
+    },
+    {
+      "kp": "arch.sys.cost_control",
+      "type": "single_choice",
+      "question": "下列哪项最符合“总体拥有成本（TCO）”的含义？",
+      "options": [
+        "仅指服务器采购费用",
+        "仅指云服务的月度账单",
+        "包含采购、运维、能耗、人力、迁移与退出等全生命周期成本",
+        "仅指软件许可费用"
+      ],
+      "answer": 2,
+      "explanation": "TCO 覆盖系统全生命周期内的直接与间接成本，采购价只是其中一部分，运维、人力、迁移、退出等同样重要。",
+      "error_tag": "概念混淆",
+      "variant_group": "tco_definition"
+    },
+    {
+      "kp": "arch.sys.cost_control",
+      "type": "single_choice",
+      "question": "关于“超卖/过度承诺”资源在成本控制中的理解，正确的是？",
+      "options": [
+        "超卖总能省钱且没有风险",
+        "适度超卖可提高利用率降本，但需评估隔离与争抢风险",
+        "超卖与成本无关",
+        "超卖一定会导致系统崩溃"
+      ],
+      "answer": 1,
+      "explanation": "在保证隔离与可接受性能的前提下，适度超卖能提升资源利用率降低成本，但过度超卖会带来性能争抢与稳定性风险。",
+      "error_tag": "边界错误",
+      "variant_group": "oversubscription"
+    },
+    {
+      "kp": "arch.sys.cost_control",
+      "type": "multi_choice",
+      "question": "下列哪些做法有助于降低系统运行成本？（多选）",
+      "options": [
+        "根据负载弹性伸缩资源",
+        "对冷数据进行分层存储或归档",
+        "持续监控并清理闲置资源",
+        "对所有服务都按峰值常驻高配资源",
+        "为稳定基线负载购买预留/折扣资源"
+      ],
+      "answer": [
+        0,
+        1,
+        2,
+        4
+      ],
+      "explanation": "弹性伸缩、分层存储、清理闲置、预留折扣都是常见降本手段；按峰值常驻高配会加剧浪费。",
+      "error_tag": "记忆缺失",
+      "variant_group": "cost_reduction_methods"
+    },
+    {
+      "kp": "arch.sys.cost_control",
+      "type": "multi_choice",
+      "question": "在设计阶段进行成本控制时，通常需要考虑哪些因素？（多选）",
+      "options": [
+        "业务负载特征（峰值/波动/增长趋势）",
+        "性能与可靠性要求",
+        "资源定价模型（按量、预留、竞价等）",
+        "运维人力与自动化程度",
+        "架构组件的许可证或托管费用"
+      ],
+      "answer": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "explanation": "成本控制是架构级权衡，需综合负载特征、质量要求、定价模型、运维成本与组件费用等多方面因素。",
+      "error_tag": "概念混淆",
+      "variant_group": "design_cost_factors"
+    },
+    {
+      "kp": "arch.sys.cost_control",
+      "type": "multi_choice",
+      "question": "下列哪些现象可能是“成本失控”的信号？（多选）",
+      "options": [
+        "资源利用率长期很低",
+        "账单持续上涨但业务量未同步增长",
+        "存在大量无人认领的闲置实例或存储",
+        "所有服务的容量都精确匹配当前负载并有监控告警"
+      ],
+      "answer": [
+        0,
+        1,
+        2
+      ],
+      "explanation": "低利用率、账单与业务脱节、闲置资源都是成本失控信号；精确匹配并有监控属于良好实践。",
+      "error_tag": "场景误判",
+      "variant_group": "cost_anomaly_signals"
+    },
+    {
+      "kp": "arch.sys.cost_control",
+      "type": "multi_choice",
+      "question": "关于“成本”与“可靠性”的关系，下列说法正确的有？（多选）",
+      "options": [
+        "提高可靠性通常需要更多冗余资源，可能增加成本",
+        "通过降本可以无限降低可靠性而不影响业务",
+        "需要根据业务等级设定合理的可靠性目标以平衡成本",
+        "可靠性目标和成本目标之间不存在任何权衡"
+      ],
+      "answer": [
+        0,
+        2
+      ],
+      "explanation": "冗余与容错通常增加成本，因此要按业务等级设定 SLO，在可靠性与成本间做合理权衡；二者确实存在权衡关系。",
+      "error_tag": "概念混淆",
+      "variant_group": "reliability_cost_tradeoff"
+    },
+    {
+      "kp": "arch.sys.cost_control",
+      "type": "fill_blank",
+      "question": "系统全生命周期内包括采购、运维、能耗、人力等在内的总成本，常缩写为 ______。",
+      "options": [],
+      "answer": [
+        "TCO",
+        "tco",
+        "总体拥有成本",
+        "总拥有成本"
+      ],
+      "explanation": "TCO（Total Cost of Ownership，总体拥有成本）强调不只看采购价，而是覆盖全生命周期的综合成本。",
+      "error_tag": "记忆缺失",
+      "variant_group": "tco_definition"
+    },
+    {
+      "kp": "arch.sys.cost_control",
+      "type": "fill_blank",
+      "question": "根据负载变化自动增减计算资源的机制称为 ______。",
+      "options": [],
+      "answer": [
+        "弹性伸缩",
+        "自动伸缩",
+        "autoscaling",
+        "auto scaling",
+        "弹性扩缩容"
+      ],
+      "explanation": "弹性伸缩（autoscaling）让资源随负载动态调整，低谷时释放资源，是控制按量付费成本的关键机制。",
+      "error_tag": "记忆缺失",
+      "variant_group": "elasticity_cost"
+    },
+    {
+      "kp": "arch.sys.cost_control",
+      "type": "code_reading",
+      "question": "阅读下列伪代码场景并回答问题：\n\n```\n每小时执行一次：\n    for 实例 in 所有运行中的实例:\n        if 实例.CPU利用率 < 5% 且 持续时长 > 24小时:\n            标记为疑似闲置\n\n人工审核后，将确认闲置的实例关闭并释放。\n```\n\n这段逻辑主要服务于什么目的？",
+      "options": [],
+      "answer": "识别并清理长期低利用率的闲置实例，减少不必要的资源开销，从而实现成本控制。",
+      "explanation": "脚本定期检测长时间低负载的实例，人工确认后释放，是典型的闲置资源治理，直接降低持续计费带来的浪费。",
+      "error_tag": "概念混淆",
+      "variant_group": "idle_resource_cleanup"
+    },
+    {
+      "kp": "arch.sys.cost_control",
+      "type": "code_reading",
+      "question": "阅读下列容量决策伪代码并回答问题：\n\n```\n基线负载 = 过去30天每小时的负载最小值\n峰值负载 = 过去30天每小时的负载最大值\n\n方案A：全部按 峰值负载 配置常驻资源\n方案B：按 基线负载 购买预留资源，峰值超出部分使用按量弹性资源\n```\n\n从成本控制角度，为什么方案B通常更优？",
+      "options": [],
+      "answer": "方案B让稳定的基线负载享受预留折扣，波动部分才用按量资源，避免为仅出现在峰值时段的容量长期付费，从而在满足峰值需求的同时降低总成本。",
+      "explanation": "峰值常驻会让大部分时间资源闲置；基线预留+峰值弹性能兼顾折扣与弹性，是常见的成本优化组合策略。",
+      "error_tag": "边界错误",
+      "variant_group": "capacity_planning"
+    },
+    {
+      "kp": "arch.sys.cost_control",
+      "type": "scenario",
+      "question": "某电商系统的订单历史数据持续增长，其中超过 90% 的记录在写入后一年内几乎不再被访问，但存储账单不断攀升。团队希望在不影响近期订单查询性能的前提下控制存储成本。请给出你的方案与理由。",
+      "options": [],
+      "answer": [
+        "分层存储",
+        "冷热分离",
+        "归档",
+        "访问频率",
+        "低成本",
+        "性能"
+      ],
+      "explanation": "应按访问频率对数据分层，热数据保留在高性能存储，冷/历史数据转入低成本介质或归档；这样既保证近期查询性能，又显著降低长期存储成本。",
+      "error_tag": "场景误判",
+      "variant_group": "storage_tiering",
+      "required_keywords": [
+        "数据分层",
+        "热数据",
+        "冷数据",
+        "低成本存储",
+        "归档"
+      ]
+    },
+    {
+      "kp": "arch.sys.cost_control",
+      "type": "single_choice",
+      "question": "某团队把服务从自建机房迁移到按量付费的云资源后，发现夜间流量低谷时费用反而没有明显下降。最可能的原因是？",
+      "options": [
+        "云厂商偷偷涨价",
+        "仍保留了按峰值配置的常驻资源，未做弹性伸缩",
+        "夜间网络更贵",
+        "迁移后代码变慢了"
+      ],
+      "answer": 1,
+      "explanation": "按量付费只有在资源能随负载伸缩时才能体现成本优势；若仍按峰值常驻，低谷期资源闲置，费用不会下降。",
+      "error_tag": "场景误判",
+      "variant_group": "elasticity_cost"
+    },
+    {
+      "kp": "arch.sys.cost_control",
+      "type": "scenario",
+      "question": "某团队发现近期云账单比上月上涨了 40%，但业务流量基本持平。作为架构师，你会如何排查并控制这次成本异常？",
+      "options": [],
+      "answer": [
+        "成本监控",
+        "账单分析",
+        "闲置资源",
+        "异常开销",
+        "标签",
+        "优化"
+      ],
+      "explanation": "应借助成本监控与账单分析，按服务/标签拆分费用，定位异常开销来源（如闲置资源、配置变更、未缩容、数据增长等），再针对根因优化并验证效果，形成闭环。",
+      "error_tag": "记忆缺失",
+      "variant_group": "cost_observability",
+      "required_keywords": [
+        "成本监控",
+        "账单分析",
+        "按标签拆分",
+        "异常开销定位",
+        "根因优化"
+      ]
+    },
+    {
+      "kp": "arch.sys.cost_control",
+      "type": "single_choice",
+      "question": "关于缓存对成本控制的作用，下列说法正确的是？",
+      "options": [
+        "缓存只会增加成本，没有收益",
+        "缓存能降低后端负载，从而可能减少所需计算与数据库资源",
+        "缓存一定能降低所有成本",
+        "缓存与成本控制无关"
+      ],
+      "answer": 1,
+      "explanation": "合理的缓存可以显著降低对后端计算和数据库的压力，进而减少资源规模与费用，但缓存本身也有内存/一致性成本，需权衡。",
+      "error_tag": "概念混淆",
+      "variant_group": "cache_cost_tradeoff"
+    },
+    {
+      "kp": "arch.sys.cost_control",
+      "type": "single_choice",
+      "question": "在容量规划中，“按峰值配置资源”通常会导致什么问题？",
+      "options": [
+        "系统一定不可用",
+        "平均资源利用率偏低，造成闲置浪费，抬高成本",
+        "无法应对突发流量",
+        "数据一定会丢失"
+      ],
+      "answer": 1,
+      "explanation": "按峰值配置虽然能扛住最高负载，但大部分时间资源闲置，利用率低，成本高。更好的做法是结合弹性伸缩与容量预留策略。",
+      "error_tag": "边界错误",
+      "variant_group": "capacity_planning"
+    },
+    {
+      "kp": "arch.sys.cost_control",
+      "type": "single_choice",
+      "question": "下列哪种做法最有助于控制长期存储成本？",
+      "options": [
+        "所有数据都放在最高性能的存储介质上",
+        "对所有数据永不删除、永不归档",
+        "按访问频率分层存储，冷数据转入低成本介质或归档",
+        "把数据复制到尽可能多的副本中"
+      ],
+      "answer": 2,
+      "explanation": "数据分层（热/温/冷/归档）能根据访问频率匹配存储成本，是控制长期存储成本的关键手段。",
+      "error_tag": "记忆缺失",
+      "variant_group": "storage_tiering"
+    },
+    {
+      "kp": "arch.sys.cost_control",
+      "type": "single_choice",
+      "question": "关于预留实例/长期合约与按量付费的选择，下列说法正确的是？",
+      "options": [
+        "预留一定比按量便宜，任何场景都该买",
+        "按量一定比预留便宜",
+        "负载稳定可预测时预留通常更省；负载波动大时按量/弹性更合适",
+        "两者成本完全一样"
+      ],
+      "answer": 2,
+      "explanation": "预留通过承诺换取折扣，适合稳定基线负载；波动部分用按量或弹性资源承接，组合策略通常最优。",
+      "error_tag": "概念混淆",
+      "variant_group": "pricing_model_choice"
+    },
+    {
+      "kp": "arch.sys.cost_control",
+      "type": "single_choice",
+      "question": "某在线服务在促销期间流量暴涨，团队临时扩容，促销结束后却忘记缩容。这最直接导致的成本问题是？",
+      "options": [
+        "采购成本一次性升高",
+        "持续为不再需要的资源付费，形成资源浪费",
+        "数据丢失",
+        "网络延迟升高"
+      ],
+      "answer": 1,
+      "explanation": "扩容后未及时缩容会导致资源长期闲置但持续计费，是常见的成本泄漏来源，需要自动化生命周期管理。",
+      "error_tag": "场景误判",
+      "variant_group": "resource_lifecycle"
+    },
+    {
+      "kp": "arch.sys.cost_control",
+      "type": "single_choice",
+      "question": "在成本优化中，“可观测性/监控”的主要价值是什么？",
+      "options": [
+        "让系统看起来更专业",
+        "帮助发现资源浪费点、异常开销与成本趋势，为优化决策提供依据",
+        "自动降低所有费用",
+        "替代容量规划"
+      ],
+      "answer": 1,
+      "explanation": "没有度量就没有优化。成本可观测性能定位浪费、识别异常、评估优化效果，是成本控制闭环的基础。",
+      "error_tag": "概念混淆",
+      "variant_group": "cost_observability"
+    },
+    {
+      "kp": "arch.sys.cost_control",
+      "type": "single_choice",
+      "question": "下列哪一项通常不属于“成本控制”需要权衡的维度？",
+      "options": [
+        "性能",
+        "可靠性/可用性",
+        "开发与运维复杂度",
+        "代码注释的字体大小"
+      ],
+      "answer": 3,
+      "explanation": "成本控制需要在性能、可靠性、复杂度等约束下权衡；代码注释字体大小与系统成本无关，是明显的干扰项。",
+      "error_tag": "概念混淆",
+      "variant_group": "cost_tradeoff_dimensions"
+    }
+  ]
+}

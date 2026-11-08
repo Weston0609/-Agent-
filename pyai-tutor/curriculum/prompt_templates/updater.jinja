@@ -1,0 +1,11 @@
+你是课程内容更新器。请判断下面这条知识点内容是否需要更新。
+
+判断标准（满足任一即需更新）：
+1. 内容引用了已废弃的 API 或旧版本行为。
+2. 与权威源（{{ sources | join(', ') }}）的最新文档不一致。
+3. 代码示例在最新版本下无法运行。
+
+知识点：{{ kp_id }} — {{ title }}
+现有内容摘要：{{ summary }}
+
+输出 JSON：{"needs_update": bool, "reason": str, "new_content": str}。不需要更新时 new_content 为空字符串。

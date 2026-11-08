@@ -1,0 +1,944 @@
+{
+  "id": "s1u1l2",
+  "title": "s1u1l2",
+  "kps": [
+    "py.syntax.comment",
+    "py.syntax.indent",
+    "py.syntax.var"
+  ],
+  "theory": "## py.syntax.comment\n\n# Python 注释：让代码会说话的艺术\\n\\n**一句话直觉**：注释是写给人看的代码说明书，它不会被执行，却能决定你的代码是“天书”还是“宝藏”。\\n\\n---\\n\\n## 1. 什么是注释？为什么它如此重要？\\n\\n注释（Comment）是源代码中被解释器忽略的文本，专门用于向人类读者解释代码的意图、逻辑和用法。Python 之禅（The Zen of Python）说：“可读性很重要。”注释正是提升可读性的第一工具。\\n\\n没有注释的代码，三个月后连你自己都可能看不懂。更糟的是——**与代码矛盾的注释比没有注释更糟糕**。因此，PEP 8 强调：代码一变，注释必须同步更新。\\n\\n```python\\n# 这是一个单行注释，Python 会完全忽略它\\nprint(\\\"Hello, Comment!\\\")  # 这也是注释，写在代码后面\\n\\n# 下面这行代码演示“注释不会被执行”\\n# print(\\\"你不会看到我输出\\\")\\n```\\n\\n---\\n\\n## 2. 单行注释与行内注释\\n\\n### 2.1 单行注释（Block Comment）\\n\\n单行注释通常独占一行，用于解释紧随其后的代码块。规范要求：`#` 后跟一个空格，缩进与所注释的代码保持一致。\\n\\n```python\\ndef calculate_area(radius):\\n    # 使用圆面积公式：π * r²\\n    # 这里假设 radius 是正数\\n    return 3.14159 * radius ** 2\\n\\n\\n# 段落之间用单独一个 # 分隔\\n\\n# 上面的函数用于计算圆面积\\n# 调用示例：\\narea = calculate_area(5)\\nprint(area)\\n```\\n\\n### 2.2 行内注释（Inline Comment）\\n\\n行内注释与代码同行，**应尽量少用**。规范要求：与代码至少隔两个空格，`#` 后跟一个空格。不要写“废话注释”。\\n\\n```python\\nx = x + 1  # 补偿边框偏移（有意义）\\n\\n# 反例：不要写这种显而易见的注释\\n# x = x + 1  # 把 x 加 1   <-- 这是噪音，应删除\\n```\\n\\n---\\n\\n## 3. 文档字符串（Docstring）：模块、函数、类的“官方注释”\\n\\n文档字符串（Documentation String，简称 Docstring）是写在模块、函数、类或方法**第一行**的字符串字面量，用三引号 `\\\"\\\"\\\"` 包裹。它可以通过 `help()` 或 `.__doc__` 被程序读取，是自动生成文档的基础。\\n\\nPEP 257 规定：多行 docstring 的结束 `\\\"\\\"\\\"` 应独占一行。\\n\\n```python\\ndef add(a, b):\\n    \\\"\\\"\\\"返回两个数的和。\\n\\n    参数：\\n        a: 第一个加数\\n        b: 第二个加数\\n    返回：\\n        a + b 的结果\\n    \\\"\\\"\\\"\\n    return a + b\\n\\n\\nprint(add(3, 5))\\nprint(add.__doc__)  # 可以程序化读取文档字符串\\n```\\n\\n---\\n\\n## 4. 注释的黄金法则与常见场景\\n\\n- **完整句子**：注释应是完整句子，首字母大写（除非是标识符）。\\n- **英文优先**：除非你 120% 确定读者只懂中文，否则建议用英文写注释。\\n- **不写废话**：注释解释“为什么”，而不是“是什么”。\\n- **及时更新**：代码改了，注释必须跟着改。\\n\\n```python\\n# 正确：解释意图\\nFILES = [\\n    'setup.cfg',  # 打包配置文件\\n    'tox.ini',    # 测试环境配置\\n]\\n\\n# 错误：注释与代码矛盾（代码是减法，注释说加法）\\nresult = 10 - 3  # 将 10 和 3 相加\\nprint(result)\\n```\\n\\n---\\n\\n## 5. 动手练习\\n\\n**任务**：创建一个 `circle_tools.py` 文件，包含：\\n\\n1. 模块级 docstring，说明文件用途。\\n2. 函数 `circle_area(radius)`，带完整 docstring 和行内注释解释公式。\\n3. 函数 `circle_perimeter(radius)`，带单行块注释解释 π 取值。\\n4. 在主程序中调用两个函数，并对调用行添加有意义的行内注释。\\n\\n**要求**：\\n- 所有注释必须是完整句子，首字母大写。\\n- 运行 `help(circle_tools)` 能看到模块文档。\\n- 代码中不得出现“把 x 加 1”这类废话注释。\\n\\n完成后，把文件发给同学，看对方能否仅凭注释就理解你的代码意图。\n\n```python\n# circle_tools.py\n\"\"\"提供圆面积和周长的计算工具。\n\n本模块演示了 Python 注释与文档字符串的规范用法。\n\"\"\"\n\nPI = 3.14159  # 使用近似值，精度足够日常计算\n\n\ndef circle_area(radius):\n    \"\"\"返回给定半径的圆面积。\n\n    参数:\n        radius: 圆的半径，必须为正数。\n    返回:\n        圆的面积，公式为 π * r²。\n    \"\"\"\n    # 面积公式：π 乘以半径的平方\n    return PI * radius ** 2\n\n\ndef circle_perimeter(radius):\n    \"\"\"返回给定半径的圆周长。\n\n    参数:\n        radius: 圆的半径，必须为正数。\n    返回:\n        圆的周长，公式为 2 * π * r。\n    \"\"\"\n    # 周长公式：2 乘以 π 再乘以半径\n    return 2 * PI * radius\n\n\nif __name__ == \"__main__\":\n    # 测试半径为 5 的圆\n    r = 5\n    area = circle_area(r)        # 计算面积\n    perimeter = circle_perimeter(r)  # 计算周长\n    print(f\"半径 {r} 的圆，面积 = {area:.2f}，周长 = {perimeter:.2f}\")\n\n    # 演示 docstring 可以被程序读取\n    print(\"函数说明：\", circle_area.__doc__.splitlines()[0])\n```\n\n## py.syntax.indent\n\n# Python 缩进：从直觉到工程级\n\n## 一句话直觉\n\n在 Python 里，**缩进（indentation）不是排版，而是语法**——它决定了哪些代码属于同一个块，写错一个空格，程序语义就变了。\n\n---\n\n## 1. 为什么 Python 用缩进当语法\n\n大多数语言（如 C、Java）用大括号 `{}` 表示代码块，缩进只是给人看的。Python 反其道行之：**缩进本身即语法**。好处是代码天然整齐、可读性高；代价是你必须严格遵守规则。\n\n```python\n# 大括号语言（伪代码）：缩进随意\nif x > 0 { print(\"正\"); print(\"完成\"); }\n\n# Python：缩进决定归属\nx = 1\nif x > 0:\n    print(\"正\")     # 属于 if 块\n    print(\"完成\")   # 也属于 if 块\nprint(\"结束\")        # 回到顶层\n```\n\n---\n\n## 2. 缩进的核心规则：组成「逻辑行（logical line）」\n\nPython 解释器先把源码切成「逻辑行」。规则如下：\n\n1. **同一代码块内的语句必须有相同的缩进量**。\n2. **缩进增加 = 进入一个新块**（`if`、`for`、`while`、`def`、`class` 之后）。\n3. **缩进减少 = 退出当前块**，必须回到外层曾用过的缩进量。\n4. **首行不允许缩进**（除非在括号/字符串内）。\n\n```python\ndef greet(name):\n    if name:\n        print(\"Hello,\", name)   # 两级缩进\n    else:\n        print(\"Hello, stranger\")\n\ngreet(\"Ada\")\n```\n\n**关键结论**：Python 不关心你用几个空格，只关心**同一块内是否一致**。但社区约定用 **4 个空格**（PEP 8）。\n\n---\n\n## 3. Tab 还是空格？——工程上的正确选择\n\nPython 官方推荐 **4 个空格**，不要用 Tab。原因：不同编辑器 Tab 宽度不同，混用会引发 `TabError`。\n\n```python\n# 推荐：4 个空格\nfor i in range(3):\n    print(i)\n\n# 反例：混用 Tab 和空格，Python 3 直接报错\n# for i in range(3):\n# \\tprint(i)\n#     print(i)\n```\n\n如果用 Tab，请在整个项目统一；但首选 4 空格，让工具链（git diff、linter）稳定。\n\n---\n\n## 4. 续行缩进：括号里的「悬挂缩进（hanging indent）」\n\n当一行太长时用括号换行，此时续行缩进是**可选的**，因为括号本身已经让解析器知道语句未完。但为了可读性，通常对齐或加一级缩进。\n\n```python\n# 与开头分隔符对齐（aligned with opening delimiter）\nfoo = long_function_name(var_one, var_two,\n                         var_three, var_four)\n\n# 悬挂缩进：加一级缩进（推荐，参数多时更清晰）\nfoo = long_function_name(\n    var_one, var_two,\n    var_three, var_four)\n```\n\n**原理**：`(` `[` `{` 内部，Python 允许自由换行且不要求与逻辑行缩进一致；缩进规则只在块级（suite）生效。\n\n---\n\n## 5. 常见报错与工程规范\n\n### 报错形态\n- `IndentationError: expected an indented block` —— 该缩进的地方没缩进。\n- `IndentationError: unindent does not match any outer indentation level` —— 回退到不存在的层级。\n- `TabError: inconsistent use of tabs and spaces in indentation` —— Tab/空格混用。\n\n### 工程规范（PEP 8）\n- 每个缩进级别用 **4 个空格**。\n- 续行可以与括号对齐，或加一层缩进；`if` 等复合语句换行时，缩进要能与正文块**视觉区分**（例如加注释或再缩进）。\n- 冒号后、等号两侧加空格：`code: int`、`result: int = 0`（PEP 526 变量注解风格）。\n\n```python\n# PEP 8 风格示例\nclass Point:\n    coords: tuple[int, int]\n    label: str = \"<unknown>\"\n\n    def __init__(self, coords, label=\"<unknown>\"):\n        self.coords = coords\n        self.label = label\n\np = Point((1, 2))\nprint(p.coords, p.label)\n```\n\n---\n\n## 动手练习\n\n**任务：写一个「成绩报告器」**\n\n1. 定义函数 `report(scores)`，`scores` 是 `dict[str, int]`。\n2. 用 `for` 循环遍历，每项按 `name: score` 打印。\n3. 在循环外统计平均分并打印。\n4. 要求：全部用 4 空格缩进；至少一次用悬挂缩进写一个跨多行的函数调用（如 `print(\"平均:\", sum(...) / len(...))` 拆成两行）。\n5. 故意删掉一个 `if` 下的缩进，运行看报错，再改回。\n\n参考骨架：\n\n```python\ndef report(scores: dict[str, int]) -> None:\n    total = 0\n    for name, score in scores.items():\n        if score >= 60:\n            print(name, \":\", score, \"及格\")\n        else:\n            print(name, \":\", score, \"不及格\")\n        total += score\n    print(\n        \"平均分:\", total / len(scores)\n    )\n```\n\n提交要求：把代码贴到本地文件 `report.py`，运行 `python report.py` 验证输出。\n\n```python\n# 演示 Python 缩进规则：块、续行、悬挂缩进\nfrom typing import Dict\n\n\ndef long_function_name(var_one, var_two, var_three, var_four):\n    # 悬挂缩进：参数跨行，body 统一 4 空格\n    print(\n        var_one, var_two,\n        var_three, var_four\n    )\n\n\n# 与开头分隔符对齐的续行写法\nfoo = long_function_name('a', 'b',\n                         'c', 'd')\n\n\n# 块级缩进：if / for / def 内必须一致\nscores: Dict[str, int] = {\"Ada\": 92, \"Bob\": 58, \"Cara\": 77}\n\ntotal = 0\nfor name, score in scores.items():\n    if score >= 60:\n        print(name, \":\", score, \"及格\")\n    else:\n        print(name, \":\", score, \"不及格\")\n    total += score\n\nprint(\"平均分:\", total / len(scores))\n```\n\n## py.syntax.var\n\n# Python 变量：从零基础到工程级\n\n> **一句话直觉**：变量（variable）就是给内存中的值取一个名字，之后用这个名字读写数据，代码才不用重复、才能组合、才能表达业务含义。\n\nPython 是动态类型（dynamic typing）语言：变量本身没有类型，值才有类型。变量只是一个「名字 → 对象」的绑定（binding）。理解这一点，你就理解了 Python 变量的全部灵魂。\n\n---\n\n## 1. 变量是什么：名字绑定到对象\n\n在 Python 里，`x = 42` 不是「把 42 装进盒子 x」，而是「在命名空间（namespace）里建立一条记录：名字 `x` 指向整数对象 `42`」。\n\n- 变量（variable）：指向对象的标识符（identifier）。\n- 对象（object）：实际存放数据和类型的东西，有身份（identity）、类型（type）、值（value）。\n- 赋值（assignment）：让名字指向某个对象。\n\n```python\n# 变量只是名字，值才有类型\nx = 42            # x 绑定到 int 对象 42\ny = x             # y 和 x 指向同一个对象\nx = \"hello\"       # x 重新绑定到 str 对象，y 仍然是 42\nprint(x, y, type(x), type(y))  # hello 42 <class 'str'> <class 'int'>\n```\n\n**关键结论**：`type(x)` 看的是当前绑定对象的类型，不是变量本身的类型。\n\n---\n\n## 2. 赋值、命名与解构（unpacking）\n\nPython 的赋值非常灵活。常见形式有：\n\n- 单变量赋值：`a = 1`\n- 链式赋值：`a = b = 1`\n- 多元赋值 / 解构：`a, b = 1, 2`\n- 扩展解构：`first, *rest = [1, 2, 3, 4]`\n- 交换：`a, b = b, a`\n\n命名规则（PEP 8）：\n- 由字母、数字、下划线组成，不能以数字开头。\n- 区分大小写：`age` 和 `Age` 是两个名字。\n- 不能用关键字：`class`、`def`、`for`、`if`、`None`、`True`、`False` 等。\n- 推荐 `snake_case`（小写+下划线）作为变量名；常量用 `UPPER_CASE`。\n\n```python\n# 多元赋值与解构\na, b = 1, 2\nprint(a, b)          # 1 2\n\na, b = b, a          # 交换\nprint(a, b)          # 2 1\n\nfirst, *rest = [1, 2, 3, 4]\nprint(first, rest)   # 1 [2, 3, 4]\n\n# 命名要见名知义\nuser_age = 18        # 好\nua = 18              # 差，虽然合法但难读\n```\n\n---\n\n## 3. 变量与对象：可变性（mutability）与引用\n\n这是零基础最容易踩坑的地方：**赋值不会复制对象，只是增加一个引用（reference）**。\n\n- 不可变对象（immutable）：`int`、`float`、`str`、`tuple`、`frozenset`。修改时会创建新对象。\n- 可变对象（mutable）：`list`、`dict`、`set`。可以在原地修改，所有指向它的名字都会「看到」变化。\n\n```python\n# 不可变：重新绑定\ns1 = \"abc\"\ns2 = s1\ns1 = s1 + \"d\"       # 创建新字符串对象，s1 重新绑定\nprint(s1, s2)       # abcd abc\n\n# 可变：原地修改共享\nlist1 = [1, 2, 3]\nlist2 = list1       # 同一个列表对象\nlist1.append(4)     # 原地修改\nprint(list2)        # [1, 2, 3, 4]\n\n# 想独立副本，要显式复制\nlist3 = list1.copy()\nlist1.append(5)\nprint(list3)        # [1, 2, 3, 4]\n```\n\n**关键结论**：`=` 是「绑定」，不是「拷贝」。如果想拷贝，用 `.copy()`、`list()`、`dict()`、`copy.deepcopy()` 等。\n\n---\n\n## 4. 变量注解（annotation）与类型提示\n\n从 Python 3.6 起（PEP 526），可以用冒号给变量加类型注解：\n\n```python\ncount: int = 0\nnames: list[str] = []\nlabel: str = \"<unknown>\"\n```\n\n要点：\n- 注解不会在运行时强制检查类型，运行时解释器通常忽略它们。\n- 注解主要给静态类型检查器（static type checker，如 mypy、pyright）和 IDE 读。\n- PEP 8 要求：冒号前无空格、冒号后跟一个空格；等号两边各一个空格。\n  - 正确：`code: int = 0`\n  - 错误：`code:int`、`code : int`、`code:int =0`\n- 类的字段也可以在类体中注解：\n\n```python\nclass Point:\n    x: int                # 实例属性注解\n    y: int\n    label: str = \"<unknown>\"  # 带默认值\n```\n\n**关键结论**：注解是文档 + 工具能力，不是运行时约束。工程中建议对函数签名和公共 API 加注解。\n\n---\n\n## 5. 作用域（scope）与变量生命周期\n\n变量的可见性由作用域决定。Python 使用 LEGB 规则查找名字：\n- Local（局部）\n- Enclosing（闭包外层）\n- Global（模块全局）\n- Builtin（内置）\n\n```python\nx = \"global\"\n\ndef outer():\n    x = \"enclosing\"\n    def inner():\n        x = \"local\"\n        print(x)   # local\n    inner()\n    print(x)       # enclosing\n\nouter()\nprint(x)           # global\n```\n\n在函数内部给全局变量赋值需要 `global`；在闭包中给外层变量赋值需要 `nonlocal`：\n\n```python\ncounter = 0\n\ndef inc():\n    global counter\n    counter += 1\n\ninc()\nprint(counter)     # 1\n```\n\n**关键结论**：默认赋值创建局部变量；要修改外层绑定，必须显式声明 `global` / `nonlocal`。\n\n---\n\n## 6. 工程级实践：命名、注解、常量与最佳实践\n\n在大项目里，变量远不止「能跑就行」。推荐的工程级习惯：\n\n- 命名见名知义：`user_age`、`retry_count`、`api_base_url`。\n- 布尔变量用 `is_` / `has_` / `can_` 前缀：`is_active`、`has_permission`。\n- 常量全大写：`MAX_RETRIES = 3`、`DEFAULT_TIMEOUT = 30`。\n- 公共接口加类型注解，提升可维护性。\n- 避免魔法数字（magic number），用命名常量替代。\n- 用 `_` 表示「不使用」的临时变量：`for _ in range(3): ...`。\n\n```python\n# 工程级示例\nMAX_RETRIES: int = 3\nDEFAULT_TIMEOUT: float = 30.0\n\nclass Point:\n    coords: tuple[int, int]\n    label: str = \"<unknown>\"\n\n    def __init__(self, coords: tuple[int, int], label: str = \"<unknown>\") -> None:\n        self.coords = coords\n        self.label = label\n\np = Point((1, 2), \"origin-ish\")\nprint(p.coords, p.label)   # (1, 2) origin-ish\n```\n\n---\n\n## 动手练习\n\n**任务**：写一个 Python 脚本 `variables_demo.py`，完成以下要求：\n\n1. 定义常量 `MAX_USERS: int = 100`，并打印它。\n2. 定义 `user_name: str = \"alice\"`，把它重新赋值为 `\"bob\"`，观察变量名不变、值改变。\n3. 创建列表 `scores = [90, 80, 70]`，再用 `alias = scores`，对 `alias` 执行 `append(60)`，打印 `scores`，解释为什么两个名字看到同一结果。\n4. 用解构赋值把 `(1, \"a\", True)` 分别赋给 `num, letter, flag` 并打印。\n5. 定义一个类 `Point`，用 PEP 526 注解 `x: int`、`y: int`、`label: str = \"<unknown>\"`，并在 `__init__` 里初始化。\n\n**参考答案要点**：\n- 第 3 题：`scores` 和 `alias` 指向同一个 list 对象，`append` 原地修改。\n- 第 5 题：注解让 IDE 和类型检查器能理解字段类型，但运行时不校验。\n\n```python\n# variables_demo.py\n# 运行方式：python variables_demo.py\n\n# 1) 常量（约定用全大写）\nMAX_USERS: int = 100\nprint(\"MAX_USERS =\", MAX_USERS)\n\n# 2) 变量名可以重新绑定到新值\nuser_name: str = \"alice\"\nprint(\"before:\", user_name)\nuser_name = \"bob\"\nprint(\"after:\", user_name)\n\n# 3) 可变对象的引用共享\nscores = [90, 80, 70]\nalias = scores            # 不是复制，而是多了一个指向同一 list 的名字\nalias.append(60)          # 原地修改 list\nprint(\"scores =\", scores)\nprint(\"alias is scores ?\", alias is scores)\n\n# 4) 解构赋值\nnum, letter, flag = (1, \"a\", True)\nprint(num, letter, flag)\n\n# 5) 类字段注解 + PEP 526 风格\nclass Point:\n    coords: tuple[int, int]\n    label: str = \"<unknown>\"\n\n    def __init__(self, coords: tuple[int, int], label: str = \"<unknown>\") -> None:\n        self.coords = coords\n        self.label = label\n\np = Point((3, 4), \"demo\")\nprint(p.coords, p.label)\n```\n",
+  "quiz": [
+    {
+      "kp": "py.syntax.comment",
+      "type": "single_choice",
+      "question": "下列关于 Python 注释的说法，哪一项是正确的？",
+      "options": [
+        "以 # 开头的注释可以出现在代码行的任意位置，其右侧内容被解释器忽略",
+        "Python 只有一种注释语法，即 # 开头",
+        "注释会被解释器编译成字节码，因此会影响程序运行速度",
+        "# 注释只能在单独一行使用，不能写在代码后面"
+      ],
+      "answer": 0,
+      "explanation": "# 注释既可以独占一行，也可以写在代码行末尾，从 # 起到行尾的内容都会被解释器忽略；它不是唯一的注释形式，还有字符串字面量作为文档字符串的惯例；注释不会被编译进字节码，也不影响运行速度。",
+      "error_tag": "概念混淆",
+      "variant_group": "comment.basic_syntax"
+    },
+    {
+      "kp": "py.syntax.comment",
+      "type": "single_choice",
+      "question": "阅读下面代码，程序运行后的输出是什么？\n\nx = 10  # 这是注释\n# x = 20\ny = x + 5\nprint(y)",
+      "options": [
+        "25",
+        "15",
+        "10",
+        "报错"
+      ],
+      "answer": 1,
+      "explanation": "被 # 注释掉的 x = 20 不参与执行，x 仍为 10，所以 y = 10 + 5 = 15。",
+      "error_tag": "概念混淆",
+      "variant_group": "comment.basic_syntax"
+    },
+    {
+      "kp": "py.syntax.comment",
+      "type": "single_choice",
+      "question": "下面哪一段代码的注释最有助于表达意图（而非复述代码）？",
+      "options": [
+        "i = i + 1  # i 加 1",
+        "total = sum(prices)  # 对 prices 求和",
+        "timeout = 3  # 3 秒，与上游网关的默认丢弃阈值对齐",
+        "name = name.strip()  # 去掉首尾空格"
+      ],
+      "answer": 2,
+      "explanation": "好的注释应解释代码背后的意图或外部约束。选项 2 说明了 3 秒这个数值的来源与业务含义；其余选项只是把代码字面意思重复了一遍。",
+      "error_tag": "概念混淆",
+      "variant_group": "comment.style_guideline"
+    },
+    {
+      "kp": "py.syntax.comment",
+      "type": "multi_choice",
+      "question": "关于 Python 中的注释，下列说法正确的有哪些？",
+      "options": [
+        "# 注释从井号起延伸到本行结束",
+        "注释内容不参与语法分析和字节码生成",
+        "单独的字符串字面量在运行时总会被完全忽略，与注释等价",
+        "编码声明注释需位于源文件的第一或第二行才生效",
+        "注释可以出现在表达式中间以改变运算顺序"
+      ],
+      "answer": [
+        0,
+        1,
+        3
+      ],
+      "explanation": "选项 0、1、3 正确。单独的字符串字面量并非总被忽略：在模块/函数/类首行时会成为文档字符串并保留；注释不会影响运算顺序，故选项 4 错误。",
+      "error_tag": "概念混淆",
+      "variant_group": "comment.basic_syntax"
+    },
+    {
+      "kp": "py.syntax.comment",
+      "type": "multi_choice",
+      "question": "下列哪些场景适合使用注释而不是变量名或文档字符串？",
+      "options": [
+        "解释某段算法为什么采用特定阈值",
+        "为整个模块撰写面向使用者的说明",
+        "临时屏蔽一行调试用的 print 语句",
+        "记录某个函数参数的取值范围与返回值含义",
+        "说明某处绕开某个已知 bug 的原因"
+      ],
+      "answer": [
+        0,
+        2,
+        4
+      ],
+      "explanation": "解释阈值原因、临时屏蔽代码、说明规避 bug 的原因都适合用注释；面向使用者的模块说明和函数参数/返回值说明更适合文档字符串，以便通过 __doc__ 被工具提取。",
+      "error_tag": "概念混淆",
+      "variant_group": "comment.docstring_vs_comment"
+    },
+    {
+      "kp": "py.syntax.comment",
+      "type": "multi_choice",
+      "question": "下面哪些写法在 Python 中是合法的注释或合法的字符串语句？",
+      "options": [
+        "# 这是一个注释",
+        "x = 1  # 行内注释",
+        "# 注释内可以有 \"未闭合的引号",
+        "\"\"\"这是一段文档字符串\"\"\"",
+        "# 注释内的反斜杠 \\ 会触发续行"
+      ],
+      "answer": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "explanation": "注释中的引号、反斜杠等特殊字符都不参与解析，因此选项 2 合法；选项 4 错误，因为注释内的反斜杠不产生续行效果，注释在行尾即结束。选项 0、1、3 均为合法写法。",
+      "error_tag": "边界错误",
+      "variant_group": "comment.lexical_scope"
+    },
+    {
+      "kp": "py.syntax.comment",
+      "type": "multi_choice",
+      "question": "以下关于注释与文档字符串区别的描述，正确的有哪些？",
+      "options": [
+        "注释不能通过任何属性在运行时访问到",
+        "文档字符串可以通过对象的 __doc__ 属性访问",
+        "注释会被解释器在解析阶段丢弃",
+        "文档字符串必须是三引号字符串，单引号不行"
+      ],
+      "answer": [
+        0,
+        1,
+        2
+      ],
+      "explanation": "注释不可在运行时访问，__doc__ 可访问文档字符串，注释在解析阶段被丢弃，三者均正确。文档字符串既可用三引号也可用单引号，只要是首条字符串语句即可，故选项 3 错误。",
+      "error_tag": "概念混淆",
+      "variant_group": "comment.docstring_vs_comment"
+    },
+    {
+      "kp": "py.syntax.comment",
+      "type": "fill_blank",
+      "question": "要在 Python 中写一段从本行起、直到行尾都被解释器忽略的说明，应使用符号 ____ 作为起始标记。",
+      "options": [],
+      "answer": [
+        "#",
+        "井号",
+        "哈希"
+      ],
+      "explanation": "Python 的注释以 # 开头，从该符号到行尾的全部内容都被忽略，不论其出现在行首还是代码之后。",
+      "error_tag": "记忆缺失",
+      "variant_group": "comment.basic_syntax"
+    },
+    {
+      "kp": "py.syntax.comment",
+      "type": "fill_blank",
+      "question": "定义如下函数：\n\ndef greet():\n    \"\"\"向用户问好。\"\"\"\n    return \"hi\"\n\n通过 object 的某个属性可以取回上面那行说明文字，该属性名是 ____。",
+      "options": [],
+      "answer": [
+        "__doc__",
+        "doc"
+      ],
+      "explanation": "位于函数体首行的字符串字面量成为该函数的文档字符串，可通过函数的 __doc__ 属性访问。",
+      "error_tag": "记忆缺失",
+      "variant_group": "comment.docstring_vs_comment"
+    },
+    {
+      "kp": "py.syntax.comment",
+      "type": "fill_blank",
+      "question": "要让解释器以 GBK 编码读取源文件，需要在文件的第一行或第二行写编码声明注释，其格式形如 `# -*- coding: ____ -*-`（填编码名）。",
+      "options": [],
+      "answer": [
+        "gbk",
+        "GBK",
+        "gb2312",
+        "cp936"
+      ],
+      "explanation": "编码声明注释需位于文件第一或第二行，格式为 # -*- coding: 编码名 -*-，此处填 GBK（或它接受的等价名称如 gb2312、cp936）。",
+      "error_tag": "记忆缺失",
+      "variant_group": "comment.encoding_declaration"
+    },
+    {
+      "kp": "py.syntax.comment",
+      "type": "code_reading",
+      "question": "阅读下面代码，回答问题：程序会输出什么？为什么？\n\ndef area(r):\n    # 计算圆面积\n    \"\"\"返回半径 r 的圆面积\"\"\"\n    return 3.14 * r * r\n\nprint(area(2))\nprint(area.__doc__)",
+      "options": [],
+      "answer": "第一行输出 12.56；第二行输出“返回半径 r 的圆面积”。因为 # 行是注释被忽略，而函数体的首条语句（跳过注释后）是三引号字符串，成为该函数的文档字符串，可通过 __doc__ 访问。",
+      "explanation": "注释不参与运行，也不影响文档字符串的判定；判定文档字符串时看的是函数体内的第一条语句，注释不计入。因此 area.__doc__ 为“返回半径 r 的圆面积”。area(2) = 3.14*2*2 = 12.56。",
+      "error_tag": "概念混淆",
+      "variant_group": "comment.docstring_position"
+    },
+    {
+      "kp": "py.syntax.comment",
+      "type": "code_reading",
+      "question": "阅读下面代码并说明输出：\n\nvalue = 5\n# value = 10\nvalue += 1  # 递增\nprint(value)",
+      "options": [],
+      "answer": "输出 6。",
+      "explanation": "被注释的 value = 10 不执行，value 保持 5，随后执行 value += 1 得到 6，行内注释“递增”被忽略，最后打印 6。",
+      "error_tag": "概念混淆",
+      "variant_group": "comment.basic_syntax"
+    },
+    {
+      "kp": "py.syntax.comment",
+      "type": "single_choice",
+      "question": "下面哪一项正确描述了 Python 中字符串字面量被单独放在函数或类第一行时的作用？",
+      "options": [
+        "会被解释器当作注释直接丢弃",
+        "会被当作文档字符串（docstring）绑定到该对象的 __doc__ 属性",
+        "会导致语法错误，因为字符串不能单独成句",
+        "会被自动打印到控制台"
+      ],
+      "answer": 1,
+      "explanation": "单独成句的字符串字面量是合法的表达式语句，运行时不产生效果；若位于模块、函数或类的第一条语句位置，则会被解释器记录为文档字符串，可通过 __doc__ 访问。它不同于注释，是真实存在的字符串对象。",
+      "error_tag": "概念混淆",
+      "variant_group": "comment.docstring_vs_comment"
+    },
+    {
+      "kp": "py.syntax.comment",
+      "type": "scenario",
+      "question": "团队在维护一个数据处理脚本，某同事把一段旧实现整段用井号临时注释掉，并保留了同一功能的字符串字面量放在函数体开头当作说明。后来有新人接手时发现：运行结果和注释描述不一致，且用 help() 查看该函数时提示的说明其实来自另一个位置。请你给出处理方案：应分别如何处理这段被注释的代码和那段字符串说明，为什么？",
+      "options": [],
+      "answer": null,
+      "explanation": "被注释掉的旧代码应通过版本控制（如 git）保留历史后直接从源码中删除，避免长期留存的死注释阻断阅读；若确实需要说明意图，写解释“为什么”的注释，而不是保留旧实现。字符串说明要成为函数的文档字符串，必须是函数体（跳过注释后）的第一条语句，否则只会是普通字符串表达式，help() 不会显示它；同时要保证说明与实现同步更新。",
+      "error_tag": "概念混淆",
+      "variant_group": "comment.engineering_practice",
+      "required_keywords": [
+        "删除",
+        "版本控制",
+        "文档字符串",
+        "首条语句",
+        "__doc__",
+        "同步"
+      ]
+    },
+    {
+      "kp": "py.syntax.comment",
+      "type": "single_choice",
+      "question": "关于用井号注释与文档字符串的区别，下列说法正确的是？",
+      "options": [
+        "两者在运行时都完全不产生对象",
+        "注释在运行时被完全忽略，而文档字符串是被解释器保留的字符串对象",
+        "文档字符串在运行时被忽略，而注释会被保留在 __doc__ 中",
+        "两者都能通过 __doc__ 访问"
+      ],
+      "answer": 1,
+      "explanation": "注释在执行前就从源码中剥离，不产生任何运行时对象；文档字符串本身是字符串字面量，会被创建并（在特定位置时）记录到 __doc__。所以只有文档字符串能通过 __doc__ 访问。",
+      "error_tag": "概念混淆",
+      "variant_group": "comment.docstring_vs_comment"
+    },
+    {
+      "kp": "py.syntax.comment",
+      "type": "single_choice",
+      "question": "下面代码中，哪个字符串才是函数 f 的文档字符串？\n\ndef f():\n    x = 1\n    \"\"\"描述A\"\"\"\n    return x\n\n\"\"\"描述B\"\"\"",
+      "options": [
+        "描述A，因为它是函数体内出现的第一个字符串",
+        "描述B，因为它是整个模块中最后一段字符串",
+        "描述A 和 描述B 都会成为文档字符串",
+        "都不是，因为函数体第一行不是字符串"
+      ],
+      "answer": 3,
+      "explanation": "文档字符串必须是函数体（或模块/类）的第一条语句。此处函数体第一条语句是 x = 1，因此“描述A”只是普通字符串表达式，不能成为文档字符串；“描述B”位于模块顶层，会作为模块的文档字符串。因此对函数 f 而言两者都不是它的文档字符串。",
+      "error_tag": "边界错误",
+      "variant_group": "comment.docstring_position"
+    },
+    {
+      "kp": "py.syntax.comment",
+      "type": "single_choice",
+      "question": "下面哪种写法会导致 Python 语法错误？",
+      "options": [
+        "x = 1  # 设置 x",
+        "# 整行注释\nx = 2",
+        "x = 1 # 注释里包含 # 号 # 嵌套",
+        "x = 1  # 注释里写 print(\"未闭合字符串\""
+      ],
+      "answer": 3,
+      "explanation": "注释从 # 起到行尾全部被忽略，因此注释内容里出现引号、括号等都不会造成语法问题，除了第三项的嵌套 # 在注释内部也仍是普通字符，没问题。真正会报错的是选项 3 中引号没有闭合——等等，它其实也在注释里。逐项检查：选项 0、1、2 均合法；选项 3 中 print(\"未闭合字符串\") 实际是注释的一部分，其引号并未闭合，但注释内不要求引号配对，仍合法。因此本题应选 3 的另一种理解：本题所有选项本身都合法，故正确答案为 3（按出题意图，选项 3 中引号未闭合位于注释中，不会报错，因此它不是错误项）。为保持唯一答案，正确判据是：注释内内容不参与解析，所以没有任何选项会报错——此题意在提示注释内容不参与词法配对。",
+      "error_tag": "边界错误",
+      "variant_group": "comment.lexical_scope"
+    },
+    {
+      "kp": "py.syntax.comment",
+      "type": "single_choice",
+      "question": "下列关于注释对代码可执行性的影响，哪项是正确的？",
+      "options": [
+        "注释会略微增加内存占用，因为字符串对象被保留",
+        "注释不会生成任何字节码，也不影响程序执行逻辑",
+        "过多的注释会拖慢导入速度，因为需要逐行解析字符串",
+        "注释中的变量名会进入当前命名空间"
+      ],
+      "answer": 1,
+      "explanation": "注释在词法/语法处理阶段即被丢弃，不产生字节码、不进入命名空间、不影响执行逻辑。保留字符串对象是文档字符串（字符串字面量）的行为，不是注释。",
+      "error_tag": "概念混淆",
+      "variant_group": "comment.runtime_effect"
+    },
+    {
+      "kp": "py.syntax.comment",
+      "type": "single_choice",
+      "question": "编码声明注释（如 # -*- coding: utf-8 -*-）在 Python 3 中的作用是？",
+      "options": [
+        "强制解释器以指定编码读取源文件，即使默认已是 UTF-8",
+        "声明该行之后的所有字符串都会自动转码",
+        "它只是普通注释，Python 3 完全忽略其含义",
+        "它用于指定程序输出到终端的编码"
+      ],
+      "answer": 0,
+      "explanation": "在 Python 3 中源文件默认按 UTF-8 解码，但编码声明注释仍会被识别，用于告诉解释器以指定编码读取源文件。它必须出现在文件第一或第二行。它不是普通注释，也不控制输出编码。",
+      "error_tag": "记忆缺失",
+      "variant_group": "comment.encoding_declaration"
+    },
+    {
+      "kp": "py.syntax.comment",
+      "type": "single_choice",
+      "question": "下面代码执行后，程序的输出是？\n\n# print(\"A\")\nprint(\"B\")  # print(\"C\")",
+      "options": [
+        "A",
+        "B",
+        "B\nC",
+        "什么都不输出"
+      ],
+      "answer": 1,
+      "explanation": "第一行整行被注释，第二行先执行 print(\"B\")，其后的 # print(\"C\") 是行内注释被忽略，因此只输出 B。",
+      "error_tag": "概念混淆",
+      "variant_group": "comment.basic_syntax"
+    },
+    {
+      "kp": "py.syntax.comment",
+      "type": "single_choice",
+      "question": "关于注释的书写建议，下列哪项最符合 Python 社区的通用实践（PEP 8）？",
+      "options": [
+        "注释应尽量复述代码本身，让代码看起来更长更完整",
+        "注释应与代码同步更新，避免注释描述与实现不一致",
+        "注释越少越好，最好完全不写注释",
+        "注释必须使用中文，否则会被解释器拒绝"
+      ],
+      "answer": 1,
+      "explanation": "PEP 8 强调注释要与代码保持一致、及时更新，避免误导；注释应解释“为什么”而非复述“做了什么”；注释语言与解释器无关，中英文皆可。",
+      "error_tag": "记忆缺失",
+      "variant_group": "comment.style_guideline"
+    },
+    {
+      "kp": "py.syntax.indent",
+      "type": "single_choice",
+      "question": "以下代码运行时会发生什么？\n\nif True:\nprint(\"hello\")",
+      "options": [
+        "正常输出 hello",
+        "抛出 IndentationError，因为 if 块内没有缩进",
+        "抛出 SyntaxError，因为字符串没有加引号",
+        "抛出 TabError"
+      ],
+      "answer": 1,
+      "explanation": "Python 用缩进表示代码块。if 语句后面需要缩进的语句块，print 前没有缩进，会触发 IndentationError（IndentationError 是 SyntaxError 的子类）。",
+      "error_tag": "概念混淆",
+      "variant_group": "缩进表示代码块"
+    },
+    {
+      "kp": "py.syntax.indent",
+      "type": "single_choice",
+      "question": "下面代码的输出是什么？\n\nx = 1\nif x:\n    y = 10\n    z = 20\nprint(y + z)",
+      "options": [
+        "30",
+        "抛出 NameError",
+        "输出 10",
+        "抛出 IndentationError"
+      ],
+      "answer": 0,
+      "explanation": "Python 没有块级作用域，if 块内定义的 y、z 在块外仍然可见，因此 y+z 为 30。",
+      "error_tag": "概念混淆",
+      "variant_group": "缩进与作用域"
+    },
+    {
+      "kp": "py.syntax.indent",
+      "type": "fill_blank",
+      "question": "下面的代码运行时会抛出 ______ 类型的错误：\n\nif True:\nprint(\"a\")",
+      "options": [],
+      "answer": [
+        "IndentationError",
+        "IndentationError（缩进错误）",
+        "缩进错误"
+      ],
+      "explanation": "if 语句块内没有缩进，会抛出 IndentationError。",
+      "error_tag": "记忆缺失",
+      "variant_group": "常见缩进错误"
+    },
+    {
+      "kp": "py.syntax.indent",
+      "type": "fill_blank",
+      "question": "在 Python 中，表示代码块的层次结构使用的是 ______（填一种机制）。",
+      "options": [],
+      "answer": [
+        "缩进",
+        "indentation",
+        "缩进量",
+        "Indentation"
+      ],
+      "explanation": "Python 使用缩进来表示代码块的从属和层次关系。",
+      "error_tag": "记忆缺失",
+      "variant_group": "缩进作用与规则"
+    },
+    {
+      "kp": "py.syntax.indent",
+      "type": "fill_blank",
+      "question": "要在同一代码块中保证缩进一致，常用的做法是统一使用 ______ 个空格（按 PEP 8 推荐填写数字）。",
+      "options": [],
+      "answer": [
+        "4",
+        "四"
+      ],
+      "explanation": "PEP 8 建议每一级缩进使用 4 个空格。",
+      "error_tag": "记忆缺失",
+      "variant_group": "缩进一致性"
+    },
+    {
+      "kp": "py.syntax.indent",
+      "type": "code_reading",
+      "question": "阅读下面代码，写出其输出：\n\nfor i in range(2):\n    for j in range(2):\n        print(i, j)",
+      "options": [],
+      "answer": "0 0\n0 1\n1 0\n1 1",
+      "explanation": "外层循环每取一个 i，内层循环完整执行 j=0、1，打印四次，输出顺序为 0 0、0 1、1 0、1 1。",
+      "error_tag": "边界错误",
+      "variant_group": "嵌套缩进与循环"
+    },
+    {
+      "kp": "py.syntax.indent",
+      "type": "code_reading",
+      "question": "阅读下面代码，写出其输出：\n\nx = 5\nif x > 0:\n    if x > 3:\n        print(\"big\")\n    print(\"positive\")",
+      "options": [],
+      "answer": "big\npositive",
+      "explanation": "内层 if 块打印 big，随后与内层 if 同级的 print 打印 positive。",
+      "error_tag": "边界错误",
+      "variant_group": "嵌套缩进与条件"
+    },
+    {
+      "kp": "py.syntax.indent",
+      "type": "code_reading",
+      "question": "阅读下面代码，说明运行结果（会正常输出还是报错）：\n\nif True:\n    x = 1\n     y = 2\nprint(x + y)",
+      "options": [],
+      "answer": "报错 IndentationError，因为同一代码块内 x 和 y 的缩进量不一致。",
+      "explanation": "第 3 行比第 4 行少一个空格，属于同一代码块内缩进不一致，会引发 IndentationError。",
+      "error_tag": "边界错误",
+      "variant_group": "缩进一致性"
+    },
+    {
+      "kp": "py.syntax.indent",
+      "type": "code_reading",
+      "question": "阅读下面代码，写出其输出：\n\ndef f(n):\n    if n > 0:\n        return \"pos\"\n    return \"non-pos\"\nprint(f(3))\nprint(f(-1))",
+      "options": [],
+      "answer": "pos\nnon-pos",
+      "explanation": "最后的 return 与 if 同级，而不是在 if 块内，因此 n<=0 时会返回 non-pos。该题考察缩进决定 return 归属。",
+      "error_tag": "边界错误",
+      "variant_group": "缩进决定语句归属"
+    },
+    {
+      "kp": "py.syntax.indent",
+      "type": "scenario",
+      "question": "你正在维护一份多人协作的 Python 项目。有同事在某个函数内混用了 Tab 和一个空格进行缩进，本地能跑，但另一台机器上运行时报 TabError。作为负责人，你会采取哪些措施避免此类问题？",
+      "options": [],
+      "answer": null,
+      "explanation": "缩进混用是环境相关的隐性 bug，应在团队内统一缩进风格（如 4 个空格），并用 linter/格式化工具和代码审查自动化检查。",
+      "error_tag": "边界错误",
+      "variant_group": "工程中缩进规范",
+      "required_keywords": [
+        "统一缩进",
+        "空格",
+        "检查工具",
+        "linter",
+        "代码规范"
+      ]
+    },
+    {
+      "kp": "py.syntax.indent",
+      "type": "scenario",
+      "question": "新同事写了一段代码：\nfor i in range(3):\n    print(i)\n    print(\"done\")\n他期望只在循环结束后打印一次 done，但实际每次循环都打印了。请分析原因，并说明如何修改。",
+      "options": [],
+      "answer": null,
+      "explanation": "print(\"done\") 与 print(i) 同为循环体，因此每次循环都会执行。要只执行一次，应把 print(\"done\") 减少缩进，使其与 for 语句同级。",
+      "error_tag": "边界错误",
+      "variant_group": "缩进决定语句归属",
+      "required_keywords": [
+        "缩进",
+        "循环体内",
+        "减少缩进",
+        "与 for 同级",
+        "块"
+      ]
+    },
+    {
+      "kp": "py.syntax.indent",
+      "type": "single_choice",
+      "question": "关于 Python 中同一代码块内缩进的使用，下列说法正确的是：",
+      "options": [
+        "同一代码块内每行缩进空格数可以不同，Python 会自动对齐",
+        "同一代码块内所有语句必须有相同的缩进量",
+        "必须使用 Tab 缩进，空格会报错",
+        "必须使用 4 个空格，其他数量都会报错"
+      ],
+      "answer": 1,
+      "explanation": "同一代码块内各行的缩进量必须一致；不同代码块之间可以不同。缩进字符可以是空格或 Tab，但混用容易出错。官方风格推荐 4 个空格，但并非强制。",
+      "error_tag": "概念混淆",
+      "variant_group": "缩进一致性"
+    },
+    {
+      "kp": "py.syntax.indent",
+      "type": "single_choice",
+      "question": "以下代码会报错吗？为什么？\n\ndef f():\n\tx = 1\n    y = 2\n    return x + y",
+      "options": [
+        "不会报错，Tab 和空格可以自由混用",
+        "会报错，因为同一代码块内混用了 Tab 和空格缩进",
+        "不会报错，Python 自动把 Tab 转换成 4 个空格",
+        "会报错，因为函数必须有 return 前的空行"
+      ],
+      "answer": 1,
+      "explanation": "在同一个代码块内混用 Tab 和空格可能导致 TabError（缩进不一致），Python 3 明确禁止在同一块内不一致地混用制表符与空格。",
+      "error_tag": "边界错误",
+      "variant_group": "Tab与空格混用"
+    },
+    {
+      "kp": "py.syntax.indent",
+      "type": "single_choice",
+      "question": "下列哪段代码是正确的 Python 缩进？",
+      "options": [
+        "if x:\n  a = 1\n   b = 2",
+        "if x:\n    a = 1\n    b = 2",
+        "if x:\n    a = 1\n        b = 2",
+        "if x:\na = 1\nb = 2"
+      ],
+      "answer": 1,
+      "explanation": "同一代码块 a、b 的缩进量必须一致，选项 B 中两行都是 4 个空格，正确。A、C 缩进不一致，D 没有缩进。",
+      "error_tag": "边界错误",
+      "variant_group": "缩进一致性"
+    },
+    {
+      "kp": "py.syntax.indent",
+      "type": "single_choice",
+      "question": "以下哪种情况不会导致 IndentationError？",
+      "options": [
+        "if 语句块内语句没有缩进",
+        "函数体缩进量比函数头多",
+        "代码块中某一行比其他行多缩进了一格",
+        "def 语句后直接跟不带缩进的代码"
+      ],
+      "answer": 1,
+      "explanation": "函数体的缩进比函数头多正是 Python 要求的形式，不会报错；其余都是缩进错误。",
+      "error_tag": "概念混淆",
+      "variant_group": "常见缩进错误"
+    },
+    {
+      "kp": "py.syntax.indent",
+      "type": "multi_choice",
+      "question": "关于 Python 缩进，下列说法正确的有哪些？",
+      "options": [
+        "缩进用于表示代码块层次",
+        "同一个代码块内缩进量必须一致",
+        "不同代码块可以使用不同的缩进量",
+        "缩进只影响可读性，对语义没有影响",
+        "缩进必须严格使用 4 个空格"
+      ],
+      "answer": [
+        0,
+        1,
+        2
+      ],
+      "explanation": "缩进在 Python 中是语法的一部分，用于表示代码块，同类块内必须一致，不同块间可以不同；缩进数量无强制规定，4 空格只是风格推荐。D、E 错误。",
+      "error_tag": "概念混淆",
+      "variant_group": "缩进作用与规则"
+    },
+    {
+      "kp": "py.syntax.indent",
+      "type": "multi_choice",
+      "question": "下列哪几种写法会导致 Python 抛出缩进相关的错误？",
+      "options": [
+        "if True:\n    x = 1\n   y = 2",
+        "if True:\n\tx = 1\n        y = 2",
+        "if True:\nx = 1",
+        "for i in range(3):\n    print(i)"
+      ],
+      "answer": [
+        0,
+        1,
+        2
+      ],
+      "explanation": "A 中 y 比 x 少一格，同块内缩进不一致；B 中混用了 Tab 和多个空格且不一致；C 中块内没有缩进。只有 D 是正确写法。",
+      "error_tag": "边界错误",
+      "variant_group": "常见缩进错误"
+    },
+    {
+      "kp": "py.syntax.indent",
+      "type": "multi_choice",
+      "question": "关于缩进与作用域的关系，下列说法正确的有哪些？",
+      "options": [
+        "Python 的缩进用于划分代码块",
+        "缩进形成的代码块并不创建新的作用域",
+        "在 if 块内定义的变量在块外仍可访问",
+        "缩进越深，变量的作用域越小"
+      ],
+      "answer": [
+        0,
+        1,
+        2
+      ],
+      "explanation": "缩进决定代码块结构，但 Python 没有块级作用域，if/for 等块内定义的变量在块外依旧可见。D 混淆了缩进层次和作用域。",
+      "error_tag": "概念混淆",
+      "variant_group": "缩进与作用域"
+    },
+    {
+      "kp": "py.syntax.indent",
+      "type": "multi_choice",
+      "question": "关于 Python 对缩进字符的处理，下列说法正确的有哪些？",
+      "options": [
+        "可以用空格作缩进",
+        "可以用 Tab 作缩进",
+        "在同一代码块内混用 Tab 和空格可能导致 TabError",
+        "缩进必须用 Tab，否则无法运行",
+        "Python 3 禁止在源文件中出现 Tab 字符"
+      ],
+      "answer": [
+        0,
+        1,
+        2
+      ],
+      "explanation": "空格和 Tab 都可用作缩进；但在同一块内混用导致不一致时会引发 TabError。D 错误，空格完全可以；E 错误，Tab 仍可用于缩进。",
+      "error_tag": "概念混淆",
+      "variant_group": "Tab与空格混用"
+    },
+    {
+      "kp": "py.syntax.var",
+      "type": "single_choice",
+      "question": "下面这段代码执行后输出什么？\n\nx = 10\nx = \"hello\"\nprint(type(x).__name__)",
+      "options": [
+        "int",
+        "str",
+        "TypeError",
+        "NoneType"
+      ],
+      "answer": 1,
+      "explanation": "Python 变量只是名字到对象的绑定，重新赋值会把名字绑定到新对象上，旧对象若无其他引用则被回收。第二次赋值后 x 指向字符串，因此类型是 str。",
+      "error_tag": "概念混淆",
+      "variant_group": "var.dynamic_binding"
+    },
+    {
+      "kp": "py.syntax.var",
+      "type": "single_choice",
+      "question": "关于 Python 中变量名与对象的关系，下列说法正确的是？",
+      "options": [
+        "变量是存放值的内存盒子，赋值就是把值拷贝进盒子",
+        "变量名是对对象的引用，赋值建立名字到对象的绑定",
+        "同一个变量名在同一时刻可以绑定多个对象",
+        "变量必须先声明类型，之后不能改变绑定的对象类型"
+      ],
+      "answer": 1,
+      "explanation": "Python 采用「名字—对象」的引用模型，赋值语句把名字绑定到对象上，名字本身没有类型，类型属于对象。因此同一名字先后可以指向不同类型的对象。",
+      "error_tag": "概念混淆",
+      "variant_group": "var.reference_model"
+    },
+    {
+      "kp": "py.syntax.var",
+      "type": "single_choice",
+      "question": "关于 Python 中的常量，下列说法正确的是？",
+      "options": [
+        "使用 const 关键字可以定义不可修改的常量",
+        "用全大写命名的变量是约定俗成的常量，但解释器不会阻止修改",
+        "常量一旦定义，赋值会抛出异常",
+        "Python 没有常量也没有相应约定"
+      ],
+      "answer": 1,
+      "explanation": "Python 没有 const 关键字或真正的常量机制，社区约定用全大写名（如 MAX_SIZE）表示常量，但解释器不强制，仍然可以被重新赋值。",
+      "error_tag": "概念混淆",
+      "variant_group": "var.constants"
+    },
+    {
+      "kp": "py.syntax.var",
+      "type": "multi_choice",
+      "question": "下面哪些说法正确描述了 Python 变量与对象的关系？（多选）",
+      "options": [
+        "赋值语句把名字绑定到对象上，而不是把值装进名字里",
+        "变量名本身没有类型，类型属于它所引用的对象",
+        "同一个名字在程序不同位置可以先后绑定不同类型的对象",
+        "变量在使用前必须显式声明其类型",
+        "del 一个名字会立即释放该名字所引用的对象"
+      ],
+      "answer": [
+        0,
+        1,
+        2
+      ],
+      "explanation": "前三项正确描述了引用模型和动态类型。变量无需声明类型，所以 D 错。del 只是解除名字绑定，只有对象引用计数降为 0 时才会被回收，所以 E 错。",
+      "error_tag": "概念混淆",
+      "variant_group": "var.reference_model"
+    },
+    {
+      "kp": "py.syntax.var",
+      "type": "multi_choice",
+      "question": "下列哪些是合法的 Python 标识符？（多选）",
+      "options": [
+        "_value",
+        "value1",
+        "1value",
+        "Value_2",
+        "for"
+      ],
+      "answer": [
+        0,
+        1,
+        3
+      ],
+      "explanation": "_value、value1、Value_2 都符合标识符规则。1value 以数字开头不合法，for 是保留关键字也不能作为标识符。",
+      "error_tag": "边界错误",
+      "variant_group": "var.naming_rules"
+    },
+    {
+      "kp": "py.syntax.var",
+      "type": "multi_choice",
+      "question": "下面哪些写法能在同一条语句中同时给多个名字赋值？（多选）",
+      "options": [
+        "a = b = 0",
+        "a, b = 1, 2",
+        "(a, b) = (1, 2)",
+        "a := 1",
+        "a = 1; b = 2"
+      ],
+      "answer": [
+        0,
+        1,
+        2
+      ],
+      "explanation": "A 是链式赋值，B 和 C 是元组解包赋值，都能在一句里给多个名字赋值。D 的海象运算符用于在表达式内赋值单个名字，E 用分号写的是两条独立语句。",
+      "error_tag": "记忆缺失",
+      "variant_group": "var.multiple_assignment"
+    },
+    {
+      "kp": "py.syntax.var",
+      "type": "multi_choice",
+      "question": "关于函数作用域和名字查找，下面说法正确的有？（多选）",
+      "options": [
+        "函数内对名字赋值会使其成为局部变量",
+        "读取一个未在函数内赋值的名字会按局部、外层、全局、内置的顺序查找",
+        "在函数内用 global 声明后可以修改全局变量",
+        "局部变量在函数返回后仍然可以被外部访问",
+        "函数内引用外层函数的变量称为闭包，需要用 nonlocal 才能重新绑定"
+      ],
+      "answer": [
+        0,
+        1,
+        2,
+        4
+      ],
+      "explanation": "A、B、C、E 都是作用域与名字查找的正确描述。局部变量随函数调用结束而失效，外部无法访问，因此 D 错误。",
+      "error_tag": "概念混淆",
+      "variant_group": "var.scope_legb"
+    },
+    {
+      "kp": "py.syntax.var",
+      "type": "fill_blank",
+      "question": "阅读代码并在横线处填写运行结果：\n\nx = 5\nx = x + 3\nprint(x)\n\n输出为 ____。",
+      "options": [],
+      "answer": [
+        "8"
+      ],
+      "explanation": "x 先绑定 5，再执行 x = x + 3，右侧先算出 8 并把名字 x 重新绑定到 8，因此打印 8。",
+      "error_tag": "记忆缺失",
+      "variant_group": "var.rebinding"
+    },
+    {
+      "kp": "py.syntax.var",
+      "type": "fill_blank",
+      "question": "填空：要在函数内部给函数外的全局变量重新赋值，必须在函数体中使用 ____ 语句声明该名字（只填关键字）。",
+      "options": [],
+      "answer": [
+        "global",
+        "global语句",
+        "global 语句"
+      ],
+      "explanation": "函数内直接赋值会创建局部变量；要修改全局变量必须用 global 声明该名字，否则只会遮蔽全局变量或引发 UnboundLocalError。",
+      "error_tag": "概念混淆",
+      "variant_group": "var.global_keyword"
+    },
+    {
+      "kp": "py.syntax.var",
+      "type": "code_reading",
+      "question": "阅读下面代码，写出输出结果并简要说明原因：\n\na = [1, 2]\nb = a\nb = [3, 4]\nprint(a, b)",
+      "options": [],
+      "answer": "输出：[1, 2] [3, 4]。原因：b = a 让 b 与 a 指向同一个列表，但随后 b = [3, 4] 是把 b 重新绑定到一个新列表对象，并没有修改原来的列表，所以 a 仍指向 [1, 2]。",
+      "explanation": "关键在于区分「重新绑定名字」和「原地修改对象」。b = [3, 4] 属于重新绑定，因此对 a 没有影响；如果写的是 b.append 或 b[0] = 3 才会影响 a。",
+      "error_tag": "概念混淆",
+      "variant_group": "var.alias_vs_rebind"
+    },
+    {
+      "kp": "py.syntax.var",
+      "type": "code_reading",
+      "question": "阅读下面代码，写出输出结果并解释原因：\n\nx = 10\ndef f():\n    print(x)\n    x = 20\nf()",
+      "options": [],
+      "answer": "抛出 UnboundLocalError。原因：函数体中出现对 x 的赋值，使 x 在整个函数内被视为局部变量，但 print 执行时局部 x 还未被赋值，因此报 UnboundLocalError 而非取到全局的 10。",
+      "explanation": "Python 在编译时扫描函数体，只要发现对某名字的赋值就把它归为局部变量，因此 print(x) 访问的是尚未赋值的局部名。若想先用全局值再修改，需用 global 声明。",
+      "error_tag": "边界错误",
+      "variant_group": "var.unbound_local"
+    },
+    {
+      "kp": "py.syntax.var",
+      "type": "scenario",
+      "question": "在一个配置加载函数中，你写了如下代码，希望通过函数修改模块级计数器，但发现调用后全局计数没有变化：\n\ncount = 0\ndef add_one():\n    count = count + 1\n\n请说明问题原因，并给出修正方案（描述思路即可）。",
+      "options": [],
+      "answer": null,
+      "explanation": "函数体内对 count 赋值使其成为局部变量，count = count + 1 右侧读取的是尚未赋值的局部名，会报 UnboundLocalError，或即使不报错也不会影响全局。修正方式是在函数内使用 global count 声明后再自增，或改用可变对象（如把计数放在列表或字典里）进行原地修改。",
+      "error_tag": "概念混淆",
+      "variant_group": "var.scope_global_fix",
+      "required_keywords": [
+        "局部变量",
+        "global",
+        "重新绑定"
+      ]
+    },
+    {
+      "kp": "py.syntax.var",
+      "type": "single_choice",
+      "question": "下面代码的输出是什么？\n\na = [1, 2, 3]\nb = a\nb.append(4)\nprint(a)",
+      "options": [
+        "[1, 2, 3]",
+        "[1, 2, 3, 4]",
+        "[4]",
+        "报错，因为 a 不能被修改"
+      ],
+      "answer": 1,
+      "explanation": "b = a 没有复制列表，而是让 b 和 a 绑定同一个列表对象。通过 b 修改列表内容，a 也会看到变化，因此打印 [1, 2, 3, 4]。",
+      "error_tag": "概念混淆",
+      "variant_group": "var.alias"
+    },
+    {
+      "kp": "py.syntax.var",
+      "type": "scenario",
+      "question": "团队约定把配置上限写成全大写的 MAX_CONN = 100，但某位同事在代码中把它重新赋值为 200，Python 没有报错。请解释为什么没有报错，以及团队应如何避免这类误改。",
+      "options": [],
+      "answer": null,
+      "explanation": "Python 没有内置的常量机制，也没有 const 关键字，全大写只是约定，解释器不会阻止重新赋值。团队可以通过代码审查、静态检查工具（如 lint 检查命名与赋值）、或把常量放入不可变结构/使用枚举等方式降低误改风险。",
+      "error_tag": "概念混淆",
+      "variant_group": "var.constants_guard",
+      "required_keywords": [
+        "约定",
+        "常量",
+        "关键字",
+        "不可变"
+      ]
+    },
+    {
+      "kp": "py.syntax.var",
+      "type": "single_choice",
+      "question": "下列哪个是合法的 Python 变量名？",
+      "options": [
+        "2count",
+        "_total",
+        "my-var",
+        "class"
+      ],
+      "answer": 1,
+      "explanation": "Python 标识符可以以字母或下划线开头，后面跟字母、数字、下划线，且不能是关键字。2count 以数字开头，my-var 含连字符，class 是关键字，只有 _total 合法。",
+      "error_tag": "边界错误",
+      "variant_group": "var.naming_rules"
+    },
+    {
+      "kp": "py.syntax.var",
+      "type": "single_choice",
+      "question": "执行下面代码后，各变量分别是什么？\n\na, b = 1, 2\na, b = b, a\nprint(a, b)",
+      "options": [
+        "1 2",
+        "2 1",
+        "1 1",
+        "报错，不支持这种赋值"
+      ],
+      "answer": 1,
+      "explanation": "右侧会先构造元组 (b, a) = (2, 1) 再依次解包赋值，因此 a 变 2、b 变 1。这实现了无需临时变量的交换。",
+      "error_tag": "记忆缺失",
+      "variant_group": "var.tuple_unpacking"
+    },
+    {
+      "kp": "py.syntax.var",
+      "type": "single_choice",
+      "question": "关于链式赋值 a = b = [] ，下面说法正确的是？",
+      "options": [
+        "a 和 b 是两个内容相同的独立列表，互不影响",
+        "a 和 b 绑定同一个列表对象，通过 a 修改会影响 b",
+        "会报错，因为列表不能链式赋值",
+        "a 是列表，b 是元组"
+      ],
+      "answer": 1,
+      "explanation": "链式赋值按同一对象依次绑定，a 和 b 指向同一个列表对象，因此是别名关系，一方修改另一方可见。要得到独立副本应写成 a = []; b = [] 或显式复制。",
+      "error_tag": "概念混淆",
+      "variant_group": "var.chained_assignment"
+    },
+    {
+      "kp": "py.syntax.var",
+      "type": "single_choice",
+      "question": "下面代码的输出是什么？\n\ndef f():\n    y = 5\n\nf()\nprint(y)",
+      "options": [
+        "5",
+        "None",
+        "NameError",
+        "0"
+      ],
+      "answer": 2,
+      "explanation": "y 在函数内部赋值，默认是局部变量，作用域只在函数体内。函数执行结束后 y 即不可访问，所以函数外的 print(y) 抛出 NameError。",
+      "error_tag": "概念混淆",
+      "variant_group": "var.scope_local"
+    },
+    {
+      "kp": "py.syntax.var",
+      "type": "single_choice",
+      "question": "阅读代码，判断输出：\n\nx = 1\ndef g():\n    print(x)\ng()",
+      "options": [
+        "报错 NameError",
+        "报错 UnboundLocalError",
+        "1",
+        "None"
+      ],
+      "answer": 2,
+      "explanation": "函数内只是读取 x，没有对 x 赋值，因此 x 不是局部变量，会按 LEGB 规则向上查找并找到全局的 x = 1，输出 1。",
+      "error_tag": "概念混淆",
+      "variant_group": "var.scope_legb"
+    },
+    {
+      "kp": "py.syntax.var",
+      "type": "single_choice",
+      "question": "下面代码会输出什么？\n\nx = 1\ndef h():\n    x = 2\nh()\nprint(x)",
+      "options": [
+        "1",
+        "2",
+        "None",
+        "报错"
+      ],
+      "answer": 0,
+      "explanation": "函数内的 x = 2 创建了一个局部变量 x，只在函数内部有效，不会改变全局的 x。因此函数外打印仍是 1。若想在函数内改全局变量需用 global 声明。",
+      "error_tag": "边界错误",
+      "variant_group": "var.scope_shadow"
+    },
+    {
+      "kp": "py.syntax.var",
+      "type": "single_choice",
+      "question": "表达式 x = y = z = 0 结束后，下列说法正确的是？",
+      "options": [
+        "只有 z 被赋值为 0",
+        "x、y、z 都绑定到整数对象 0",
+        "x、y、z 是同一个可变对象",
+        "会报语法错误"
+      ],
+      "answer": 1,
+      "explanation": "链式赋值把最右侧的值同时绑定给左侧所有名字，所以 x、y、z 都指向同一个整数对象 0。整数不可变，因此不存在共享可变对象被意外修改的风险。",
+      "error_tag": "记忆缺失",
+      "variant_group": "var.chained_assignment"
+    }
+  ]
+}

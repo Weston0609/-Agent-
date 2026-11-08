@@ -1,0 +1,636 @@
+{
+  "id": "s6u3l1",
+  "title": "s6u3l1",
+  "kps": [
+    "ai.llm.attention",
+    "ai.llm.multihead"
+  ],
+  "theory": "## ai.llm.attention\n\n# 注意力机制（Attention）：LLM 的“聚焦能力”\n\n> 一句话直觉：注意力机制让模型在处理一个词时，动态决定该“看”输入序列里的哪些词，并给它们分配不同权重，从而用上下文理解当前词。\n\n---\n\n## 1. 为什么需要注意力：从“平均看”到“重点看”\n\n零基础先记住一个场景：翻译句子 “The cat sat on the mat” 时，翻译 “cat” 最该关注的是 “The” 和 “sat”，而不是 “mat”。早期模型把整句压成一个固定向量（fixed-length vector），信息会被“平均掉”。注意力机制（Attention Mechanism）的核心是：**为每个位置生成一组权重，对输入做加权求和**，让模型自己学“该看哪里”。\n\n最小形式叫点积注意力（Dot-Product Attention）：用查询（Query）和键（Key）算相似度，再用相似度加权值（Value）。\n\n```python\nimport torch\nimport torch.nn.functional as F\n\n# 3 个 token，每个 token 用 4 维向量表示\nx = torch.randn(3, 4)\n\n# 简化：Q、K、V 都来自 x\nQ = K = V = x\n\n# 相似度分数：Q 与 K 的点积，并缩放\nscores = Q @ K.T / (4 ** 0.5)  # shape: (3, 3)\n\n# softmax 把分数变成权重，每行和为 1\nweights = F.softmax(scores, dim=-1)\n\n# 加权求和得到每个位置的新表示\nout = weights @ V\nprint(weights)\nprint(out)\n```\n\n**关键结论**：注意力输出是“值（Value）的加权平均”，权重来自“查询（Query）与键（Key）的相似度”。\n\n---\n\n## 2. 自注意力（Self-Attention）：序列自己看自己\n\n当 Q、K、V 都来自同一个输入序列时，叫自注意力（Self-Attention）。它让每个词都能直接和句子中任意词交互，距离不再是障碍。\n\n```python\nimport torch\nimport torch.nn as nn\n\n# 一个 batch：2 条样本，每条 3 个 token，每个 token 4 维\nx = torch.randn(2, 3, 4)\n\n# 用线性层分别生成 Q、K、V\nd_model = 4\nWq = nn.Linear(d_model, d_model)\nWk = nn.Linear(d_model, d_model)\nWv = nn.Linear(d_model, d_model)\n\nQ, K, V = Wq(x), Wk(x), Wv(x)\n\n# 缩放点积注意力\nscores = Q @ K.transpose(-2, -1) / (d_model ** 0.5)\nweights = torch.softmax(scores, dim=-1)\nout = weights @ V\nprint(out.shape)  # torch.Size([2, 3, 4])\n```\n\n**关键结论**：自注意力让每个位置聚合全序列信息，且权重是数据驱动的、可学习的。\n\n---\n\n## 3. 多头注意力（Multi-Head Attention）：并行看多种关系\n\n一个注意力头只能学一种“关注模式”。多头注意力（Multi-Head Attention）把维度切成多份，并行做多次注意力，再拼接。这样模型可以同时关注语法、指代、语义等不同关系。\n\n```python\nimport torch\nimport torch.nn as nn\n\nbatch, seq_len, d_model, n_heads = 2, 5, 8, 2\nx = torch.randn(batch, seq_len, d_model)\n\n# 标准多头注意力实现\nmha = nn.MultiheadAttention(embed_dim=d_model, num_heads=n_heads, batch_first=True)\nout, attn_weights = mha(x, x, x)\n\nprint(out.shape)          # torch.Size([2, 5, 8])\nprint(attn_weights.shape) # torch.Size([2, 5, 5])\n```\n\n**关键结论**：多头注意力 = 多组 Q/K/V 并行 + 拼接 + 线性投影，是 Transformer 的基本积木。\n\n---\n\n## 4. 因果掩码（Causal Mask）：GPT 为什么不能“偷看未来”\n\nLLM（Large Language Model，大语言模型）通常做下一词预测（next-token prediction），第 t 个位置只能看 1..t，不能看 t+1 之后。实现方式是在 softmax 前把未来位置的分数设成负无穷。\n\n```python\nimport torch\n\nseq_len = 4\nscores = torch.randn(seq_len, seq_len)\n\n# 上三角（不含对角线）设为 -inf\nmask = torch.triu(torch.ones(seq_len, seq_len), diagonal=1).bool()\nscores = scores.masked_fill(mask, float('-inf'))\n\nweights = torch.softmax(scores, dim=-1)\nprint(weights)\n# 每行只在对角线及左侧有非零值，未来位置权重为 0\n```\n\n**关键结论**：因果掩码保证自回归（autoregressive）生成时信息不泄露，是 GPT 类模型的关键。\n\n---\n\n## 5. 复杂度与工程要点：为什么长上下文很贵\n\n注意力计算量随序列长度 n 呈 O(n²) 增长。n=4096 时分数矩阵有约 1600 万个元素；n=128k 时是 160 亿级。工程上常用 FlashAttention、稀疏注意力、滑动窗口注意力等优化显存和速度。\n\n```python\nimport torch\nimport torch.nn.functional as F\n\n# 用 PyTorch 内置 scaled_dot_product_attention，通常会自动选高效内核\ndef attention(q, k, v, causal=False):\n    return F.scaled_dot_product_attention(q, k, v, is_causal=causal)\n\nq = torch.randn(1, 4, 8, 16)  # batch, heads, seq, dim\nk = torch.randn(1, 4, 8, 16)\nv = torch.randn(1, 4, 8, 16)\nout = attention(q, k, v, causal=True)\nprint(out.shape)  # torch.Size([1, 4, 8, 16])\n```\n\n**关键结论**：注意力是 LLM 的核心算子，但长序列下的 O(n²) 是主要瓶颈，工程优化围绕它展开。\n\n---\n\n## 动手练习\n\n**任务**：实现一个带因果掩码的单头自注意力，并验证“未来位置权重为 0”。\n\n1. 构造 `x = torch.randn(1, 5, 6)`。\n2. 用 3 个 `nn.Linear(6, 6)` 生成 Q、K、V。\n3. 计算 `scores = Q @ K.transpose(-2, -1) / sqrt(6)`。\n4. 加上因果掩码，softmax 后得到权重。\n5. 打印权重矩阵，检查第 0 行只有第 0 列非零，第 1 行只有第 0、1 列非零。\n6. 再用 `F.scaled_dot_product_attention(..., is_causal=True)` 对照结果是否一致。\n\n**提交要求**：贴出权重矩阵，并写一句话解释因果掩码的作用。\n\n## ai.llm.multihead\n\n# 多头注意力（Multi-Head Attention）40 分钟讲义\n\n> 一句话直觉：**让模型像多个专家同时从不同角度审阅同一句话，再把意见汇总，比只听一个人的判断更准。**\n\n---\n\n## 0. 为什么需要它？\n\n在 Transformer（变换器）里，注意力（Attention）机制让每个词去“看”句子中其他词。但只用一套注意力权重，模型只能学到一种“关注模式”。比如句子「小明把书给了小红，因为她喜欢读书」中，理解「她」指谁，需要同时关注：\n\n- 语法主语（小明 / 小红）\n- 语义角色（给书的人、收书的人）\n- 性别线索（她 → 女性）\n\n**多头注意力（Multi-Head Attention, MHA）** 就是并行运行多套注意力，每套叫一个“头”（head），各自学习不同的关注模式，最后拼接融合。\n\n---\n\n## 1. 从单头到多头：核心公式\n\n单头注意力（Scaled Dot-Product Attention，缩放点积注意力）的公式是：\n\n$$\\text{Attention}(Q,K,V)=\\text{softmax}\\left(\\frac{QK^T}{\\sqrt{d_k}}\\right)V$$\n\n其中：\n\n- **Q（Query，查询）**：当前词想“问什么”\n- **K（Key，键）**：每个词能“提供什么线索”\n- **V（Value，值）**：每个词真正的“内容”\n- **$d_k$**：每个头的维度，除以 $\\sqrt{d_k}$ 是为了防止点积过大导致 softmax 梯度消失\n\n多头把模型维度 $d_{model}$ 切成 $h$ 份，每个头维度 $d_k=d_v=d_{model}/h$：\n\n$$\\text{MultiHead}(Q,K,V)=\\text{Concat}(\\text{head}_1,\\dots,\\text{head}_h)W^O$$\n\n$$\\text{head}_i=\\text{Attention}(QW_i^Q, KW_i^K, VW_i^V)$$\n\n关键点：**不是简单重复 h 次，而是每个头有独立的可学习投影矩阵 $W_i^Q, W_i^K, W_i^V$，最后再用 $W^O$ 融合。**\n\n---\n\n## 2. 形状变化：工程实现的关键\n\n假设批次大小（batch size）$B$，序列长度（sequence length）$L$，模型维度 $d_{model}$，头数 $h$，每头维度 $d_k=d_{model}/h$。\n\n| 张量 | 形状 |\n|---|---|\n| 输入 X | (B, L, d_model) |\n| Q/K/V 投影后 | (B, L, d_model) |\n| reshape 成多头 | (B, h, L, d_k) |\n| 注意力分数 | (B, h, L, L) |\n| 每个头输出 | (B, h, L, d_k) |\n| 拼接后 | (B, L, d_model) |\n\n工程上最常见的 bug 就是 **reshape / transpose 顺序写错**，导致头之间信息串味。\n\n---\n\n## 3. 为什么要除以 h？\n\n如果直接把 $d_{model}$ 拿去做单头注意力，点积结果的方差会随维度线性增长。多头把维度均分后，每个头在低维空间计算，**总计算量几乎不变，但表达能力更强**：\n\n- 单头：$L \\times d_{model}$ 的 QK 计算\n- 多头：$h \\times L \\times d_k = L \\times d_{model}$，一样\n\n所以多头是“几乎免费”的表达力升级。\n\n---\n\n## 4. 多头学到了什么？（可解释性）\n\n论文 *Attention Is All You Need* 可视化显示：\n\n- 有的头关注**相邻词**（局部语法）\n- 有的头关注**句首/句尾**（全局结构）\n- 有的头做**指代消解**（她 → 小红）\n- 有的头几乎无用（可在推理时裁剪，即 head pruning）\n\n这说明多头不是冗余，而是**分工**。\n\n---\n\n## 5. PyTorch 从零实现\n\n下面代码完整实现一个多头注意力模块，并与 PyTorch 官方 `nn.MultiheadAttention` 对齐形状验证。\n",
+  "quiz": [
+    {
+      "kp": "ai.llm.attention",
+      "type": "single_choice",
+      "question": "在自注意力机制中，输入序列每个位置的表示会与序列中所有位置（包括自身）的表示计算相似度得分。这主要带来什么效果？",
+      "options": [
+        "每个位置的输出只依赖它左边的上下文",
+        "每个位置的输出可以聚合整个序列的信息，权重由相似度决定",
+        "每个位置的输出等于该位置输入的线性变换，与其它位置无关",
+        "每个位置的输出只依赖它右边的上下文"
+      ],
+      "answer": 1,
+      "explanation": "自注意力通过相似度得分对全序列做加权聚合，因此每个位置都能看到整个序列；只依赖左侧或右侧是因果掩码或单向注意力的特例，与概念本身无关。",
+      "error_tag": "概念混淆",
+      "variant_group": "attention_basic"
+    },
+    {
+      "kp": "ai.llm.attention",
+      "type": "single_choice",
+      "question": "某注意力层中，查询向量 q 与所有键向量 k_i 做点积后得到较大的正数。通常这表示什么？",
+      "options": [
+        "该查询与对应键的匹配程度较高，注意力权重会倾向更大",
+        "该查询与对应键的匹配程度较低，注意力权重会倾向更小",
+        "点积结果与注意力权重无关，只影响输出维度",
+        "该查询必须被完全忽略"
+      ],
+      "answer": 0,
+      "explanation": "点积越大通常表示查询与键越匹配，经过缩放和 softmax 后对应位置的权重更大；权重小才是匹配度低的表现。",
+      "error_tag": "符号理解错误",
+      "variant_group": "attention_score"
+    },
+    {
+      "kp": "ai.llm.attention",
+      "type": "single_choice",
+      "question": "在 softmax 注意力中，如果某个键的得分远远大于其它键，softmax 输出会呈现什么特点？",
+      "options": [
+        "几乎所有概率质量集中在得分最大的键上",
+        "概率质量均匀分布在所有键上",
+        "所有概率都变成 0",
+        "概率质量集中在得分最小的键上"
+      ],
+      "answer": 0,
+      "explanation": "softmax 对最大得分非常敏感，得分差距大时近似 one-hot；均匀分布、全 0 或集中到最小得分都不符合其定义。",
+      "error_tag": "softmax 行为误解",
+      "variant_group": "attention_softmax"
+    },
+    {
+      "kp": "ai.llm.attention",
+      "type": "single_choice",
+      "question": "下列关于交叉注意力的说法，哪一项更准确？",
+      "options": [
+        "查询来自一个序列，键和值来自另一个序列",
+        "查询、键、值必须来自同一个序列",
+        "交叉注意力只能用于图像分类",
+        "交叉注意力不需要计算相似度"
+      ],
+      "answer": 0,
+      "explanation": "交叉注意力常用于让一个序列查询另一个序列的信息，因此 Q 与 K/V 可来自不同序列；它仍需要相似度计算，也不是图像分类专属。",
+      "error_tag": "交叉注意力误解",
+      "variant_group": "attention_cross"
+    },
+    {
+      "kp": "ai.llm.attention",
+      "type": "single_choice",
+      "question": "在多头注意力中，若把每个头的维度设得与单头总维度相同，而不做任何并行拆分，会发生什么？",
+      "options": [
+        "参数量和计算量可能显著增加，但不等于标准多头设计",
+        "会自动获得多头带来的子空间多样性",
+        "注意力权重会自动变成均匀分布",
+        "查询和键会被自动共享"
+      ],
+      "answer": 0,
+      "explanation": "标准多头是把总维度拆成多个子空间并行；若每头都用完整维度，计算量会膨胀，且不等于原始多头设计。",
+      "error_tag": "头维度理解错误",
+      "variant_group": "attention_multihead"
+    },
+    {
+      "kp": "ai.llm.attention",
+      "type": "single_choice",
+      "question": "对于自注意力层，若把输入序列中所有位置的顺序打乱，输出通常会怎样？",
+      "options": [
+        "输出保持不变，因为自注意力本身对位置置换等变",
+        "输出会完全不同，因为自注意力显式编码了位置",
+        "输出会变成全零",
+        "输出会随机初始化"
+      ],
+      "answer": 0,
+      "explanation": "纯自注意力对输入位置是置换等变的，打乱顺序会相应打乱输出；要区分顺序通常需要位置编码，而不是注意力本身。",
+      "error_tag": "置换等变性误解",
+      "variant_group": "attention_permutation"
+    },
+    {
+      "kp": "ai.llm.attention",
+      "type": "single_choice",
+      "question": "如果注意力权重在 softmax 之前不加缩放，且键维度较大，可能出现的数值问题是？",
+      "options": [
+        "得分方差变大，softmax 输出接近 one-hot，梯度变小",
+        "得分方差变小，softmax 输出接近均匀分布",
+        "得分全部变成整数",
+        "键向量维度会自动缩小"
+      ],
+      "answer": 0,
+      "explanation": "点积方差随维度增大而增大，未缩放时 softmax 容易饱和，梯度变小；这与均匀分布、整数化和维度自动缩小无关。",
+      "error_tag": "缩放必要性误解",
+      "variant_group": "attention_scale"
+    },
+    {
+      "kp": "ai.llm.attention",
+      "type": "single_choice",
+      "question": "在注意力机制中，对值向量 V 进行加权求和时，权重来自哪里？",
+      "options": [
+        "来自查询与键的相似度经 softmax 后的结果",
+        "来自值向量自身的模长",
+        "来自输出层的梯度",
+        "来自位置编码的固定值"
+      ],
+      "answer": 0,
+      "explanation": "权重由 Q 与 K 的匹配分数归一化得到，再用于对 V 加权；不是由 V 的模长、输出梯度或位置编码决定。",
+      "error_tag": "权重来源混淆",
+      "variant_group": "attention_weight_source"
+    },
+    {
+      "kp": "ai.llm.attention",
+      "type": "single_choice",
+      "question": "下列关于注意力掩码的说法，哪一项正确？",
+      "options": [
+        "掩码用于屏蔽某些位置，使它们不参与注意力计算",
+        "掩码用于增加序列长度",
+        "掩码会把所有注意力权重置为 1",
+        "掩码只能用于解码器，不能用于编码器"
+      ],
+      "answer": 0,
+      "explanation": "掩码通过给被屏蔽位置一个极大的负分来阻止其参与 softmax 加权；它不改变序列长度，也不把权重全置 1，编码器中也可使用填充掩码。",
+      "error_tag": "掩码功能误解",
+      "variant_group": "attention_mask"
+    },
+    {
+      "kp": "ai.llm.attention",
+      "type": "single_choice",
+      "question": "某注意力层输入包括一个长度为 5 的查询序列和长度为 8 的键值序列。注意力权重矩阵的形状最可能是？",
+      "options": [
+        "5×8",
+        "8×5",
+        "5×5",
+        "8×8"
+      ],
+      "answer": 0,
+      "explanation": "权重矩阵行数对应查询数量，列数对应键数量，因此是 5×8；8×5、5×5、8×8 都把查询和键的数量弄反或混用了。",
+      "error_tag": "形状计算错误",
+      "variant_group": "attention_shape"
+    },
+    {
+      "kp": "ai.llm.attention",
+      "type": "single_choice",
+      "question": "在多头注意力中，若某个头学到的注意力权重几乎均匀分布，最合理的解释是？",
+      "options": [
+        "该头对输入位置的区分能力较弱，近似平均聚合",
+        "该头一定比其它头更重要",
+        "该头已经失效，必须删除",
+        "该头只能处理长度为 1 的序列"
+      ],
+      "answer": 0,
+      "explanation": "均匀权重意味着该头对位置区分不明显，近似平均池化；这不一定代表更重要或必须删除，也与序列长度是否为 1 无关。",
+      "error_tag": "头行为误解",
+      "variant_group": "attention_multihead"
+    },
+    {
+      "kp": "ai.llm.attention",
+      "type": "single_choice",
+      "question": "关于自注意力与循环神经网络在建模长距离依赖上的差异，下列哪项更准确？",
+      "options": [
+        "自注意力中任意两位置可直接交互，路径长度较短；循环网络需逐步传递",
+        "自注意力必须逐步传递信息，循环网络可直接交互",
+        "两者都只能建模相邻位置的关系",
+        "自注意力无法建模长距离依赖"
+      ],
+      "answer": 0,
+      "explanation": "自注意力使任意两位置一步交互，有利于长距离依赖；循环网络依赖时间步逐步传递，路径更长。其它选项把两者特性颠倒或绝对化。",
+      "error_tag": "模型对比误解",
+      "variant_group": "attention_vs_rnn"
+    },
+    {
+      "kp": "ai.llm.attention",
+      "type": "single_choice",
+      "question": "在缩放点积注意力中，点积结果会除以 sqrt(d_k)，其中 d_k 是键向量的维度。这样做的主要目的是什么？",
+      "options": [
+        "让输出向量的维度变成 sqrt(d_k)",
+        "防止点积结果过大导致 softmax 梯度消失或过于尖锐",
+        "把注意力权重变成整数",
+        "减少查询和键的数量"
+      ],
+      "answer": 1,
+      "explanation": "维度增大时点积方差会变大，softmax 容易进入饱和区，缩放可稳定数值与梯度；它不改变输出维度，也不改变查询/键数量。",
+      "error_tag": "作用误解",
+      "variant_group": "attention_scale"
+    },
+    {
+      "kp": "ai.llm.attention",
+      "type": "single_choice",
+      "question": "若注意力权重矩阵的每一行经过 softmax 计算，那么每一行的权重具有什么性质？",
+      "options": [
+        "每个权重都等于 1",
+        "所有权重之和为 1，且每个权重非负",
+        "权重之和等于序列长度",
+        "权重可以为任意负数"
+      ],
+      "answer": 1,
+      "explanation": "softmax 输出是非负的且沿指定维度归一化，因此每行权重和为 1；权重并非全 1，也不是序列长度，更不能为负。",
+      "error_tag": "归一化理解错误",
+      "variant_group": "attention_softmax"
+    },
+    {
+      "kp": "ai.llm.attention",
+      "type": "single_choice",
+      "question": "在多头注意力中，多个注意力头并行计算后再拼接并线性变换。与单头注意力相比，主要优势是什么？",
+      "options": [
+        "让模型只能关注一个位置",
+        "让模型在不同子空间中关注不同类型的关系",
+        "完全消除注意力计算量",
+        "保证每个头学到完全相同的权重"
+      ],
+      "answer": 1,
+      "explanation": "多头允许在不同投影子空间中并行建模多种关系，再融合；它不会只关注一个位置，也不会消除计算量，更不会保证各头相同。",
+      "error_tag": "多头机制误解",
+      "variant_group": "attention_multihead"
+    },
+    {
+      "kp": "ai.llm.attention",
+      "type": "single_choice",
+      "question": "在自注意力中，如果去掉所有位置之间的交互，只让每个位置与自己计算注意力，会发生什么？",
+      "options": [
+        "模型仍然可以建模任意两个位置之间的依赖",
+        "每个位置的输出只由自身决定，失去跨位置建模能力",
+        "注意力权重会自动变成均匀分布",
+        "查询、键、值会共享同一个参数矩阵"
+      ],
+      "answer": 1,
+      "explanation": "只与自身计算注意力时，输出仅依赖当前位置，跨位置依赖无法建模；均匀分布和参数共享都不是必然结果。",
+      "error_tag": "交互作用忽略",
+      "variant_group": "attention_self"
+    },
+    {
+      "kp": "ai.llm.attention",
+      "type": "single_choice",
+      "question": "在因果自注意力中，位置 t 只能关注位置 t 及之前的位置。实现时通常采用什么方式？",
+      "options": [
+        "对未来的位置加上很大的负值，使 softmax 后权重接近 0",
+        "删除未来的键和值，使序列变短",
+        "对未来的位置加上很大的正值，使权重变大",
+        "把未来位置的查询向量置为单位向量"
+      ],
+      "answer": 0,
+      "explanation": "常用掩码把未来位置得分设为负无穷或大负数，softmax 后权重接近 0；不是删除张量，也不是加大正值或改查询向量。",
+      "error_tag": "掩码实现混淆",
+      "variant_group": "attention_causal"
+    },
+    {
+      "kp": "ai.llm.attention",
+      "type": "single_choice",
+      "question": "在注意力计算中，查询 Q、键 K、值 V 的作用分别是什么？",
+      "options": [
+        "Q 用来计算相似度，K 用来提供被比较的表示，V 用来被加权聚合",
+        "Q 用来被加权聚合，K 用来计算相似度，V 用来提供被比较的表示",
+        "Q、K、V 三者完全等价，可以随意交换",
+        "Q 决定输出维度，K 决定序列长度，V 决定批量大小"
+      ],
+      "answer": 0,
+      "explanation": "Q 与 K 计算匹配分数，再用分数对 V 加权求和得到输出；三者角色不同，不能随意交换，也不直接决定形状参数。",
+      "error_tag": "角色混淆",
+      "variant_group": "attention_qkv"
+    },
+    {
+      "kp": "ai.llm.attention",
+      "type": "single_choice",
+      "question": "注意力权重矩阵的形状通常与下列哪一项对应？",
+      "options": [
+        "查询数量 × 键数量",
+        "值维度 × 输出维度",
+        "批量大小 × 头数",
+        "键维度 × 查询维度"
+      ],
+      "answer": 0,
+      "explanation": "注意力权重描述每个查询对每个键的关注程度，因此形状是查询数量乘键数量；其它选项把维度角色弄混了。",
+      "error_tag": "形状理解错误",
+      "variant_group": "attention_shape"
+    },
+    {
+      "kp": "ai.llm.attention",
+      "type": "single_choice",
+      "question": "若输入序列长度为 n，自注意力的权重矩阵大小约为 n×n，当 n 很大时会出现什么主要问题？",
+      "options": [
+        "权重矩阵过大，计算和存储开销随 n 的平方增长",
+        "权重矩阵会自动变成稀疏矩阵，计算量下降",
+        "序列长度不会影响计算开销",
+        "注意力头数量会自动减少"
+      ],
+      "answer": 0,
+      "explanation": "自注意力权重规模与序列长度平方相关，长序列时计算和内存开销显著增大；它不会自动变稀疏，也不影响头数。",
+      "error_tag": "复杂度误解",
+      "variant_group": "attention_complexity"
+    },
+    {
+      "kp": "ai.llm.multihead",
+      "type": "single_choice",
+      "question": "在多头注意力机制中，将查询、键、值投影到多个低维子空间并行计算注意力，最主要的动机是什么？",
+      "options": [
+        "减少模型参数总量，使训练更快收敛",
+        "让模型能在不同表示子空间中关注不同的信息模式",
+        "避免使用 softmax，从而提升数值稳定性",
+        "使序列长度不参与计算复杂度的增长"
+      ],
+      "answer": 1,
+      "explanation": "多头注意力的核心是让不同的头在不同的投影子空间中各自学习关注模式，从而捕获更丰富的语义关系。参数总量通常与单头同维度时相近，头数并不改变总参数量；它也不改变 O(n^2) 的序列长度依赖，也不是为了避开 softmax。",
+      "error_tag": "概念混淆",
+      "variant_group": "multihead-motivation"
+    },
+    {
+      "kp": "ai.llm.multihead",
+      "type": "single_choice",
+      "question": "设模型维度 d_model=512，头数 h=8，在标准多头注意力中每个头的维度 d_k 通常等于多少？",
+      "options": [
+        "512",
+        "8",
+        "64",
+        "4096"
+      ],
+      "answer": 2,
+      "explanation": "标准实现里每个头的维度为 d_model / h = 512 / 8 = 64，各头拼接后投影回 d_model，因此整体维度不变。选 512 是忽略了分头，选 8 是混淆了头数与维度。",
+      "error_tag": "概念混淆",
+      "variant_group": "multihead-head-dim"
+    },
+    {
+      "kp": "ai.llm.multihead",
+      "type": "multi_choice",
+      "question": "以下哪些是使用多头注意力（而非单头）可能带来的好处？（多选）",
+      "options": [
+        "能从不同表示子空间捕获不同类型的依赖关系",
+        "增强模型对不同位置、不同语义关系的关注能力",
+        "显著减少序列长度带来的二次复杂度",
+        "在总维度不变时提供更灵活的表示分解"
+      ],
+      "answer": [
+        0,
+        1,
+        3
+      ],
+      "explanation": "多头的主要收益是子空间多样性和表示分解带来的关注灵活性，并不会降低注意力的二次复杂度，所以第三项不成立。",
+      "error_tag": "概念混淆",
+      "variant_group": "multihead-benefits"
+    },
+    {
+      "kp": "ai.llm.multihead",
+      "type": "multi_choice",
+      "question": "在实现多头注意力时，以下哪些做法是常见的正确操作？（多选）",
+      "options": [
+        "把 d_model 拆分成 h 份作为每个头的维度",
+        "对每个头的查询和键做点积后除以 sqrt(d_k) 再 softmax",
+        "把各头输出拼接后用输出投影还原到 d_model",
+        "在解码器自注意力中屏蔽未来位置",
+        "让所有头共用同一个查询投影矩阵以保证一致性"
+      ],
+      "answer": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "explanation": "前四项都是多头注意力的标准实现步骤。让所有头共用投影矩阵会破坏多头的独立性，不是常见做法。",
+      "error_tag": "概念混淆",
+      "variant_group": "multihead-implementation"
+    },
+    {
+      "kp": "ai.llm.multihead",
+      "type": "multi_choice",
+      "question": "关于注意力掩码（mask），以下说法正确的有哪些？（多选）",
+      "options": [
+        "因果掩码用于防止看到未来位置的信息",
+        "填充掩码用于忽略批次中补齐的无效位置",
+        "掩码通常在 softmax 之前施加，把无效位置分数置为负无穷",
+        "掩码会改变注意力权重的归一化方式，使其不再和为 1"
+      ],
+      "answer": [
+        0,
+        1,
+        2
+      ],
+      "explanation": "因果掩码和填充掩码分别处理因果性和无效位置，通过置负无穷在 softmax 前生效。softmax 后有效位置的权重仍然归一化，和为 1，因此第四项错误。",
+      "error_tag": "概念混淆",
+      "variant_group": "multihead-mask"
+    },
+    {
+      "kp": "ai.llm.multihead",
+      "type": "multi_choice",
+      "question": "关于多头注意力中的维度关系，以下哪些表述是正确的？（多选）",
+      "options": [
+        "通常要求 d_model 能被头数 h 整除",
+        "每个头的键维度 d_k 可以和值维度 d_v 不相等",
+        "拼接后的维度是 h * d_v，一般再投影回 d_model",
+        "注意力分数矩阵的形状与头数无关，只与序列长度有关"
+      ],
+      "answer": [
+        0,
+        1,
+        2
+      ],
+      "explanation": "为便于均匀划分，d_model 通常被头数整除；键和值维度可以不同；拼接维度为 h*d_v 并投影回 d_model。注意力分数矩阵在每个头内是序列长度的方阵，但头数会影响批量维度，因此第四项不准确。",
+      "error_tag": "记忆缺失",
+      "variant_group": "multihead-dimension"
+    },
+    {
+      "kp": "ai.llm.multihead",
+      "type": "fill_blank",
+      "question": "在缩放点积注意力中，为避免点积过大导致 softmax 饱和，需要将查询与键的点积除以________。",
+      "options": [],
+      "answer": [
+        "sqrt(d_k)",
+        "sqrt(dk)",
+        "根号 d_k",
+        "d_k 的平方根",
+        "d_k的平方根"
+      ],
+      "explanation": "缩放因子是键维度 d_k 的平方根，即 1/sqrt(d_k)，目的是控制点积的方差，使 softmax 梯度保持稳定。",
+      "error_tag": "记忆缺失",
+      "variant_group": "multihead-scaling"
+    },
+    {
+      "kp": "ai.llm.multihead",
+      "type": "fill_blank",
+      "question": "多头注意力中各个头计算完毕后，通常将它们的输出沿________维度拼接，再进行一次线性投影。",
+      "options": [],
+      "answer": [
+        "特征",
+        "最后一个",
+        "channel",
+        "特征维度",
+        "最后一维"
+      ],
+      "explanation": "各头输出在特征（最后一维）上拼接，构成 h*d_v 的向量，随后由输出投影融合为 d_model 维表示。",
+      "error_tag": "记忆缺失",
+      "variant_group": "multihead-combine"
+    },
+    {
+      "kp": "ai.llm.multihead",
+      "type": "fill_blank",
+      "question": "设 d_model=256，头数 h=4，则每个头的维度 d_k = ________。",
+      "options": [],
+      "answer": [
+        "64",
+        "64 维",
+        "64维"
+      ],
+      "explanation": "每个头的维度为 d_model / h = 256 / 4 = 64。",
+      "error_tag": "边界错误",
+      "variant_group": "multihead-head-dim"
+    },
+    {
+      "kp": "ai.llm.multihead",
+      "type": "code_reading",
+      "question": "阅读下面（示意性）的注意力分数计算片段：\n\nscores = Q @ K.transpose(-2, -1)\nscores = scores / math.sqrt(d_k)\nmask = torch.triu(torch.ones(L, L), diagonal=1).bool()\nscores = scores.masked_fill(mask, float('-inf'))\nattn = softmax(scores, dim=-1)\n\n问：如果不做 masked_fill 这一步，在解码器自注意力训练中会出现什么问题？",
+      "options": [],
+      "answer": "每个位置会同时看到包括未来位置在内的全部键，注意力权重被泄漏的未来信息污染，训练目标与自回归推理不一致，生成时依赖的信息在推理阶段不可得，导致训练/推理行为不一致。",
+      "explanation": "上三角掩码把未来位置的分数置为负无穷，softmax 后这些位置权重为 0。去掉该步骤会破坏因果性，使模型在训练时就能看到答案位置之后的内容。",
+      "error_tag": "概念混淆",
+      "variant_group": "multihead-mask"
+    },
+    {
+      "kp": "ai.llm.multihead",
+      "type": "code_reading",
+      "question": "阅读下面（示意性）的多头拆分片段：\n\n# x: (batch, seq, d_model)\nq = W_q(x)  # (batch, seq, d_model)\nq = q.reshape(batch, seq, h, d_k).transpose(1, 2)\n# 得到 (batch, h, seq, d_k)\n\n问：这里的 transpose(1, 2) 起到了什么作用？",
+      "options": [],
+      "answer": "把头这一维移到序列维度之前，使张量形状变为 (batch, h, seq, d_k)，这样每个头都有独立的序列维度，便于对 seq x seq 的注意力分数并行计算，之后再转置回来拼接。",
+      "explanation": "拆分后需要把头维与序列维交换，使注意力在 (seq, d_k) 上按头并行计算，得到 (batch, h, seq, seq) 的分数矩阵，最后再转回 (batch, seq, d_model) 拼接输出。",
+      "error_tag": "概念混淆",
+      "variant_group": "multihead-implementation"
+    },
+    {
+      "kp": "ai.llm.multihead",
+      "type": "scenario",
+      "question": "在某翻译模型的训练中，工程师发现解码器生成的译文总是提前「看到」了后续词，训练损失很低但推理时质量骤降。经排查，代码里多头自注意力在计算分数后先做了 softmax，再对结果做上三角置零。请分析问题原因并给出修正思路。",
+      "options": [],
+      "answer": null,
+      "explanation": "先 softmax 再置零会使被屏蔽位置的权重被重新分配后又被清零，剩余有效权重的归一化已被破坏，同时未来位置的信息已经参与了 softmax 分母计算。正确做法是在 softmax 之前，把未来位置的分数置为负无穷，让 softmax 后这些位置权重为 0，从而保证因果性。",
+      "error_tag": "边界错误",
+      "variant_group": "multihead-mask",
+      "required_keywords": [
+        "因果性",
+        "softmax",
+        "上三角掩码",
+        "负无穷",
+        "注意力分数"
+      ]
+    },
+    {
+      "kp": "ai.llm.multihead",
+      "type": "single_choice",
+      "question": "在多头注意力中，各个头计算出的注意力输出通常是怎样组合成最终输出的？",
+      "options": [
+        "对所有头取平均后直接输出",
+        "只保留注意力分数最高的那个头",
+        "将各头输出按最后一维拼接，再做一次线性投影",
+        "将各头输出逐元素相加，不做任何投影"
+      ],
+      "answer": 2,
+      "explanation": "标准做法是把各头的输出在特征维度上拼接，然后通过输出权重矩阵投影回 d_model。取平均、相加或选最大值都不是标准组合方式。",
+      "error_tag": "概念混淆",
+      "variant_group": "multihead-combine"
+    },
+    {
+      "kp": "ai.llm.multihead",
+      "type": "scenario",
+      "question": "团队在把单头注意力改为多头注意力（d_model 不变）后，发现显存占用明显上升、吞吐下降，但模型质量提升有限。请从实现角度分析可能的原因，并说明如何排查与优化。",
+      "options": [],
+      "answer": null,
+      "explanation": "在 d_model 不变时，多头本身不显著增加参数量，但会引入额外的中间张量（拆分、转置、拼接产生的临时张量），头数越多这类张量越多，显存与访存开销上升。排查时应检查是否出现了不必要的 contiguous/复制、是否可用融合算子（如合并的 QKV 投影或高效的注意力实现），并在保证质量的前提下选择合适头数，避免低效的 reshape 与拼接路径。",
+      "error_tag": "概念混淆",
+      "variant_group": "multihead-performance",
+      "required_keywords": [
+        "QKV",
+        "复制"
+      ]
+    },
+    {
+      "kp": "ai.llm.multihead",
+      "type": "single_choice",
+      "question": "若在多头注意力中把缩放因子漏掉（即不除以 sqrt(d_k)），当 d_k 较大时最可能出现什么现象？",
+      "options": [
+        "注意力分数规模过大，softmax 输出趋于极端，梯度变小",
+        "注意力分数规模过小，softmax 输出接近均匀分布",
+        "模型维度不匹配，前向传播直接报错",
+        "各头之间无法拼接，必须减少头数"
+      ],
+      "answer": 0,
+      "explanation": "点积的方差随维度增长，不做缩放会使点积值很大，softmax 进入饱和区，输出接近 one-hot，梯度变得很小，训练困难。这是缩放点积注意力中引入 sqrt(d_k) 的原因。",
+      "error_tag": "概念混淆",
+      "variant_group": "multihead-scaling"
+    },
+    {
+      "kp": "ai.llm.multihead",
+      "type": "single_choice",
+      "question": "关于多头注意力中不同头的查询/键/值投影矩阵，下列说法正确的是？",
+      "options": [
+        "所有头必须共享同一组投影矩阵，才能保证输出可比",
+        "每个头有各自独立的投影矩阵，通过训练学习不同的关注模式",
+        "投影矩阵是固定的正交矩阵，不参与训练",
+        "只有第一个头需要投影矩阵，其余头直接复用"
+      ],
+      "answer": 1,
+      "explanation": "每个头拥有独立的可学习投影矩阵，正是这种独立性让各头可以学到不同的关注子空间。共享或固定矩阵会削弱多头的表达能力。",
+      "error_tag": "概念混淆",
+      "variant_group": "multihead-projection"
+    },
+    {
+      "kp": "ai.llm.multihead",
+      "type": "single_choice",
+      "question": "在解码器的自注意力层中，为什么要对注意力分数施加掩码（mask）？",
+      "options": [
+        "防止模型看到未来位置的信息，保证自回归性质",
+        "减少显存占用，因为掩码可以删除部分张量",
+        "让不同头共享同一套键值，从而降低参数量",
+        "把 softmax 替换成 sigmoid，提高数值稳定性"
+      ],
+      "answer": 0,
+      "explanation": "掩码把未来位置的分数置为负无穷，经 softmax 后权重为 0，使每个位置只能关注自身及之前的位置，从而保持自回归生成时的因果性。掩码不减少参数，也不改变 softmax 本身。",
+      "error_tag": "概念混淆",
+      "variant_group": "multihead-mask"
+    },
+    {
+      "kp": "ai.llm.multihead",
+      "type": "single_choice",
+      "question": "在多头注意力中，如果注意力头数从 8 增加到 16，而 d_model 保持不变，下列说法最准确的是？",
+      "options": [
+        "总参数量翻倍，因为头的数量翻倍了",
+        "每个头的维度减半，总投影参数量基本不变，但各头容量更小",
+        "注意力计算复杂度会随头数平方增长",
+        "必须同时把 d_model 翻倍，否则无法运行"
+      ],
+      "answer": 1,
+      "explanation": "在 d_model 固定时，投影矩阵总大小与头数无关，头数增加只是把维度切得更细，每个头的 d_k 变小。单头复杂度之和近似不变，并不是按头数平方增长，也不需要把 d_model 翻倍。",
+      "error_tag": "边界错误",
+      "variant_group": "multihead-head-count"
+    },
+    {
+      "kp": "ai.llm.multihead",
+      "type": "single_choice",
+      "question": "某实现中把各头输出在特征维度上「相加」而不是「拼接」，这会导致什么问题？",
+      "options": [
+        "输出维度会变成 d_model 的 h 倍，无法继续前向传播",
+        "不同头的信息被直接叠加耦合，输出投影无法按头区分各子空间贡献",
+        "softmax 会失效，注意力权重不再归一化",
+        "计算复杂度从 O(n^2) 降到 O(n)"
+      ],
+      "answer": 1,
+      "explanation": "拼接保留了各头在子空间中的独立表示，随后由输出投影统一融合；直接相加会让不同头的信息在元素级提前耦合，丢失头之间的可区分性，一般不是标准做法。相加不会改变输出维度，也不影响 softmax 归一化。",
+      "error_tag": "概念混淆",
+      "variant_group": "multihead-combine"
+    },
+    {
+      "kp": "ai.llm.multihead",
+      "type": "single_choice",
+      "question": "在跨注意力（cross-attention）中，查询、键、值分别通常来自哪里？",
+      "options": [
+        "查询、键、值都来自同一个序列",
+        "查询来自解码器当前序列，键和值来自编码器输出",
+        "查询来自编码器，键和值来自解码器",
+        "查询、键、值都由同一个随机初始化的矩阵生成"
+      ],
+      "answer": 1,
+      "explanation": "跨注意力用于解码器关注编码器信息：查询来自解码器当前表示，键和值来自编码器输出。全部来自同一序列是自注意力，与跨注意力的定义不同。",
+      "error_tag": "概念混淆",
+      "variant_group": "multihead-cross-attention"
+    },
+    {
+      "kp": "ai.llm.multihead",
+      "type": "single_choice",
+      "question": "关于多头注意力与单头注意力的计算复杂度（不含投影），说法正确的是？",
+      "options": [
+        "多头是单头的 h 倍，其余不变",
+        "在总维度相同时，两者大致相同，都是关于序列长度的平方级",
+        "多头是线性增长，单头是平方增长",
+        "两者都与序列长度无关"
+      ],
+      "answer": 1,
+      "explanation": "在 d_model 固定时，多头把维度切分给 h 个头，各头的注意力计算量之和与单头在同维度下大体相当，仍然随序列长度呈平方增长。既不呈线性，也与长度并非无关。",
+      "error_tag": "边界错误",
+      "variant_group": "multihead-complexity"
+    }
+  ]
+}

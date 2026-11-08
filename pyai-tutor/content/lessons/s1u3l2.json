@@ -1,0 +1,634 @@
+{
+  "id": "s1u3l2",
+  "title": "s1u3l2",
+  "kps": [
+    "py.flow.while",
+    "py.flow.break_continue"
+  ],
+  "theory": "## py.flow.while\n\n# `while` 循环：让重复工作交给机器\n\n## 一句话直觉\n\n**当“某件事还没做完”时，就一遍遍重复做，直到条件不再满足——这就是 `while` 循环（while loop）。** 判断、循环、退出，三者构成了程序自动化的核心。\n\n---\n\n## 1. 为什么需要 `while`：从“复制粘贴”到“自动重复”\n\n假设要打印 1 到 5：\n\n```python\nprint(1)\nprint(2)\nprint(3)\nprint(4)\nprint(5)\n```\n\n如果要打印 1 到 10000 呢？显然不能手写一万行。程序最擅长的事之一就是**重复执行**。`while` 的语法是：\n\n```python\nwhile 条件表达式:\n    循环体\n```\n\n它的执行逻辑是：\n\n1. 判断 `条件表达式` 是否为 `True`；\n2. 若为 `True`，执行一次循环体，然后回到第 1 步；\n3. 若为 `False`，跳过循环体，继续执行后面的代码。\n\n```python\ncount = 1                      # 初始化计数器\nwhile count <= 5:              # 条件：只要 count 不超过 5\n    print(count)               # 循环体\n    count += 1                 # 让条件最终会变 False，否则会无限循环\n```\n\n**关键结论：`while` 循环里一定要有“让条件最终变为 False”的语句，否则就是死循环（infinite loop）。**\n\n---\n\n## 2. 控制循环节奏：`break`、`continue` 与 `else`\n\n有时候条件本身不够表达“何时退出”，我们需要更细粒度的控制：\n\n- **`break`**：立刻终止整个循环；\n- **`continue`**：跳过本次剩余循环体，直接进入下一次条件判断；\n- **`while ... else`**：只有当循环**自然结束**（条件变 False，没有被 `break` 打断）时才执行 `else`。\n\n```python\nn = 0\nwhile n < 10:\n    n += 1\n    if n == 3:\n        continue     # 跳过打印 3，但循环继续\n    if n == 6:\n        break        # 遇到 6 直接结束循环\n    print(n)         # 输出 1 2 4 5\nelse:\n    print(\"循环自然结束\")   # 因为被 break 打断，这行不会执行\n```\n\n**关键结论：`break` 是“跳出循环”，`continue` 是“跳过这一轮”，`else` 是“没有被打断时的收尾”。**\n\n---\n\n## 3. 典型模式：计数器、累加器、哨兵值\n\n工程中 `while` 最常见的三种用法：\n\n### 3.1 计数器循环\n\n```python\ni = 0\nwhile i < 3:\n    print(f\"第 {i + 1} 次\")\n    i += 1\n```\n\n### 3.2 累加/累乘\n\n```python\ntotal = 0\nk = 1\nwhile k <= 100:\n    total += k\n    k += 1\nprint(total)   # 5050\n```\n\n### 3.3 哨兵值循环（sentinel loop）\n\n当不知道循环次数，只知道“遇到某个特殊值就停”时，用哨兵值（sentinel）。\n\n```python\nwhile True:\n    user_input = input(\"输入数字（输入 q 退出）：\")\n    if user_input == \"q\":\n        break\n    number = int(user_input)\n    print(number * 2)\n```\n\n**关键结论：`while True` + `break` 是处理“不确定循环次数”场景最自然的写法。**\n\n---\n\n## 4. 与 `for` 的关系，以及选择原则\n\n`while` 与 `for` 都能做重复，但**选择依据是“你知道重复次数吗？”**：\n\n- 知道遍历对象或次数 → 优先 `for`（更简洁、更安全）；\n- 只知道“条件满足就继续” → 用 `while`（更能表达意图）。\n\n```python\n# 用 for 打印 1..5\nfor i in range(1, 6):\n    print(i)\n\n# 用 while 打印 1..5\ni = 1\nwhile i <= 5:\n    print(i)\n    i += 1\n```\n\n两者在大多数可数场景下等价，但 `while` 更适合“循环条件本身是业务逻辑”的场景，例如“只要服务器未就绪就继续等待”。\n\n---\n\n## 5. 工程级注意点\n\n在真实项目里，`while` 循环要注意以下几点：\n\n1. **防止死循环**：条件变量一定要在循环体内被修改，或使用 `break` 有明确出口；\n2. **超时保护**：等待型循环要加最大等待时间，避免程序卡死；\n3. **优先使用条件判断而非 `== True/False`**：判断布尔表达式时直接 `if greeting:`，不要写 `if greeting == True:`，后者是可读性差的反模式；\n4. **避免在 `finally` 里用 `return/break/continue`**：会吞掉正在传播的异常；\n5. **空序列判断**：对于字符串、列表、元组等，直接用真值判断（`if not seq:`），不要用 `len(seq)`。\n\n```python\n# 带超时保护的等待循环（模拟）\nimport time\nstart = time.time()\ntimeout = 2.0\nready = False\nwhile not ready:\n    if time.time() - start > timeout:\n        raise TimeoutError(\"等待超时\")\n    # 模拟“就绪检查”\n    ready = True\nprint(\"准备完成\")\n```\n\n**关键结论：一个健壮的 `while` 循环，通常由“条件 + 状态更新 + 退出保护”三部分组成。**\n\n---\n\n## 动手练习\n\n**任务：猜数字小游戏（命令行版）**\n\n1. 程序随机生成一个 1~100 之间的整数作为答案；\n2. 使用 `while True:` 循环不断读取用户输入；\n3. 如果输入的数字比答案大，打印“大了”；比答案小，打印“小了”；\n4. 猜中时打印“恭喜猜中！共猜了 N 次”，并用 `break` 退出循环；\n5. 如果用户输入 `q`，则打印“游戏已退出”并 `break`；\n6. 额外加分：限制最多猜 7 次，超过则打印答案并退出。\n\n提示：使用 `import random` 与 `random.randint(1, 100)` 生成答案；用 `input()` 读输入；注意把字符串转换成 `int`。\n\n## py.flow.break_continue\n\n# Python 中的 `break` 与 `continue`：循环流程控制\n\n> **一句话直觉**：当你“遍历一堆东西”时，`break` 让你立刻抽身离开循环，`continue` 让你跳过当前这一个、直接进入下一个。\n\n在写程序时，我们经常需要“对一批数据做同一件事”。`for` 循环（loop）和 `while` 循环让我们重复执行代码，但真实世界并不总是“从头做到尾”：有时任务已经完成，没必要再往下跑（例如已经找到想找的元素）；有时当前这一个元素不合格，我们想直接跳过它，但不想中断整个流程。`break` 和 `continue` 就是控制这两种“提前脱离”行为的两个关键字（keyword）。它们不改变循环的遍历规则，只影响**本次/本轮**循环控制流的走向。\n\n---\n\n## 1. 基本语法与执行模型\n\nPython 中循环的基本形式是：\n\n```python\nfor 变量 in 可迭代对象:\n    循环体\n```\n\n或\n\n```python\nwhile 条件:\n    循环体\n```\n\n在循环体里，`break` 会**终止整个循环**，跳到循环之后的第一条语句继续执行；\n`continue` 会**终止本轮循环的剩余部分**，直接回到循环头部开始下一轮。\n\n用一句话记忆：\n\n- `break`：我不玩了，**整场退出**。\n- `continue`：这一轮作废，**进入下一轮**。\n\n```python\n# 演示 break 与 continue 的区别\nfor n in range(1, 6):\n    if n == 3:\n        continue          # 跳过 3 本身，不打印 3\n    if n == 5:\n        break             # 遇到 5 直接结束循环\n    print(n)\n```\n\n运行结果会打印 `1`、`2`、`4`：\n\n- 当 `n == 3` 时，`continue` 让这一轮直接结束，所以 `print(3)` 不会执行；\n- 当 `n == 5` 时，`break` 让整个 `for` 循环停止，后面的 5 也不会打印。\n\n---\n\n## 2. `break`：找到了就收工\n\n`break` 最常见的用途，是“我只需要找到一个满足条件的对象，找到就可以结束”。例如在一个列表中查找第一个偶数：\n\n```python\nnumbers = [3, 7, 11, 8, 9, 12]\nfound = None\n\nfor n in numbers:\n    if n % 2 == 0:\n        found = n\n        break             # 找到了第一个偶数，不用再翻了\n\nprint(found)              # 输出 8\n```\n\n如果没有 `break`，程序会继续把列表剩下的元素都检查一遍，虽然结果可能一样，但效率更低、表达意图也更模糊。`break` 把“只要第一个”这个意图明确地交给了读代码的人。\n\n同样地，`while True` 配合 `break` 是写“条件在循环内部才确定”的循环的常用写法：\n\n```python\ncount = 0\nwhile True:\n    count += 1\n    if count >= 3:\n        break\nprint(count)              # 输出 3\n```\n\n---\n\n## 3. `continue`：这一个不要，下一个继续\n\n当“当前这个元素不满足要求，但我不想中断整个循环”时，用 `continue`。例如过滤股票代码中的无效项：\n\n```python\ncodes = [\"AAPL\", \"\", \"MSFT\", \"  \", \"GOOG\"]\n\nfor code in codes:\n    if not code.strip():      # 空字符串或纯空白，跳过\n        continue\n    print(code)\n```\n\n输出只有 `AAPL`、`MSFT`、`GOOG`。这样写的好处是“异常/无效分支”在循环开头就被处理掉，主逻辑可以一直保持在同一缩进层，减少嵌套层级。\n\n`continue` 在 `while` 循环中要格外注意：如果跳过的分支里包含了“让循环变量变化”的语句，`continue` 可能会跳过它，导致死循环（infinite loop）。例如下面这段就是错误的：\n\n```python\n# ⚠️ 错误示范：跳过 i += 1 会导致无限循环\ni = 0\nwhile i < 5:\n    if i == 2:\n        continue     # 这里直接回到 while 判断，i 永远是 2\n    print(i)\n    i += 1\n```\n\n修正方式是把 `i += 1` 放到 `continue` 之前，或者改用 `for` 循环。\n\n---\n\n## 4. `for / while` 中的 `else` 子句与 `break` 的配合\n\nPython 循环有一个其他语言少见的特性：`for` 和 `while` 后面可以接 `else`。这里的 `else` 意思是“**循环自然结束（没有被 `break` 打断）时执行**”。它在“查找失败才提示”的场景里非常好用：\n\n```python\ntarget = 7\ndata = [1, 3, 5, 9]\n\nfor x in data:\n    if x == target:\n        print(\"找到了\")\n        break\nelse:\n    print(\"没有找到\")     # 只有循环完整跑完才会执行\n```\n\n这里 `else` 不是“如果……否则……”的 `else`，而是“循环没有被 `break` 掉”的 `else`。刚接触时容易误读，但记住语义后就非常顺手。\n\n---\n\n## 5. 工程级用法：在数据/训练流程中“跳过脏数据”和“提前停止”\n\n在真实的机器学习（machine learning）或数据处理代码里，`break` 和 `continue` 几乎是必备工具：\n\n- **数据加载（data loading）**：跳过损坏样本、空字段、格式错误的记录；\n- **训练循环（training loop）**：早停（early stopping），只要验证指标连续多轮不再提升，就 `break` 退出训练；\n- **搜索/匹配**：命中就 `break`，避免无谓遍历。\n\n一个模拟“训练早停”的例子：\n\n```python\nlosses = [0.9, 0.7, 0.6, 0.605, 0.608, 0.61]\nbest = float(\"inf\")\npatience = 2          # 连续 2 轮没有变好就停\nbad_epochs = 0\n\nfor epoch, loss in enumerate(losses, start=1):\n    if loss < best:\n        best = loss\n        bad_epochs = 0\n        print(f\"epoch {epoch}: loss={loss:.3f} 新低\")\n    else:\n        bad_epochs += 1\n        print(f\"epoch {epoch}: loss={loss:.3f} 未提升 ({bad_epochs}/{patience})\")\n        if bad_epochs >= patience:\n            print(\"触发早停，结束训练\")\n            break                 # 提前退出整个训练循环\n```\n\n这段代码就是工程上“`break` = 停止大循环”的典型代表。\n\n---\n\n## 小结\n\n| 关键字 | 作用 | 影响的循环 | 常见场景 |\n| --- | --- | --- | --- |\n| `break` | 立即结束整个循环 | 最内层循环 | 找到目标、早停、搜索命中 |\n| `continue` | 结束本轮，进入下一轮 | 最内层循环 | 过滤无效数据、跳过异常分支 |\n| `else` | 循环未被 break 时执行 | 与 `break` 配合 | “找不到才提示” |\n\n掌握它们的关键是搞清楚“我现在是在结束整场，还是只跳过这一轮”。\n\n```python\n# 可运行示例：从一组用户记录中，找出第一个合法邮箱，并跳过异常数据\nusers = [\n    {\"name\": \"alice\", \"email\": \"alice@example.com\"},\n    {\"name\": \"bob\",   \"email\": \"\"},\n    {\"name\": \"carol\", \"email\": \"carol_at_example.com\"},\n    {\"name\": \"dave\",  \"email\": \"dave@example.com\"},\n]\n\nfound = None\n\nfor u in users:\n    email = u[\"email\"].strip()\n    if not email:\n        print(f\"{u['name']}: 邮箱为空，跳过\")\n        continue                          # 跳过空邮箱\n    if \"@\" not in email:\n        print(f\"{u['name']}: 邮箱格式不正确，跳过\")\n        continue                          # 跳过错格式邮箱\n    found = (u[\"name\"], email)\n    break                                 # 找到了第一个合法邮箱，停止遍历\n\nif found is not None:\n    print(f\"使用第一个合法邮箱：{found[0]} <{found[1]}>\")\nelse:\n    print(\"没有找到任何合法邮箱\")\n```\n",
+  "quiz": [
+    {
+      "kp": "py.flow.while",
+      "type": "single_choice",
+      "question": "以下代码的输出是什么？\n\ni = 0\nwhile i < 3:\n    print(i)\n    i += 1",
+      "options": [
+        "0 1 2",
+        "1 2 3",
+        "0 1 2 3",
+        "无限循环"
+      ],
+      "answer": 0,
+      "explanation": "i 从 0 开始，每次循环打印后加 1，当 i 等于 3 时条件 i < 3 为假，循环结束。因此输出 0、1、2。",
+      "error_tag": "边界条件判断错误",
+      "variant_group": "while_basic_loop"
+    },
+    {
+      "kp": "py.flow.while",
+      "type": "single_choice",
+      "question": "以下代码会输出什么？\n\nn = 5\nwhile n > 0:\n    n -= 1\n    if n == 2:\n        break\n    print(n)",
+      "options": [
+        "4 3",
+        "4 3 2",
+        "4 3 2 1 0",
+        "5 4 3"
+      ],
+      "answer": 0,
+      "explanation": "每次循环先减 1 再判断。n 依次为 4、3、2，当 n 等于 2 时 break 提前结束，所以只打印了 4 和 3。",
+      "error_tag": "break 执行顺序误解",
+      "variant_group": "while_break"
+    },
+    {
+      "kp": "py.flow.while",
+      "type": "single_choice",
+      "question": "以下代码的输出是什么？\n\nvalues = [1, 2, 3]\nwhile values:\n    print(values.pop())",
+      "options": [
+        "3 2 1",
+        "1 2 3",
+        "1 3 2",
+        "报错"
+      ],
+      "answer": 0,
+      "explanation": "pop() 默认弹出末尾元素，列表为空时循环条件为假，输出顺序为 3、2、1。",
+      "error_tag": "列表变化与循环条件理解错误",
+      "variant_group": "while_pop"
+    },
+    {
+      "kp": "py.flow.while",
+      "type": "single_choice",
+      "question": "以下代码的输出是什么？\n\nn = 0\nwhile n < 10:\n    n += 1\n    if n == 5:\n        pass\n    print(n)",
+      "options": [
+        "1 到 10",
+        "1 到 5",
+        "5 到 10",
+        "什么都不输出"
+      ],
+      "answer": 0,
+      "explanation": "pass 是空语句，不改变循环行为，n 从 1 递增到 10 并全部打印。",
+      "error_tag": "pass 语义误解",
+      "variant_group": "while_pass"
+    },
+    {
+      "kp": "py.flow.while",
+      "type": "single_choice",
+      "question": "以下代码的输出是什么？\n\ni = 0\nwhile i < 4:\n    i += 1\n    if i == 2:\n        continue\n    if i == 4:\n        break\n    print(i)",
+      "options": [
+        "1 3",
+        "1 2 3",
+        "1 3 4",
+        "1 2 3 4"
+      ],
+      "answer": 0,
+      "explanation": "i 为 2 时被 continue 跳过；i 为 4 时先判断 break 再 print，因此只打印 1 和 3。",
+      "error_tag": "continue 与 break 组合顺序错误",
+      "variant_group": "while_continue_break"
+    },
+    {
+      "kp": "py.flow.while",
+      "type": "single_choice",
+      "question": "以下代码的输出是什么？\n\ni = 10\nwhile i > 5:\n    i -= 1\nprint(i)",
+      "options": [
+        "5",
+        "6",
+        "10",
+        "4"
+      ],
+      "answer": 0,
+      "explanation": "i 依次为 9、8、7、6、5，当 i 为 5 时不再满足 i > 5，循环结束并输出 5。",
+      "error_tag": "循环边界判断错误",
+      "variant_group": "while_boundary"
+    },
+    {
+      "kp": "py.flow.while",
+      "type": "single_choice",
+      "question": "关于 while 循环，下列说法正确的是？",
+      "options": [
+        "while 循环体可能一次都不执行",
+        "while 循环体至少执行一次",
+        "while 循环不能与 else 搭配",
+        "while 循环条件必须使用比较运算符"
+      ],
+      "answer": 0,
+      "explanation": "while 是前测试循环，若初始条件为假，循环体一次都不会执行；可以与 else 搭配，条件也可以是任意表达式。",
+      "error_tag": "while 基本特性误解",
+      "variant_group": "while_property"
+    },
+    {
+      "kp": "py.flow.while",
+      "type": "single_choice",
+      "question": "以下代码的输出是什么？\n\ni = 0\nwhile i < 3:\n    print(i)\n    i += 1\nelse:\n    print('end')",
+      "options": [
+        "0 1 2 end",
+        "0 1 2",
+        "end",
+        "0 1 2 end end"
+      ],
+      "answer": 0,
+      "explanation": "循环正常结束执行 else，先打印 0、1、2，再打印 end。",
+      "error_tag": "while-else 执行时机误解",
+      "variant_group": "while_else_normal"
+    },
+    {
+      "kp": "py.flow.while",
+      "type": "single_choice",
+      "question": "以下代码的输出是什么？\n\ni = 0\nwhile True:\n    i += 1\n    if i >= 3:\n        break\nprint(i)",
+      "options": [
+        "3",
+        "2",
+        "无限循环",
+        "1"
+      ],
+      "answer": 0,
+      "explanation": "while True 是常见的无限循环写法，通过 break 退出。i 累加至 3 时 break，输出 3。",
+      "error_tag": "while True 与 break 配合理解错误",
+      "variant_group": "while_true_break"
+    },
+    {
+      "kp": "py.flow.while",
+      "type": "single_choice",
+      "question": "以下代码的输出是什么？\n\ni = 0\nwhile i < 5:\n    i += 2\n    print(i)",
+      "options": [
+        "2 4 6",
+        "2 4",
+        "0 2 4",
+        "2 4 6 8"
+      ],
+      "answer": 0,
+      "explanation": "i 依次为 2、4、6，当 i 为 6 时不满足 i < 5 但 6 在递增后立即打印，所以输出 2、4、6。",
+      "error_tag": "循环退出点判断错误",
+      "variant_group": "while_step2"
+    },
+    {
+      "kp": "py.flow.while",
+      "type": "single_choice",
+      "question": "以下代码的输出是什么？\n\ni = 5\nwhile i > 0:\n    if i == 3:\n        i -= 1\n        continue\n    print(i)\n    i -= 1",
+      "options": [
+        "5 4 2 1",
+        "5 4 3 2 1",
+        "5 4 3 2 1 跳过 3",
+        "5 4 2 1 0"
+      ],
+      "answer": 0,
+      "explanation": "i 为 3 时被 continue 跳过，且 continue 前先自减，所以不会死循环，最终输出 5、4、2、1。",
+      "error_tag": "continue 前未更新变量导致死循环",
+      "variant_group": "while_continue_update"
+    },
+    {
+      "kp": "py.flow.while",
+      "type": "single_choice",
+      "question": "以下代码的输出是什么？\n\na = 1\nb = 1\nwhile b < 20:\n    a, b = b, a + b\nprint(b)",
+      "options": [
+        "21",
+        "20",
+        "34",
+        "13"
+      ],
+      "answer": 0,
+      "explanation": "这是斐波那契数列的迭代：b 依次为 1、2、3、5、8、13、21，第一个不小于 20 的 b 是 21。",
+      "error_tag": "循环终止条件与序列计算错误",
+      "variant_group": "while_fibonacci"
+    },
+    {
+      "kp": "py.flow.while",
+      "type": "single_choice",
+      "question": "以下代码的输出是什么？\n\ni = 0\nwhile i < 5:\n    i += 1\n    if i % 2 == 0:\n        continue\n    print(i)",
+      "options": [
+        "1 3 5",
+        "2 4",
+        "1 2 3 4 5",
+        "0 1 2 3 4"
+      ],
+      "answer": 0,
+      "explanation": "i 自增后，偶数被 continue 跳过，只打印奇数 1、3、5。",
+      "error_tag": "continue 作用理解错误",
+      "variant_group": "while_continue"
+    },
+    {
+      "kp": "py.flow.while",
+      "type": "single_choice",
+      "question": "以下代码的输出是什么？\n\ncount = 0\nwhile count < 5:\n    count += 1\nelse:\n    print('done')",
+      "options": [
+        "done",
+        "5",
+        "无限循环",
+        "什么都不输出"
+      ],
+      "answer": 0,
+      "explanation": "while 循环正常结束（未被 break 中断）时会执行 else 子句，因此打印 done。",
+      "error_tag": "while-else 语义误解",
+      "variant_group": "while_else"
+    },
+    {
+      "kp": "py.flow.while",
+      "type": "single_choice",
+      "question": "以下代码的输出是什么？\n\ni = 0\nwhile i < 5:\n    i += 1\n    if i == 3:\n        break\nelse:\n    print('completed')",
+      "options": [
+        "什么都不输出",
+        "completed",
+        "3",
+        "无限循环"
+      ],
+      "answer": 0,
+      "explanation": "循环被 break 中断时，while 的 else 子句不会执行，因此没有输出。",
+      "error_tag": "while-else 与 break 的配合理解错误",
+      "variant_group": "while_else_break"
+    },
+    {
+      "kp": "py.flow.while",
+      "type": "single_choice",
+      "question": "下列哪段代码会造成无限循环？",
+      "options": [
+        "i = 0\nwhile i < 5:\n    print(i)",
+        "i = 0\nwhile i < 5:\n    print(i)\n    i += 1",
+        "for i in range(5):\n    print(i)",
+        "i = 5\nwhile i > 0:\n    i -= 1",
+        "以上都不会"
+      ],
+      "answer": 0,
+      "explanation": "第一段代码中 i 从不改变，条件 i < 5 永远为真，会造成无限循环。",
+      "error_tag": "循环变量未更新",
+      "variant_group": "while_infinite"
+    },
+    {
+      "kp": "py.flow.while",
+      "type": "single_choice",
+      "question": "以下代码的输出是什么？\n\nx = 10\nwhile x > 0:\n    x -= 3\n    print(x)",
+      "options": [
+        "7 4 1 -2",
+        "10 7 4 1",
+        "7 4 1",
+        "10 7 4 1 -2"
+      ],
+      "answer": 0,
+      "explanation": "x 依次变化为 7、4、1、-2，条件 x > 0 在 x 为 -2 时不再满足，但 -2 是在循环体内打印的，所以输出包含 -2。",
+      "error_tag": "循环结束条件判断错误",
+      "variant_group": "while_step"
+    },
+    {
+      "kp": "py.flow.while",
+      "type": "single_choice",
+      "question": "以下代码的输出是什么？\n\ntotal = 0\nwhile total < 10:\n    total += 4\nprint(total)",
+      "options": [
+        "12",
+        "8",
+        "10",
+        "16"
+      ],
+      "answer": 0,
+      "explanation": "total 依次为 4、8、12，当为 12 时不再满足 total < 10，循环结束，最后 print 输出 12。",
+      "error_tag": "循环退出后变量值判断错误",
+      "variant_group": "while_accumulate"
+    },
+    {
+      "kp": "py.flow.while",
+      "type": "single_choice",
+      "question": "以下代码的输出是什么？\n\ns = 'abc'\nidx = 0\nwhile idx < len(s):\n    print(s[idx])\n    idx += 1",
+      "options": [
+        "a b c",
+        "a b c 报错",
+        "abc",
+        "c b a"
+      ],
+      "answer": 0,
+      "explanation": "用索引遍历字符串，依次打印 a、b、c，索引在范围内不会报错。",
+      "error_tag": "索引遍历理解错误",
+      "variant_group": "while_index"
+    },
+    {
+      "kp": "py.flow.while",
+      "type": "single_choice",
+      "question": "以下代码的输出是什么？\n\ni = 3\nwhile i:\n    print(i)\n    i -= 1",
+      "options": [
+        "3 2 1",
+        "3 2 1 0",
+        "0 1 2 3",
+        "无限循环"
+      ],
+      "answer": 0,
+      "explanation": "当 i 为非零整数时条件为真，递减到 0 时条件为假循环结束，输出 3、2、1。",
+      "error_tag": "真值判断与数值判断混淆",
+      "variant_group": "while_truthy"
+    },
+    {
+      "kp": "py.flow.break_continue",
+      "type": "single_choice",
+      "question": "以下代码执行后，输出结果是什么？\n\nfor i in range(5):\n    if i == 3:\n        break\n    print(i)",
+      "options": [
+        "0\\n1\\n2",
+        "0\\n1\\n2\\n3",
+        "0\\n1\\n2\\n3\\n4",
+        "3\\n4"
+      ],
+      "answer": 0,
+      "explanation": "当 i 等于 3 时执行 break，立即终止整个循环，因此只打印 0、1、2。break 会跳出当前整个循环，而不是只跳过本次迭代。",
+      "error_tag": "概念混淆",
+      "variant_group": "break_basic"
+    },
+    {
+      "kp": "py.flow.break_continue",
+      "type": "single_choice",
+      "question": "以下代码执行后，输出结果是什么？\n\nfor i in range(5):\n    if i == 3:\n        continue\n    print(i)",
+      "options": [
+        "0\\n1\\n2",
+        "0\\n1\\n2\\n4",
+        "0\\n1\\n2\\n3\\n4",
+        "3"
+      ],
+      "answer": 1,
+      "explanation": "continue 只跳过本次迭代中它之后的语句，循环继续执行。i 为 3 时跳过 print，其余 0、1、2、4 都被打印。",
+      "error_tag": "概念混淆",
+      "variant_group": "continue_basic"
+    },
+    {
+      "kp": "py.flow.break_continue",
+      "type": "single_choice",
+      "question": "以下代码中 break 出现在 if 分支里，循环一共执行几次 print？\n\ncount = 0\nfor i in range(10):\n    if i == 6:\n        break\n    count += 1\nprint(count)",
+      "options": [
+        "6",
+        "7",
+        "5",
+        "10"
+      ],
+      "answer": 0,
+      "explanation": "i 从 0 到 5 时各执行一次 count += 1，共 6 次；i 为 6 时 break 跳出，不再累加。所以 count 为 6。",
+      "error_tag": "边界错误",
+      "variant_group": "break_count"
+    },
+    {
+      "kp": "py.flow.break_continue",
+      "type": "single_choice",
+      "question": "列表中查找第一个负数，找到后停止，以下哪种做法最符合“找到即停止”的语义？",
+      "options": [
+        "遍历时对每个负数执行 print",
+        "遍历时遇到负数执行 break",
+        "遍历时遇到负数执行 continue",
+        "遍历时跳过所有正数"
+      ],
+      "answer": 1,
+      "explanation": "“找到即停止”意味着一旦找到目标就结束循环，break 正是这个语义。continue 只是跳过本次迭代，不会结束循环。",
+      "error_tag": "概念混淆",
+      "variant_group": "break_use_case"
+    },
+    {
+      "kp": "py.flow.break_continue",
+      "type": "multi_choice",
+      "question": "关于 break 与 continue，下列说法正确的有哪些？",
+      "options": [
+        "break 终止整个循环，continue 只结束本次迭代",
+        "两者都可以用于 for 和 while 循环",
+        "continue 会执行循环的 else 分支",
+        "break 会让循环的 else 分支不执行",
+        "在 for 循环中 break 后，循环变量会保持原值"
+      ],
+      "answer": [
+        0,
+        1,
+        3,
+        4
+      ],
+      "explanation": "break 终止整个循环，continue 只跳过本次迭代，两者都可用于 for/while。因 break 提前退出时，循环的 else 分支不会执行，而 continue 不阻止 else 执行。",
+      "error_tag": "概念混淆",
+      "variant_group": "break_continue_compare"
+    },
+    {
+      "kp": "py.flow.break_continue",
+      "type": "multi_choice",
+      "question": "以下哪些场景适合使用 continue 而不是 break？",
+      "options": [
+        "跳过列表中所有空字符串，继续处理其余元素",
+        "找到目标元素后立即停止搜索",
+        "忽略不符合条件的数据行，继续处理下一行",
+        "提前结束对文件的读取",
+        "跳过偶数编号的行"
+      ],
+      "answer": [
+        0,
+        2,
+        4
+      ],
+      "explanation": "continue 适合“跳过当前项、继续处理后续项”的场景（跳过空串、忽略不合格行、跳过特定行）。而找到目标后停止或提前结束读取，属于终止整个循环，适合 break。",
+      "error_tag": "概念混淆",
+      "variant_group": "break_continue_compare"
+    },
+    {
+      "kp": "py.flow.break_continue",
+      "type": "multi_choice",
+      "question": "关于 for/while 循环的 else 分支，下列说法正确的有哪些？",
+      "options": [
+        "循环正常结束（未被 break 打断）时执行 else",
+        "循环因 break 退出时不执行 else",
+        "continue 会导致 else 不执行",
+        "else 分支在循环体每次执行后都会运行一次",
+        "没有 break 的循环结束后一定会执行 else"
+      ],
+      "answer": [
+        0,
+        1,
+        4
+      ],
+      "explanation": "循环的 else 仅在循环正常结束（未被 break 打断）时执行一次；continue 不影响 else；若循环体从头到尾没有触发 break，则正常结束后会执行 else。",
+      "error_tag": "记忆缺失",
+      "variant_group": "loop_else"
+    },
+    {
+      "kp": "py.flow.break_continue",
+      "type": "multi_choice",
+      "question": "下面哪些情况会导致 break 之外的多层循环退出策略？",
+      "options": [
+        "用标志变量配合每层循环的 break",
+        "把嵌套循环封装成函数并使用 return",
+        "在循环中抛出异常并在外层捕获",
+        "使用 continue 从最内层跳到最外层",
+        "直接在最内层使用 break 就能退出所有层"
+      ],
+      "answer": [
+        0,
+        1,
+        2
+      ],
+      "explanation": "break 只跳出所在那一层，因此退出多层循环常用：标志变量逐层 break、封装成函数用 return、或抛异常在外层捕获。continue 和单条 break 都无法跳出所有层。",
+      "error_tag": "边界错误",
+      "variant_group": "nested_break"
+    },
+    {
+      "kp": "py.flow.break_continue",
+      "type": "fill_blank",
+      "question": "在循环中，如果想“跳过本次迭代剩余的语句，直接进入下一次迭代”，应使用关键字 ______。",
+      "options": [],
+      "answer": [
+        "continue"
+      ],
+      "explanation": "continue 跳过当前迭代中其后的语句，直接开始下一次迭代，是“跳过本次”的语义。",
+      "error_tag": "记忆缺失",
+      "variant_group": "keyword_recall"
+    },
+    {
+      "kp": "py.flow.break_continue",
+      "type": "fill_blank",
+      "question": "在循环中，如果想“立即终止并跳出整个循环”，应使用关键字 ______。",
+      "options": [],
+      "answer": [
+        "break"
+      ],
+      "explanation": "break 会立即终止它所在的那一层循环，程序继续执行循环之后的语句。",
+      "error_tag": "记忆缺失",
+      "variant_group": "keyword_recall"
+    },
+    {
+      "kp": "py.flow.break_continue",
+      "type": "code_reading",
+      "question": "阅读代码，写出运行结果：\n\nfor i in range(4):\n    if i == 2:\n        continue\n    if i == 3:\n        break\n    print(i)",
+      "options": [],
+      "answer": "0\\n1",
+      "explanation": "i=0、1 打印；i=2 时 continue 跳过；i=3 时 break 终止循环，因此只打印 0 和 1。",
+      "error_tag": "边界错误",
+      "variant_group": "break_continue_combo"
+    },
+    {
+      "kp": "py.flow.break_continue",
+      "type": "code_reading",
+      "question": "阅读代码，说明为什么该循环不会打印最后一个数 5，以及它实际打印什么：\n\nn = 5\nwhile n > 0:\n    if n == 5:\n        n -= 1\n        continue\n    print(n)\n    n -= 1",
+      "options": [],
+      "answer": "第一次迭代 n=5 时先 n 减为 4，然后 continue；此后打印 4、3、2、1，最后 n 为 0 时循环结束。因此不会打印 5，实际打印 4\\n3\\n2\\n1。",
+      "explanation": "continue 之前先把 n 减 1，避免死循环，同时使 n=5 从未被打印。这说明 continue 与循环变量更新的位置会影响结果，也是常见陷阱。",
+      "error_tag": "边界错误",
+      "variant_group": "continue_infinite_loop"
+    },
+    {
+      "kp": "py.flow.break_continue",
+      "type": "single_choice",
+      "question": "以下代码执行后，输出结果是什么？\n\nfor i in range(3):\n    for j in range(3):\n        if j == 1:\n            break\n        print(i, j)",
+      "options": [
+        "打印 (0,0)(1,0)(2,0)",
+        "打印 (0,0)",
+        "打印 (0,0)(0,1)(1,0)(1,1)(2,0)(2,1)",
+        "只打印 (0,0)(0,1)"
+      ],
+      "answer": 0,
+      "explanation": "内层循环在内层 j 为 1 时 break，只终止内层循环；外层循环继续，所以每轮外层只打印 j=0 的组合，共 (0,0)(1,0)(2,0)。",
+      "error_tag": "边界错误",
+      "variant_group": "nested_break"
+    },
+    {
+      "kp": "py.flow.break_continue",
+      "type": "scenario",
+      "question": "你在写一个数据清洗脚本，需要遍历一批记录：遇到字段为空的行就跳过，继续检查下一行；一旦发现某行的 id 与已有记录重复，就要立即停止整个遍历并报错。请说明你会如何在循环中搭配使用 break 和 continue，并解释为什么各自的语义与需求匹配。",
+      "options": [],
+      "answer": null,
+      "explanation": "空行需要跳过本次迭代但继续后续处理，符合 continue 的“跳过本次迭代”语义；而遇到重复 id 要立即停止整个遍历，符合 break 的“终止整个循环”语义。混用两者能满足同一循环内不同条件的处理需求。",
+      "error_tag": "概念混淆",
+      "variant_group": "scenario_break_continue",
+      "required_keywords": [
+        "continue",
+        "break",
+        "循环",
+        "迭代",
+        "遍历"
+      ]
+    },
+    {
+      "kp": "py.flow.break_continue",
+      "type": "single_choice",
+      "question": "关于 break 在内层循环中的作用，下列说法正确的是？",
+      "options": [
+        "break 会同时终止内层和外层循环",
+        "break 只终止包含它的那一层循环",
+        "break 会结束整个程序",
+        "break 只能用在 while 循环中"
+      ],
+      "answer": 1,
+      "explanation": "break 只终止它所在的那一层循环。若想跳出多层循环，需要额外机制（如标志变量、return 或异常）。",
+      "error_tag": "概念混淆",
+      "variant_group": "nested_break"
+    },
+    {
+      "kp": "py.flow.break_continue",
+      "type": "single_choice",
+      "question": "以下 while 循环会输出什么？\n\ni = 0\nwhile i < 5:\n    i += 1\n    if i % 2 == 0:\n        continue\n    print(i)",
+      "options": [
+        "1\\n3\\n5",
+        "2\\n4",
+        "1\\n2\\n3\\n4\\n5",
+        "5"
+      ],
+      "answer": 0,
+      "explanation": "i 从 1 到 5，偶数值（2、4）被 continue 跳过，只打印奇数 1、3、5。continue 之后不执行 print。",
+      "error_tag": "边界错误",
+      "variant_group": "continue_basic"
+    },
+    {
+      "kp": "py.flow.break_continue",
+      "type": "single_choice",
+      "question": "以下代码中，用 continue 后为什么没有输出任何内容？\n\nfor i in range(3):\n    print(i)\n    continue\n    print('after')",
+      "options": [
+        "continue 会终止循环",
+        "print('after') 永远不会被执行，但 print(i) 会执行",
+        "continue 让循环条件变为 False",
+        "代码有语法错误"
+      ],
+      "answer": 1,
+      "explanation": "这段代码不会“没有输出”，会打印 0、1、2；'after' 永远不打印。若选项中描述“完全不输出”是误解。本题正确理解为 print(i) 正常执行，continue 只跳过其后的语句。",
+      "error_tag": "概念混淆",
+      "variant_group": "continue_skip_after"
+    },
+    {
+      "kp": "py.flow.break_continue",
+      "type": "single_choice",
+      "question": "以下 for-else 结构执行后，输出结果是什么？\n\nfor i in range(3):\n    if i == 5:\n        break\nelse:\n    print('no break')",
+      "options": [
+        "no break",
+        "什么都不输出",
+        "5",
+        "报错"
+      ],
+      "answer": 0,
+      "explanation": "循环正常结束（未因 break 提前退出）时执行 else 分支。i 永远不会等于 5，所以循环正常结束，打印 no break。",
+      "error_tag": "记忆缺失",
+      "variant_group": "loop_else"
+    },
+    {
+      "kp": "py.flow.break_continue",
+      "type": "single_choice",
+      "question": "以下 for-else 结构执行后，输出结果是什么？\n\nfor i in range(3):\n    if i == 1:\n        break\nelse:\n    print('no break')",
+      "options": [
+        "no break",
+        "什么都不输出",
+        "1",
+        "报错"
+      ],
+      "answer": 1,
+      "explanation": "循环因 i==1 时 break 而提前终止，else 分支不执行，所以什么都不打印。",
+      "error_tag": "记忆缺失",
+      "variant_group": "loop_else"
+    },
+    {
+      "kp": "py.flow.break_continue",
+      "type": "single_choice",
+      "question": "以下代码的输出是什么？\n\nresult = []\nfor i in range(10):\n    if i > 4:\n        break\n    if i % 2 == 0:\n        continue\n    result.append(i)\nprint(result)",
+      "options": [
+        "[1, 3]",
+        "[0, 2, 4]",
+        "[1, 3, 5]",
+        "[0, 1, 2, 3, 4]"
+      ],
+      "answer": 0,
+      "explanation": "i 超过 4 时 break 终止循环。在 0~4 中，偶数被 continue 跳过，奇数 1、3 被加入，因此是 [1, 3]。",
+      "error_tag": "边界错误",
+      "variant_group": "break_continue_combo"
+    },
+    {
+      "kp": "py.flow.break_continue",
+      "type": "single_choice",
+      "question": "在 while 循环中使用 continue 时，下面哪种写法最容易造成死循环？",
+      "options": [
+        "在 continue 之前修改循环变量",
+        "在 continue 之后修改循环变量",
+        "在 break 之前修改循环变量",
+        "在循环外修改循环变量"
+      ],
+      "answer": 1,
+      "explanation": "若把改变循环变量（如 i += 1）放在 continue 之后，遇到 continue 时更新语句被跳过，循环条件不变，导致死循环。",
+      "error_tag": "边界错误",
+      "variant_group": "continue_infinite_loop"
+    }
+  ]
+}

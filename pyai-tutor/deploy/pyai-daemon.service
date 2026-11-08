@@ -1,0 +1,24 @@
+# pyai-tutor 常驻守护进程（Linux systemd 用户服务）
+#
+# 部署：
+#   cp deploy/pyai-daemon.service ~/.config/systemd/user/
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now pyai-daemon
+#   journalctl --user -u pyai-daemon -f      # 看日志
+#
+# 前提：已 `pip install -e .`（提供 pyai 命令）；把 WorkingDirectory 改成实际仓库路径。
+
+[Unit]
+Description=pyai-tutor 离线学习系统守护进程（实时排课/提醒/周更）
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/pyai-tutor
+Environment=PYTHONUTF8=1
+ExecStart=%h/.local/bin/pyai daemon
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

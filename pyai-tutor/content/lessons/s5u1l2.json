@@ -1,0 +1,625 @@
+{
+  "id": "s5u1l2",
+  "title": "s5u1l2",
+  "kps": [
+    "py.web.fastapi_async",
+    "py.web.fastapi_depends"
+  ],
+  "theory": "## py.web.fastapi_async\n\n# py.web.fastapi_async：用 async/await 写出高并发 Web 接口\n\n> 一句话直觉：FastAPI 的异步接口，就是让一个 Python 进程在等数据库、等网络的时候“顺手去干别的活”，从而用很少的资源扛住大量并发请求。\n\n---\n\n## 1. 为什么需要 async：从“排队打饭”说起\n\n先看同步（synchronous）代码的问题。假设每个请求都要等 1 秒 IO：\n\n```python\n# 同步版本：一个请求把线程占满 1 秒\nimport time\n\ndef fetch_user():\n    time.sleep(1)          # 模拟数据库/网络 IO\n    return {\"id\": 1}\n\ndef handle_request():\n    return fetch_user()\n```\n\n如果 10 个请求同时来，同步模型要么排队（总耗时 10 秒），要么开 10 个线程（内存和上下文切换开销大）。\n\n**异步（asynchronous）** 的核心思想：遇到 IO 等待时，把 CPU 让出去执行其他任务，等 IO 完成后再回来继续。Python 用 `async def` / `await` 语法表达这件事，底层由 **事件循环（event loop）** 调度。\n\n```python\nimport asyncio\n\nasync def fetch_user():\n    await asyncio.sleep(1)   # 关键：await 会把控制权交还事件循环\n    return {\"id\": 1}\n\nasync def main():\n    # 并发发起 10 个请求，总耗时约 1 秒，而不是 10 秒\n    results = await asyncio.gather(*(fetch_user() for _ in range(10)))\n    print(len(results))\n\nasyncio.run(main())\n```\n\n**结论**：`await` 不是“等待”，而是“暂停当前协程（coroutine），让事件循环去跑别的协程”。\n\n---\n\n## 2. FastAPI 如何把 async 变成 Web 服务\n\n**FastAPI** 是一个现代 Python Web 框架，它原生支持 `async def` 路由。当你的路径操作函数（path operation function）写成 `async def` 时，FastAPI 会在同一个事件循环里调度它。\n\n```python\n# 安装：pip install fastapi uvicorn\nfrom fastapi import FastAPI\n\napp = FastAPI()\n\n@app.get(\"/sync\")\ndef sync_hello():\n    # 同步函数：FastAPI 会把它丢到线程池执行\n    return {\"mode\": \"sync\"}\n\n@app.get(\"/async\")\nasync def async_hello():\n    # 异步函数：直接在事件循环里执行\n    return {\"mode\": \"async\"}\n```\n\n关键对比：\n\n| 写法 | 执行位置 | 适合场景 |\n|------|----------|----------|\n| `def` | 线程池（threadpool） | 调用阻塞库（如 `requests`、同步 DB 驱动） |\n| `async def` | 事件循环（event loop） | 调用异步库（如 `httpx`、`asyncpg`） |\n\n**结论**：写成 `async def` 却调用阻塞函数，反而会卡死整个事件循环——这是新手最常见的坑。\n\n---\n\n## 3. 在 FastAPI 里真正做异步 IO\n\n要让异步有价值，IO 操作本身也必须是异步的。下面用 `httpx` 的异步客户端调用外部 API：\n\n```python\nimport httpx\nfrom fastapi import FastAPI\n\napp = FastAPI()\n\n@app.get(\"/proxy\")\nasync def proxy():\n    async with httpx.AsyncClient() as client:\n        # await 让出控制权，其他请求可以继续被处理\n        resp = await client.get(\"https://httpbin.org/get\")\n    return {\"status\": resp.status_code}\n```\n\n如果这里换成同步的 `requests.get(...)`，事件循环会被阻塞，多个请求会串行排队。\n\n**依赖注入（dependency injection）** 也可以异步：\n\n```python\nfrom fastapi import Depends\n\nasync def get_db():\n    # 模拟异步获取数据库连接\n    await asyncio.sleep(0.01)\n    yield {\"conn\": \"db\"}\n\n@app.get(\"/items\")\nasync def items(db=Depends(get_db)):\n    return {\"db\": db[\"conn\"]}\n```\n\n---\n\n## 4. 并发控制与后台任务\n\n异步不等于“随便并发”。大量并发可能压垮下游，需要用信号量（semaphore）限流：\n\n```python\nimport asyncio\n\nsem = asyncio.Semaphore(5)   # 最多 5 个并发\n\nasync def limited_task(i):\n    async with sem:\n        await asyncio.sleep(0.1)\n        return i\n```\n\nFastAPI 还提供 `BackgroundTasks` 处理“返回响应后再执行”的工作：\n\n```python\nfrom fastapi import BackgroundTasks\n\ndef write_log(msg: str):\n    print(\"log:\", msg)\n\n@app.post(\"/notify\")\nasync def notify(background_tasks: BackgroundTasks):\n    background_tasks.add_task(write_log, \"user notified\")\n    return {\"ok\": True}\n```\n\n**结论**：异步编程的两个核心工具是 `asyncio.gather`（并发）和 `Semaphore`（限流），配合 FastAPI 的 `BackgroundTasks` 能覆盖大多数 Web 场景。\n\n---\n\n## 5. 常见误区与工程建议\n\n- **不要**在 `async def` 里写 `time.sleep`、同步 DB 查询、`requests`，否则事件循环会被阻塞。\n- **不要**为了“看起来高级”全用 `async def`；如果底层库是同步的，用普通 `def` 让 FastAPI 丢线程池反而更安全。\n- 调试时可用 `uvicorn main:app --reload` 启动，并观察并发行为。\n- 生产环境建议用异步数据库驱动（如 `asyncpg`、`motor`）和异步 HTTP 客户端（`httpx`）。\n\n记住一句话：**异步的收益来自“IO 等待时能切走”，没有异步 IO 库时，async 只是换了个写法而已。**\n\n## py.web.fastapi_depends\n\n# FastAPI 依赖注入（Depends）40 分钟讲义\n\n## 一句话直觉\n\n> **依赖注入（Dependency Injection）** 就是：让框架在调用你的接口函数前，自动把接口需要的“公共东西”（数据库连接、当前用户、配置、分页参数……）准备好并塞进参数里——你只写业务逻辑，不写重复的准备代码。\n\n学它的理由：几乎所有真实 FastAPI 项目都靠 `Depends` 复用鉴权、数据库会话、分页、限流等横切逻辑。不会 `Depends`，就只会写玩具接口。\n\n---\n\n## 小节 1：为什么需要依赖？先看“没有依赖注入”的痛点\n\n假设三个接口都需要“校验 token 并拿到用户”。最笨的写法是每个函数里复制一遍校验代码：\n\n```python\n# 反面示例：重复逻辑\nfrom fastapi import FastAPI, Header, HTTPException\n\napp = FastAPI()\n\ndef check(token: str):\n    if token != \"secret\":\n        raise HTTPException(status_code=401, detail=\"invalid token\")\n    return {\"user\": \"alice\"}\n\n@app.get(\"/a\")\ndef a(token: str = Header(...)):\n    user = check(token)\n    return {\"route\": \"a\", \"user\": user}\n\n@app.get(\"/b\")\ndef b(token: str = Header(...)):\n    user = check(token)\n    return {\"route\": \"b\", \"user\": user}\n```\n\n问题：逻辑重复、难测试、改动一处要改多处。**依赖注入**把这个公共逻辑抽成一个函数，交给 FastAPI 自动调用。\n\n---\n\n## 小节 2：`Depends` 最小示例——把函数变成“可注入依赖”\n\n`Depends(dependency)` 传入一个可调用对象（函数、类、生成器）。FastAPI 会在请求进入时调用它，把返回值注入到参数上。\n\n```python\n# 最小可用示例\nfrom fastapi import FastAPI, Depends, Header, HTTPException\n\napp = FastAPI()\n\n# 依赖：一个普通函数\ndef get_current_user(token: str = Header(...)):\n    \"\"\"FastAPI 也会解析依赖函数的参数声明（这里是 Header）。\"\"\"\n    if token != \"secret\":\n        raise HTTPException(status_code=401, detail=\"invalid token\")\n    return {\"user\": \"alice\"}\n\n@app.get(\"/me\")\ndef read_me(user: dict = Depends(get_current_user)):\n    # user 就是 get_current_user 的返回值\n    return {\"hello\": user[\"user\"]}\n```\n\n要点：\n- 参数默认值写成 `Depends(...)`，实际外部请求**不需要**传这个参数。\n- 依赖函数里的参数（如 `token`）同样会被 FastAPI 解析和校验。\n\n---\n\n## 小节 3：依赖可以嵌套，形成“依赖树”\n\n依赖本身还能依赖别的依赖。FastAPI 会构建依赖图（Dependency Graph），并按拓扑顺序执行、对同一请求内相同依赖做缓存（默认 `use_cache=True`）。\n\n```python\n# 嵌套依赖\nfrom fastapi import FastAPI, Depends\n\napp = FastAPI()\n\ndef get_config():\n    return {\"env\": \"dev\"}\n\ndef get_db(config: dict = Depends(get_config)):\n    # 假装连接数据库，用配置里的 env\n    return {\"db\": f\"db-{config['env']}\"}\n\n@app.get(\"/info\")\ndef info(db: dict = Depends(get_db), config: dict = Depends(get_config)):\n    # 同一请求内 get_config 只会执行一次（默认缓存）\n    return {\"db\": db, \"config\": config}\n```\n\n---\n\n## 小节 4：用 `yield` 写“带清理”的依赖（数据库会话的经典姿势）\n\n数据库连接需要在请求结束后关闭。用 `yield` 的生成器依赖：`yield` 之前是准备，`yield` 的值会被注入，请求结束后继续执行 `yield` 之后的清理代码。\n\n```python\n# yield 依赖：请求前建立资源，请求后释放\nfrom fastapi import FastAPI, Depends\n\napp = FastAPI()\n\nclass FakeSession:\n    def __init__(self): self.opened = True\n    def close(self): self.opened = False\n\ndef get_session():\n    session = FakeSession()\n    try:\n        yield session          # 注入给接口\n    finally:\n        session.close()        # 请求结束（含异常）后一定执行\n\n@app.get(\"/db\")\ndef use_db(session: FakeSession = Depends(get_session)):\n    return {\"session_opened\": session.opened}\n```\n\n要点：\n- `try/finally` 保证清理一定执行。\n- 即使接口里抛异常，`finally` 也会运行。\n\n---\n\n## 小节 5：三类常用依赖写法（工程级套路）\n\n1. **函数依赖**：最常用（鉴权、分页参数、配置读取）。\n2. **类依赖**：把参数封装成类，`Depends(SomeClass)` 时 FastAPI 会实例化它，`__init__` 的参数同样会被解析。\n3. **全局依赖**：`FastAPI(dependencies=[Depends(...)])` 或路由级 `dependencies=[...]`，对所有接口生效（如统一鉴权）。\n\n```python\n# 类依赖 + 路由级全局依赖\nfrom fastapi import FastAPI, Depends, APIRouter, Header, HTTPException\n\nclass Pagination:\n    def __init__(self, skip: int = 0, limit: int = 10):\n        self.skip, self.limit = skip, limit\n\ndef require_token(token: str = Header(...)):\n    if token != \"secret\":\n        raise HTTPException(401, \"invalid token\")\n\nrouter = APIRouter(dependencies=[Depends(require_token)])  # 该 router 下所有接口都要 token\n\n@router.get(\"/items\")\ndef list_items(page: Pagination = Depends(Pagination)):\n    return {\"skip\": page.skip, \"limit\": page.limit}\n\napp = FastAPI()\napp.include_router(router)\n```\n\n你可以本地跑：\n\n```bash\npip install fastapi uvicorn\nuvicorn main:app --reload\n# 访问 http://127.0.0.1:8000/docs 用 Swagger UI 直接测试\n```\n\n---\n\n## 常见误区（Pitfalls）\n\n1. **把 `Depends` 当装饰器用**：它只能作为参数默认值，或写在 `dependencies=[...]` 里。\n2. **依赖函数带 async/sync 混用出错**：依赖函数可以是 `async def` 或 `def`，FastAPI 会正确调度；但别在 `def` 依赖里调用 `await`。\n3. **误以为依赖每次请求都重新执行**：同一请求内相同依赖默认缓存；如需每次都执行，传 `Depends(fn, use_cache=False)`。\n4. **`yield` 依赖里忘了 `try/finally`**：清理代码在接口抛异常时可能不执行。\n5. **循环依赖**：A 依赖 B，B 又依赖 A，FastAPI 会启动失败——依赖图必须是有向无环图（DAG）。\n6. **把依赖当全局单例**：依赖函数每次请求都会被调用（缓存仅限单请求内），跨请求共享状态要用数据库/外部存储。\n\n---\n\n## 动手练习\n\n**任务**：写一个 FastAPI 应用 `main.py`，实现下面功能，并用 `uvicorn main:app --reload` 跑起来，在 `/docs` 里验证：\n\n1. 写一个依赖 `get_api_key`：从请求头 `X-API-Key` 读取，若值不是 `\"secret\"` 就返回 `401`。\n2. 写一个 `yield` 依赖 `get_resource`：`yield` 前打印 `\"open\"`，`finally` 里打印 `\"close\"`，`yield` 一个字典 `{\"id\": 42}`。\n3. 写一个路由 `GET /protected`，同时注入上面两个依赖，返回 `{\"resource\": resource, \"ok\": True}`。\n4. 用 `curl` 验证：\n   - `curl -H \"X-API-Key: secret\" http://127.0.0.1:8000/protected` 返回 200；\n   - `curl http://127.0.0.1:8000/protected` 返回 401。\n5. **进阶**：把 `get_api_key` 通过 `APIRouter(dependencies=[...])` 挂到整个 router 上，让 `/protected` 之外再加一个 `/hello` 也自动受保护。\n\n提示：在接口里故意 `raise` 一个异常，观察终端里 `\"close\"` 是否仍然打印——这验证 `yield` 依赖的清理语义。\n",
+  "quiz": [
+    {
+      "kp": "py.web.fastapi_async",
+      "type": "single_choice",
+      "question": "在 FastAPI 中，某个路由函数被定义为 `async def read_item():`，并在其中直接调用了同步阻塞的数据库驱动（会阻塞数秒）。下列描述最准确的是？",
+      "options": [
+        "由于函数是 async 定义的，阻塞调用会被自动放进线程池，不影响事件循环",
+        "阻塞调用会占用事件循环线程，期间该 worker 无法处理其它请求",
+        "FastAPI 会在检测到阻塞时自动终止该请求并返回 500",
+        "只有使用 def 定义的路由才会阻塞，async def 中的同步调用不会阻塞"
+      ],
+      "answer": 1,
+      "explanation": "async def 路由运行在事件循环线程中，任何同步阻塞调用都会卡住整个事件循环，导致同一 worker 上其它请求无法被处理。async def 不会自动把同步调用移入线程池。",
+      "error_tag": "对事件循环阻塞机制理解错误",
+      "variant_group": "fastapi_async_blocking"
+    },
+    {
+      "kp": "py.web.fastapi_async",
+      "type": "single_choice",
+      "question": "在 FastAPI 中，路由用 `def`（非 async）定义时，框架默认如何处理它？",
+      "options": [
+        "直接在事件循环线程中同步执行，因此会阻塞事件循环",
+        "放入线程池执行，避免阻塞事件循环",
+        "必须显式标注为线程执行，否则启动时报错",
+        "转换为协程后在事件循环中执行"
+      ],
+      "answer": 1,
+      "explanation": "FastAPI 对普通 def 路由函数会通过线程池（anyio/starlette 的 run_in_threadpool）执行，从而不阻塞事件循环。它不会直接在事件循环线程中执行。",
+      "error_tag": "混淆 def 与 async def 的执行方式",
+      "variant_group": "fastapi_async_def_handling"
+    },
+    {
+      "kp": "py.web.fastapi_async",
+      "type": "single_choice",
+      "question": "在 async 路由中需要并行执行多个 CPU 密集型任务，最合适的处理方式是？",
+      "options": [
+        "用 asyncio.gather 并发执行这些任务，即可利用多核",
+        "用线程池执行，因为线程可以绕过 GIL 做 CPU 并行",
+        "交给进程池或后台任务进程处理，因为 asyncio 无法让 CPU 密集任务并行利用多核",
+        "在事件循环中串行执行，因为没有更好的办法"
+      ],
+      "answer": 2,
+      "explanation": "asyncio 解决的是 I/O 并发，不是 CPU 并行；线程池受 GIL 限制也难以真正并行 CPU 任务。CPU 密集型应使用进程池等真正的多进程方案。",
+      "error_tag": "混淆 I/O 并发与 CPU 并行",
+      "variant_group": "fastapi_async_cpu_bound"
+    },
+    {
+      "kp": "py.web.fastapi_async",
+      "type": "single_choice",
+      "question": "关于在 async 路由中创建后台任务，下列说法正确的是？",
+      "options": [
+        "用 asyncio.create_task 创建任务后，无需保存引用也不会被回收",
+        "用 asyncio.create_task 创建任务时，应保存引用以防止任务被垃圾回收，且注意异常处理",
+        "后台任务必须用 def 定义",
+        "后台任务不能是协程，只能是普通函数"
+      ],
+      "answer": 1,
+      "explanation": "asyncio.create_task 创建的任务如果没有保存强引用，可能被垃圾回收导致任务提前取消；同时任务内异常需要妥善处理，否则可能被忽略。后台任务可以是协程。",
+      "error_tag": "对 asyncio 任务生命周期管理不当",
+      "variant_group": "fastapi_async_background_task"
+    },
+    {
+      "kp": "py.web.fastapi_async",
+      "type": "single_choice",
+      "question": "在 FastAPI 的 async 路由中，若需要调用一个同步 CPU 密集函数，下列哪种做法最不推荐？",
+      "options": [
+        "用 run_in_threadpool 在需要时把部分逻辑放到线程池",
+        "改用进程池执行该 CPU 密集函数",
+        "在 async 路由中直接同步调用该 CPU 密集函数",
+        "将其作为独立服务或任务异步处理"
+      ],
+      "answer": 2,
+      "explanation": "在 async 路由中直接同步调用 CPU 密集函数会长时间阻塞事件循环，是最不推荐的做法。线程池、进程池或拆分服务都是更合理的缓解方式（CPU 密集更推荐进程）。",
+      "error_tag": "在事件循环中执行 CPU 密集同步代码",
+      "variant_group": "fastapi_async_cpu_bound"
+    },
+    {
+      "kp": "py.web.fastapi_async",
+      "type": "single_choice",
+      "question": "关于 FastAPI 中间件与 async 的关系，下列描述正确的是？",
+      "options": [
+        "中间件只能是同步函数，FastAPI 会在线程池中运行它",
+        "中间件可以是 async 函数，也可以是普通函数，async 中间件中可以 await",
+        "中间件中不能使用 await，否则请求会失败",
+        "中间件必须继承自某个特定基类，且基类方法必须是同步的"
+      ],
+      "answer": 1,
+      "explanation": "FastAPI/Starlette 的中间件函数/类可以是 async 或普通函数，async 中间件中可以使用 await。并非只能同步，也不是不能 await。",
+      "error_tag": "对中间件异步支持理解错误",
+      "variant_group": "fastapi_async_middleware"
+    },
+    {
+      "kp": "py.web.fastapi_async",
+      "type": "single_choice",
+      "question": "以下哪种场景最适合使用 async def 路由？",
+      "options": [
+        "路由内需要做大量复杂矩阵运算，CPU 占用很高",
+        "路由内主要通过 await 调用远程 API 和异步数据库",
+        "路由内需要调用一个无法替换的同步阻塞 SDK",
+        "路由内需要读写本地大文件并使用同步文件 API"
+      ],
+      "answer": 1,
+      "explanation": "async def 适合 I/O 密集型且使用异步客户端的场景，await 期间可让出事件循环。CPU 密集、无法替换的同步阻塞、同步文件 I/O 都不适合直接在 async 路由中执行。",
+      "error_tag": "对 async 适用场景判断错误",
+      "variant_group": "fastapi_async_benefit"
+    },
+    {
+      "kp": "py.web.fastapi_async",
+      "type": "single_choice",
+      "question": "在 async 路由中使用了同步的 `open()` 读取大文件，可能带来的问题是？",
+      "options": [
+        "open 会自动转为异步，没有问题",
+        "读取期间会阻塞事件循环，影响同一 worker 上的其它请求",
+        "FastAPI 会拒绝在 async 路由中使用 open",
+        "只有写文件会阻塞，读文件不会阻塞"
+      ],
+      "answer": 1,
+      "explanation": "同步 open/read 是阻塞调用，在 async 路由中执行会阻塞事件循环。应使用异步文件库或把文件操作放到线程池。读和写都会阻塞。",
+      "error_tag": "在异步代码中误用阻塞文件 I/O",
+      "variant_group": "fastapi_async_blocking"
+    },
+    {
+      "kp": "py.web.fastapi_async",
+      "type": "single_choice",
+      "question": "关于在 async 路由中使用 `asyncio.gather`，下列说法正确的是？",
+      "options": [
+        "gather 会等待所有任务完成并返回结果列表，异常处理需注意",
+        "gather 只等待第一个完成的任务，其余会被取消",
+        "gather 只能用于普通函数，不能用于协程",
+        "gather 会阻塞事件循环直到所有任务完成"
+      ],
+      "answer": 0,
+      "explanation": "asyncio.gather 并发调度多个可等待对象，等待全部完成并返回结果列表；默认某个任务抛异常时会传播，需根据需求处理。它不会阻塞事件循环，而是挂起当前协程。",
+      "error_tag": "对 gather 语义理解错误",
+      "variant_group": "fastapi_async_concurrency"
+    },
+    {
+      "kp": "py.web.fastapi_async",
+      "type": "single_choice",
+      "question": "某 async 路由中需要依次执行两个异步操作，第二个依赖第一个的结果。下列写法正确的是？",
+      "options": [
+        "result1 = await op1(); result2 = await op2(result1)",
+        "result1 = op1(); result2 = op2(result1)",
+        "result1, result2 = await asyncio.gather(op1(), op2(result1))",
+        "await op1(); op2() 无需 await 即可"
+      ],
+      "answer": 0,
+      "explanation": "依赖关系下应按顺序 await：先 await op1 得到结果，再 await op2。不 await 会得到协程对象而非结果；gather 也不适合有依赖且 op2 需要 result1 的场景；op2 调用必须 await。",
+      "error_tag": "对 await 与顺序依赖理解错误",
+      "variant_group": "fastapi_async_await_semantics"
+    },
+    {
+      "kp": "py.web.fastapi_async",
+      "type": "single_choice",
+      "question": "在 FastAPI 中，关于 `async def` 路由返回值，下列说法正确的是？",
+      "options": [
+        "必须返回可 JSON 序列化的对象，返回协程会由框架自动 await",
+        "可以直接返回协程而无需 await，框架会处理",
+        "返回普通 dict/list 会被自动序列化为 JSON",
+        "必须返回 Response 对象，返回 dict 会报错"
+      ],
+      "answer": 2,
+      "explanation": "FastAPI 路由返回 dict/list 等会被自动序列化为 JSON；返回协程对象并非正确用法（框架不会替你 await 任意返回的协程），通常也不需要强制返回 Response 对象。",
+      "error_tag": "对路由返回值处理理解错误",
+      "variant_group": "fastapi_async_response"
+    },
+    {
+      "kp": "py.web.fastapi_async",
+      "type": "single_choice",
+      "question": "关于 async 路由中的异常处理，下列哪种做法更合适？",
+      "options": [
+        "用 try/except 捕获异常并用 raise HTTPException 转换为 HTTP 响应",
+        "因为 async 中不能抛异常，只能返回错误码",
+        "后台任务中未捕获的异常会自动转为 4xx 响应",
+        "在 async 路由中不能用 try/except"
+      ],
+      "answer": 0,
+      "explanation": "在 async 路由中可以用 try/except 捕获异常，并用 HTTPException 或异常处理器转换成合适的 HTTP 响应。后台任务中未捕获的异常不会自动转成客户端响应。",
+      "error_tag": "对异步路由异常处理理解错误",
+      "variant_group": "fastapi_async_exception"
+    },
+    {
+      "kp": "py.web.fastapi_async",
+      "type": "single_choice",
+      "question": "某 async 路由中需要调用一个会阻塞数秒的同步函数，为保证其它请求不被卡住，最合适的做法是？",
+      "options": [
+        "直接调用该同步函数，因为 async 上下文会自动并发",
+        "用 asyncio.get_event_loop().run_until_complete(...) 直接执行它",
+        "使用异步兼容的库；若无法替换，可用 run_in_threadpool 等把调用放到线程池",
+        "在函数前加 await 关键字即可让它变为非阻塞"
+      ],
+      "answer": 2,
+      "explanation": "同步阻塞函数无法通过加 await 变为非阻塞；应改用异步库，或用 starlette.concurrency.run_in_threadpool（或 anyio.to_thread）把阻塞调用放到线程池。run_until_complete 在运行中的事件循环里会报错。",
+      "error_tag": "误以为 await 能让同步代码非阻塞",
+      "variant_group": "fastapi_async_handle_blocking"
+    },
+    {
+      "kp": "py.web.fastapi_async",
+      "type": "single_choice",
+      "question": "以下关于 FastAPI 中 async 路由内 `await` 的描述，正确的是？",
+      "options": [
+        "await 会让当前请求暂停，事件循环可在此期间处理其它任务",
+        "await 会阻塞整个事件循环直到被等待的操作完成",
+        "await 只能用于 def 定义的路由函数",
+        "await 的对象必须是普通函数，协程不能 await"
+      ],
+      "answer": 0,
+      "explanation": "await 会挂起当前协程并把控制权交还事件循环，使循环能运行其它任务，这正是异步并发的关键。await 用于可等待对象（协程、Future、Task 等），且必须在 async 函数内使用。",
+      "error_tag": "对 await 调度语义理解错误",
+      "variant_group": "fastapi_async_await_semantics"
+    },
+    {
+      "kp": "py.web.fastapi_async",
+      "type": "single_choice",
+      "question": "在 FastAPI 的 async 路由中，同时需要发起两个互不依赖的异步 HTTP 请求，下列写法最能体现并发的是？",
+      "options": [
+        "依次 await 两个请求，因为 await 本身就会并行",
+        "用 asyncio.gather 把两个协程一起调度，再 await 结果",
+        "用 time.sleep 分隔两个请求以避免竞争",
+        "把两个请求写在同一行用逗号分隔即可并发"
+      ],
+      "answer": 1,
+      "explanation": "依次 await 是串行的，总耗时是两者之和；asyncio.gather 可以把多个协程并发调度，总耗时接近较慢的那个。time.sleep 是阻塞调用，反而会卡住事件循环。",
+      "error_tag": "不清楚协程并发调度方式",
+      "variant_group": "fastapi_async_concurrency"
+    },
+    {
+      "kp": "py.web.fastapi_async",
+      "type": "single_choice",
+      "question": "在 async 路由里直接调用 `time.sleep(5)`，最可能的后果是？",
+      "options": [
+        "该请求等待 5 秒，其它请求不受影响，因为各自独立",
+        "事件循环被阻塞 5 秒，该 worker 上的其它请求也被延迟",
+        "time.sleep 在 async 函数中会抛出 RuntimeError",
+        "FastAPI 会自动把 time.sleep 转为异步等待"
+      ],
+      "answer": 1,
+      "explanation": "time.sleep 是同步阻塞调用，在事件循环线程中执行会阻塞整个循环，导致同 worker 上其它请求被延迟。异步代码中应使用 asyncio.sleep。",
+      "error_tag": "在异步代码中误用阻塞调用",
+      "variant_group": "fastapi_async_blocking"
+    },
+    {
+      "kp": "py.web.fastapi_async",
+      "type": "single_choice",
+      "question": "关于 FastAPI 的依赖项（Depends），下列说法正确的是？",
+      "options": [
+        "依赖项必须是 async 函数，否则无法使用",
+        "依赖项可以是 async 也可以是普通 def，框架会按相应方式执行",
+        "依赖项只在路由为 async 时才会被解析",
+        "依赖项中不能使用 await"
+      ],
+      "answer": 1,
+      "explanation": "FastAPI 依赖项既可以是 async def 也可以是 def；async 依赖会在事件循环中 await，普通 def 依赖会在线程池中执行。依赖项中可以使用 await（当它是 async 时）。",
+      "error_tag": "对依赖项函数类型限制理解错误",
+      "variant_group": "fastapi_async_depends"
+    },
+    {
+      "kp": "py.web.fastapi_async",
+      "type": "single_choice",
+      "question": "某 async 路由需要返回大量数据，并使用了同步的 ORM 查询。若希望避免阻塞事件循环，较合理的做法是？",
+      "options": [
+        "在 async 路由中直接调用同步 ORM，因为 ORM 很快",
+        "改用异步 ORM（如支持 async 的驱动），或用线程池执行同步 ORM 调用",
+        "把路由改为 async 并加 await 在同步 ORM 调用前即可",
+        "在同步 ORM 调用后加 asyncio.sleep(0) 就不会阻塞"
+      ],
+      "answer": 1,
+      "explanation": "同步 ORM 在 async 路由中会阻塞事件循环；应使用异步 ORM/驱动，或通过线程池执行。加 await 或 asyncio.sleep(0) 都不能消除同步阻塞。",
+      "error_tag": "试图用 await 包装同步阻塞调用",
+      "variant_group": "fastapi_async_handle_blocking"
+    },
+    {
+      "kp": "py.web.fastapi_async",
+      "type": "single_choice",
+      "question": "在 FastAPI 中，使用 `async def` 定义路由相对于 `def` 的主要优势通常在于？",
+      "options": [
+        "async def 路由一定比 def 路由更快，无论内部做什么",
+        "当路由内部进行 await I/O 时，能在等待期间让出事件循环以处理其它请求",
+        "async def 路由会自动启用多进程",
+        "async def 路由无需经过线程池，因此永远比 def 路由并发高"
+      ],
+      "answer": 1,
+      "explanation": "async def 的优势在于 await I/O 期间可以释放事件循环，提高 I/O 密集型并发；若内部是 CPU 密集或同步阻塞，优势不成立甚至更差。它不会自动多进程，也不能一概而论更快。",
+      "error_tag": "对 async 适用场景理解片面",
+      "variant_group": "fastapi_async_benefit"
+    },
+    {
+      "kp": "py.web.fastapi_async",
+      "type": "single_choice",
+      "question": "以下哪段代码在 FastAPI 的 async 路由中会阻塞事件循环？",
+      "options": [
+        "await asyncio.sleep(1)",
+        "await some_async_db.fetch()",
+        "requests.get('http://example.com')",
+        "await asyncio.gather(task1, task2)"
+      ],
+      "answer": 2,
+      "explanation": "requests.get 是同步阻塞调用，在 async 路由中会阻塞事件循环。asyncio.sleep、异步 DB 的 await、asyncio.gather 都是非阻塞或并发调度的写法。",
+      "error_tag": "在异步代码中误用同步库",
+      "variant_group": "fastapi_async_blocking"
+    },
+    {
+      "kp": "py.web.fastapi_depends",
+      "type": "single_choice",
+      "question": "在 FastAPI 中，关于依赖注入（Depends）的作用，下列说法正确的是？",
+      "options": [
+        "它会在每次请求处理前自动执行依赖函数，并把返回值作为参数注入到路径操作函数中",
+        "它只能用于注入数据库连接对象，不能注入普通函数返回值",
+        "它只在应用启动时执行一次，并把结果缓存给所有请求",
+        "它必须通过装饰器 @Depends 显式声明在路径操作函数上"
+      ],
+      "answer": 0,
+      "explanation": "FastAPI 的依赖注入通过 Depends() 声明，在每次请求处理时执行依赖函数，并将其返回值注入到路径操作函数的参数中。它不是仅限数据库连接，也不是只执行一次，更不是用装饰器声明而是用参数默认值 Depends()。",
+      "error_tag": "概念混淆",
+      "variant_group": "fastapi_depends_basic"
+    },
+    {
+      "kp": "py.web.fastapi_depends",
+      "type": "single_choice",
+      "question": "以下代码中，common_params 依赖会被执行几次？\n\nfrom fastapi import FastAPI, Depends\napp = FastAPI()\n\ndef common_params(q: str = None):\n    return {\"q\": q}\n\n@app.get(\"/items/\")\ndef read_items(params: dict = Depends(common_params)):\n    return params",
+      "options": [
+        "每次请求执行一次",
+        "只在应用启动时执行一次",
+        "每次请求执行两次",
+        "从不执行，除非显式调用"
+      ],
+      "answer": 0,
+      "explanation": "默认情况下，Depends 的依赖函数在每次请求处理时都会被执行一次，不会缓存跨请求的结果。",
+      "error_tag": "概念混淆",
+      "variant_group": "fastapi_depends_execution"
+    },
+    {
+      "kp": "py.web.fastapi_depends",
+      "type": "fill_blank",
+      "question": "在 FastAPI 中，要让路径操作函数的参数使用依赖注入，需要把该参数的默认值设为 ________(some_dependency)。",
+      "options": [],
+      "answer": [
+        "Depends",
+        "fastapi.Depends",
+        "Depends()"
+      ],
+      "explanation": "FastAPI 通过在参数默认值中写 Depends(dependency) 来声明依赖注入，Depends 从 fastapi 导入。",
+      "error_tag": "记忆缺失",
+      "variant_group": "fastapi_depends_syntax"
+    },
+    {
+      "kp": "py.web.fastapi_depends",
+      "type": "fill_blank",
+      "question": "FastAPI 依赖注入默认会在同一请求内缓存依赖结果，若要禁用该缓存，需将 Depends 的 ________ 参数设为 False。",
+      "options": [],
+      "answer": [
+        "use_cache",
+        "use_cache=False"
+      ],
+      "explanation": "Depends(use_cache=False) 可禁用同一请求内的依赖结果缓存，使依赖在同一请求中每次被引用时都重新执行。",
+      "error_tag": "记忆缺失",
+      "variant_group": "fastapi_depends_cache"
+    },
+    {
+      "kp": "py.web.fastapi_depends",
+      "type": "fill_blank",
+      "question": "带 yield 的依赖函数中，yield ________ 的代码通常用于释放资源（如关闭数据库会话），它在响应发送后执行。",
+      "options": [],
+      "answer": [
+        "之后",
+        "后面",
+        "after",
+        "yield之后"
+      ],
+      "explanation": "带 yield 的依赖，yield 之前的代码是 setup，yield 之后的代码是 teardown，会在响应发送后执行，用于资源清理。",
+      "error_tag": "记忆缺失",
+      "variant_group": "fastapi_depends_yield"
+    },
+    {
+      "kp": "py.web.fastapi_depends",
+      "type": "code_reading",
+      "question": "阅读以下代码，说明每次请求 /items/ 时 get_db 会执行几次，以及 db 参数的值来自哪里。\n\nfrom fastapi import FastAPI, Depends\napp = FastAPI()\n\ndef get_db():\n    print(\"open db\")\n    return \"DB\"\n\n@app.get(\"/items/\")\ndef read_items(db = Depends(get_db)):\n    return {\"db\": db}",
+      "options": [],
+      "answer": "每次请求 get_db 执行一次（打印一次 \"open db\"），db 参数的值是 get_db 的返回值 \"DB\"。",
+      "explanation": "Depends(get_db) 会在每次请求时执行 get_db，默认在同一请求内缓存；其返回值被注入到 db 参数中。因此每次请求打印一次并返回 \"DB\"。",
+      "error_tag": "概念混淆",
+      "variant_group": "fastapi_depends_execution"
+    },
+    {
+      "kp": "py.web.fastapi_depends",
+      "type": "code_reading",
+      "question": "阅读以下代码，说明请求 /x 时输出顺序是怎样的。\n\nfrom fastapi import FastAPI, Depends\napp = FastAPI()\n\ndef dep():\n    print(\"setup\")\n    yield \"res\"\n    print(\"teardown\")\n\n@app.get(\"/x\")\ndef x(v = Depends(dep)):\n    print(\"handler\")\n    return {\"v\": v}",
+      "options": [],
+      "answer": "输出顺序为：setup -> handler -> teardown。",
+      "explanation": "带 yield 的依赖：yield 之前的 setup 先执行；然后进入路径操作函数打印 handler；响应发送后回到 yield 之后打印 teardown。",
+      "error_tag": "概念混淆",
+      "variant_group": "fastapi_depends_yield"
+    },
+    {
+      "kp": "py.web.fastapi_depends",
+      "type": "code_reading",
+      "question": "阅读以下代码，说明路径操作函数中 token 参数的值是什么，以及是否需要手动调用 get_token。\n\nfrom fastapi import FastAPI, Depends\napp = FastAPI()\n\ndef get_token():\n    return \"abc\"\n\n@app.get(\"/t\")\ndef t(token = Depends(get_token)):\n    return {\"token\": token}",
+      "options": [],
+      "answer": "token 的值是 \"abc\"，由 FastAPI 自动调用 get_token 得到，不需要手动调用。",
+      "explanation": "Depends(get_token) 让 FastAPI 在请求处理时自动调用 get_token，并把返回值 \"abc\" 注入到 token 参数，无需手动调用。",
+      "error_tag": "概念混淆",
+      "variant_group": "fastapi_depends_injection"
+    },
+    {
+      "kp": "py.web.fastapi_depends",
+      "type": "code_reading",
+      "question": "阅读以下代码，说明同一请求中 dep 会被执行几次。\n\nfrom fastapi import FastAPI, Depends\napp = FastAPI()\n\ndef dep():\n    print(\"run\")\n    return 1\n\n@app.get(\"/y\")\ndef y(a = Depends(dep), b = Depends(dep)):\n    return {\"a\": a, \"b\": b}",
+      "options": [],
+      "answer": "同一请求中 dep 只执行一次（只打印一次 \"run\"），a 和 b 都得到 1。",
+      "explanation": "FastAPI 默认 use_cache=True，同一请求内对同一依赖的多次引用只执行一次并复用结果，因此 a 和 b 都为 1。",
+      "error_tag": "边界错误",
+      "variant_group": "fastapi_depends_cache"
+    },
+    {
+      "kp": "py.web.fastapi_depends",
+      "type": "scenario",
+      "question": "你们团队在一个 FastAPI 项目中，多个路径操作函数都需要读取当前登录用户信息，并且都要在请求结束时统一关闭数据库会话。请描述你会如何使用依赖注入来组织这两类公共逻辑，并说明两类依赖在写法上有何不同。",
+      "options": [],
+      "answer": null,
+      "explanation": "应把用户信息读取和数据库会话分别封装为依赖函数，通过 Depends 注入到各路径操作。当前用户获取可用普通函数依赖返回用户对象；数据库会话应用带 yield 的依赖，yield 前创建会话、yield 后关闭，保证请求结束时释放资源。",
+      "error_tag": "概念混淆",
+      "variant_group": "fastapi_depends_scenario",
+      "required_keywords": [
+        "依赖注入",
+        "Depends",
+        "普通函数依赖",
+        "yield",
+        "数据库会话"
+      ]
+    },
+    {
+      "kp": "py.web.fastapi_depends",
+      "type": "scenario",
+      "question": "一名同事在 FastAPI 中写了两个依赖函数，其中一个依赖需要拿到另一个依赖的结果。他直接在依赖函数体内调用了另一个依赖函数（而不是在参数中用 Depends 声明）。请指出这样做的潜在问题，并说明正确做法。",
+      "options": [],
+      "answer": null,
+      "explanation": "直接在函数体内调用另一个依赖会绕过 FastAPI 的依赖解析，可能导致该依赖重复执行、无法复用请求内缓存、无法参与依赖树与校验等。正确做法是在依赖函数的参数上用 Depends(other_dep) 声明，由 FastAPI 解析嵌套依赖。",
+      "error_tag": "概念混淆",
+      "variant_group": "fastapi_depends_scenario",
+      "required_keywords": [
+        "FastAPI",
+        "缓存"
+      ]
+    },
+    {
+      "kp": "py.web.fastapi_depends",
+      "type": "scenario",
+      "question": "你的接口中有一个依赖用于权限校验，你希望它只做校验、不把返回值注入到路径操作函数，同时希望它在多个路径操作上复用。请说明应该把该依赖声明在哪里，以及这种方式与把依赖作为函数参数默认值声明有何区别。",
+      "options": [],
+      "answer": null,
+      "explanation": "可把依赖写在路径操作装饰器的 dependencies=[Depends(...)] 中，这样适合做纯校验/副作用且返回值不注入。与作为函数参数默认值声明的区别在于：后者会在函数签名中出现参数并接收返回值，前者不会注入返回值。",
+      "error_tag": "概念混淆",
+      "variant_group": "fastapi_depends_scenario",
+      "required_keywords": [
+        "路径操作装饰器",
+        "dependencies",
+        "Depends",
+        "返回值注入",
+        "函数参数默认值"
+      ]
+    },
+    {
+      "kp": "py.web.fastapi_depends",
+      "type": "single_choice",
+      "question": "关于 Depends 的 use_cache 参数，下列说法正确的是？",
+      "options": [
+        "use_cache=False 时，同一个请求中多次使用同一依赖会重复执行依赖函数",
+        "use_cache=False 时，依赖函数的结果会被永久缓存到磁盘",
+        "use_cache 默认值为 False",
+        "use_cache=True 时，依赖函数只在应用启动时执行一次"
+      ],
+      "answer": 0,
+      "explanation": "FastAPI 默认 use_cache=True，在同一请求内多次声明同一依赖时只执行一次并复用结果；设置 use_cache=False 会禁用该请求内缓存，导致重复执行。use_cache 不影响跨请求行为，默认也不是 False。",
+      "error_tag": "边界错误",
+      "variant_group": "fastapi_depends_cache"
+    },
+    {
+      "kp": "py.web.fastapi_depends",
+      "type": "scenario",
+      "question": "在一个高并发 FastAPI 服务中，有同事担心依赖注入会带来额外开销，于是把数据库会话和用户信息都缓存为全局变量以提升性能。请评估这种做法的风险，并给出更合适的做法。",
+      "options": [],
+      "answer": null,
+      "explanation": "把会话等请求级资源缓存为全局变量会导致并发请求共享同一资源，引发数据串扰、事务混乱和会话泄漏，且难以正确关闭。更合适的做法是用 Depends 每请求创建/注入会话，带 yield 的依赖在响应后关闭，利用请求级隔离保证并发安全。",
+      "error_tag": "概念混淆",
+      "variant_group": "fastapi_depends_scenario",
+      "required_keywords": [
+        "隔离",
+        "事务",
+        "缓存",
+        "并发",
+        "泄漏"
+      ]
+    },
+    {
+      "kp": "py.web.fastapi_depends",
+      "type": "single_choice",
+      "question": "以下关于带 yield 的依赖函数的说法，正确的是？",
+      "options": [
+        "yield 之前的代码在请求处理前执行，yield 之后的代码在响应发送后执行，可用于清理资源",
+        "yield 之后的代码永远不会执行",
+        "带 yield 的依赖不能用于依赖注入",
+        "yield 之后的代码在 yield 语句处立即执行"
+      ],
+      "answer": 0,
+      "explanation": "FastAPI 支持带 yield 的依赖，yield 前相当于 setup，路径操作函数执行并生成响应后，会回到 yield 之后执行 teardown/清理逻辑，类似上下文管理器。",
+      "error_tag": "概念混淆",
+      "variant_group": "fastapi_depends_yield"
+    },
+    {
+      "kp": "py.web.fastapi_depends",
+      "type": "single_choice",
+      "question": "若路径操作函数声明了 dependencies=[Depends(verify_token)]，关于 verify_token 的返回值，下列说法正确的是？",
+      "options": [
+        "返回值不会被注入到路径操作函数参数中，仅用于执行校验或副作用",
+        "返回值会自动作为第一个参数传入路径操作函数",
+        "返回值必须为布尔类型，否则会报错",
+        "返回值会被自动写入响应体"
+      ],
+      "answer": 0,
+      "explanation": "在路径操作装饰器的 dependencies 参数中声明的依赖，其返回值不会注入到函数参数，只用于执行校验、副作用等；只有作为函数参数默认值声明的依赖才会注入返回值。",
+      "error_tag": "概念混淆",
+      "variant_group": "fastapi_depends_decorator"
+    },
+    {
+      "kp": "py.web.fastapi_depends",
+      "type": "single_choice",
+      "question": "以下哪种方式可以正确地让一个依赖函数接收另一个依赖？",
+      "options": [
+        "在依赖函数的参数中使用 param: Type = Depends(other_dep)",
+        "在依赖函数体内调用 other_dep()",
+        "使用 @Depends(other_dep) 装饰器装饰依赖函数",
+        "在依赖函数上使用 @inject 装饰器"
+      ],
+      "answer": 0,
+      "explanation": "依赖可以嵌套：在依赖函数的参数上使用 Depends(other_dep)，FastAPI 会解析依赖树并逐层注入。直接调用 other_dep() 会绕过 FastAPI 的注入机制。",
+      "error_tag": "概念混淆",
+      "variant_group": "fastapi_depends_nested"
+    },
+    {
+      "kp": "py.web.fastapi_depends",
+      "type": "single_choice",
+      "question": "关于 Depends 与类的关系，下列说法正确的是？",
+      "options": [
+        "Depends 可以接受一个类作为依赖，FastAPI 会调用该类来创建实例并注入",
+        "Depends 只能接受函数，不能接受类",
+        "Depends 接受的类必须继承自 Depends 基类",
+        "Depends 接受类时，会直接注入类本身而不是实例"
+      ],
+      "answer": 0,
+      "explanation": "Depends 可以接受可调用对象，类也是可调用对象，FastAPI 会用其构造实例并注入。并不要求继承特定基类，注入的是实例而非类本身。",
+      "error_tag": "概念混淆",
+      "variant_group": "fastapi_depends_class"
+    },
+    {
+      "kp": "py.web.fastapi_depends",
+      "type": "multi_choice",
+      "question": "关于 FastAPI 依赖注入（Depends）的特点，以下说法正确的有哪些？",
+      "options": [
+        "依赖可以形成嵌套依赖树，FastAPI 会自动解析",
+        "同一请求内，默认对同一依赖只执行一次（use_cache=True）",
+        "依赖函数的返回值一定会被注入到路径操作函数的参数中",
+        "依赖可以声明在路径操作装饰器的 dependencies 参数中以执行校验",
+        "带 yield 的依赖可用于请求结束后的资源清理"
+      ],
+      "answer": [
+        0,
+        1,
+        3,
+        4
+      ],
+      "explanation": "依赖支持嵌套、默认请求内缓存、可放在装饰器 dependencies 中做校验、带 yield 可做清理。但只有在函数参数上声明为默认值的依赖，其返回值才会注入；装饰器 dependencies 中的依赖返回值不会注入，故 C 错。",
+      "error_tag": "概念混淆",
+      "variant_group": "fastapi_depends_features"
+    },
+    {
+      "kp": "py.web.fastapi_depends",
+      "type": "multi_choice",
+      "question": "以下哪些场景适合使用 FastAPI 的依赖注入？",
+      "options": [
+        "在多个路径操作中复用数据库会话的获取与释放逻辑",
+        "统一进行身份认证与权限校验",
+        "在请求处理前后执行公共的日志或计时逻辑",
+        "替代 Python 的 import 语句来加载模块",
+        "分页参数的公共解析与校验"
+      ],
+      "answer": [
+        0,
+        1,
+        2,
+        4
+      ],
+      "explanation": "依赖注入适合复用公共逻辑：数据库会话管理、认证鉴权、公共前置/后置处理、分页参数等。它不能替代 import 语句来加载模块，二者是完全不同的机制。",
+      "error_tag": "概念混淆",
+      "variant_group": "fastapi_depends_usecase"
+    },
+    {
+      "kp": "py.web.fastapi_depends",
+      "type": "multi_choice",
+      "question": "关于带 yield 的依赖，以下说法正确的有哪些？",
+      "options": [
+        "yield 之前的代码在请求处理前运行",
+        "yield 之后的代码在响应发送完成后运行",
+        "如果路径操作函数中抛出异常，yield 之后的代码仍有机会执行（取决于异常处理）",
+        "带 yield 的依赖不能抛出 HTTPException",
+        "带 yield 的依赖必须返回值，否则无法使用"
+      ],
+      "answer": [
+        0,
+        1,
+        2
+      ],
+      "explanation": "带 yield 的依赖：yield 前是 setup，yield 后是 teardown，响应发送后执行；异常情况下 teardown 仍会执行。它可以在 yield 前后抛 HTTPException，也不要求必须有返回值（可以只做副作用）。",
+      "error_tag": "概念混淆",
+      "variant_group": "fastapi_depends_yield"
+    }
+  ]
+}

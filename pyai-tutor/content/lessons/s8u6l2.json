@@ -1,0 +1,632 @@
+{
+  "id": "s8u6l2",
+  "title": "s8u6l2",
+  "kps": [
+    "arch.sec.data_privacy",
+    "arch.sec.compliance"
+  ],
+  "theory": "## arch.sec.data_privacy\n\n## 一句话直觉\n\n**数据隐私（Data Privacy）** 要解决的核心问题是：**系统在处理个人数据时，如何保证数据只被该看的人、在该用的场景、以可解释的方式使用。** 对 AI 系统而言，这不仅是合规要求，更直接影响模型训练、推理、日志、缓存、第三方调用等每个环节。\n\n学它的原因很直接：一旦隐私设计出错，代价通常不是“功能 bug”，而是**法律罚款、用户信任崩塌、模型下架、数据泄露事故**。\n\n---\n\n## 1. 隐私的第一性原理：数据最小化与目的限制\n\n隐私工程（Privacy Engineering）里最基础的两个原则是：\n\n- **数据最小化（Data Minimization）**：只收集、存储、处理完成当前目的所必需的数据。\n- **目的限制（Purpose Limitation）**：数据只能用于收集时明确告知的目的，不能“顺手”拿去训练、分析、出售。\n\n在工程上，这意味着：\n\n- 能用聚合数据，就不要用原始明细；\n- 能本地计算，就不要上传原始数据；\n- 能短期保留，就不要永久存储；\n- 能匿名化，就不要保留可识别字段。\n\n**关键结论**：隐私不是“加个勾选框”，而是数据流每一跳都要问：**这个字段真的需要吗？**\n\n```python\n# 示例：最小化用户画像字段\n# 不推荐：收集完整生日、精确地址、手机号\nraw_user = {\n    \"name\": \"张三\",\n    \"birthday\": \"1990-05-12\",\n    \"address\": \"北京市朝阳区某小区3号楼\",\n    \"phone\": \"13800000000\",\n    \"age\": 34,\n}\n\n# 推荐：只保留当前推荐场景需要的粗粒度特征\nminimized_user = {\n    \"age_bucket\": \"30-39\",\n    \"city_tier\": \"一线城市\",\n}\n\nprint(minimized_user)\n```\n\n---\n\n## 2. 匿名化、假名化与去标识化：别把“改名”当“匿名”\n\n这三个词经常被混淆：\n\n- **匿名化（Anonymization）**：处理后无法再识别到个人，通常不可逆。\n- **假名化（Pseudonymization）**：用代号替换直接标识符，但通过额外信息仍可还原。\n- **去标识化（De-identification）**：移除或模糊标识符，但可能通过组合字段重新识别。\n\n**关键结论**：假名化不等于匿名化。只要还存在可关联的辅助数据，就可能被**重识别（Re-identification）**。\n\n例如：邮编 + 生日 + 性别，在很多地区足以唯一锁定一个人。\n\n```python\n# 示例：假名化并不等于匿名化\nimport hashlib\n\nuser_id = \"user_12345\"\n\n# 假名化：稳定映射，便于关联，但仍可被字典攻击或交叉比对\npseudonym = hashlib.sha256(user_id.encode()).hexdigest()[:12]\nprint(\"pseudonym:\", pseudonym)\n\n# 如果攻击者知道 user_12345 的哈希规则，仍可反推\nknown = \"user_12345\"\nprint(\"match:\", hashlib.sha256(known.encode()).hexdigest()[:12] == pseudonym)\n```\n\n---\n\n## 3. 差分隐私：让“统计结果”不泄露个体\n\n**差分隐私（Differential Privacy, DP）** 是目前最严格的隐私数学框架之一。它的直觉是：\n\n> 无论某个人的数据在不在数据集里，查询结果的分布几乎一样。\n\n这样攻击者无法通过对比查询结果，判断某个人是否在数据中。\n\n常见做法是给统计结果加噪声，例如拉普拉斯机制（Laplace Mechanism）。\n\n**关键结论**：差分隐私保护的是“个体是否参与”的信息，而不是简单删掉姓名。\n\n```python\n# 示例：拉普拉斯机制做差分隐私计数\nimport numpy as np\n\ndef laplace_mechanism(true_value: float, sensitivity: float, epsilon: float) -> float:\n    \"\"\"\n    true_value: 真实统计值\n    sensitivity: 单个个体对结果的最大影响\n    epsilon: 隐私预算，越小越隐私，噪声越大\n    \"\"\"\n    scale = sensitivity / epsilon\n    noise = np.random.laplace(0, scale)\n    return true_value + noise\n\n# 真实有 1000 个用户患病\nprint(laplace_mechanism(1000, 1, 0.1))\nprint(laplace_mechanism(1000, 1, 1.0))\n```\n\n---\n\n## 4. AI 系统里的隐私风险点\n\nAI 系统常见的隐私风险不只是“数据库被拖库”，还包括：\n\n- **训练数据记忆（Memorization）**：模型可能记住训练集中的敏感样本。\n- **成员推断攻击（Membership Inference）**：判断某条数据是否参与训练。\n- **模型反演（Model Inversion）**：从模型输出反推输入特征。\n- **提示词泄露（Prompt Leakage）**：LLM 可能泄露系统提示或上下文中的隐私。\n- **第三方 API 调用**：把原始用户数据发给外部模型服务。\n\n**关键结论**：AI 隐私必须覆盖**训练、推理、日志、缓存、评估、第三方调用**全链路。\n\n```python\n# 示例：推理前做敏感信息过滤，避免把隐私直接送给第三方\nimport re\n\ndef redact_pii(text: str) -> str:\n    # 简单示例：遮盖手机号和邮箱\n    text = re.sub(r\"1[3-9]\\d{9}\", \"[PHONE]\", text)\n    text = re.sub(r\"[\\w.-]+@[\\w.-]+\\.\\w+\", \"[EMAIL]\", text)\n    return text\n\nprompt = \"请联系张三，手机13800000000，邮箱zhangsan@example.com\"\nprint(redact_pii(prompt))\n```\n\n---\n\n## 5. 工程落地：把隐私做成默认能力\n\n隐私不能靠“记得处理”，要变成系统能力：\n\n- **数据分类分级**：哪些是 PII（Personally Identifiable Information，个人可识别信息）、哪些是敏感数据。\n- **访问控制**：最小权限、按需授权、审计日志。\n- **加密**：传输加密、存储加密、密钥管理。\n- **脱敏与合成数据**：测试环境不用真实数据。\n- **保留与删除策略**：到期删除、被遗忘权。\n- **隐私影响评估（PIA / DPIA）**：上线前评估风险。\n\n**关键结论**：隐私工程的目标不是“零数据”，而是**在可用性和隐私之间做可验证的权衡**。\n\n```python\n# 示例：一个简单的隐私检查清单函数\ndef privacy_checklist(features: dict) -> list:\n    issues = []\n    pii_fields = {\"name\", \"phone\", \"email\", \"address\", \"id_card\"}\n    for field in features:\n        if field in pii_fields:\n            issues.append(f\"发现直接标识符: {field}\")\n    if \"birthday\" in features and \"zipcode\" in features:\n        issues.append(\"生日+邮编可能重识别\")\n    return issues\n\nsample = {\"name\": \"张三\", \"birthday\": \"1990-05-12\", \"zipcode\": \"100020\"}\nprint(privacy_checklist(sample))\n```\n\n---\n\n## 动手练习\n\n**任务：实现一个“隐私友好的用户行为日志管道”**\n\n要求：\n\n1. 输入一条原始日志，包含 `user_id`、`phone`、`email`、`event`、`timestamp`、`ip`。\n2. 输出一条可写入分析系统的日志：\n   - 移除或哈希 `user_id`；\n   - 遮盖 `phone`、`email`；\n   - `ip` 只保留前两段；\n   - 保留 `event` 和按小时取整的 `timestamp`。\n3. 写一个函数 `sanitize_log(log: dict) -> dict`。\n4. 额外写一个 `check_reidentification_risk(log: dict) -> list`，提示是否存在重识别风险字段组合。\n5. 用 3 条不同日志测试，并打印结果。\n\n**提交形式**：一个 `.py` 文件，包含函数定义、测试数据和输出。\n\n**进阶挑战**：给 `event` 统计加差分隐私噪声，比较 `epsilon=0.1` 和 `epsilon=1.0` 的输出差异。\n\n```python\nimport hashlib\nimport re\nfrom datetime import datetime\n\ndef sanitize_log(log: dict) -> dict:\n    \"\"\"隐私友好的日志清洗：去标识、遮盖、粗化。\"\"\"\n    out = {}\n\n    # 1. user_id 假名化，保留可关联性但去掉直接身份\n    uid = str(log.get(\"user_id\", \"\"))\n    out[\"user_pseudo\"] = hashlib.sha256(uid.encode()).hexdigest()[:12]\n\n    # 2. 遮盖手机号和邮箱\n    phone = str(log.get(\"phone\", \"\"))\n    out[\"phone_masked\"] = re.sub(r\"(\\d{3})\\d{4}(\\d{4})\", r\"\\1****\\2\", phone) if phone else \"\"\n\n    email = str(log.get(\"email\", \"\"))\n    out[\"email_masked\"] = re.sub(r\"(.{2}).*(@.*)\", r\"\\1***\\2\", email) if email else \"\"\n\n    # 3. IP 只保留前两段\n    ip = str(log.get(\"ip\", \"\"))\n    parts = ip.split(\".\")\n    out[\"ip_prefix\"] = \".\".join(parts[:2]) + \".0.0\" if len(parts) == 4 else \"\"\n\n    # 4. 时间按小时粗化\n    ts = log.get(\"timestamp\")\n    if isinstance(ts, datetime):\n        out[\"hour_bucket\"] = ts.strftime(\"%Y-%m-%d %H:00\")\n    else:\n        out[\"hour_bucket\"] = \"\"\n\n    # 5. 事件本身通常可保留\n    out[\"event\"] = log.get(\"event\", \"\")\n\n    return out\n\n\ndef check_reidentification_risk(log: dict) -> list:\n    \"\"\"检查是否存在常见重识别风险字段组合。\"\"\"\n    issues = []\n    risky = [\"birthday\", \"zipcode\", \"gender\", \"job\", \"company\"]\n    present = [f for f in risky if f in log]\n    if len(present) >= 3:\n        issues.append(f\"多个准标识符同时存在，可能重识别: {present}\")\n    if \"phone\" in log and \"email\" in log:\n        issues.append(\"手机号与邮箱同时出现，关联风险高\")\n    return issues\n\n\nif __name__ == \"__main__\":\n    logs = [\n        {\n            \"user_id\": \"user_001\",\n            \"phone\": \"13800000000\",\n            \"email\": \"zhangsan@example.com\",\n            \"event\": \"click_banner\",\n            \"timestamp\": datetime(2024, 6, 1, 14, 37, 22),\n            \"ip\": \"192.168.1.100\",\n        },\n        {\n            \"user_id\": \"user_002\",\n            \"phone\": \"13911112222\",\n            \"email\": \"lisi@test.org\",\n            \"event\": \"purchase\",\n            \"timestamp\": datetime(2024, 6, 1, 9, 5, 0),\n            \"ip\": \"10.0.0.8\",\n        },\n    ]\n\n    for log in logs:\n        print(\"原始:\", log)\n        print(\"清洗后:\", sanitize_log(log))\n        print(\"风险:\", check_reidentification_risk(log))\n        print(\"-\" * 40)\n```\n\n## arch.sec.compliance\n\n## 一句话直觉\n\n合规（Compliance）不是“写完代码再补的文档”，而是把法律、行业和公司规则变成**可执行、可检查、可审计**的工程约束，让系统在运行时就能证明自己“守规矩”。\n\n---\n\n## 1. 什么是合规：从“人治”到“机制”\n\n合规指系统及其开发流程满足法律、监管、合同或内部政策要求。对架构师来说，关键不是背条款，而是把条款翻译成：\n\n- **策略（Policy）**：允许/禁止什么行为。\n- **控制（Control）**：用什么技术或流程落实策略。\n- **证据（Evidence）**：如何证明控制确实生效。\n- **审计（Audit）**：谁在何时做了什么、结果如何。\n\n> 直觉：合规 = 规则 + 自动化检查 + 可追溯证据。\n\n```python\n# 一个最小的“合规规则”表示：把规则写成数据，而不是散落在注释里\ncompliance_rules = [\n    {\n        \"id\": \"DATA-001\",\n        \"desc\": \"个人身份信息（PII, Personally Identifiable Information）必须加密存储\",\n        \"check\": lambda record: record.get(\"pii_encrypted\") is True,\n    },\n    {\n        \"id\": \"LOG-002\",\n        \"desc\": \"敏感操作必须记录审计日志（Audit Log）\",\n        \"check\": lambda record: record.get(\"audit_logged\") is True,\n    },\n]\n\n# 模拟一条待检查的数据记录\nrecord = {\"pii_encrypted\": True, \"audit_logged\": False}\n\n# 执行检查：返回违规规则列表\nviolations = [r[\"id\"] for r in compliance_rules if not r[\"check\"](record)]\nprint(violations)  # ['LOG-002']\n```\n\n---\n\n## 2. 合规在架构中的位置：分层与边界\n\n合规不是单点功能，而是横切关注点（Cross-Cutting Concern）。常见分层：\n\n- **数据层**：加密、脱敏、保留期限（Retention）、数据驻留（Data Residency）。\n- **应用层**：访问控制（Access Control）、输入校验、审计日志。\n- **接口层**：鉴权、速率限制、传输加密（TLS）。\n- **运维层**：不可变日志、备份、漏洞管理、变更审批。\n\n> 直觉：越靠近数据，合规成本越高；越早设计，返工越少。\n\n```python\n# 用装饰器把“审计日志”作为横切关注点织入业务函数\nimport functools, datetime, json\n\naudit_trail = []\n\ndef audit(action: str):\n    \"\"\"合规控制：敏感操作自动记录审计日志\"\"\"\n    def decorator(func):\n        @functools.wraps(func)\n        def wrapper(*args, **kwargs):\n            result = func(*args, **kwargs)\n            audit_trail.append({\n                \"action\": action,\n                \"time\": datetime.datetime.utcnow().isoformat(),\n                \"args\": str(args),\n                \"result\": str(result),\n            })\n            return result\n        return wrapper\n    return decorator\n\n@audit(\"export_user_data\")\ndef export_user_data(user_id: int):\n    return {\"user_id\": user_id, \"data\": \"...\"}\n\nexport_user_data(42)\nprint(json.dumps(audit_trail, ensure_ascii=False, indent=2))\n```\n\n---\n\n## 3. 把合规变成“可验证”的工程能力\n\n合规要可验证，通常需要：\n\n- **策略即代码（Policy as Code）**：规则可版本化、可测试。\n- **持续检查（Continuous Compliance）**：在 CI/CD 和运行时都检查。\n- **证据链（Evidence Chain）**：日志、报告、签名、时间戳。\n- **最小权限（Least Privilege）**：默认拒绝，按需授权。\n\n> 直觉：不能自动检查的合规，最后都会变成“口头合规”。\n\n```python\n# 策略即代码示例：用简单断言模拟 CI 中的合规门禁\nfrom dataclasses import dataclass\n\n@dataclass\nclass ServiceConfig:\n    name: str\n    encryption_at_rest: bool\n    audit_log_enabled: bool\n    data_region: str\n\ndef check_compliance(cfg: ServiceConfig) -> list:\n    \"\"\"返回不合规项；空列表表示通过\"\"\"\n    issues = []\n    if not cfg.encryption_at_rest:\n        issues.append(\"缺少静态加密（Encryption at Rest）\")\n    if not cfg.audit_log_enabled:\n        issues.append(\"缺少审计日志\")\n    if cfg.data_region not in {\"cn-north\", \"cn-south\"}:\n        issues.append(\"数据驻留区域不合规\")\n    return issues\n\nsvc = ServiceConfig(\"payment\", encryption_at_rest=True, audit_log_enabled=False, data_region=\"us-east\")\nprint(check_compliance(svc))\n# ['缺少审计日志', '数据驻留区域不合规']\n```\n\n---\n\n## 4. 常见合规框架与工程映射\n\n你不需要成为法律专家，但要知道条款通常落在哪些技术控制上：\n\n- **GDPR（General Data Protection Regulation）**：数据主体权利、删除权、数据最小化。\n- **HIPAA（Health Insurance Portability and Accountability Act）**：医疗数据保护、访问审计。\n- **PCI DSS（Payment Card Industry Data Security Standard）**：支付卡数据加密、网络隔离。\n- **SOC 2（System and Organization Controls 2）**：安全、可用性、保密性等控制证据。\n- **等保 2.0**：中国网络安全等级保护，强调分域、审计、备份。\n\n> 直觉：框架不同，但技术落点高度重叠：加密、访问控制、日志、备份、隔离。\n\n```python\n# 把多个框架的共性控制抽象成“合规基线”\nbaseline_controls = {\n    \"encryption\": [\"GDPR\", \"HIPAA\", \"PCI DSS\", \"等保2.0\"],\n    \"access_control\": [\"GDPR\", \"HIPAA\", \"PCI DSS\", \"SOC 2\", \"等保2.0\"],\n    \"audit_log\": [\"HIPAA\", \"PCI DSS\", \"SOC 2\", \"等保2.0\"],\n    \"backup\": [\"SOC 2\", \"等保2.0\"],\n}\n\n# 找出被最多框架要求的控制\nranked = sorted(baseline_controls.items(), key=lambda kv: len(kv[1]), reverse=True)\nprint(ranked[0])\n# ('access_control', ['GDPR', 'HIPAA', 'PCI DSS', 'SOC 2', '等保2.0'])\n```\n\n---\n\n## 5. 架构师视角：合规设计检查清单\n\n- 数据分类（Data Classification）：先知道什么数据敏感。\n- 数据流图（Data Flow Diagram）：数据从哪里来、到哪里去。\n- 默认安全（Secure by Default）：默认加密、默认拒绝、默认记录。\n- 可审计（Auditability）：关键操作不可抵赖。\n- 可删除（Right to Erasure）：能按主体删除或匿名化。\n- 可迁移（Portability）：数据可导出。\n- 持续验证：CI/CD 门禁 + 运行时监控 + 定期审计。\n\n> 直觉：合规架构的目标是“让正确的事成为默认，让错误的事难以发生”。\n\n```python\n# 一个极简的“合规检查清单”执行器\nchecklist = {\n    \"data_classified\": True,\n    \"encryption_enabled\": True,\n    \"audit_log_enabled\": True,\n    \"can_delete_by_subject\": False,\n}\n\nfailed = [k for k, v in checklist.items() if not v]\nprint(\"未通过:\", failed)\n# 未通过: ['can_delete_by_subject']\n```\n\n---\n\n## 动手练习\n\n任务：为你熟悉的一个小系统（比如“用户注册服务”）写一个 **合规检查脚本**。\n\n要求：\n1. 定义至少 4 条合规规则，覆盖：加密、访问控制、审计日志、数据删除。\n2. 用 Python 字典或列表表示规则，并为每条规则写一个 `check` 函数。\n3. 输入一个配置对象（可用字典模拟），输出所有不合规项。\n4. 把脚本放到本地 `compliance_check.py`，运行并截图或保存输出。\n5. 加分项：把检查接入一个简单的 `if __name__ == \"__main__\":`，返回非零退出码表示不合规。\n\n示例骨架：\n\n```python\ndef check_compliance(config: dict) -> list:\n    rules = [\n        (\"ENC-001\", lambda c: c.get(\"encryption\"), \"必须启用加密\"),\n        # 继续补充...\n    ]\n    return [rid for rid, fn, _ in rules if not fn(config)]\n```\n\n```python\nimport functools\nimport datetime\nimport json\n\n# 合规规则：策略即代码\ncompliance_rules = [\n    {\n        \"id\": \"DATA-001\",\n        \"desc\": \"个人身份信息（PII）必须加密存储\",\n        \"check\": lambda record: record.get(\"pii_encrypted\") is True,\n    },\n    {\n        \"id\": \"LOG-002\",\n        \"desc\": \"敏感操作必须记录审计日志\",\n        \"check\": lambda record: record.get(\"audit_logged\") is True,\n    },\n]\n\n# 横切关注点：审计日志装饰器\naudit_trail = []\n\ndef audit(action: str):\n    def decorator(func):\n        @functools.wraps(func)\n        def wrapper(*args, **kwargs):\n            result = func(*args, **kwargs)\n            audit_trail.append({\n                \"action\": action,\n                \"time\": datetime.datetime.utcnow().isoformat(),\n                \"args\": str(args),\n                \"result\": str(result),\n            })\n            return result\n        return wrapper\n    return decorator\n\n@audit(\"export_user_data\")\ndef export_user_data(user_id: int):\n    return {\"user_id\": user_id, \"data\": \"...\"}\n\n# 运行检查\nrecord = {\"pii_encrypted\": True, \"audit_logged\": False}\nviolations = [r[\"id\"] for r in compliance_rules if not r[\"check\"](record)]\nprint(\"违规规则:\", violations)\n\nexport_user_data(42)\nprint(\"审计日志:\", json.dumps(audit_trail, ensure_ascii=False, indent=2))\n```\n",
+  "quiz": [
+    {
+      "kp": "arch.sec.data_privacy",
+      "type": "single_choice",
+      "question": "在架构设计中处理用户个人数据时，以下哪种做法最符合「数据最小化」原则？",
+      "options": [
+        "为了将来可能有用，尽量多收集用户信息并长期保存",
+        "只收集实现当前业务功能所必需的最少数据，并设定保留期限",
+        "把所有用户数据集中到一个大表中方便统一管理",
+        "将数据最小化理解为压缩存储体积以节省磁盘"
+      ],
+      "answer": 1,
+      "explanation": "数据最小化原则要求仅收集和处理实现特定目的所必需的最少数据，并限制保留时间。选项 A 与最小化相反；C 是集中化问题，与最小化无关；D 把数据最小化误解为物理存储压缩，属于概念混淆。",
+      "error_tag": "概念混淆",
+      "variant_group": "data_minimization"
+    },
+    {
+      "kp": "arch.sec.data_privacy",
+      "type": "single_choice",
+      "question": "某系统在日志中记录了用户完整手机号和身份证号，用于排查问题。从数据隐私角度，最合适的改进是？",
+      "options": [
+        "将日志文件权限改为只有管理员可读即可",
+        "对敏感字段进行脱敏或掩码处理后再写入日志",
+        "把日志保存期限从一年缩短为一个月",
+        "把日志从明文改为二进制格式存储"
+      ],
+      "answer": 1,
+      "explanation": "日志是隐私泄露的高风险渠道，直接记录完整敏感信息即使权限受限也存在泄露风险。脱敏/掩码是业界常规做法。缩短保留期和改二进制都不改变明文可读性，权限控制只是辅助手段而非根本解决。",
+      "error_tag": "概念混淆",
+      "variant_group": "logging_privacy"
+    },
+    {
+      "kp": "arch.sec.data_privacy",
+      "type": "multi_choice",
+      "question": "以下哪些属于数据隐私保护中「隐私设计（Privacy by Design）」的典型原则？（多选）",
+      "options": [
+        "主动预防而非事后补救",
+        "默认设置即为最保护隐私的状态",
+        "隐私应嵌入设计，而非事后附加",
+        "为了功能优先，隐私可以最后再考虑",
+        "全生命周期保护数据"
+      ],
+      "answer": [
+        0,
+        1,
+        2,
+        4
+      ],
+      "explanation": "隐私设计强调主动预防、默认保护、嵌入设计、全生命周期、端到端安全、可见性与用户中心。选项 D 把隐私当作事后补充，与该原则相悖。",
+      "error_tag": "记忆缺失",
+      "variant_group": "privacy_by_design"
+    },
+    {
+      "kp": "arch.sec.data_privacy",
+      "type": "multi_choice",
+      "question": "以下哪些措施有助于降低「数据再识别（re-identification）」风险？（多选）",
+      "options": [
+        "去除或泛化准标识符（如精确出生日期改为年龄段）",
+        "对数据进行聚合或加入噪声",
+        "保留完整邮编与精确生日但不做处理",
+        "限制数据的访问和使用范围"
+      ],
+      "answer": [
+        0,
+        1,
+        3
+      ],
+      "explanation": "降低再识别风险靠去标识化、泛化、聚合/扰动以及访问限制。保留完整邮编和精确生日恰恰是再识别的常见突破口。",
+      "error_tag": "概念混淆",
+      "variant_group": "re_identification"
+    },
+    {
+      "kp": "arch.sec.data_privacy",
+      "type": "multi_choice",
+      "question": "关于访问控制与数据隐私，以下哪些说法正确？（多选）",
+      "options": [
+        "应遵循最小权限原则，仅授予完成工作所需的权限",
+        "应记录敏感数据访问审计日志",
+        "所有员工默认拥有生产库读写权限比较方便",
+        "对敏感字段可结合角色进行字段级访问控制"
+      ],
+      "answer": [
+        0,
+        1,
+        3
+      ],
+      "explanation": "最小权限、审计日志、字段级/角色级访问控制都是隐私保护的常规手段。全员默认读写生产库违反最小权限，是常见的危险做法。",
+      "error_tag": "概念混淆",
+      "variant_group": "access_control_privacy"
+    },
+    {
+      "kp": "arch.sec.data_privacy",
+      "type": "multi_choice",
+      "question": "某团队要上线新功能，会采集用户位置信息。以下哪些做法符合数据隐私要求？（多选）",
+      "options": [
+        "明确告知采集目的并获取同意",
+        "默认开启后台持续精确定位且不提示",
+        "提供关闭采集的选项",
+        "仅在前台需要时采集并按需降低精度"
+      ],
+      "answer": [
+        0,
+        2,
+        3
+      ],
+      "explanation": "位置属于敏感数据，需要告知与同意、可撤回、按需最小化精度和采集时机。默认后台持续精确定位且不提示违反透明度和最小化原则。",
+      "error_tag": "边界错误",
+      "variant_group": "location_privacy"
+    },
+    {
+      "kp": "arch.sec.data_privacy",
+      "type": "fill_blank",
+      "question": "在处理个人数据时，仅收集实现特定目的所必需的最少数据，这一原则称为「数据____化」。",
+      "options": [],
+      "answer": [
+        "最小",
+        "最小化",
+        "最小化原则",
+        "minimal",
+        "minimization"
+      ],
+      "explanation": "数据最小化原则要求收集和处理的数据限于实现目的所必需，且与目的相关。",
+      "error_tag": "记忆缺失",
+      "variant_group": "data_minimization"
+    },
+    {
+      "kp": "arch.sec.data_privacy",
+      "type": "fill_blank",
+      "question": "把个人数据中的直接标识符替换为假名，但通过额外信息仍可能重新关联到个人，这种做法称为数据____化。",
+      "options": [],
+      "answer": [
+        "假名",
+        "假名化",
+        "pseudonymization",
+        "pseudonymisation"
+      ],
+      "explanation": "假名化是替换标识符但保留可重新关联可能；与不可逆的匿名化不同。",
+      "error_tag": "概念混淆",
+      "variant_group": "anonymization_vs_pseudonymization"
+    },
+    {
+      "kp": "arch.sec.data_privacy",
+      "type": "code_reading",
+      "question": "阅读以下伪代码，判断它在隐私方面最主要的问题是什么：\n\ndef log_user_action(user, action):\n    logger.info(f\"user={user.email} id_card={user.id_card} action={action}\")\n\n回答该代码在数据隐私上的主要风险。",
+      "options": [],
+      "answer": "把用户的邮箱和身份证号等敏感个人信息以明文写入日志，属于过度记录和敏感数据暴露风险；应改为脱敏或只记录不可关联的标识，并控制日志访问与保留期限。",
+      "explanation": "日志中记录完整敏感字段会扩大数据暴露面，一旦日志被读取即造成隐私泄露，违反最小化和目的限制原则。",
+      "error_tag": "边界错误",
+      "variant_group": "logging_privacy"
+    },
+    {
+      "kp": "arch.sec.data_privacy",
+      "type": "code_reading",
+      "question": "阅读以下查询逻辑，指出潜在的隐私问题：\n\nSELECT * FROM orders WHERE user_id = ?;\n// 应用层只校验 user_id 是否存在，未校验该 user_id 是否属于当前登录租户\n\n这段代码在多租户场景下的隐私风险是什么？",
+      "options": [],
+      "answer": "缺少租户隔离校验，任何用户只要猜到或遍历 user_id 就可能读取其他租户的订单数据，造成跨租户越权访问和数据泄露；应在数据访问层强制注入租户条件或使用行级安全策略。",
+      "explanation": "多租户系统必须在数据层强制租户上下文，仅靠应用层判断容易遗漏，导致越权读取他人数据。",
+      "error_tag": "边界错误",
+      "variant_group": "multi_tenant_isolation"
+    },
+    {
+      "kp": "arch.sec.data_privacy",
+      "type": "scenario",
+      "question": "场景：你的团队正在开发一个健康类 App，需要把用户的步数和心率数据上传到云端做分析。产品经理希望默认开启全部数据上传且永久保存，以便将来做更多分析。作为架构师，你会如何设计数据隐私方案？请说明关键做法。",
+      "options": [],
+      "answer": null,
+      "explanation": "健康数据属于敏感个人信息，应默认最小化采集、显式同意且可撤回、设定保留期限、传输与存储加密，并做去标识化/脱敏以降低可识别性，不能默认永久保存。",
+      "error_tag": "概念混淆",
+      "variant_group": "privacy_by_design",
+      "required_keywords": [
+        "最小化",
+        "去标识化",
+        "脱敏",
+        "加密",
+        "显式同意",
+        "可撤回"
+      ]
+    },
+    {
+      "kp": "arch.sec.data_privacy",
+      "type": "scenario",
+      "question": "场景：公司要接入第三方分析 SDK，该 SDK 会自动采集设备标识、位置和用户行为。上线前你需要做隐私评估。请列出你会采取的关键措施。",
+      "options": [],
+      "answer": null,
+      "explanation": "接入第三方 SDK 前应评估其采集范围，确保用户被告知并同意、只开启必要能力、签订数据处理协议、限制用途，并建立审计与退出机制。",
+      "error_tag": "边界错误",
+      "variant_group": "third_party_sharing",
+      "required_keywords": [
+        "SDK",
+        "审计",
+        "数据处理协议"
+      ]
+    },
+    {
+      "kp": "arch.sec.data_privacy",
+      "type": "single_choice",
+      "question": "关于「匿名化」与「假名化」的区别，下列说法正确的是？",
+      "options": [
+        "两者等价，只是叫法不同",
+        "假名化后数据仍可能通过关联其他信息重新识别到个人，匿名化则要求不可逆地无法识别",
+        "匿名化只是把姓名替换成编号，假名化是删除所有字段",
+        "假名化只适用于日志，匿名化只适用于数据库"
+      ],
+      "answer": 1,
+      "explanation": "假名化是用假名替代直接标识符，但仍保留可通过额外信息重新关联到个人的可能；匿名化要求经过处理后无法再识别到特定个人且不可逆。两者法律与合规含义不同，选项 A/C/D 均为常见误解。",
+      "error_tag": "概念混淆",
+      "variant_group": "anonymization_vs_pseudonymization"
+    },
+    {
+      "kp": "arch.sec.data_privacy",
+      "type": "single_choice",
+      "question": "在设计面向多租户的 SaaS 系统时，为防止跨租户数据泄露，最关键的措施是？",
+      "options": [
+        "在应用层每次查询都拼接 tenant_id 条件，并在数据库层启用行级安全策略",
+        "把所有租户数据放在同一张表但加密存储",
+        "依靠前端隐藏其他租户的数据入口",
+        "为每个租户分配不同的表名后缀但共用一个数据库账号"
+      ],
+      "answer": 0,
+      "explanation": "多租户隔离需要在数据访问层强制租户上下文（如行级安全或强制 tenant 过滤），应用层过滤容易被遗漏。仅加密存储、前端隐藏或共用高权限账号都无法防止越权读取，尤其共用账号会让数据库无法区分租户。",
+      "error_tag": "边界错误",
+      "variant_group": "multi_tenant_isolation"
+    },
+    {
+      "kp": "arch.sec.data_privacy",
+      "type": "single_choice",
+      "question": "一家公司要把包含用户邮箱的分析数据交给第三方处理。以下哪项做法最符合数据隐私要求？",
+      "options": [
+        "直接发送原始明文数据，因为对方签了保密协议",
+        "先对直接标识符进行假名化或去标识化，并签订数据处理协议、限定用途",
+        "只发送邮箱的哈希值就一定安全，不需要其他约束",
+        "把数据压缩加密后发送即可，无需约定用途"
+      ],
+      "answer": 1,
+      "explanation": "向第三方共享数据时，应同时采取技术去标识化和合同/用途限制等多层措施。仅签保密协议不够；单纯哈希邮箱仍可能因低熵被暴力枚举；仅加密不限制用途仍可能被滥用。",
+      "error_tag": "概念混淆",
+      "variant_group": "third_party_sharing"
+    },
+    {
+      "kp": "arch.sec.data_privacy",
+      "type": "single_choice",
+      "question": "关于「同意（consent）」在数据隐私中的作用，以下理解正确的是？",
+      "options": [
+        "只要用户注册时勾选了一次同意，之后任何用途都可使用其数据",
+        "同意应是具体、知情、自愿的，且用户应能撤回，用途变更通常需重新获取同意",
+        "用户一旦同意就不可撤回",
+        "同意只对营销邮件有效，对数据分析无效"
+      ],
+      "answer": 1,
+      "explanation": "有效同意需要具体、知情、自愿且可撤回，用途变更往往需要重新获得同意。选项 A、C 把同意当成一次性永久授权；D 错误限定了同意的适用范围。",
+      "error_tag": "概念混淆",
+      "variant_group": "consent"
+    },
+    {
+      "kp": "arch.sec.data_privacy",
+      "type": "single_choice",
+      "question": "在数据传输和存储中，以下哪种做法最符合隐私保护的最佳实践？",
+      "options": [
+        "传输用 HTTP，存储时再整体加密",
+        "传输使用 TLS，存储对敏感字段加密，并妥善管理密钥",
+        "只要在内网传输就无需加密",
+        "把所有数据都用同一个硬编码密钥加密"
+      ],
+      "answer": 1,
+      "explanation": "隐私保护要求传输中加密（如 TLS）和静态加密（敏感字段加密），并做好密钥管理。内网传输不加密、硬编码统一密钥都是常见但危险的做法。",
+      "error_tag": "记忆缺失",
+      "variant_group": "encryption_basics"
+    },
+    {
+      "kp": "arch.sec.data_privacy",
+      "type": "single_choice",
+      "question": "某应用需要展示用户之间的排行，但不想暴露真实身份。以下方案中隐私风险最低的是？",
+      "options": [
+        "直接显示用户真实姓名和头像",
+        "显示用户 ID 后四位加昵称首字母",
+        "显示为随机分配的展示名，且不与其他系统标识关联",
+        "显示邮箱前缀作为展示名"
+      ],
+      "answer": 2,
+      "explanation": "用与真实身份无关的随机展示名可降低可识别性。真实姓名、邮箱前缀、ID 片段都可能被关联识别或推断，属于常见误解。",
+      "error_tag": "边界错误",
+      "variant_group": "displays_pseudonymity"
+    },
+    {
+      "kp": "arch.sec.data_privacy",
+      "type": "single_choice",
+      "question": "关于数据保留期限（retention）的做法，以下正确的是？",
+      "options": [
+        "数据永久保留，删除麻烦且可能影响审计",
+        "根据业务和合规要求设定保留期限，到期后安全删除或匿名化",
+        "只要用户不投诉就一直保留",
+        "保留期限越长越好，便于将来分析"
+      ],
+      "answer": 1,
+      "explanation": "数据保留应遵循目的限制和存储限制原则，到期后应删除或匿名化。永久保留、无限期保留都违反隐私原则。",
+      "error_tag": "概念混淆",
+      "variant_group": "retention"
+    },
+    {
+      "kp": "arch.sec.data_privacy",
+      "type": "single_choice",
+      "question": "在实现用户账号删除功能时，从隐私合规角度以下哪项最应关注？",
+      "options": [
+        "只删除用户表里的主记录即可",
+        "需要在所有存储位置（主库、备份、缓存、日志、第三方）处理该用户数据，并考虑法律要求的保留例外",
+        "只要前端不再显示该用户即算删除",
+        "删除操作越快越好，不需要记录"
+      ],
+      "answer": 1,
+      "explanation": "用户删除权要求覆盖所有数据副本和下游系统，还要处理备份、缓存、日志与第三方。仅删主记录或前端隐藏都不彻底，也可能遗漏合规要求。",
+      "error_tag": "边界错误",
+      "variant_group": "right_to_erasure"
+    },
+    {
+      "kp": "arch.sec.compliance",
+      "type": "single_choice",
+      "question": "在 Python 项目中引入第三方依赖时，从供应链安全合规的角度看，下列哪种做法最有助于降低引入恶意或被篡改包的风险？",
+      "options": [
+        "直接在 import 语句出错时用 pip install 安装最新版本，保证功能可用",
+        "使用带版本约束的依赖清单，并配合哈希校验（如 --require-hashes 方式安装）",
+        "只要包在官方索引上能搜到，就默认它是安全可信的",
+        "把依赖全部改为从随机论坛下载的 wheel 文件以获取更快的下载速度"
+      ],
+      "answer": 1,
+      "explanation": "合规的依赖管理强调可复现与完整性：固定版本并校验哈希能防止包在传输或索引侧被替换成篡改版本。仅凭'能搜到'不等于可信，随意下载来源不明的 wheel 更是高风险行为。",
+      "error_tag": "概念混淆",
+      "variant_group": "依赖完整性"
+    },
+    {
+      "kp": "arch.sec.compliance",
+      "type": "single_choice",
+      "question": "某团队要求所有生产环境代码在合入前必须经过安全审查。从合规视角解释，'可追溯性'最核心的价值是什么？",
+      "options": [
+        "让代码运行速度更快",
+        "减少代码总行数",
+        "能够追溯每次变更的作者、时间与审批记录，为审计和责任界定提供依据",
+        "让开发人员无需写单元测试"
+      ],
+      "answer": 2,
+      "explanation": "合规中的可追溯性指记录谁在何时因何做了何种变更并获得何种批准，是审计与事后追责的基础，与性能、代码量无关。",
+      "error_tag": "概念混淆",
+      "variant_group": "可追溯性"
+    },
+    {
+      "kp": "arch.sec.compliance",
+      "type": "single_choice",
+      "question": "某项目需要在日志中保留可定位问题的信息，但又不违反隐私合规。下列做法合理的是？",
+      "options": [
+        "记录请求的完整原始报文，包含所有个人标识",
+        "对个人标识进行哈希或掩码处理后再记录，并限制日志访问权限",
+        "把日志上传到公开的公共存储桶以免丢失",
+        "干脆不记日志，靠用户口述复现问题"
+      ],
+      "answer": 1,
+      "explanation": "脱敏/掩码可在保留排查价值的同时降低隐私风险，配合访问控制进一步减少暴露。公开存储桶与记录原始个人数据都违反合规要求。",
+      "error_tag": "边界错误",
+      "variant_group": "日志脱敏"
+    },
+    {
+      "kp": "arch.sec.compliance",
+      "type": "multi_choice",
+      "question": "下列哪些做法有助于提升软件供应链的合规与安全？（多选）",
+      "options": [
+        "对依赖清单固定版本并校验哈希",
+        "从来源不明的镜像站随意下载依赖",
+        "持续监控依赖的已知漏洞并制定修复流程",
+        "对引入的开源组件核对许可证义务",
+        "把构建用的私钥提交到公开仓库"
+      ],
+      "answer": [
+        0,
+        2,
+        3
+      ],
+      "explanation": "固定版本加校验、持续漏洞监控、核对许可证均属于供应链合规实践。来源不明的依赖和泄露构建私钥都会显著提升风险。",
+      "error_tag": "概念混淆",
+      "variant_group": "供应链合规"
+    },
+    {
+      "kp": "arch.sec.compliance",
+      "type": "multi_choice",
+      "question": "关于审计日志应满足的特性，下列说法正确的有？（多选）",
+      "options": [
+        "应记录谁在何时执行了何种敏感操作",
+        "日志应防止被未授权用户随意篡改或删除",
+        "日志中应明文保存用户密码以便核对身份",
+        "应控制日志的访问权限，仅授权人员可读",
+        "日志可随意丢弃，无需保留期"
+      ],
+      "answer": [
+        0,
+        1,
+        3
+      ],
+      "explanation": "审计日志需可追溯、防篡改、受访问控制。明文保存密码严重违反安全与隐私要求，无保留期则无法满足审计。",
+      "error_tag": "记忆缺失",
+      "variant_group": "审计日志"
+    },
+    {
+      "kp": "arch.sec.compliance",
+      "type": "multi_choice",
+      "question": "在合规项目中处理个人数据时，下列哪些做法符合要求？（多选）",
+      "options": [
+        "收集前明确目的并仅收集必要数据",
+        "为方便分析，把全部原始个人数据导出到个人电脑长期保存",
+        "按法规设定留存期限，到期删除或匿名化",
+        "对敏感数据进行加密存储并限制访问",
+        "将个人数据出售给第三方以获取额外收益"
+      ],
+      "answer": [
+        0,
+        2,
+        3
+      ],
+      "explanation": "目的限制、最小必要、留存期限、加密与访问控制都是合规处理个人数据的要点。私自导出长期保存和擅自出售数据通常违规。",
+      "error_tag": "边界错误",
+      "variant_group": "个人数据处理"
+    },
+    {
+      "kp": "arch.sec.compliance",
+      "type": "fill_blank",
+      "question": "在依赖管理中，为保证安装内容与预期完全一致、防止包被替换，通常会在依赖清单中固定版本并进行 ______ 校验。",
+      "options": [],
+      "answer": [
+        "哈希",
+        "hash",
+        "哈希值",
+        "hash 值"
+      ],
+      "explanation": "哈希校验（如通过 --require-hashes）可确保下载的包与预期内容一致，防止被篡改或替换，是供应链合规的常见手段。",
+      "error_tag": "记忆缺失",
+      "variant_group": "依赖完整性"
+    },
+    {
+      "kp": "arch.sec.compliance",
+      "type": "fill_blank",
+      "question": "为了满足审计与追责要求，系统应记录敏感操作的相关信息，这类日志通常被称为 ______ 日志。",
+      "options": [],
+      "answer": [
+        "审计",
+        "audit",
+        "审计日志",
+        "audit log"
+      ],
+      "explanation": "审计日志用于记录谁在何时做了何种敏感操作，是合规审计与事后追责的关键依据。",
+      "error_tag": "记忆缺失",
+      "variant_group": "审计日志"
+    },
+    {
+      "kp": "arch.sec.compliance",
+      "type": "code_reading",
+      "question": "阅读下面代码，从安全合规角度回答：这段代码存在哪类主要问题，为什么？\n\n```python\nimport requests\n\nAPI_KEY = \"sk-live-1234567890abcdef\"\nDB_PASSWORD = \"p@ssw0rd\"\n\ndef get_data():\n    headers = {\"Authorization\": API_KEY}\n    return requests.get(\"https://api.example.com/data\", headers=headers).json()\n```",
+      "options": [],
+      "answer": "代码把 API 密钥和数据库口令以明文硬编码在源码中。一旦源码进入版本控制或被共享，凭证就会泄露，且难以轮换；合规上违反密钥管理要求。应改为从环境变量或密钥管理服务读取，并确保不进入版本库。",
+      "explanation": "硬编码凭证是最常见的合规与安全问题之一。凭证应外置并通过环境变量或密钥管理服务注入，同时保证不进入版本控制历史。",
+      "error_tag": "概念混淆",
+      "variant_group": "密钥管理"
+    },
+    {
+      "kp": "arch.sec.compliance",
+      "type": "code_reading",
+      "question": "阅读下面日志代码，从隐私合规角度回答：这样记录日志有什么风险，应如何改进？\n\n```python\nimport logging\n\ndef login(user):\n    logging.info(f\"user={user.name} password={user.password} id_card={user.id_card}\")\n```",
+      "options": [],
+      "answer": "日志中记录了明文密码和身份证号等敏感个人信息，违反最小必要与隐私合规要求，且日志一旦泄露会造成严重后果。改进方式：只记录审计所需的事件（如用户名、时间、结果），对敏感字段脱敏或掩码，并限制日志访问权限。",
+      "explanation": "日志常被长期留存且访问面较广，写入明文密码和个人敏感信息会显著放大风险。应遵循最小必要原则并脱敏。",
+      "error_tag": "边界错误",
+      "variant_group": "日志脱敏"
+    },
+    {
+      "kp": "arch.sec.compliance",
+      "type": "scenario",
+      "question": "你接手一个 Python 项目，发现依赖清单里大量使用无版本约束的第三方包，且每次构建都从外部索引拉取最新版。安全团队要求你提升供应链合规性。请说明你会采取哪些措施以及理由。",
+      "options": [],
+      "answer": null,
+      "explanation": "合规的供应链管理要求构建可复现、内容可校验、风险可跟踪。固定版本并用哈希校验保证一致性；持续扫描已知漏洞并及时修复；核对引入组件的许可证义务；确保构建可复现以便审计。",
+      "error_tag": "概念混淆",
+      "variant_group": "供应链合规",
+      "required_keywords": [
+        "审计",
+        "版本",
+        "合规",
+        "一致性"
+      ]
+    },
+    {
+      "kp": "arch.sec.compliance",
+      "type": "scenario",
+      "question": "某团队为了排查线上问题，想把生产数据库中的真实用户数据完整复制到开发环境。作为负责合规的工程师，你会如何评估并给出替代方案？请说明理由。",
+      "options": [],
+      "answer": null,
+      "explanation": "把真实用户数据完整复制到开发环境违反最小必要与环境隔离要求，扩大隐私泄露面。替代方案是对数据进行脱敏或使用合成数据，并遵循留存期限与访问控制，确保符合合规。",
+      "error_tag": "边界错误",
+      "variant_group": "环境隔离",
+      "required_keywords": [
+        "脱敏",
+        "访问控制",
+        "隔离",
+        "隐私",
+        "合规",
+        "复制"
+      ]
+    },
+    {
+      "kp": "arch.sec.compliance",
+      "type": "single_choice",
+      "question": "关于'合规（compliance）'与'安全（security）'的关系，下列说法最准确的是？",
+      "options": [
+        "满足合规要求就一定安全，因为没有漏洞才会被审计通过",
+        "合规是一套外部要求的最低标准，安全是持续降低风险的过程，二者相关但不完全重合",
+        "安全就是合规，两者可以互相替代",
+        "只要通过一次合规审计，之后无需再关注安全"
+      ],
+      "answer": 1,
+      "explanation": "合规通常对应法规或标准设定的基线要求，而安全是持续的风险管理过程。满足合规不等于消除了所有安全风险，反之亦然。",
+      "error_tag": "概念混淆",
+      "variant_group": "合规与安全关系"
+    },
+    {
+      "kp": "arch.sec.compliance",
+      "type": "single_choice",
+      "question": "在代码仓库中处理敏感信息（如数据库口令、API 密钥）时，符合安全合规要求的做法是？",
+      "options": [
+        "把密钥硬编码在源码里，方便团队共享",
+        "把密钥提交到公开仓库，依靠'没人会看'来保密",
+        "通过环境变量或专用密钥管理服务注入，并确保密钥不进入版本控制",
+        "把密钥写在注释里，正式代码里再读取"
+      ],
+      "answer": 2,
+      "explanation": "密钥应外置到环境变量或密钥管理系统中，避免进入版本库历史。硬编码或写入注释都会随仓库泄露，且难以轮换。",
+      "error_tag": "记忆缺失",
+      "variant_group": "密钥管理"
+    },
+    {
+      "kp": "arch.sec.compliance",
+      "type": "single_choice",
+      "question": "某服务需要记录用户操作日志以满足审计要求。下列哪种日志内容最符合合规中的'最小必要'原则？",
+      "options": [
+        "完整记录用户的身份证号、银行卡号和明文密码",
+        "只记录与审计相关的事件类型、时间、操作者标识，并对敏感字段做脱敏",
+        "把所有请求体和响应体原样落盘，方便日后排查",
+        "不记录任何日志，避免隐私问题"
+      ],
+      "answer": 1,
+      "explanation": "最小必要原则要求只采集达成目的所需的数据。记录审计所需事件并脱敏，既满足可追溯又避免过度收集敏感信息。原样落盘会放大泄露面。",
+      "error_tag": "概念混淆",
+      "variant_group": "日志与最小必要"
+    },
+    {
+      "kp": "arch.sec.compliance",
+      "type": "single_choice",
+      "question": "关于开源许可证（license）在合规中的作用，下列理解正确的是？",
+      "options": [
+        "任何开源代码都可以随意商用，无需关注许可证",
+        "不同许可证对再分发、修改、商用的条件不同，使用前需确认其义务是否与项目相符",
+        "只要不修改源码就不涉及许可证问题",
+        "许可证只与作者有关，使用者无需关心"
+      ],
+      "answer": 1,
+      "explanation": "许可证规定了使用、修改、分发代码时的权利与义务（如是否需开源衍生作品）。即使不修改，分发或商用也可能触发义务，因此使用前需核对。",
+      "error_tag": "记忆缺失",
+      "variant_group": "许可证合规"
+    },
+    {
+      "kp": "arch.sec.compliance",
+      "type": "single_choice",
+      "question": "在 CI 流水线中做依赖漏洞扫描，最合理的合规实践是？",
+      "options": [
+        "只在项目上线当天扫描一次，之后不再关注",
+        "把扫描结果一律忽略，因为误报太多",
+        "将漏洞扫描纳入流水线，对高危漏洞设置阻断阈值并跟踪修复",
+        "仅扫描自研代码，完全不看第三方依赖"
+      ],
+      "answer": 2,
+      "explanation": "依赖漏洞会随时间变化（新披露），因此需持续扫描。设置阻断阈值并跟踪修复，才能在合规与交付之间取得平衡。",
+      "error_tag": "边界错误",
+      "variant_group": "依赖漏洞扫描"
+    },
+    {
+      "kp": "arch.sec.compliance",
+      "type": "single_choice",
+      "question": "关于数据留存（retention）策略的合规含义，下列哪项描述正确？",
+      "options": [
+        "数据留得越久越好，方便随时回溯",
+        "应依据法规与业务需要设定留存期限，到期后安全删除或匿名化",
+        "只要加密存储，留存多久都无所谓",
+        "留存策略只与存储成本有关，与合规无关"
+      ],
+      "answer": 1,
+      "explanation": "合规要求数据留存不超过必要期限，超期应删除或匿名化。加密能降低泄露影响，但不能替代留存期限的约束。",
+      "error_tag": "概念混淆",
+      "variant_group": "数据留存"
+    },
+    {
+      "kp": "arch.sec.compliance",
+      "type": "single_choice",
+      "question": "在多环境部署中，为满足合规隔离要求，下列做法最恰当的是？",
+      "options": [
+        "生产数据库与测试数据库共用同一实例，只是表名不同",
+        "测试环境直接使用生产环境的真实用户数据，方便复现问题",
+        "生产与测试环境使用独立资源与独立凭证，测试数据需脱敏或合成",
+        "所有环境共用同一套管理员账号，减少管理成本"
+      ],
+      "answer": 2,
+      "explanation": "环境隔离与凭证分离是合规的常见要求。测试使用真实生产数据且不脱敏会造成隐私与泄露风险，共用管理员账号则削弱审计与最小权限原则。",
+      "error_tag": "边界错误",
+      "variant_group": "环境隔离"
+    },
+    {
+      "kp": "arch.sec.compliance",
+      "type": "single_choice",
+      "question": "关于'最小权限原则（principle of least privilege）'，下列哪项描述最准确？",
+      "options": [
+        "给每个用户授予管理员权限，方便随时处理问题",
+        "仅授予完成任务所必需的权限，且权限应可回收与审计",
+        "权限一经授予就长期保留，避免频繁调整",
+        "最小权限只适用于人类用户，不适用于服务账号"
+      ],
+      "answer": 1,
+      "explanation": "最小权限强调只授予必需权限并定期审查回收，适用于用户与服务账号。长期的超范围权限会扩大攻击面并妨碍审计。",
+      "error_tag": "概念混淆",
+      "variant_group": "最小权限"
+    }
+  ]
+}

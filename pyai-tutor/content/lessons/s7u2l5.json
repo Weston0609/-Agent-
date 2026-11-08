@@ -1,0 +1,651 @@
+{
+  "id": "s7u2l5",
+  "title": "s7u2l5",
+  "kps": [
+    "agent.rag.eval_ragas",
+    "agent.rag.hallucination_guard"
+  ],
+  "theory": "## agent.rag.eval_ragas\n\n# agent.rag.eval_ragas：用 RAGAS 评估 RAG 系统\n\n> 一句话直觉：RAG（Retrieval-Augmented Generation，检索增强生成）系统“看起来能答”，但要看它**答得准不准、检索得对不对、有没有幻觉（hallucination）**，就需要一套自动化评估指标，RAGAS 就是做这件事的常用工具。\n\n---\n\n## 1. 为什么 RAG 需要专门评估？\n\nRAG 系统通常由两部分组成：\n\n1. **Retriever（检索器）**：从知识库中找出与问题相关的文档片段。\n2. **Generator（生成器）**：基于问题和检索到的上下文，生成最终回答。\n\n传统文本生成评估常用 BLEU、ROUGE 等，但它们主要看“字面重叠”，不适合 RAG，因为：\n\n- 回答可以换一种说法仍然正确；\n- 检索到的上下文可能很多，但只有一部分真正被用到；\n- 模型可能编造上下文里没有的内容，即**幻觉（hallucination）**。\n\nRAGAS（Retrieval Augmented Generation Assessment）提供了一组更贴近 RAG 的指标，例如：\n\n- **Faithfulness（忠实度）**：回答是否完全由给定上下文支持；\n- **Answer Relevancy（答案相关性）**：回答是否直接切题；\n- **Context Precision（上下文精确率）**：检索到的上下文中，相关内容是否排在前面；\n- **Context Recall（上下文召回率）**：标准答案所需信息是否都被检索到。\n\n本节先建立最小可运行认知：用 RAGAS 对一组“问题-回答-上下文-标准答案”做评估。\n\n---\n\n## 2. RAGAS 的输入数据长什么样？\n\nRAGAS 通常接收一个数据集，每条样本至少包含这些字段：\n\n- `question`：用户问题；\n- `answer`：RAG 系统生成的回答；\n- `contexts`：检索器返回的上下文列表；\n- `ground_truth`：人工标注的标准答案，也叫 reference。\n\n可以把它理解成一张表：\n\n| question | answer | contexts | ground_truth |\n|---|---|---|---|\n| 什么是 RAG？ | RAG 是检索增强生成…… | [\"RAG 是...\", \"检索增强...\"] | RAG 是结合检索与生成的方案 |\n\nRAGAS 会调用 LLM（Large Language Model，大语言模型）和 Embedding（嵌入）模型来打分，因此你需要配置模型。\n\n---\n\n## 3. 安装与最小评估流程\n\n先安装：\n\n```bash\npip install ragas datasets langchain-openai\n```\n\n然后构造数据并评估。下面代码演示核心流程。\n\n---\n\n## 4. 指标怎么读？\n\n运行后你会得到类似：\n\n```text\nfaithfulness: 0.85\nanswer_relevancy: 0.92\ncontext_precision: 0.78\ncontext_recall: 0.80\n```\n\n解释：\n\n- **faithfulness 低**：回答可能包含上下文没有依据的内容，优先检查生成 prompt 是否要求“只依据上下文回答”。\n- **answer_relevancy 低**：回答可能跑题，检查问题理解和回答格式。\n- **context_precision 低**：检索结果里噪声多，考虑改进 chunking（分块）、rerank（重排）或向量库。\n- **context_recall 低**：需要的信息没被检索到，考虑增加召回数量、改 embedding 模型或补知识库。\n\n---\n\n## 5. 工程中怎么接入？\n\n建议把 RAGAS 评估做成流水线的一步：\n\n1. 准备一批真实问题；\n2. 跑 RAG 系统，记录 `answer` 和 `contexts`；\n3. 人工补 `ground_truth`；\n4. 用 RAGAS 批量打分；\n5. 把分数纳入回归测试，防止改 prompt 或换模型后指标下降。\n\n注意：RAGAS 很多指标依赖 LLM 打分，所以评估本身有成本，也会受评估模型能力影响。工程上要固定评估模型版本，并保留样本集版本。\n\n---\n\n## 动手练习\n\n在本地完成一个小评估：\n\n1. 准备 3 条关于“Python 列表”的问答样本，每条包含 `question`、`answer`、`contexts`、`ground_truth`；\n2. 用上面的代码跑 RAGAS，得到 4 个指标分数；\n3. 故意把其中一条 `answer` 改成明显幻觉内容，再跑一次，观察 `faithfulness` 是否下降；\n4. 写 5 行总结：哪个指标最能发现“编造答案”，哪个指标最能发现“检索噪声”。\n\n## agent.rag.hallucination_guard\n\n# 幻觉护栏（Hallucination Guard）：给 RAG 代理系上安全带\n\n> **一句话直觉**：检索增强生成（RAG, Retrieval-Augmented Generation）里的“幻觉护栏（Hallucination Guard）”，就是当模型想瞎编时，能把它按回证据上，并告诉你“这句话到底有没有出处”。\n\n## 1. 为什么需要幻觉护栏\n\n大语言模型（LLM, Large Language Model）本质是**下一个词概率预测器**，它追求“像人话”，而不是“说真话”。在 RAG（Retrieval-Augmented Generation，检索增强生成）里，我们虽然把外部文档塞进了上下文（Context），但模型仍可能：\n\n- 忽略检索内容，凭记忆回答；\n- 把不同文档的片段“缝合”成看似合理的事实；\n- 引用不存在的页码、链接、法规条款。\n\n幻觉护栏不是让模型“变聪明”，而是加一道**可验证的防线**：\n\n- 生成后，把回答拆成“原子声明（atomic claim）”；\n- 对每个声明，回到检索证据中找支持；\n- 没有证据支持的声明，要么删除，要么标记为“未经验证”。\n\n下面用 5 个小节逐步实现一个最小可用的护栏。\n\n---\n\n## 2. 最小闭环：答案 + 证据 + 校验\n\n先不引入复杂模型，只用字符串匹配理解护栏骨架。\n\n```python\n# 第1步：模拟检索到的证据（真实系统中来自向量库）\ndocs = [\n    \"RAG 是检索增强生成，先检索再生成。\",\n    \"幻觉护栏的目标是减少没有依据的陈述。\",\n    \"温度参数 temperature 越高，输出越随机。\",\n]\n\n# 第2步：模拟模型生成的答案（包含一句幻觉）\nanswer = \"RAG 是检索增强生成，幻觉护栏能完全消除幻觉，温度越高输出越随机。\"\n\n# 第3步：把答案拆成原子声明（这里用逗号、句号粗切）\nimport re\nclaims = [c.strip() for c in re.split(r\"[，。；;]\", answer) if c.strip()]\n\n# 第4步：逐条检查是否有证据支持（最简单的子串包含判定）\ndef supported(claim: str, docs: list[str]) -> bool:\n    # 只要某个文档包含该声明的关键片段，就认为有支持\n    # 工程中应换成嵌入相似度或 NLI（自然语言推理）模型\n    return any(claim in d or d in claim for d in docs)\n\nfor c in claims:\n    print(\"✓\" if supported(c, docs) else \"✗ 无依据\", c)\n```\n\n**结论**：护栏的第一性原理是“逐声明验证”，而不是整体看答案像不像。\n\n---\n\n## 3. 关键升级：从“字符串匹配”到“语义支持”\n\n字符串匹配会漏掉“同义改写”。工程中常用两种做法：\n\n1. **嵌入相似度（Embedding Similarity）**：把声明和证据编码成向量，算余弦相似度。\n2. **自然语言推理（NLI, Natural Language Inference）**：判断证据是否“蕴含（entail）”声明。\n\n下面用 `sentence-transformers` 演示嵌入方案（本地可装：`pip install sentence-transformers`）。\n\n```python\nfrom sentence_transformers import SentenceTransformer, util\n\n# 用一个小型多语言模型，CPU 也能跑\nmodel = SentenceTransformer(\"paraphrase-multilingual-MiniLM-L12-v2\")\n\ndef best_support(claim: str, docs: list[str], threshold: float = 0.6):\n    # 把声明和所有证据编码成向量\n    emb_claim = model.encode(claim, convert_to_tensor=True)\n    emb_docs = model.encode(docs, convert_to_tensor=True)\n    # 计算与每条证据的余弦相似度\n    scores = util.cos_sim(emb_claim, emb_docs)[0]\n    best_idx = int(scores.argmax())\n    return float(scores[best_idx]), docs[best_idx]\n\nclaim = \"幻觉护栏能减少没有依据的陈述\"\nscore, evidence = best_support(claim, docs)\nprint(f\"相似度={score:.3f}，最相关证据：{evidence}\")\nprint(\"判定：\", \"有支持\" if score >= 0.6 else \"无支持\")\n```\n\n**结论**：阈值 `threshold` 是护栏的“灵敏度旋钮”。太低会放过幻觉，太高会把正确改写误杀。\n\n---\n\n## 4. 工程化护栏：三种处置策略\n\n验证之后，要决定怎么处置“无依据”的声明。常见三类策略：\n\n| 策略 | 行为 | 适用场景 |\n|---|---|---|\n| 删除（prune） | 直接删掉无依据句子 | 客服、医疗等高风险 |\n| 标注（annotate） | 保留但加“未经验证”标记 | 研究辅助、探索性问答 |\n| 重写（rewrite） | 让模型只保留有依据部分 | 需要自然语言的对外回答 |\n\n```python\ndef guard(answer: str, docs: list[str], threshold: float = 0.6, mode: str = \"annotate\"):\n    claims = [c.strip() for c in re.split(r\"[，。；;]\", answer) if c.strip()]\n    kept = []\n    for c in claims:\n        score, _ = best_support(c, docs, threshold)\n        if score >= threshold:\n            kept.append(c)\n        elif mode == \"prune\":\n            continue\n        elif mode == \"annotate\":\n            kept.append(f\"{c}（未经验证）\")\n        elif mode == \"rewrite\":\n            kept.append(\"[已省略无依据内容]\")\n    return \"，\".join(kept)\n\nprint(guard(answer, docs, mode=\"annotate\"))\nprint(guard(answer, docs, mode=\"prune\"))\n```\n\n**结论**：护栏不是单一开关，而是一组可配置策略，应根据业务风险选择。\n\n---\n\n## 5. 常见误区与选型建议\n\n- **误区一：护栏能“完全消除”幻觉。** 不能。它只能减少并暴露幻觉，不能保证真理。\n- **误区二：只看答案整体相似度。** 必须逐声明验证，否则一句真话会“掩护”一句假话。\n- **误区三：阈值一刀切。** 不同领域、不同问题类型应分档调参，并用标注集评估。\n- **选型建议**：\n  - 原型阶段：字符串/嵌入相似度 + `annotate`。\n  - 生产阶段：NLI 模型 + 引用溯源（citation grounding）+ 人工抽检。\n  - 高风险场景：强制 `prune`，并让模型输出证据 ID。\n\n> 记住这句工程口诀：**先检索、再生成、后验证；无证据、不输出、要标注。**\n",
+  "quiz": [
+    {
+      "kp": "agent.rag.eval_ragas",
+      "type": "single_choice",
+      "question": "在评估一个 RAG（检索增强生成）系统的回答质量时，我们希望衡量「生成答案是否忠实于检索到的上下文，不包含上下文中没有依据的内容」。这一维度通常被称为？",
+      "options": [
+        "Faithfulness（忠实性）",
+        "Answer Relevancy（答案相关性）",
+        "Context Precision（上下文精确率）",
+        "Context Recall（上下文召回率）"
+      ],
+      "answer": 0,
+      "explanation": "Faithfulness 衡量答案中的每个论断是否能由给定上下文推出，即是否忠实于检索内容、不产生无依据的幻觉。Answer Relevancy 关注答案与问题的贴合度；Context Precision 关注检索到的上下文中有多少是相关的；Context Recall 关注参考答案所需信息有多少被检索到，均不衡量「答案对上下文的忠实度」。",
+      "error_tag": "概念混淆",
+      "variant_group": "rag_eval_metric_definition"
+    },
+    {
+      "kp": "agent.rag.eval_ragas",
+      "type": "single_choice",
+      "question": "某团队用 RAG 评估框架跑评测，发现 Context Recall 很低，但 Faithfulness 很高。最合理的解读是？",
+      "options": [
+        "生成模型产生了大量幻觉",
+        "答案与问题不相关",
+        "检索阶段漏掉了参考答案所需的关键信息，但模型只根据已检索到的内容作答，没有编造",
+        "检索到的上下文里混入了大量无关内容"
+      ],
+      "answer": 2,
+      "explanation": "Context Recall 低说明参考答案所需的信息没有被完整检索到；Faithfulness 高说明模型没有超出已给上下文去编造。二者结合指向「检索召回不足，但生成较克制」。幻觉严重应表现为 Faithfulness 低；答案不相关应表现为 Answer Relevancy 低；上下文混入无关内容应表现为 Context Precision 低。",
+      "error_tag": "指标解读错误",
+      "variant_group": "rag_eval_metric_interpretation"
+    },
+    {
+      "kp": "agent.rag.eval_ragas",
+      "type": "single_choice",
+      "question": "关于 RAG 评估指标之间的独立性，下列说法正确的是？",
+      "options": [
+        "Faithfulness 高就一定意味着 Answer Relevancy 高",
+        "Context Precision 高就一定意味着 Context Recall 高",
+        "一个系统可能 Context Recall 高但 Faithfulness 低",
+        "Answer Relevancy 与 Context Recall 是同一个指标"
+      ],
+      "answer": 2,
+      "explanation": "各指标衡量不同维度，可以出现组合。召回率高意味着上下文含有所需信息，但生成模型仍可能偏离上下文编造，导致忠实性低。A、B 把两个独立维度绑定，D 将不同指标混为一谈。",
+      "error_tag": "概念混淆",
+      "variant_group": "rag_eval_metric_definition"
+    },
+    {
+      "kp": "agent.rag.eval_ragas",
+      "type": "single_choice",
+      "question": "为提高 RAG 评估结果的可复现性，以下哪项做法最合理？",
+      "options": [
+        "每次评测都换一批问题和评分标准，以覆盖更多情况",
+        "固定问题集、参考答案与评估配置，并记录每次实验的版本",
+        "只保留一次评测的最终平均分，不记录中间细节",
+        "把评分模型的温度调到很高，让结果更有多样性"
+      ],
+      "answer": 1,
+      "explanation": "可复现性要求输入、参照与评估配置固定并版本化，便于归因和回归。频繁更换问题集/标准会让结果不可比；只记平均分丢失细节；提高评分模型温度会增加评分波动而非复现性。",
+      "error_tag": "实验设计错误",
+      "variant_group": "rag_eval_experiment_design"
+    },
+    {
+      "kp": "agent.rag.eval_ragas",
+      "type": "single_choice",
+      "question": "某系统在评测中 Context Precision 很低，但 Context Recall 很高。最可能的系统表现是？",
+      "options": [
+        "检索几乎没有找到有用的信息",
+        "检索找到了所需信息，但同时带入了大量无关内容",
+        "模型完全没有依据上下文作答",
+        "参考答案编写有误"
+      ],
+      "answer": 1,
+      "explanation": "Context Recall 高说明所需信息基本被检索到；Context Precision 低说明检索结果中无关内容比例高或相关项排序靠后。A 与高召回矛盾；C 属生成层问题，与这两个上下文指标无直接对应；D 无法从这两个分数推出。",
+      "error_tag": "指标解读错误",
+      "variant_group": "rag_eval_metric_interpretation"
+    },
+    {
+      "kp": "agent.rag.eval_ragas",
+      "type": "single_choice",
+      "question": "下列哪一组指标组合，最能分别对应「检索质量」和「生成质量」两个层面？",
+      "options": [
+        "Context Precision / Context Recall 对应检索；Faithfulness / Answer Relevancy 对应生成",
+        "Faithfulness 对应检索；Context Recall 对应生成",
+        "Answer Relevancy 对应检索；Context Precision 对应生成",
+        "所有指标都只反映生成质量"
+      ],
+      "answer": 0,
+      "explanation": "Context Precision/Recall 评估检索到的上下文；Faithfulness/Answer Relevancy 评估生成答案。将二者交叉对应或认为只反映生成，都是对指标作用层面的误解。",
+      "error_tag": "概念混淆",
+      "variant_group": "rag_eval_metric_definition"
+    },
+    {
+      "kp": "agent.rag.eval_ragas",
+      "type": "single_choice",
+      "question": "在构建面向 RAG 评估的问题集时，以下哪种做法最不利于评估的有效性？",
+      "options": [
+        "问题覆盖不同难度和主题",
+        "问题有明确、可核对的参考答案",
+        "所有问题都写成能用「是/否」回答且答案永远为「是」",
+        "问题中既有事实型也有需要综合多段上下文的问题"
+      ],
+      "answer": 2,
+      "explanation": "全是同一答案的封闭式问题会导致分数失去区分度，也无法覆盖推理与综合能力。A、B、D 都是提升评估有效性的常见做法。",
+      "error_tag": "数据集设计错误",
+      "variant_group": "rag_eval_dataset"
+    },
+    {
+      "kp": "agent.rag.eval_ragas",
+      "type": "single_choice",
+      "question": "关于「用 LLM 作为评审来给 RAG 答案打分」，下列说法最准确的是？",
+      "options": [
+        "LLM 评审的输出天然稳定，同一输入多次评分必然完全一致",
+        "LLM 评审可以理解语义，但仍可能受提示词、参照答案和模型自身偏见影响",
+        "LLM 评审只能做二分类，无法给出维度化评分",
+        "LLM 评审不需要任何参照，直接凭直觉即可"
+      ],
+      "answer": 1,
+      "explanation": "LLM 评审具备语义理解能力，但评分会受提示词设计、参照信息质量与模型偏差影响，需要校准与抽样核查。A 忽略了生成随机性与不稳定；C 与常见实践不符；D 忽视了参照与口径的重要性。",
+      "error_tag": "评估方法误解",
+      "variant_group": "rag_eval_methodology"
+    },
+    {
+      "kp": "agent.rag.eval_ragas",
+      "type": "single_choice",
+      "question": "某系统 Faithfulness 低而 Context Recall 高。最合理的解释是？",
+      "options": [
+        "参考资料没有被检索到",
+        "所需信息已被检索到，但生成模型没有忠实使用它，甚至编造了内容",
+        "检索到的内容全部与问题无关",
+        "参考答案与问题不匹配"
+      ],
+      "answer": 1,
+      "explanation": "Recall 高说明所需信息在上下文中；Faithfulness 低说明答案与上下文不一致，问题出在生成层。A 与高召回矛盾；C 更接近精确率问题；D 属于数据集问题，无法从这两个指标直接推出。",
+      "error_tag": "指标解读错误",
+      "variant_group": "rag_eval_metric_interpretation"
+    },
+    {
+      "kp": "agent.rag.eval_ragas",
+      "type": "single_choice",
+      "question": "在一个 RAG 评估流程中，以下哪个步骤最应该发生在「计算各指标得分」之前？",
+      "options": [
+        "根据得分调参并反复评测",
+        "准备问题集、参考答案并收集系统在各问上的输出与检索上下文",
+        "对外发布评估报告",
+        "删除表现较差的样例"
+      ],
+      "answer": 1,
+      "explanation": "必须先有输入数据（问题、参考答案）和系统产出（答案、检索上下文），才能计算忠实性、相关性、上下文精确率/召回率等。调参、发布、删样例要么在其后，要么属于不当操作。",
+      "error_tag": "流程理解错误",
+      "variant_group": "rag_eval_workflow"
+    },
+    {
+      "kp": "agent.rag.eval_ragas",
+      "type": "single_choice",
+      "question": "若一个 RAG 系统的答案只复述了检索到的原文片段、未做任何整合，且原文与问题高度相关。此时最可能出现的情况是？",
+      "options": [
+        "Faithfulness 较高，Answer Relevancy 可能也较高",
+        "Faithfulness 较低，Context Recall 必然为 0",
+        "Answer Relevancy 必然为 0",
+        "所有指标都会低于 0.1"
+      ],
+      "answer": 0,
+      "explanation": "答案取自高度相关的原文片段，因此有上下文支撑（Faithfulness 高）、也可能切题（Answer Relevancy 较高）。但它未必覆盖参考答案的全部信息，因此召回率等不必然为零，更不会所有指标都极低。",
+      "error_tag": "指标解读错误",
+      "variant_group": "rag_eval_metric_interpretation"
+    },
+    {
+      "kp": "agent.rag.eval_ragas",
+      "type": "single_choice",
+      "question": "在实际工程中，对 RAG 系统做端到端评估时，常用的做法是？",
+      "options": [
+        "只评估最终答案，完全忽略检索到的上下文",
+        "分别评估检索质量与生成质量，并结合端到端指标综合判断",
+        "只评估检索，忽略生成",
+        "只关注单次评测的最高分样例"
+      ],
+      "answer": 1,
+      "explanation": "RAG 包含检索与生成两阶段，分别评估便于定位问题，端到端指标反映整体效果，两者结合更全面。只评估某一层或只看最好样例都无法反映系统真实水平。",
+      "error_tag": "流程理解错误",
+      "variant_group": "rag_eval_workflow"
+    },
+    {
+      "kp": "agent.rag.eval_ragas",
+      "type": "single_choice",
+      "question": "关于 RAG 评估数据集中的「参考答案（ground truth / reference answer）」，下列说法正确的是？",
+      "options": [
+        "参考答案必须与系统生成的答案逐字完全一致才能算正确",
+        "参考答案用于对比系统输出，但语义一致性通常比字面完全匹配更合适",
+        "只要系统生成了参考答案中的关键词就算正确，无需考虑语义",
+        "参考答案不是必需的，任何 RAG 评估都不需要它"
+      ],
+      "answer": 1,
+      "explanation": "在基于 LLM 的 RAG 评估中，参考答案用于对照，但自然语言答案表述多样，逐字匹配会严重低估质量，因此通常采用语义层面的判断。逐字一致、只看关键词都属于常见误解；而 Context Recall 等指标确实依赖参考答案，因此「任何评估都不需要」也不成立。",
+      "error_tag": "评估方法误解",
+      "variant_group": "rag_eval_dataset"
+    },
+    {
+      "kp": "agent.rag.eval_ragas",
+      "type": "single_choice",
+      "question": "关于 RAG 评估里「参考答案（reference）」的作用，下列说法最不合理的是？",
+      "options": [
+        "用于评估检索是否覆盖了回答所需的关键信息",
+        "作为生成答案对比的语义参照",
+        "参考答案一旦写好就绝对正确，无需校验",
+        "参考答案的质量会影响评估结论的可靠性"
+      ],
+      "answer": 2,
+      "explanation": "参考答案由人工或模型生成，可能存在错误或偏差，需要评审与迭代，否则会误导评估。A、B、D 都是对参考答案作用的正确理解。",
+      "error_tag": "数据集设计错误",
+      "variant_group": "rag_eval_dataset"
+    },
+    {
+      "kp": "agent.rag.eval_ragas",
+      "type": "single_choice",
+      "question": "在 RAG 评估里，Context Precision 主要考察的是？",
+      "options": [
+        "检索到的上下文中，相关内容排在前面、无关内容靠后的程度",
+        "参考答案中的信息有多少被检索到",
+        "生成的答案是否忠实于上下文",
+        "生成的答案是否与问题语义相关"
+      ],
+      "answer": 0,
+      "explanation": "Context Precision 关注被检索到的上下文里相关内容的比例与排序位置（相关项是否被排在更前面）。选项 B 是 Context Recall，选项 C 是 Faithfulness，选项 D 是 Answer Relevancy。",
+      "error_tag": "概念混淆",
+      "variant_group": "rag_eval_metric_definition"
+    },
+    {
+      "kp": "agent.rag.eval_ragas",
+      "type": "single_choice",
+      "question": "某 RAG 系统 Answer Relevancy 得分很低，但 Faithfulness 得分很高。最可能的原因是？",
+      "options": [
+        "模型经常编造上下文中没有的事实",
+        "检索到的文档全部无关",
+        "模型的回答忠实于上下文，但答非所问或没有正面回应用户问题",
+        "参考答案本身写错了"
+      ],
+      "answer": 2,
+      "explanation": "Answer Relevancy 低说明答案没有很好地对准问题；Faithfulness 高说明答案仍然基于给定上下文。因此可能是「答非所问但没编造」。若编造事实则 Faithfulness 低；文档全无关通常也会压低 Faithfulness 或 Context Precision；参考答案错误属于数据集问题，不作为此组合的首选解释。",
+      "error_tag": "指标解读错误",
+      "variant_group": "rag_eval_metric_interpretation"
+    },
+    {
+      "kp": "agent.rag.eval_ragas",
+      "type": "single_choice",
+      "question": "关于 RAG 评估中「基于 LLM 的自动评估」与「人工评估」的关系，下列说法最合理的是？",
+      "options": [
+        "基于 LLM 的自动评估完全不可信，只能人工评估",
+        "基于 LLM 的自动评估可规模化、可复现，但可能受模型偏差影响，通常会配合人工抽样或校准",
+        "只要用了自动评估，就不需要任何参考答案或人工介入",
+        "人工评估无法发现自动评估无法发现的错误"
+      ],
+      "answer": 1,
+      "explanation": "LLM 评审能低成本批量运行、便于回归比较，但存在评分偏差和不稳定性，实践中常与人工抽样/标注校准结合。选项 A 过于绝对；C 忽略了评估仍需参照与人工把关；D 与事实相反，人工能发现更多细微问题。",
+      "error_tag": "评估方法误解",
+      "variant_group": "rag_eval_methodology"
+    },
+    {
+      "kp": "agent.rag.eval_ragas",
+      "type": "single_choice",
+      "question": "某团队修改了 RAG 的分块大小后重新评测，准备把两次评测结果直接对比。以下哪种做法最容易导致对比结论不可靠？",
+      "options": [
+        "两次评测使用同一份问题集",
+        "两次评测使用同一份参考答案",
+        "两次评测使用相同的评估指标和评分模型",
+        "两次评测中问题集不同，但把两者平均分直接比较"
+      ],
+      "answer": 3,
+      "explanation": "评测对比的前提是可比的输入与一致的评估口径。问题集不同会让分数差异可能来自题目难易而非系统改动，导致结论失真。A、B、C 都是保证可比性的正确做法。",
+      "error_tag": "实验设计错误",
+      "variant_group": "rag_eval_experiment_design"
+    },
+    {
+      "kp": "agent.rag.eval_ragas",
+      "type": "single_choice",
+      "question": "在 RAG 评估数据中，一条样例通常包含哪些要素？",
+      "options": [
+        "只有用户问题，不需要其他内容",
+        "用户问题、参考答案，以及（可选的）检索到的上下文",
+        "只有模型生成的答案",
+        "只有检索到的文档原文"
+      ],
+      "answer": 1,
+      "explanation": "RAG 评估样例通常需要问题（query）、参考答案（用于对比/召回评估），以及与本次推理相关的上下文（用于忠实性等评估）。只有问题、只有生成答案或只保留文档都无法覆盖主要评估维度。",
+      "error_tag": "概念混淆",
+      "variant_group": "rag_eval_dataset"
+    },
+    {
+      "kp": "agent.rag.eval_ragas",
+      "type": "single_choice",
+      "question": "若某条评估样例的参考答案里有三段关键信息，而系统实际检索到的上下文中只覆盖了两段，这对 Context Recall 意味着什么？",
+      "options": [
+        "Context Recall 一定为 1.0",
+        "Context Recall 会低于 1.0，因为存在未被检索到的参考答案信息",
+        "Context Recall 与参考答案无关，因此不受影响",
+        "Context Recall 会等于 Answer Relevancy"
+      ],
+      "answer": 1,
+      "explanation": "Context Recall 衡量参考答案所需信息被检索覆盖的程度。三段中缺一段，则覆盖不完整，得分小于 1。它与答案相关性、忠实性不是同一维度，也不必然等于某个固定值。",
+      "error_tag": "指标解读错误",
+      "variant_group": "rag_eval_metric_interpretation"
+    },
+    {
+      "kp": "agent.rag.eval_ragas",
+      "type": "single_choice",
+      "question": "当生成的答案里包含一个论断，而检索到的上下文中没有任何一处能支持它时，最相关的问题是？",
+      "options": [
+        "上下文召回率偏低",
+        "答案忠实性存在问题，可能产生了幻觉",
+        "上下文精确率偏低",
+        "答案与问题的相关性偏低"
+      ],
+      "answer": 1,
+      "explanation": "答案中的论断无法由给定上下文支撑，直接指向 Faithfulness（忠实性）问题，即可能产生了幻觉。召回率、精确率、答案相关性都可能正常，但忠实性该受质疑。",
+      "error_tag": "概念混淆",
+      "variant_group": "rag_eval_metric_definition"
+    },
+    {
+      "kp": "agent.rag.hallucination_guard",
+      "type": "single_choice",
+      "question": "在 RAG 智能体中，生成「幻觉防护」（hallucination guard）主要想解决的问题是什么？",
+      "options": [
+        "让检索速度更快，降低延迟",
+        "让模型生成的内容有依据、可溯源，减少无中生有",
+        "压缩向量维度以节省存储",
+        "把用户问题改写成更短的查询"
+      ],
+      "answer": 1,
+      "explanation": "幻觉防护的核心目标是约束生成内容以检索到的证据为依据，减少模型凭空捏造事实。加速、压缩向量、改写查询分别是检索优化、存储优化和查询理解，与幻觉防护目标不同。",
+      "error_tag": "概念混淆",
+      "variant_group": "hallucination_guard_goal"
+    },
+    {
+      "kp": "agent.rag.hallucination_guard",
+      "type": "single_choice",
+      "question": "某 RAG 系统在生成答案后，用一段独立逻辑判断「答案中的每个事实是否都能在检索到的文档片段里找到支撑」，不通过就拒答或重试。这属于幻觉防护的哪种做法？",
+      "options": [
+        "查询改写（query rewriting）",
+        "答案后验校验（groundedness check）",
+        "向量索引重建（re-indexing）",
+        "分块大小调优（chunk tuning）"
+      ],
+      "answer": 1,
+      "explanation": "在生成之后、返回之前检查答案是否有检索证据支撑，属于答案后验校验/有依据性检查，是幻觉防护的典型手段。查询改写发生在检索前，重建索引和调参属于检索侧优化。",
+      "error_tag": "概念混淆",
+      "variant_group": "guard_stage"
+    },
+    {
+      "kp": "agent.rag.hallucination_guard",
+      "type": "single_choice",
+      "question": "下列关于「幻觉防护可能带来的副作用」的描述，最准确的是？",
+      "options": [
+        "防护只会提升效果，没有任何副作用",
+        "过强的防护可能导致系统对本来能回答的问题也拒答，需要在覆盖率与安全性之间权衡",
+        "防护会让检索到的文档全部失效",
+        "防护会把所有用户问题都改成简单问题"
+      ],
+      "answer": 1,
+      "explanation": "幻觉防护本质是安全性与可用性的权衡：门槛设得过高会误拒本可回答的问题，降低有效覆盖率。因此需要调参和评测，而不是「越严越好」。其他选项与防护机制不符。",
+      "error_tag": "边界错误",
+      "variant_group": "guard_tradeoff"
+    },
+    {
+      "kp": "agent.rag.hallucination_guard",
+      "type": "multi_choice",
+      "question": "以下哪些属于 RAG 智能体中幻觉防护可以采用的措施？（多选）",
+      "options": [
+        "生成后对有依据性做自动校验，不通过则拒答或重试",
+        "在提示中要求只依据检索资料回答，无依据时说明无法回答",
+        "对检索结果做相关性过滤，剔除明显无关片段",
+        "要求答案必须给出可核对的引用来源"
+      ],
+      "answer": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "explanation": "四项分别对应后验校验、生成约束、检索过滤和引用溯源，都是幻觉防护的不同层次手段，可以组合使用。",
+      "error_tag": "记忆缺失",
+      "variant_group": "guard_layers"
+    },
+    {
+      "kp": "agent.rag.hallucination_guard",
+      "type": "multi_choice",
+      "question": "关于检索质量与幻觉防护的关系，下列说法正确的有？（多选）",
+      "options": [
+        "检索不到关键证据时，模型更可能靠先验知识编造，因此提高检索质量有助于减少幻觉",
+        "检索回来的文档若是错的，答案可能有依据却不正确，故检索侧质量仍需把关",
+        "只要检索质量足够高，就不需要任何生成侧防护",
+        "多轮召回、查询改写等手段可以在证据不足时补充相关片段"
+      ],
+      "answer": [
+        0,
+        1,
+        3
+      ],
+      "explanation": "检索与生成是两道防线：好检索减少编造诱因，但证据本身可能错误，且模型仍可能误读证据，所以生成侧防护不可省略。故第 3 项「不需要生成侧防护」错误。",
+      "error_tag": "边界错误",
+      "variant_group": "retrieval_and_guard"
+    },
+    {
+      "kp": "agent.rag.hallucination_guard",
+      "type": "multi_choice",
+      "question": "在设计幻觉防护的评测时，下列哪些指标/做法是合理的？（多选）",
+      "options": [
+        "统计答案中有依据的论断占比（有依据性得分）",
+        "统计本可回答却被错误拒答的比例（误拒率）",
+        "用一小批带标注答案的样本人工核对是否出现无依据事实",
+        "只看模型的生成速度，速度越快说明幻觉越少"
+      ],
+      "answer": [
+        0,
+        1,
+        2
+      ],
+      "explanation": "有依据性得分、误拒率、人工核对标注样本能从质量和代价两方面评估防护效果。生成速度与幻觉多少无因果关系，不能作为幻觉指标。",
+      "error_tag": "概念混淆",
+      "variant_group": "guard_eval"
+    },
+    {
+      "kp": "agent.rag.hallucination_guard",
+      "type": "multi_choice",
+      "question": "下列哪些做法反而可能增加 RAG 中的幻觉风险？（多选）",
+      "options": [
+        "提示模型「先用常识补充，再结合资料」",
+        "把大量低相关度的召回片段不加过滤地塞进上下文",
+        "要求模型给出尽可能多、尽可能具体的细节",
+        "当证据不足时明确告知用户「资料中没有相关依据」"
+      ],
+      "answer": [
+        0,
+        1,
+        2
+      ],
+      "explanation": "鼓励常识补充、注入无关噪声、追求更多更具体的细节，都会推动模型脱离证据发挥，增加幻觉。而证据不足时如实说明，正是幻觉防护提倡的拒答式做法。",
+      "error_tag": "边界错误",
+      "variant_group": "anti_patterns"
+    },
+    {
+      "kp": "agent.rag.hallucination_guard",
+      "type": "fill_blank",
+      "question": "当检索到的资料不足以支撑回答时，幻觉防护通常建议系统采取的一种保守策略是＿＿＿＿（用一个常见术语表达：不给出没有依据的答案，而是如实说明无法回答）。",
+      "options": [],
+      "answer": [
+        "拒答",
+        "abstention",
+        "abstain",
+        "弃权回答"
+      ],
+      "explanation": "在证据不足时拒绝作答（abstention/拒答）是幻觉防护的基本保守策略，避免给出看似合理但无依据的答案。",
+      "error_tag": "记忆缺失",
+      "variant_group": "abstention"
+    },
+    {
+      "kp": "agent.rag.hallucination_guard",
+      "type": "fill_blank",
+      "question": "幻觉防护中，把答案中的论断与检索到的文档片段对应起来、供人工或自动核对的做法，称为＿＿＿＿（提示：常用于要求模型在句子后标注来源）。",
+      "options": [],
+      "answer": [
+        "引用",
+        "引用来源",
+        "citation",
+        "引注",
+        "标注来源"
+      ],
+      "explanation": "给论断附引用来源（citation）使有依据性可被核对，是无依据内容可被发现的前提。",
+      "error_tag": "记忆缺失",
+      "variant_group": "citation"
+    },
+    {
+      "kp": "agent.rag.hallucination_guard",
+      "type": "code_reading",
+      "question": "阅读下面这段伪代码，回答问题：\n\n```python\nanswer = generate(query, context)\nscore = check_groundedness(answer, context)\nif score < THRESHOLD:\n    new_context = retrieve(rewrite(query))\n    answer = generate(query, new_context)\n    if check_groundedness(answer, new_context) < THRESHOLD:\n        return \"抱歉，现有资料不足以回答该问题。\"\nreturn answer\n```\n\n这段逻辑体现的幻觉防护思路是什么？校验失败后采取了哪两类处理？",
+      "options": [],
+      "answer": "体现的是「生成后进行有依据性校验，校验不通过则先补充证据重试、仍不通过则拒答」的思路。校验失败后先改写查询重新检索并重答（retry with more evidence），若仍不达标则返回无法回答（拒答/abstention），避免给出无依据答案。",
+      "explanation": "关键点在于：防护发生在生成之后；失败路径不是原样重问，而是先补证据重试，最后兜底为拒答，这正是幻觉防护的典型控制流。",
+      "error_tag": "概念混淆",
+      "variant_group": "guard_control_flow"
+    },
+    {
+      "kp": "agent.rag.hallucination_guard",
+      "type": "code_reading",
+      "question": "阅读下面这段说明并回答：\n\n某系统在提示中写道：「以下是检索到的资料：{context}。请仅依据以上资料回答用户问题；如果资料中没有相关信息，请直接回复『资料中未提及』，不要根据你的记忆补充。」\n\n这段提示分别用了哪两种手段来抑制幻觉？",
+      "options": [],
+      "answer": "一是生成约束/依据限定：要求只依据给定的检索资料回答，不得使用记忆补充；二是显式拒答指令：资料不足时要求回复固定的「未提及」话术，而不是编造，从而把无依据情形引导到拒答路径。",
+      "explanation": "该提示同时施加了「只用给定证据」的约束与「无证据则声明未提及」的拒答出口，属于生成阶段的幻觉防护设计。",
+      "error_tag": "概念混淆",
+      "variant_group": "prompt_guard"
+    },
+    {
+      "kp": "agent.rag.hallucination_guard",
+      "type": "scenario",
+      "question": "工程场景：你负责一个企业知识库问答智能体。上线后用户投诉模型经常编造公司内部政策的具体条款编号和生效日期，而这些条款在检索到的文档里根本查不到。请说明你会如何用「幻觉防护」的思路来定位并缓解该问题（可从检索、提示、生成后校验、兜底四方面作答）。",
+      "options": [],
+      "answer": null,
+      "explanation": "答案应覆盖四层：先检查检索是否真的召回了相关政策段落（检索过滤/召回质量）；再在提示中要求只依据资料、细节必须引用来源、无依据不得编造（生成约束）；生成后对有依据性做自动校验（尤其是条款编号、日期这类细节）；校验不通过则补证据重试，仍不通过则拒答/说明资料不足。这样把编造细节的风险在各层拦截。",
+      "error_tag": "边界错误",
+      "variant_group": "guard_scenario_policy",
+      "required_keywords": [
+        "幻觉防护",
+        "检索过滤",
+        "召回质量",
+        "生成约束",
+        "有依据性校验"
+      ]
+    },
+    {
+      "kp": "agent.rag.hallucination_guard",
+      "type": "single_choice",
+      "question": "关于「拒答」（abstention）在幻觉防护中的作用，下列说法正确的是？",
+      "options": [
+        "拒答会降低系统召回率，所以幻觉防护应尽量避免拒答",
+        "当检索证据不足以支撑回答时，拒答往往比给出一个看似合理的答案更安全",
+        "拒答只适用于闲聊类问题，不适用于知识问答",
+        "只要模型置信度高，就绝不应该拒答"
+      ],
+      "answer": 1,
+      "explanation": "幻觉防护强调「宁可不答，不可错答」：证据不足时拒答能避免传播错误信息。拒答确实可能影响可回答率，但这是可控的代价；模型的置信度校准往往不可靠，不能仅凭高置信度就放弃拒答。",
+      "error_tag": "概念混淆",
+      "variant_group": "abstention"
+    },
+    {
+      "kp": "agent.rag.hallucination_guard",
+      "type": "scenario",
+      "question": "工程场景：你的 RAG 系统加了严格的有依据性校验后，拒答率升到 30%，其中不少用户反映「明明文档里有答案却被拒」。团队有人提议直接把校验阈值调低到几乎不拒答。请分析这种方案的问题，并给出更合理的处理方向。",
+      "options": [],
+      "answer": null,
+      "explanation": "把阈值降到几乎不拒答虽能提高覆盖率，但会把大量无依据答案放行，违背幻觉防护目的，只是把安全风险换成了可用性风险。更合理的做法是：承认幻觉防护是覆盖率与安全性之间的权衡；定位误拒原因（检索没召回/校验过于严格/提示不清）而非一味放阈值；对校验失败样本先做补证据重试，仅在证据确实不足时拒答；并用有依据性得分与误拒率等指标联合调阈值。",
+      "error_tag": "边界错误",
+      "variant_group": "guard_scenario_tradeoff",
+      "required_keywords": [
+        "重试",
+        "指标",
+        "可用性"
+      ]
+    },
+    {
+      "kp": "agent.rag.hallucination_guard",
+      "type": "single_choice",
+      "question": "以下哪种提示（prompt）设计最有助于抑制 RAG 中的幻觉？",
+      "options": [
+        "「请尽量详细、生动地回答用户的问题」",
+        "「只依据下面提供的资料回答；资料中没有的信息不要编造，若无依据请说明无法回答」",
+        "「请先用你的常识补充，再结合资料回答」",
+        "「请给出尽可能多的相关事实」"
+      ],
+      "answer": 1,
+      "explanation": "明确要求「只依据给定资料、无依据则说明无法回答」，能在生成阶段引导模型不越界编造。要求生动、补充常识、尽可能多给事实，都会鼓励模型脱离证据发挥，反而助长幻觉。",
+      "error_tag": "记忆缺失",
+      "variant_group": "prompt_guard"
+    },
+    {
+      "kp": "agent.rag.hallucination_guard",
+      "type": "single_choice",
+      "question": "RAG 系统在答案里给每个论断附上引用来源（citation），这对幻觉防护的主要价值是？",
+      "options": [
+        "让答案看起来更专业，但不影响正确性",
+        "方便用户和系统核对论断是否有检索证据支撑，从而发现并拦截无依据内容",
+        "可以完全替代检索步骤",
+        "能自动修复检索到的错误文档"
+      ],
+      "answer": 1,
+      "explanation": "引用把论断与具体证据片段对应起来，使「有依据性」可被人工或自动校验，是无依据内容能被发现和拦截的前提。引用本身不会提升专业感以外的正确性，也不能替代检索或修正源文档。",
+      "error_tag": "概念混淆",
+      "variant_group": "citation"
+    },
+    {
+      "kp": "agent.rag.hallucination_guard",
+      "type": "single_choice",
+      "question": "某团队发现模型经常把检索文档里没有的具体数字、日期「补齐」。为抑制这类幻觉，最直接的防护措施是？",
+      "options": [
+        "提高 top-k 检索数量",
+        "要求模型在给出数字、日期等细节时必须引用来源片段，无法引用则省略",
+        "降低生成温度即可彻底解决",
+        "把向量库换成关系型数据库"
+      ],
+      "answer": 1,
+      "explanation": "要求细节性事实必须绑定来源、无来源则省略，能针对性约束凭空补全数字和日期的行为。提高 top-k 不一定提供对应证据；降温只能降低随机性，无法消除「编造具体值」的倾向；换存储与幻觉无直接因果。",
+      "error_tag": "边界错误",
+      "variant_group": "detail_grounding"
+    },
+    {
+      "kp": "agent.rag.hallucination_guard",
+      "type": "single_choice",
+      "question": "关于「有依据性（groundedness）」与「事实正确性（factual correctness）」的区别，正确的是？",
+      "options": [
+        "两者完全等价，只是叫法不同",
+        "有依据性看答案是否由检索证据支撑，事实正确性看答案是否符合客观事实",
+        "有依据性只用于图像任务，事实正确性只用于文本任务",
+        "事实正确性一定意味着有依据性"
+      ],
+      "answer": 1,
+      "explanation": "有依据性是「相对证据」的属性：答案是否由所给资料推出；事实正确性是「相对真相」的属性。检索到错误资料时，答案可能有依据但不正确。因此二者不等价，事实正确性也不必然蕴含有依据性。",
+      "error_tag": "概念混淆",
+      "variant_group": "groundedness_vs_correctness"
+    },
+    {
+      "kp": "agent.rag.hallucination_guard",
+      "type": "single_choice",
+      "question": "下列关于幻觉防护的说法，哪一项是错误的？",
+      "options": [
+        "可以在检索后对低相关度文档做过滤，减少把噪声当依据",
+        "可以在生成后做有依据性校验，不通过则重试或拒答",
+        "只要把大模型温度设为 0，就无需任何其他幻觉防护措施",
+        "可以通过要求模型引用来源，使无依据内容更易被发现"
+      ],
+      "answer": 2,
+      "explanation": "温度设为 0 只是降低采样随机性，模型仍可能因缺乏知识、误解证据或过度泛化而产生幻觉，因此仍需检索过滤、后验校验、引用等防护。其余三项都是真实有效的防护手段。",
+      "error_tag": "概念混淆",
+      "variant_group": "guard_layers"
+    },
+    {
+      "kp": "agent.rag.hallucination_guard",
+      "type": "single_choice",
+      "question": "在 RAG 幻觉防护中，「基于证据的重试（retry with more evidence）」指的是？",
+      "options": [
+        "校验失败后原样再问一遍模型",
+        "校验失败后重新检索（如扩大范围、改写查询）获取更充分的证据，再让模型重答",
+        "校验失败后直接返回原始检索文档给用户",
+        "校验失败后调低模型温度并重复生成多次取平均"
+      ],
+      "answer": 1,
+      "explanation": "重试的价值在于补充证据：重新检索或改写查询获得更相关片段后再生成，才可能实质改善有依据性。原样重问、温度取平均通常无法引入新证据；直接吐文档则谈不上生成。",
+      "error_tag": "概念混淆",
+      "variant_group": "retry_evidence"
+    },
+    {
+      "kp": "agent.rag.hallucination_guard",
+      "type": "single_choice",
+      "question": "某系统对检索文档先做「相关性过滤」再交给模型生成。这一步骤对幻觉防护的意义是？",
+      "options": [
+        "减少噪声/不相关文档被当作依据，降低模型被误导而编造的概率",
+        "保证过滤后文档的每句话都绝对正确",
+        "让生成结果一定不需要再做校验",
+        "提升向量维度以增强语义匹配"
+      ],
+      "answer": 0,
+      "explanation": "不相关文档会诱导模型基于无关内容作答，相关性过滤可减少这种误导。过滤只保证相关，不保证内容本身正确，也不能免除后续校验，更与提升向量维度无关。",
+      "error_tag": "边界错误",
+      "variant_group": "retrieval_filter"
+    }
+  ]
+}

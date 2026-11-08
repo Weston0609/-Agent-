@@ -1,0 +1,47 @@
+{
+  "id": "s1u1",
+  "kind": "unit",
+  "title": "第 1 学期 · 第 1 单元「环境与第一个程序」单元考试",
+  "questions": [
+    {
+      "question": "在命令行验证 Python 安装是否成功的命令是？",
+      "options": ["python --version", "python run", "python check", "pip --version"],
+      "answer": 0
+    },
+    {
+      "question": "创建虚拟环境的正确命令是？",
+      "options": ["python -m venv venv", "python -m virtualenv", "pip venv", "python create-venv"],
+      "answer": 0
+    },
+    {
+      "question": "Python 单行注释用什么开头？",
+      "options": ["#", "//", "<!--", "%"],
+      "answer": 0
+    },
+    {
+      "question": "Python 划分代码块依靠？",
+      "options": ["缩进", "花括号", "begin/end 关键字", "分号"],
+      "answer": 0
+    },
+    {
+      "question": "print(\"hello\") 的作用是？",
+      "options": ["输出 hello 到屏幕", "定义变量", "导入模块", "退出程序"],
+      "answer": 0
+    },
+    {
+      "question": "input() 返回值类型是？",
+      "options": ["str", "int", "float", "bool"],
+      "answer": 0
+    },
+    {
+      "question": "把字符串转成整数的函数是？",
+      "options": ["int()", "str()", "float()", "list()"],
+      "answer": 0
+    },
+    {
+      "question": "f-string 嵌入变量的正确写法是？",
+      "options": ["f\"{name}\"", "\"{name}\"", "f\"$name\"", "f'%name%'"],
+      "answer": 0
+    }
+  ]
+}

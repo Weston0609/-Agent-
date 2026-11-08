@@ -1,0 +1,921 @@
+# s7u1l3 让大模型输出“能直接进程序”的数据 / 让大模型输出结构化 JSON 的工程化方法
+
+> 来源 `content/lessons/s7u1l3.json`
+
+## agent.llm.structured_output
+
+# agent.llm.structured_output：让大模型输出“能直接进程序”的数据
+
+> **一句话直觉**：大语言模型（LLM, Large Language Model）自然输出的是自由文本，而程序需要的是**结构化的、可校验的、可解析的数据**；structured output（结构化输出）就是给模型的输出加上“格式合同”。
+
+---
+
+## 1. 为什么需要结构化输出
+
+LLM 最自然的输出是自然语言文本，例如：“好的，用户叫张三，今年 28 岁。”这对人很友好，但对程序很不友好：你很难稳定地从中提取姓名和年龄。
+
+在工程中，我们经常要模型完成的是“信息抽取”“意图识别”“工具调用参数生成”等任务。这些任务的下游通常是数据库、API（Application Programming Interface，应用程序接口）或业务逻辑，它们要求输入是**确定的 JSON（JavaScript Object Notation）、字段齐全、类型正确**。
+
+因此，structured output 的核心目标不是“让模型更聪明”，而是：
+
+1. 约束输出格式；
+2. 降低解析失败率；
+3. 让结果可校验、可重试、可监控。
+
+```python
+# 直觉对比：自由文本 vs 结构化输出
+free_text = "用户张三，28岁，邮箱是 zhangsan@example.com"
+
+structured = {
+    "name": "张三",
+    "age": 28,
+    "email": "zhangsan@example.com"
+}
+
+print(type(free_text))   # <class 'str'>
+print(type(structured))  # <class 'dict'>
+print(structured["age"] + 1)  # 可以直接参与程序计算
+```
+
+---
+
+## 2. 从 Prompt 到 Schema：结构化输出的三种常见手段
+
+让模型输出结构化数据，常见有三种层次：
+
+### 2.1 纯提示词约束
+
+在提示词里写清楚“只输出 JSON，不要解释”。这最简单，但稳定性最差。
+
+### 2.2 JSON mode / 格式化输出
+
+很多模型提供 JSON mode（JSON 模式），强制模型输出合法 JSON。它解决“能不能解析”的问题，但不保证字段一定齐全。
+
+### 2.3 Schema 约束 / Function Calling
+
+更工程化的做法是给出 JSON Schema（JSON 模式定义），让模型按字段、类型、枚举值输出。OpenAI 的 Structured Outputs、Function Calling（函数调用）、以及 Pydantic（Python 数据校验库）都常用于这一类方案。
+
+```python
+# 用 Pydantic 定义期望的数据结构
+from pydantic import BaseModel, Field
+
+class UserInfo(BaseModel):
+    name: str = Field(description="用户姓名")
+    age: int = Field(description="用户年龄，必须是整数")
+    email: str = Field(description="用户邮箱")
+
+# 这段 schema 可以交给模型，要求它按此结构输出
+print(UserInfo.model_json_schema())
+```
+
+---
+
+## 3. 解析、校验与重试：工程上真正重要的一步
+
+模型即使被要求输出 JSON，也可能：
+
+- 输出多余的解释文字；
+- 字段缺失；
+- 类型错误，例如 age 写成 "二十八"；
+- 输出 markdown 代码块包裹的 JSON。
+
+所以工程上不能“拿到就信”，而要 **parse（解析） → validate（校验） → retry（重试）**。
+
+```python
+import json
+from pydantic import ValidationError
+from pydantic import BaseModel
+
+class UserInfo(BaseModel):
+    name: str
+    age: int
+    email: str
+
+def parse_user_info(raw: str) -> UserInfo:
+    """把模型输出的字符串解析并校验成 UserInfo。"""
+    try:
+        data = json.loads(raw)
+        return UserInfo(**data)
+    except json.JSONDecodeError as e:
+        raise ValueError(f"不是合法 JSON: {e}")
+    except ValidationError as e:
+        raise ValueError(f"字段校验失败: {e}")
+
+# 正常情况
+print(parse_user_info('{"name":"张三","age":28,"email":"z@example.com"}'))
+
+# 异常情况：age 类型错误
+try:
+    parse_user_info('{"name":"张三","age":"二十八","email":"z@example.com"}')
+except ValueError as e:
+    print("捕获错误:", e)
+```
+
+---
+
+## 4. 一个可运行的“模拟 LLM 结构化输出”示例
+
+真实项目中你会调用 LLM API。为了让你本地可跑，这里用一个**模拟函数**代替模型调用，重点展示完整链路：定义 schema、约束提示词、解析、校验、失败重试。
+
+```python
+import json
+from pydantic import BaseModel, Field, ValidationError
+
+class UserInfo(BaseModel):
+    name: str = Field(description="用户姓名")
+    age: int = Field(description="用户年龄")
+    email: str = Field(description="用户邮箱")
+
+def fake_llm(prompt: str, attempt: int = 1) -> str:
+    """模拟大模型输出：第一次故意输出错误格式，第二次输出正确 JSON。"""
+    if attempt == 1:
+        return "用户叫张三，28岁，邮箱是 zhangsan@example.com"
+    return '{"name":"张三","age":28,"email":"zhangsan@example.com"}'
+
+def build_prompt(text: str) -> str:
+    schema = UserInfo.model_json_schema()
+    return (
+        "请从下面文本中抽取用户信息。\n"
+        "只输出合法 JSON，不要输出其他文字。\n"
+        f"JSON Schema: {json.dumps(schema, ensure_ascii=False)}\n"
+        f"文本: {text}"
+    )
+
+def extract_user(text: str, max_retry: int = 3) -> UserInfo:
+    prompt = build_prompt(text)
+    last_err = None
+    for attempt in range(1, max_retry + 1):
+        raw = fake_llm(prompt, attempt=attempt)
+        try:
+            return UserInfo(**json.loads(raw))
+        except (json.JSONDecodeError, ValidationError) as e:
+            last_err = e
+            print(f"第 {attempt} 次失败: {e}")
+    raise RuntimeError(f"重试 {max_retry} 次仍失败: {last_err}")
+
+print(extract_user("用户叫张三，28岁，邮箱是 zhangsan@example.com"))
+```
+
+---
+
+## 5. 常见工程策略与边界
+
+- **优先使用模型/框架原生 structured output**：比手写提示词更稳。
+- **Schema 尽量小而明确**：字段少、类型简单、枚举清晰，模型更容易遵守。
+- **不要把“格式正确”当成“内容正确”**：结构化输出只保证形状，内容仍需业务校验。
+- **务必处理失败路径**：重试、降级、人工兜底都要设计。
+- **记录日志**：保存 raw output（原始输出）和校验错误，便于排查。
+
+```python
+# 业务校验：结构化之后，仍然要检查内容是否合理
+from pydantic import BaseModel, field_validator
+
+class UserInfo(BaseModel):
+    name: str
+    age: int
+    email: str
+
+    @field_validator("age")
+    @classmethod
+    def age_must_be_reasonable(cls, v: int) -> int:
+        if not (0 <= v <= 150):
+            raise ValueError("年龄必须在 0 到 150 之间")
+        return v
+
+try:
+    UserInfo(name="张三", age=999, email="z@example.com")
+except ValueError as e:
+    print("业务校验失败:", e)
+```
+
+---
+
+## 结尾：动手练习
+
+**任务**：写一个 Python 脚本 `extract_book.py`，从一段中文书籍介绍中抽取结构化信息，并保存为 JSON 文件。
+
+要求：
+
+1. 用 Pydantic 定义 `BookInfo`，字段至少包括：
+   - `title: str`
+   - `author: str`
+   - `year: int`
+   - `tags: list[str]`
+2. 写一个 `fake_llm(prompt, attempt)` 模拟模型输出：第一次返回自然语言，第二次返回合法 JSON。
+3. 实现 `extract_book(text)`：
+   - 构造带 JSON Schema 的提示词；
+   - 解析并校验；
+   - 最多重试 3 次；
+   - 成功后把结果写入 `book.json`。
+4. 用下面文本测试：
+
+> 《活着》是余华创作的长篇小说，首次出版于 1993 年，常被归类为当代文学、现实主义。
+
+**验收标准**：运行脚本后，`book.json` 内容类似：
+
+```json
+{
+  "title": "活着",
+  "author": "余华",
+  "year": 1993,
+  "tags": ["当代文学", "现实主义"]
+}
+```
+
+**加分项**：给 `year` 加一个校验器，要求年份在 1000 到 2100 之间。
+
+## agent.llm.json_mode
+
+# agent.llm.json_mode：让大模型输出结构化 JSON 的工程化方法
+
+## 一句话直觉
+
+当你需要程序自动解析 LLM（Large Language Model，大语言模型）的回复时，自由文本很难处理；**JSON Mode（JSON 模式）** 能让模型稳定输出合法 JSON，把“聊天”变成“可编程的数据接口”。
+
+---
+
+## 1. 为什么需要 JSON Mode
+
+普通 LLM 调用返回的是自然语言，例如：
+
+```text
+好的，用户叫小明，今年 18 岁。
+```
+
+程序要从这句话里提取姓名和年龄，只能靠正则或再调用一次模型，既脆弱又昂贵。
+
+JSON Mode 的目标是：**约束模型输出为合法 JSON 对象**，让下游代码可以直接 `json.loads()`。
+
+它解决三个工程问题：
+
+1. **可解析**：输出能被 `json` 模块直接解析。
+2. **可校验**：字段名、类型、枚举值可以被 schema 约束。
+3. **可自动化**：适合 Agent（智能体）、Function Calling（函数调用）、工作流编排。
+
+> 关键结论：JSON Mode 不是“让模型更聪明”，而是“让模型输出更符合程序契约”。
+
+---
+
+## 2. 最小可用示例：用提示词要求 JSON
+
+在没有原生 JSON Mode 的模型上，最简单的方法是**在提示词中明确要求 JSON**，并给出示例。
+
+```python
+import json
+from openai import OpenAI
+
+client = OpenAI()
+
+# 明确要求：只输出 JSON，不要解释，不要 Markdown 代码块
+prompt = """
+从下面句子中提取信息，只输出一个 JSON 对象，字段为 name 和 age。
+句子：小明今年 18 岁。
+"""
+
+resp = client.chat.completions.create(
+    model="gpt-4o-mini",
+    messages=[{"role": "user", "content": prompt}],
+    temperature=0,  # 降低随机性，让输出更稳定
+)
+
+text = resp.choices[0].message.content
+print(text)
+# 可能输出：{"name": "小明", "age": 18}
+
+data = json.loads(text)
+print(data["name"], data["age"])
+```
+
+这段代码能跑，但**不保证 100% 合法**：模型可能加解释、加代码块、字段名漂移。
+
+---
+
+## 3. 原生 JSON Mode：用 API 参数强制约束
+
+OpenAI 等平台提供 `response_format={"type": "json_object"}`，要求模型返回合法 JSON。
+
+```python
+import json
+from openai import OpenAI
+
+client = OpenAI()
+
+resp = client.chat.completions.create(
+    model="gpt-4o-mini",
+    messages=[
+        {"role": "system", "content": "你是一个信息抽取器，只输出 JSON。"},
+        {"role": "user", "content": "小明今年 18 岁，住在北京。"},
+    ],
+    response_format={"type": "json_object"},  # 原生 JSON Mode
+    temperature=0,
+)
+
+data = json.loads(resp.choices[0].message.content)
+print(data)
+```
+
+注意：原生 JSON Mode 通常只保证“**合法 JSON**”，不保证“**字段完全符合你的 schema**”。所以还要做校验。
+
+---
+
+## 4. 用 JSON Schema 做结构化输出与校验
+
+更工程化的做法是：先定义 **JSON Schema（JSON 模式定义）**，再让模型按 schema 输出，最后用 `jsonschema` 校验。
+
+```python
+import json
+from jsonschema import validate, ValidationError
+
+schema = {
+    "type": "object",
+    "properties": {
+        "name": {"type": "string"},
+        "age": {"type": "integer", "minimum": 0},
+        "city": {"type": "string"},
+    },
+    "required": ["name", "age", "city"],
+    "additionalProperties": False,
+}
+
+raw = '{"name": "小明", "age": 18, "city": "北京"}'
+data = json.loads(raw)
+
+try:
+    validate(instance=data, schema=schema)
+    print("校验通过：", data)
+except ValidationError as e:
+    print("校验失败：", e.message)
+```
+
+工程要点：
+
+- `required` 强制字段存在。
+- `additionalProperties: False` 禁止模型乱加字段。
+- `minimum` 等约束可做业务规则。
+
+---
+
+## 5. 在 Agent 中的典型用法：工具调用与重试
+
+Agent 常把 LLM 输出当作“决策数据”，例如选择工具、填参数。JSON Mode 是这类链路的基础。
+
+```python
+import json
+from openai import OpenAI
+from jsonschema import validate, ValidationError
+
+client = OpenAI()
+
+schema = {
+    "type": "object",
+    "properties": {
+        "tool": {"type": "string", "enum": ["search", "calculate"]},
+        "args": {"type": "object"},
+    },
+    "required": ["tool", "args"],
+}
+
+def call_llm_for_tool(user_input: str):
+    resp = client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[
+            {"role": "system", "content": "你是工具选择器，只输出 JSON：{\"tool\": ..., \"args\": ...}"},
+            {"role": "user", "content": user_input},
+        ],
+        response_format={"type": "json_object"},
+        temperature=0,
+    )
+    return json.loads(resp.choices[0].message.content)
+
+for i in range(3):  # 最多重试 3 次
+    try:
+        data = call_llm_for_tool("北京天气怎么样？")
+        validate(instance=data, schema=schema)
+        print("可用决策：", data)
+        break
+    except (json.JSONDecodeError, ValidationError) as e:
+        print(f"第 {i+1} 次失败：{e}")
+else:
+    raise RuntimeError("模型连续输出非法 JSON")
+```
+
+关键结论：**JSON Mode + Schema 校验 + 重试** 才是生产级组合。
+
+---
+
+## 6. 常见坑与最佳实践
+
+- 温度设为 0 或很低，减少格式漂移。
+- 系统提示里明确“只输出 JSON，不要 Markdown 代码块”。
+- 即使开启 JSON Mode，也要 try/except + schema 校验。
+- 不要用 `eval()` 解析输出，用 `json.loads()`。
+- 字段名用英文、稳定、少用嵌套；嵌套越深，模型越容易错。
+
+---
+
+## 动手练习
+
+**任务**：写一个 Python 脚本 `extract.py`，输入一段中文自我介绍（例如“我叫李雷，28 岁，是一名 Python 工程师，住在上海”），调用任意支持 JSON Mode 的 LLM API，输出并打印如下 JSON：
+
+```json
+{
+  "name": "李雷",
+  "age": 28,
+  "job": "Python 工程师",
+  "city": "上海"
+}
+```
+
+要求：
+
+1. 使用 `response_format={"type": "json_object"}`。
+2. 定义 JSON Schema，要求 `name`、`age`、`job`、`city` 必填，`age` 为整数且 ≥ 0。
+3. 用 `jsonschema.validate` 校验，失败时重试最多 3 次。
+4. 把最终结果写入 `result.json`。
+
+完成后思考：如果模型返回了 `"age": "28"`（字符串），你的代码会怎样？如何修复？
+
+
+---
+
+## 本课题目
+
+### single_choice · None
+
+
+
+- [A] 在提示词中说明希望返回 JSON，然后直接对模型输出做 json.loads，失败就重试
+- [B] 让模型自由发挥，再由人工整理格式
+- [C] 使用正则表达式从模型输出中尽可能抽取字段
+- [D] 完全不约束模型输出，让下游代码自行容错
+
+**参考答案**：0
+
+**解析**：结构化输出的核心是让模型按照可编程解析的格式返回，常见做法是提示词约束格式并配合解析与重试机制。
+
+### single_choice · None
+
+
+
+- [A] 要求模型输出自然语言描述，再让另一个模型改写为 JSON
+- [B] 约定固定的 JSON 字段名和类型，并只解析这些固定字段
+- [C] 允许模型每次返回不同字段名，程序动态适配
+- [D] 让模型把 JSON 嵌在 Markdown 代码块里，再人工复制
+
+**参考答案**：1
+
+**解析**：结构化输出应约定稳定的字段名和数据类型，这样程序才能可靠解析。
+
+### single_choice · None
+
+
+
+- [A] 结构化输出一定比普通文本输出更短
+- [B] 结构化输出强调格式可预测、可被程序解析，普通文本输出更自由
+- [C] 结构化输出只能用于英文
+- [D] 普通文本输出无法包含数字
+
+**参考答案**：1
+
+**解析**：结构化输出的关键差异在于格式约束和可解析性。
+
+### single_choice · None
+
+
+
+- [A] 只要 json.loads 成功就认为完全正确
+- [B] 解析后再检查必需字段是否存在、类型是否正确
+- [C] 只检查返回内容是否以 { 开头
+- [D] 依赖模型自己声明输出是否正确
+
+**参考答案**：1
+
+**解析**：解析成功只代表 JSON 合法，还需要校验字段和类型才能满足业务需求。
+
+### single_choice · None
+
+
+
+- [A] 忽略缺失字段，继续使用默认值
+- [B] 根据 schema 检测缺失并触发重试或报错
+- [C] 把所有字段都改为可选
+- [D] 让模型下次自动补上
+
+**参考答案**：1
+
+**解析**：结构化输出应依据 schema 校验完整性，缺失时重试或报错，而不是随意兜底。
+
+### single_choice · None
+
+
+
+- [A] 请返回 JSON，字段为 name 和 age
+- [B] 请以 JSON 格式返回结果
+- [C] 请用自然、优美的语言描述结果
+- [D] 请只返回 JSON 数组，不要其他文字
+
+**参考答案**：2
+
+**解析**：要求自然语言描述会鼓励模型输出自由文本，降低可解析性。
+
+### single_choice · None
+
+
+
+- [A] json
+- [B] re
+- [C] pydantic
+- [D] os
+
+**参考答案**：2
+
+**解析**：pydantic 常用于数据模型定义和结构校验；json 负责解析，re 负责正则，os 用于系统操作。
+
+### single_choice · None
+
+
+
+- [A] 成功解析，因为包含了 JSON 片段
+- [B] 抛出 JSONDecodeError，因为 JSON 前后有额外文本
+- [C] 自动提取 JSON 并解析
+- [D] 解析成空字典
+
+**参考答案**：1
+
+**解析**：json.loads 要求输入整体是合法 JSON，前后有额外文字会导致解析失败。
+
+### single_choice · None
+
+
+
+- [A] 在提示词中明确给出 JSON schema 或示例，并限制只输出 JSON
+- [B] 让模型自由发挥，程序做大量正则匹配
+- [C] 要求模型输出更长的解释
+- [D] 降低模型温度到 0 后仍不约束格式
+
+**参考答案**：0
+
+**解析**：明确 schema 或示例并限制输出格式，是提升结构化输出稳定性的关键。
+
+### single_choice · None
+
+
+
+- [A] 只要解析失败就无限重试，直到成功
+- [B] 解析失败后可以重试，但应设置次数上限并记录失败原因
+- [C] 解析失败后不应该重试，直接报错
+- [D] 重试时不需要修改提示词或参数
+
+**参考答案**：1
+
+**解析**：重试需要有限次并记录原因，避免无限循环，同时可调整提示词提高成功率。
+
+### single_choice · None
+
+
+
+- [A] 纯文本段落
+- [B] CSV 单行
+- [C] JSON 对象
+- [D] 逗号分隔的字符串
+
+**参考答案**：2
+
+**解析**：JSON 对象天然支持嵌套结构，适合表达复杂层级数据。
+
+### single_choice · None
+
+
+
+- [A] 字段越多越好，覆盖所有可能情况
+- [B] 字段名尽量使用中文，方便阅读
+- [C] 字段和类型应明确、稳定，避免歧义
+- [D] 让模型自行决定字段名
+
+**参考答案**：2
+
+**解析**：结构化输出要求字段和类型明确稳定，避免歧义，才能可靠解析。
+
+### single_choice · None
+
+
+
+- [A] 请详细描述这些数据
+- [B] 请返回类似 [{"id": 1, "title": "..."}] 的 JSON 数组
+- [C] 请用你喜欢的格式返回
+- [D] 请返回一个 HTML 表格
+
+**参考答案**：1
+
+**解析**：给出明确的 JSON 示例结构，可以显著提高模型输出可解析的概率。
+
+### single_choice · None
+
+
+
+- [A] 成功解析为字典
+- [B] 抛出 JSONDecodeError，因为包含 Markdown 代码块标记
+- [C] 自动忽略代码块并解析成功
+- [D] 解析成列表
+
+**参考答案**：1
+
+**解析**：json.loads 只接受合法 JSON 文本，Markdown 代码块标记会导致解析失败。
+
+### single_choice · None
+
+
+
+- [A] 直接让程序崩溃，提醒开发者
+- [B] 先尝试解析，失败后根据错误信息重新请求或提取关键片段再解析
+- [C] 忽略解析错误，返回 None
+- [D] 把模型输出保存到日志后不再处理
+
+**参考答案**：1
+
+**解析**：结构化输出需要容错机制：解析失败后重试或提取，可以提高系统稳定性。
+
+### single_choice · None
+
+
+
+- [A] 模式只是给人类看的文档，对模型输出没有影响
+- [B] 模式用于约束输出字段、类型和嵌套结构，便于程序校验和解析
+- [C] 模式可以保证模型永远不会返回错误内容
+- [D] 模式只能用于 XML，不能用于 JSON
+
+**参考答案**：1
+
+**解析**：模式定义了输出的字段、类型和结构，是校验和解析的重要依据。
+
+### single_choice · None
+
+
+
+- [A] 字符串 "true" 在 Python 中为真，所以逻辑判断可能出错
+- [B] Python 会自动把字符串转为布尔值 true
+- [C] json.loads 会拒绝解析字符串布尔值
+- [D] 布尔字段不能出现在 JSON 中
+
+**参考答案**：0
+
+**解析**：在 Python 中非空字符串为真，字符串 "true" 和 "false" 都会被当作真值，容易造成逻辑错误。
+
+### single_choice · None
+
+
+
+- [A] 让模型写一首自由发挥的诗歌
+- [B] 让模型从一段文本中抽取公司名称、日期和金额，并供程序入库
+- [C] 让模型进行开放式创意头脑风暴
+- [D] 让模型解释一个哲学概念
+
+**参考答案**：1
+
+**解析**：抽取固定字段并供程序处理，属于典型的结构化输出场景。
+
+### single_choice · None
+
+
+
+- [A] 减少模型的思考时间
+- [B] 避免额外文本干扰解析，提高输出可解析性
+- [C] 让模型输出更短
+- [D] 防止模型使用中文
+
+**参考答案**：1
+
+**解析**：额外解释会混入 JSON 前后，导致解析失败，因此需要限制输出内容。
+
+### single_choice · None
+
+
+
+- [A] {"name": "Alice"}
+- [B] [1, 2, 3]
+- [C] {'name': 'Alice'}
+- [D] {"ok": true}
+
+**参考答案**：2
+
+**解析**：JSON 标准要求键和字符串使用双引号，单引号不是合法 JSON。
+
+### single_choice · None
+
+
+
+- [A] 在提示词中随便提一句“请返回 JSON”，无需其他配置
+- [B] 启用接口提供的 JSON 输出模式（如 response_format 或等价参数）并配合清晰的提示词
+- [C] 让模型返回 Markdown 代码块，然后用正则去掉反引号
+- [D] 把 temperature 调到最大，模型更可能输出结构化内容
+
+**参考答案**：1
+
+**解析**：JSON 输出模式通过约束解码等方式强制模型产生合法 JSON，比单纯口头要求更可靠；但它通常仍需要提示词说明字段结构。仅靠提示词或正则清理在复杂场景下容易失败，temperature 与结构合规无关。
+
+### single_choice · None
+
+
+
+- [A] 开启后模型一定能返回符合你预期字段的 JSON，无需在提示词里描述字段
+- [B] 开启后模型只会输出合法 JSON 语法，但字段名和取值是否符合业务仍取决于提示词
+- [C] 开启后模型不再需要任何系统提示词
+- [D] 开启后模型会拒绝回答所有非结构化问题
+
+**参考答案**：1
+
+**解析**：JSON 模式保证的是“输出是语法合法的 JSON”，不保证 schema 符合业务。字段定义、枚举取值等需要提示词明确说明。选项 A 混淆了“语法合法”与“schema 正确”。
+
+### multi_choice · None
+
+
+
+- [A] 用 try/except 捕获 json 解析异常
+- [B] 对解析后的字典做字段和类型校验
+- [C] 对缺失或非法字段提供默认值或降级逻辑
+- [D] 信任模型输出，省略所有校验以提升性能
+- [E] 记录失败样本用于后续分析
+
+**参考答案**：[0, 1, 2, 4]
+
+**解析**：异常捕获、schema 校验、降级与日志记录都是标准实践。盲目信任模型输出会引入隐性故障，不是可接受的做法。
+
+### multi_choice · None
+
+
+
+- [A] 在请求参数中设置 response_format 为 json_object 之类的值
+- [B] 用 JSON schema 约束字段结构（部分服务支持 json_schema）
+- [C] 在提示词中写明“请以 JSON 格式输出”
+- [D] 把模型换成更贵的版本即可自动开启
+- [E] 用 pickle 序列化模型输出
+
+**参考答案**：[0, 1, 2]
+
+**解析**：常见的开启方式包括参数级 JSON 模式、部分服务的 JSON schema 约束，以及提示词层面的说明。换模型不会自动开启该模式，pickle 与模型输出无关。
+
+### fill_blank · None
+
+
+
+**参考答案**：["loads", "dumps", "loads 和 dumps", "loads/dumps", "JSON.loads/json.dumps", "json.loads/json.dumps"]
+
+**解析**：json.loads 用于把 JSON 字符串解析为 Python 对象，json.dumps 用于把 Python 对象序列化为 JSON 字符串。注意与 load/dump（面向文件对象）区分。
+
+### fill_blank · None
+
+
+
+**参考答案**：["response_format", "response_format=json_object", "response_format json_object", "response_format, json_object"]
+
+**解析**：主流接口使用 response_format 参数，常见取值形如 {"type": "json_object"} 或 json_object。不同厂商命名可能略有差异，但 response_format 是较通用的参数名。
+
+### fill_blank · None
+
+
+
+**参考答案**：["双引号", "双引号", "\"", "double quote", "双引号（double quote）"]
+
+**解析**：JSON 规范要求键和字符串值使用双引号，单引号不是合法 JSON。这一点常与 Python 字典字面量混淆。
+
+### code_reading · None
+
+
+
+**参考答案**：输出 '<class \'dict\'> 3'。json.loads 把 JSON 字符串解析成 Python 字典，d 的类型是 dict，d["a"]+d["b"] 即 1+2=3。
+
+**解析**：json.loads 将 JSON 文本解析为对应的 Python 对象；对象解析为 dict，数字解析为 int。因此结果为字典类型和整数 3。
+
+### code_reading · None
+
+
+
+**参考答案**：输出 '{"name": "Tom", "age": 3}'（键顺序可能不同）。ensure_ascii=False 允许非 ASCII 字符（如中文）以原字符形式输出，而不是转义为 \uXXXX。
+
+**解析**：json.dumps 默认 ensure_ascii=True，会把非 ASCII 字符转义。设为 False 后可保留原字符，便于阅读和调试。注意本示例全是 ASCII，差异在中文场景才明显。
+
+### code_reading · None
+
+
+
+**参考答案**：会打印 JSONDecodeError（或它的子类名）。因为 '{'a': 1}' 使用单引号，不是合法 JSON，json.loads 抛出 JSONDecodeError。
+
+**解析**：JSON 标准要求双引号。Python 的 json 模块解析单引号时会报错，异常类型为 json.JSONDecodeError（继承自 ValueError）。这是区分“Python 字面量”和“JSON 文本”的典型案例。
+
+### scenario · None
+
+
+
+**解析**：参考要点：开启 JSON 输出模式约束语法；用提示词明确字段 schema（意图枚举、必填字段等）；对返回结果做 json 解析与 schema 校验；解析或校验失败时把错误作为提示进行有限次重试，必要时降级到人工或澄清追问；对失败样本做日志以便迭代。
+
+### scenario · None
+
+
+
+**解析**：参考要点：确认已开启 JSON 输出模式；对返回做轻量预处理（如剥离 Markdown 代码块围栏）后再解析；解析失败时重试并设置次数上限；加入 schema 校验；用日志和监控观察失败率与错误类型，必要时调整提示词或模型；仍失败时走降级路径（如澄清追问或人工）。
+
+### single_choice · None
+
+
+
+- [A] 该接口用关键词判断你是否真的想要 JSON，是一种防误用约束
+- [B] “JSON”这个词能提高模型智商
+- [C] 不写这个词模型会返回二进制
+- [D] 这是 Python 语法要求，与模型无关
+
+**参考答案**：0
+
+**解析**：部分服务要求提示词中出现 JSON 关键词，是为了防止开发者误开 JSON 模式而提示词与格式不匹配。它是接口约束，不是模型能力或 Python 语法要求。
+
+### single_choice · None
+
+
+
+- [A] age 必须是字符串
+- [B] 末尾多了一个逗号，导致不是合法 JSON
+- [C] name 应该用单引号
+- [D] 数字不能出现在 JSON 中
+
+**参考答案**：1
+
+**解析**：JSON 不允许尾随逗号。name 用双引号是正确的，数字 3 是合法 JSON 值。此类错误常见于模型在非严格模式下生成的内容。
+
+### single_choice · None
+
+
+
+- [A] 假设返回永远是合法 JSON，直接 json.loads
+- [B] 对解析结果做 try/except 并用 schema 校验字段
+- [C] 把返回结果直接写入数据库，不做检查
+- [D] 用 eval() 代替 json.loads 以兼容更多格式
+
+**参考答案**：1
+
+**解析**：任何外部输出都应视为不可信，捕获解析异常并校验 schema 是标准做法。eval() 有安全风险，不能替代 json.loads。
+
+### single_choice · None
+
+
+
+- [A] 只说“请输出 JSON”
+- [B] 用示例或 schema 明确列出字段名、类型和取值范围
+- [C] 把字段名藏在对话历史里让模型自己猜
+- [D] 只给出一个字段的示例
+
+**参考答案**：1
+
+**解析**：JSON 模式只约束语法，字段结构需要提示词给出。用示例或明确的 schema 描述是最可靠的方式。其他选项会导致字段缺失或结构漂移。
+
+### single_choice · None
+
+
+
+- [A] 两者完全相同，只是叫法不同
+- [B] JSON 模式约束输出语法，函数调用让模型选择并填充预定工具的参数结构
+- [C] 函数调用返回的一定是合法 JSON，JSON 模式返回的一定不是
+- [D] JSON 模式只能用于聊天，函数调用只能用于补全
+
+**参考答案**：1
+
+**解析**：JSON 模式聚焦于“输出是 JSON”；函数调用/工具调用则是模型按预定义工具 schema 生成参数，通常也是结构化输出，但语义目标不同。两者并非同一机制。
+
+### single_choice · None
+
+
+
+- [A] 解析失败就直接放弃
+- [B] 解析失败时把错误信息作为提示再让模型修正，设置重试上限
+- [C] 无限重试直到成功
+- [D] 解析失败时改用 eval() 尝试
+
+**参考答案**：1
+
+**解析**：把具体解析错误反馈给模型进行自我修正，并设置次数上限，是常见且实用的退化策略。无限重试浪费资源，eval() 不安全，直接放弃则丧失可用性。
+
+### multi_choice · None
+
+
+
+- [A] 开启接口提供的 JSON 输出模式
+- [B] 在提示词中明确字段名、类型和示例
+- [C] 把 temperature 调高以增加多样性
+- [D] 对返回结果做解析校验并在失败时重试
+- [E] 把提示词写得越模糊越好，让模型自由发挥
+
+**参考答案**：[0, 1, 3]
+
+**解析**：开启 JSON 模式、明确 schema、失败重试都能提升结构化输出的可靠性。调高 temperature 会增加随机性，模糊提示词会削弱结构约束，二者都降低成功率。
+
+### multi_choice · None
+
+
+
+- [A] 它保证 JSON 语法合法，但不保证字段符合业务 schema
+- [B] 开启后模型可能仍会输出额外字段，需要程序侧校验
+- [C] 它能让模型输出任何格式，包括 XML 和 YAML
+- [D] 在流式输出场景下，增量片段未必每段都是完整 JSON
+- [E] 开启后模型不再需要提示词
+
+**参考答案**：[0, 1, 3]
+
+**解析**：JSON 模式约束语法不约束语义，可能多字段，流式场景增量片段不是完整对象。它不能输出任意格式（那是与 JSON 模式互斥的目标），也不能省略提示词。

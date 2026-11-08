@@ -1,0 +1,636 @@
+{
+  "id": "s3u4l3",
+  "title": "s3u4l3",
+  "kps": [
+    "py.async.gather",
+    "py.async.wait"
+  ],
+  "theory": "## py.async.gather\n\n## 一句话直觉\n\n`asyncio.gather` 让你**同时发起多个 IO 等待**，然后一次性把它们的结果收集齐——比如同时下载 10 张图片，总耗时约等于最慢的那一张，而不是 10 张加起来。\n\n---\n\n## 1. 先理解「协程」和「事件循环」\n\n`async def` 定义的函数叫**协程函数**（coroutine function），调用它并不会立刻执行，而是返回一个**协程对象**（coroutine object）。协程只有在被 **`await`** 或被事件循环调度时才会真正跑起来。\n\n- **事件循环**（event loop）：asyncio 的「调度中心」，负责在等待 IO 时切走、IO 就绪时切回。\n- **`asyncio.run(main())`**：启动事件循环，跑完 `main` 再关闭，是程序的入口。\n\n```python\nimport asyncio\n\nasync def main():\n    print('Hello ...')\n    await asyncio.sleep(1)  # 挂起 1 秒，期间事件循环可以去做别的事\n    print('... World!')\n\nasyncio.run(main())\n```\n\n**关键点**：`await` 不是「阻塞等待」，而是「挂起自己，把控制权交还事件循环」。\n\n---\n\n## 2. 顺序 await 的问题：时间被白白叠加\n\n最直觉的写法是先 `await` 第一个、再 `await` 第二个。但它们**不是在等待中并行**，而是严格串行。\n\n```python\nimport asyncio, time\n\nasync def fetch(name, delay):\n    await asyncio.sleep(delay)   # 模拟一次网络 IO\n    return f'{name} done'\n\nasync def main():\n    t0 = time.perf_counter()\n    r1 = await fetch('A', 1)     # 等 1 秒\n    r2 = await fetch('B', 1)     # 再等 1 秒\n    print(r1, r2, f'{time.perf_counter() - t0:.2f}s')\n\nasyncio.run(main())\n# 输出大约：A done B done 2.00s\n```\n\n**关键点**：串行 `await` 的总耗时是各任务之和。IO 密集场景下这非常浪费。\n\n---\n\n## 3. `asyncio.gather`：并发收集结果\n\n`asyncio.gather(*aws)` 接收多个 **awaitable**（协程、Task、Future），把它们**同时调度**到事件循环上，等全部完成后返回一个**结果列表**，顺序与传入顺序一致。\n\n```python\nimport asyncio, time\n\nasync def fetch(name, delay):\n    await asyncio.sleep(delay)\n    return f'{name} done'\n\nasync def main():\n    t0 = time.perf_counter()\n    results = await asyncio.gather(\n        fetch('A', 1),\n        fetch('B', 1),\n        fetch('C', 1),\n    )\n    print(results)\n    print(f'{time.perf_counter() - t0:.2f}s')\n\nasyncio.run(main())\n# 输出大约：['A done', 'B done', 'C done']  1.00s\n```\n\n**关键点**：三个任务共享同一个 1 秒等待窗口，总耗时 ≈ 1 秒而非 3 秒。返回值是**列表**，顺序和传入顺序一致，和谁先完成无关。\n\n---\n\n## 4. 用列表动态传入任务\n\n实际工程里任务数量往往不固定。`gather` 支持 `*args` 解包，所以把协程放进列表再 `*` 展开即可。\n\n```python\nimport asyncio, time\n\nasync def fetch(i):\n    await asyncio.sleep(0.5)\n    return i * i\n\nasync def main():\n    tasks = [fetch(i) for i in range(5)]  # 注意：这里还没开始跑\n    results = await asyncio.gather(*tasks)\n    print(results)   # [0, 1, 4, 9, 16]\n\nasyncio.run(main())\n```\n\n**关键点**：构造协程对象本身不执行任何事；真正「开始」发生在 `gather` 调度它们的瞬间。\n\n---\n\n## 5. 错误处理与 `return_exceptions`\n\n默认情况下，只要**任何一个任务抛异常**，`gather` 会立刻把该异常抛出，其余任务虽然继续跑，但它们的结果你不会拿到。工程上常用 `return_exceptions=True` 让所有任务都跑完，异常作为**结果项**返回。\n\n```python\nimport asyncio\n\nasync def ok():\n    return 'OK'\n\nasync def boom():\n    raise ValueError('出错了')\n\nasync def main():\n    # 默认：第一个异常直接向上抛\n    try:\n        await asyncio.gather(ok(), boom())\n    except ValueError as e:\n        print('默认捕获到:', e)\n\n    # 收集模式：异常作为结果返回\n    results = await asyncio.gather(ok(), boom(), return_exceptions=True)\n    print(results)   # ['OK', ValueError('出错了')]\n\nasyncio.run(main())\n```\n\n**关键点**：`return_exceptions=True` 是「不中断、全收集」的模式；`except` 时要判断类型。\n\n---\n\n## 6. 进阶：`gather` 返回的 Future 与取消\n\n`gather` 返回一个 **Future**（`asyncio.Future`）。在 await 它之前，你其实已经持有它了；可以调用 `.cancel()` 取消整体。协程默认**不被事件循环持有**，`gather` 会先把它们包装成 **Task** 再调度——所以取消才能穿透。\n\n```python\nimport asyncio\n\nasync def slow():\n    await asyncio.sleep(5)\n    return 'never'\n\nasync def main():\n    fut = asyncio.gather(slow(), slow())\n    loop = asyncio.get_running_loop()\n    loop.call_later(0.5, fut.cancel)   # 半秒后取消全部\n    try:\n        await fut\n    except asyncio.CancelledError:\n        print('已被取消')\n\nasyncio.run(main())\n```\n\n**关键点**：`gather` 的返回对象可被当作句柄；取消它会连带取消内部所有子任务。\n\n---\n\n## 7. 与 `asyncio.TaskGroup`（3.11+）的关系\n\nPython 3.11 引入了结构化并发的 **`TaskGroup`**，语义上比 `gather` 更严格：任务必须全部成功，否则整体取消。`gather` 依然适合「我要逐个收结果、允许部分失败」的场景。\n\n```python\nimport asyncio\n\nasync def fetch(i):\n    await asyncio.sleep(0.1)\n    return i\n\nasync def main():\n    async with asyncio.TaskGroup() as tg:\n        t1 = tg.create_task(fetch(1))\n        t2 = tg.create_task(fetch(2))\n    print(t1.result(), t2.result())   # 1 2\n\nasyncio.run(main())\n```\n\n**关键点**：`gather` 是「收集式」；`TaskGroup` 是「团队式」（一个失败，全体取消）。二者互补。\n\n---\n\n## 8. 小结\n\n| 场景 | 推荐写法 |\n|---|---|\n| 定长并发、需要结果列表 | `await asyncio.gather(*coros)` |\n| 允许部分失败 | `await asyncio.gather(*coros, return_exceptions=True)` |\n| 失败即全体取消 | `async with asyncio.TaskGroup()` |\n| 需要任务句柄 | `task = asyncio.create_task(coro)` |\n\n---\n\n## 动手练习\n\n写一个脚本 `bench_gather.py`：\n\n1. 定义 `async def fetch(url_id: int) -> str`，内部 `await asyncio.sleep(random.uniform(0.5, 1.5))`，返回 `f'url_{url_id} 响应完成'`。\n2. 用**串行 await** 跑 5 个 `fetch`，记录耗时。\n3. 用 **`asyncio.gather`** 跑同样 5 个 `fetch`，记录耗时。\n4. 打印两次耗时，并解释为什么 `gather` 那次大约只有串行的一半以内。\n5. 加分项：把其中一个 `fetch` 改成抛异常，分别测试默认行为和 `return_exceptions=True` 的行为，打印结果。\n\n运行方式：`python bench_gather.py`（Python 3.10+ 均可）。\n\n```python\nimport asyncio\nimport random\nimport time\n\n\nasync def fetch(url_id: int) -> str:\n    \"\"\"模拟一次耗时的网络请求。\"\"\"\n    await asyncio.sleep(random.uniform(0.5, 1.5))\n    return f'url_{url_id} 响应完成'\n\n\nasync def serial() -> None:\n    t0 = time.perf_counter()\n    results = [await fetch(i) for i in range(5)]  # 串行 await\n    print('串行结果:', results)\n    print(f'串行耗时: {time.perf_counter() - t0:.2f}s')\n\n\nasync def concurrent() -> None:\n    t0 = time.perf_counter()\n    results = await asyncio.gather(*(fetch(i) for i in range(5)))\n    print('并发结果:', results)\n    print(f'并发耗时: {time.perf_counter() - t0:.2f}s')\n\n\nasync def main() -> None:\n    await serial()\n    print('-' * 30)\n    await concurrent()\n\n\nif __name__ == '__main__':\n    asyncio.run(main())\n```\n\n## py.async.wait\n\n# py.async.wait：让协程并发但不失控\n\n## 一句话直觉\n\n> 你有一堆异步任务要并发跑，但你不想让它们无限等待——`asyncio.wait()` 就是你的“超时控制器”和“第一个完成就继续”的工具。\n\n---\n\n## 1. 为什么需要 asyncio.wait？\n\n在 Python 异步编程中，`asyncio` 是标准库提供的异步 I/O（Asynchronous I/O）框架。你可以用 `async def` 定义**协程（coroutine）**，用 `await` 等待它执行。\n\n但问题来了：如果你有 10 个网络请求，一个一个 `await`，总耗时是它们的和——这太慢了。你需要**并发（concurrency）**。\n\n`asyncio.gather()` 可以并发等待所有任务，但它有个限制：**你必须等全部完成**。如果你只想要“谁先完成就先处理谁”，或者“最多等 3 秒，没完成的就放弃”，`gather()` 就做不到了。\n\n这时候 `asyncio.wait()` 登场。它是 `asyncio` 中用于**并发等待多个任务（Task）或 Future** 的低层但灵活的工具。\n\n```python\n# 对比：gather 必须等全部完成\nresults = await asyncio.gather(task1, task2, task3)  # 全部完成才返回\n\n# wait 可以控制等待条件\ndone, pending = await asyncio.wait(\n    [task1, task2, task3],\n    timeout=3.0,                  # 最多等 3 秒\n    return_when=asyncio.FIRST_COMPLETED  # 有一个完成就返回\n)\n# done 是已完成的任务集合，pending 是还没完成的任务集合\n```\n\n---\n\n## 2. 基本用法：三个关键参数\n\n`asyncio.wait()` 的签名（简化版）如下：\n\n```python\nasyncio.wait(aws, *, timeout=None, return_when=ALL_COMPLETED)\n```\n\n### 参数说明\n\n| 参数 | 含义 | 默认值 |\n|------|------|--------|\n| `aws` | 可等待对象（awaitable）的**可迭代集合**，通常是 `Task` 或 `Future` | 必填 |\n| `timeout` | 超时秒数（float），超时后未完成的任务会被放入 `pending` | `None`（永不超时） |\n| `return_when` | 何时返回，有三个常量 | `ALL_COMPLETED` |\n\n### `return_when` 的三个取值\n\n- `asyncio.ALL_COMPLETED`：所有任务完成才返回（默认）\n- `asyncio.FIRST_COMPLETED`：任意一个任务完成就返回\n- `asyncio.FIRST_EXCEPTION`：任意一个任务**抛出异常**就返回；如果都没异常，则等全部完成\n\n### 返回值\n\n返回一个**二元组** `(done, pending)`：\n\n- `done`：已完成的任务集合（`set` of `Task`）\n- `pending`：未完成的任务集合（`set` of `Task`）\n\n> ⚠️ 注意：`wait()` **不会取消** `pending` 中的任务。你需要自己决定是否 `cancel()` 它们。\n\n```python\nimport asyncio\n\nasync def worker(name: str, delay: float) -> str:\n    \"\"\"一个模拟耗时的异步任务。\"\"\"\n    await asyncio.sleep(delay)\n    return f\"{name} 完成（耗时 {delay}s）\"\n\nasync def main():\n    # 创建 3 个任务\n    tasks = [\n        asyncio.create_task(worker(\"A\", 1.0)),\n        asyncio.create_task(worker(\"B\", 2.0)),\n        asyncio.create_task(worker(\"C\", 0.5)),\n    ]\n\n    # 等待第一个完成\n    done, pending = await asyncio.wait(\n        tasks,\n        return_when=asyncio.FIRST_COMPLETED\n    )\n\n    print(f\"已完成: {len(done)} 个, 未完成: {len(pending)} 个\")\n    for t in done:\n        print(\"  ->\", t.result())\n\n    # 取消剩余任务\n    for t in pending:\n        t.cancel()\n    await asyncio.gather(*pending, return_exceptions=True)\n\nasyncio.run(main())\n```\n\n---\n\n## 3. 超时控制：timeout 参数的威力\n\n`timeout` 是 `wait()` 区别于 `gather()` 的核心能力之一。设想你在写一个爬虫，某个网站响应极慢，你不想无限等下去。\n\n```python\nimport asyncio\nimport time\n\nasync def fetch(url: str, delay: float) -> str:\n    \"\"\"模拟网络请求。\"\"\"\n    await asyncio.sleep(delay)\n    return f\"{url} 响应成功\"\n\nasync def main():\n    start = time.perf_counter()\n\n    tasks = [\n        asyncio.create_task(fetch(\"site-fast.com\", 0.5)),\n        asyncio.create_task(fetch(\"site-slow.com\", 5.0)),   # 很慢\n        asyncio.create_task(fetch(\"site-medium.com\", 1.5)),\n    ]\n\n    done, pending = await asyncio.wait(tasks, timeout=2.0)\n\n    elapsed = time.perf_counter() - start\n    print(f\"实际耗时: {elapsed:.2f}s\")  # 约 2 秒，而不是 5 秒\n    print(f\"成功: {len(done)} 个, 超时: {len(pending)} 个\")\n\n    for t in done:\n        print(\"  ✓\", t.result())\n\n    # 超时的任务必须取消，否则会继续在后台运行\n    for t in pending:\n        t.cancel()\n        print(\"  ✗ 已取消:\", t.get_name())\n\n    await asyncio.gather(*pending, return_exceptions=True)\n\nasyncio.run(main())\n```\n\n**关键结论**：`timeout` 到点后，`wait()` 立即返回，但 `pending` 里的任务**仍在事件循环中运行**。不取消它们，程序退出时可能报 `Task was destroyed but it is pending!` 警告。\n\n---\n\n## 4. 实战模式：谁先完成就用谁（竞速）\n\n一个经典场景：你有多个数据源（比如多个镜像站点），想取**最快响应**的那个结果。\n\n```python\nimport asyncio\nimport random\n\nasync def mirror_fetch(mirror: str) -> str:\n    \"\"\"模拟从镜像站取数据，响应时间随机。\"\"\"\n    delay = random.uniform(0.3, 2.0)\n    await asyncio.sleep(delay)\n    return f\"数据来自 {mirror}（{delay:.2f}s）\"\n\nasync def main():\n    mirrors = [\"mirror-1\", \"mirror-2\", \"mirror-3\", \"mirror-4\"]\n    tasks = [asyncio.create_task(mirror_fetch(m)) for m in mirrors]\n\n    done, pending = await asyncio.wait(\n        tasks,\n        return_when=asyncio.FIRST_COMPLETED\n    )\n\n    # 取第一个完成的结果\n    winner = next(iter(done))\n    print(\"最快结果:\", winner.result())\n\n    # 取消其他的\n    for t in pending:\n        t.cancel()\n    await asyncio.gather(*pending, return_exceptions=True)\n\nasyncio.run(main())\n```\n\n---\n\n## 5. 与 gather 的对比与选择\n\n| 特性 | `asyncio.wait()` | `asyncio.gather()` |\n|------|------------------|---------------------|\n| 等待条件 | 可配置（全部/首个/首个异常） | 固定：全部完成 |\n| 超时支持 | ✅ `timeout` 参数 | ❌ 需配合 `asyncio.wait_for()` |\n| 返回值 | `(done, pending)` 集合 | 结果列表（保持顺序） |\n| 异常处理 | 需手动检查 | 可 `return_exceptions=True` |\n| 适合场景 | 竞速、超时控制、部分完成就处理 | 批量等待全部结果 |\n\n**选择原则**：\n- 要全部结果 → `gather()`\n- 要超时控制或首个完成 → `wait()`\n- 要取消超时任务，`wait()` + 手动 `cancel()`\n\n---\n\n## 6. Python 3.11+ 的变化（工程级注意）\n\n> **重要**：Python 3.11 起，`asyncio.wait()` **不再接受协程（coroutine）对象**，必须传入 `Task` 或 `Future`。\n\n```python\n# ❌ Python 3.11+ 会报 TypeError\nawait asyncio.wait([my_coro(), my_coro()])\n\n# ✅ 必须用 create_task 包装\nawait asyncio.wait([\n    asyncio.create_task(my_coro()),\n    asyncio.create_task(my_coro()),\n])\n```\n\n在 3.8 之前会隐式包装成 Task，但 3.8 起弃用，3.11 起移除。这是生产代码中最容易踩的坑。\n\n---\n\n## 7. 动手练习\n\n**任务**：写一个“多源竞速下载器”。\n\n要求：\n1. 定义 `async def fake_download(source: str, delay: float) -> str`，`await asyncio.sleep(delay)` 后返回 `f\"{source} 下载完成\"`。\n2. 创建 5 个任务，delay 分别在 0.5 到 5.0 秒之间随机。\n3. 用 `asyncio.wait()` 设置 **3 秒超时**，`return_when=FIRST_COMPLETED`。\n4. 打印：\n   - 总耗时\n   - 已完成的任务及其结果\n   - 超时/未完成的任务数量\n5. 取消所有 `pending` 任务，并用 `asyncio.gather(*pending, return_exceptions=True)` 等待清理。\n\n**进阶挑战**：改成“**先完成 2 个就返回**”的行为。提示：循环调用 `wait()`，每次从 `pending` 中剔除已完成的，直到 `done` 累计到 2 个。\n\n参考代码框架：\n\n```python\nimport asyncio\nimport random\nimport time\n\nasync def fake_download(source: str, delay: float) -> str:\n    await asyncio.sleep(delay)\n    return f\"{source} 下载完成\"\n\nasync def main():\n    sources = [f\"source-{i}\" for i in range(1, 6)]\n    tasks = [\n        asyncio.create_task(fake_download(s, random.uniform(0.5, 5.0)))\n        for s in sources\n    ]\n\n    start = time.perf_counter()\n    done, pending = await asyncio.wait(tasks, timeout=3.0)\n    elapsed = time.perf_counter() - start\n\n    print(f\"总耗时: {elapsed:.2f}s\")\n    print(f\"已完成 {len(done)} 个, 未完成 {len(pending)} 个\")\n    for t in done:\n        print(\"  ✓\", t.result())\n\n    for t in pending:\n        t.cancel()\n    await asyncio.gather(*pending, return_exceptions=True)\n\nasyncio.run(main())\n```\n\n```python\nimport asyncio\nimport random\nimport time\n\nasync def fake_download(source: str, delay: float) -> str:\n    \"\"\"模拟异步下载，延迟 delay 秒后返回结果。\"\"\"\n    await asyncio.sleep(delay)\n    return f\"{source} 下载完成（耗时 {delay:.2f}s）\"\n\nasync def main():\n    sources = [f\"source-{i}\" for i in range(1, 6)]\n    delays = [random.uniform(0.5, 5.0) for _ in sources]\n\n    # 创建任务（Python 3.11+ 必须传入 Task，不能传协程对象）\n    tasks = [\n        asyncio.create_task(fake_download(s, d))\n        for s, d in zip(sources, delays)\n    ]\n\n    start = time.perf_counter()\n    # 超时 3 秒，首个完成就返回\n    done, pending = await asyncio.wait(\n        tasks,\n        timeout=3.0,\n        return_when=asyncio.FIRST_COMPLETED,\n    )\n    elapsed = time.perf_counter() - start\n\n    print(f\"总耗时: {elapsed:.2f}s\")\n    print(f\"已完成 {len(done)} 个, 未完成 {len(pending)} 个\")\n    for t in done:\n        print(\"  ✓\", t.result())\n\n    # 取消未完成的任务，避免后台悬挂\n    for t in pending:\n        t.cancel()\n    await asyncio.gather(*pending, return_exceptions=True)\n\nasyncio.run(main())\n```\n",
+  "quiz": [
+    {
+      "kp": "py.async.gather",
+      "type": "single_choice",
+      "question": "关于 asyncio.gather，以下描述正确的是？",
+      "options": [
+        "它接收一组协程或可等待对象，并发调度它们，并返回一个按传入顺序排列的结果列表",
+        "它只能接收一个协程，返回该协程的返回值",
+        "它接收一组可调用对象，在事件循环中顺序执行它们",
+        "它返回一个协程对象，必须再被 run 一次才会开始执行"
+      ],
+      "answer": 0,
+      "explanation": "asyncio.gather 接收多个 awaitable（协程、Task、Future），并发调度并按传入顺序返回结果列表，本身是一个可等待对象。",
+      "error_tag": "概念混淆",
+      "variant_group": "gather.basic"
+    },
+    {
+      "kp": "py.async.gather",
+      "type": "single_choice",
+      "question": "以下代码执行后输出是什么？\n\nimport asyncio\n\nasync def f(x):\n    await asyncio.sleep(0.01)\n    return x * 2\n\nasync def main():\n    r = await asyncio.gather(f(1), f(2), f(3))\n    print(r)\n\nasyncio.run(main())",
+      "options": [
+        "[2, 4, 6]",
+        "[6, 4, 2]",
+        "2",
+        "(2, 4, 6)"
+      ],
+      "answer": 0,
+      "explanation": "gather 按传入顺序收集结果并返回 list，因此是 [2, 4, 6]。返回类型是 list 而不是 tuple。",
+      "error_tag": "返回值类型/顺序误判",
+      "variant_group": "gather.result_order"
+    },
+    {
+      "kp": "py.async.gather",
+      "type": "single_choice",
+      "question": "在 gather 的结果 Future 被取消（例如外层 await 被取消）时，下列描述正确的是？",
+      "options": [
+        "默认情况下，gather 内部尚未完成的子任务也会被取消",
+        "子任务完全不受影响，会一直运行到结束",
+        "子任务会自动重新启动一遍",
+        "只有第一个子任务会被取消，其他继续运行"
+      ],
+      "answer": 0,
+      "explanation": "gather 的 Future 被取消时，会将取消传播给所有尚未完成的子任务（如它们尚未完成）。",
+      "error_tag": "取消语义误解",
+      "variant_group": "gather.cancellation"
+    },
+    {
+      "kp": "py.async.gather",
+      "type": "single_choice",
+      "question": "下面场景中，最应该使用 asyncio.gather 的是？",
+      "options": [
+        "同时发起多个独立的网络请求，等全部返回后汇总结果",
+        "顺序执行多个有依赖关系的步骤",
+        "用多线程加速 CPU 密集型计算",
+        "在同步函数中阻塞等待多个线程结束"
+      ],
+      "answer": 0,
+      "explanation": "gather 适合并发等待多个相互独立的 I/O 任务并汇总结果；有依赖步骤应顺序 await；CPU 密集型应使用多进程。",
+      "error_tag": "适用场景误判",
+      "variant_group": "gather.use_case"
+    },
+    {
+      "kp": "py.async.gather",
+      "type": "single_choice",
+      "question": "以下两种写法的差别是什么？\n\n# 写法一\nawait asyncio.gather(f(1), f(2))\n\n# 写法二\nawait f(1)\nawait f(2)",
+      "options": [
+        "写法一并发执行两个 f，写法二顺序执行",
+        "写法一顺序执行，写法二并发执行",
+        "两种写法完全等价",
+        "写法一会在两个线程中运行，写法二在主线程运行"
+      ],
+      "answer": 0,
+      "explanation": "gather 把两个协程并发调度，而两次独立 await 是顺序等待。",
+      "error_tag": "语义对比错误",
+      "variant_group": "gather.vs_sequential"
+    },
+    {
+      "kp": "py.async.gather",
+      "type": "single_choice",
+      "question": "关于 asyncio.gather 与 asyncio.wait 的对比，正确的是？",
+      "options": [
+        "gather 直接返回按传入顺序的结果列表；wait 返回 (done, pending) 两个集合",
+        "gather 返回 (done, pending)；wait 返回结果列表",
+        "两者返回结构相同，只是参数名不同",
+        "wait 不能处理协程，只能处理 Task"
+      ],
+      "answer": 0,
+      "explanation": "gather 返回结果列表；wait 返回已完成和未完成集合，需要自己从任务对象取结果。",
+      "error_tag": "API 对比混淆",
+      "variant_group": "gather.vs_wait"
+    },
+    {
+      "kp": "py.async.gather",
+      "type": "single_choice",
+      "question": "有一个协程 f 会随机失败。希望无论失败与否都拿到全部 5 个结果，下面做法最合适的是？",
+      "options": [
+        "asyncio.gather(*[f(i) for i in range(5)], return_exceptions=True)",
+        "for i in range(5): await f(i)",
+        "asyncio.gather(*[f(i) for i in range(5)])",
+        "asyncio.wait([f(i) for i in range(5)])"
+      ],
+      "answer": 0,
+      "explanation": "return_exceptions=True 让异常也作为结果返回，配合 gather 可以拿到全部 5 项结果。",
+      "error_tag": "异常参数误用",
+      "variant_group": "gather.exceptions"
+    },
+    {
+      "kp": "py.async.gather",
+      "type": "single_choice",
+      "question": "下面代码中，如果 f(2) 抛异常且 return_exceptions 为默认值，f(1) 和 f(3) 会怎样？\n\nawait asyncio.gather(f(1), f(2), f(3))",
+      "options": [
+        "它们不会被自动取消，仍会继续运行到结束，但结果无法通过 gather 返回值获取",
+        "它们会立即被取消",
+        "它们会被重新调度一次",
+        "只有 f(1) 会继续，f(3) 被取消"
+      ],
+      "answer": 0,
+      "explanation": "默认情况下异常向调用方传播，但 gather 不会取消其他子任务；只是返回值不再可用，需要自行管理任务引用。",
+      "error_tag": "取消语义误解",
+      "variant_group": "gather.exceptions"
+    },
+    {
+      "kp": "py.async.gather",
+      "type": "single_choice",
+      "question": "想用 gather 并发执行一个协程列表，正确的写法是？",
+      "options": [
+        "await asyncio.gather(*coros)",
+        "await asyncio.gather(coros)",
+        "await asyncio.gather(list(coros))",
+        "await asyncio.gather(*[coros])"
+      ],
+      "answer": 0,
+      "explanation": "gather 接收的是位置参数，需要把可迭代对象解包传入；直接传列表会被当成一个 awaitable 处理而报错。",
+      "error_tag": "参数解包错误",
+      "variant_group": "gather.args"
+    },
+    {
+      "kp": "py.async.gather",
+      "type": "single_choice",
+      "question": "以下关于 gather 参数的说法，正确的是？",
+      "options": [
+        "gather 接收多个位置参数，可以是协程、Task 或 Future",
+        "gather 只接收 Future，不能接收协程",
+        "gather 接收一个列表，元素必须是 Task",
+        "gather 接收关键字参数 coros=[...]"
+      ],
+      "answer": 0,
+      "explanation": "gather 的位置参数可以是协程、Task 或 Future，内部统一包装为 Future 调度。",
+      "error_tag": "API 参数误用",
+      "variant_group": "gather.args"
+    },
+    {
+      "kp": "py.async.gather",
+      "type": "single_choice",
+      "question": "下列关于 gather 的说法，错误的是？",
+      "options": [
+        "gather 会等待所有任务完成后才返回",
+        "gather 返回结果的顺序与传入顺序一致",
+        "gather 可以把协程包装成 Task 并发调度",
+        "gather 返回列表中的元素类型一定与每个任务的返回类型一致（return_exceptions=True 时异常对象除外）"
+      ],
+      "answer": 0,
+      "explanation": "在 return_exceptions=False 时，只要有一个任务抛异常，gather 会立刻向外抛出异常，不会等待其他任务完成，所以『等待所有完成后才返回』不成立。",
+      "error_tag": "行为误判",
+      "variant_group": "gather.semantics"
+    },
+    {
+      "kp": "py.async.gather",
+      "type": "single_choice",
+      "question": "关于在 gather 中混用已完成 Future 与未完成协程，正确的是？",
+      "options": [
+        "gather 会并发调度未完成者，已完成的 Future 直接取其结果，最终结果仍按传入顺序排列",
+        "不允许混用，会抛 TypeError",
+        "已完成的 Future 会被丢弃，结果列表中对应位置为 None",
+        "混用时会退化为顺序执行"
+      ],
+      "answer": 0,
+      "explanation": "gather 对每个 awaitable 统一处理：已完成的直接用其结果，未完成的调度执行，结果仍按传入顺序汇总。",
+      "error_tag": "混用规则误解",
+      "variant_group": "gather.mixed_types"
+    },
+    {
+      "kp": "py.async.gather",
+      "type": "single_choice",
+      "question": "以下代码里，两个任务的 sleep 时长不同（第二个更短），最终打印的结果顺序是？\n\nimport asyncio\n\nasync def f(name, d):\n    await asyncio.sleep(d)\n    return name\n\nasync def main():\n    r = await asyncio.gather(f('a', 0.05), f('b', 0.01))\n    print(r)\n\nasyncio.run(main())",
+      "options": [
+        "['a', 'b']",
+        "['b', 'a']",
+        "['b']",
+        "报错，因为完成顺序与传入顺序不一致"
+      ],
+      "answer": 0,
+      "explanation": "gather 的返回列表顺序永远与传入参数顺序一致，与各任务完成先后无关。",
+      "error_tag": "混淆完成顺序与结果顺序",
+      "variant_group": "gather.result_order"
+    },
+    {
+      "kp": "py.async.gather",
+      "type": "single_choice",
+      "question": "在 Python 3.11+ 中，若希望 gather 之外还能更方便地对一组任务做超时控制，常会考虑使用？",
+      "options": [
+        "asyncio.TaskGroup 配合 asyncio.timeout",
+        "threading.Timer",
+        "multiprocessing.Pool",
+        "asyncio.Queue"
+      ],
+      "answer": 0,
+      "explanation": "Python 3.11 引入 TaskGroup 与 asyncio.timeout，可与 gather 配合或替代其部分场景做结构化并发和超时控制。",
+      "error_tag": "生态工具混淆",
+      "variant_group": "gather.related_api"
+    },
+    {
+      "kp": "py.async.gather",
+      "type": "single_choice",
+      "question": "下列关于 asyncio.gather 与逐个 await 的说法，正确的是？",
+      "options": [
+        "逐个 await 协程是顺序执行，gather 会并发调度它们",
+        "逐个 await 协程也是并发执行，两者等价",
+        "gather 会把协程放到线程池里并发执行",
+        "gather 内部使用了多进程来并发执行"
+      ],
+      "answer": 0,
+      "explanation": "直接对协程逐个 await 会按顺序等待，而 gather 会在事件循环中把多个 awaitable 并发调度，从而缩短总耗时。gather 不涉及线程/进程池。",
+      "error_tag": "并发模型误解",
+      "variant_group": "gather.vs_sequential"
+    },
+    {
+      "kp": "py.async.gather",
+      "type": "single_choice",
+      "question": "当传给 asyncio.gather 的某个 awaitable 抛出异常且 return_exceptions 为默认值时，会发生什么？",
+      "options": [
+        "异常会立刻传播给 gather 的 await 方，其他任务不会被取消但结果无法从 gather 取回",
+        "所有传入的任务会被自动取消，异常被吞掉",
+        "异常会被收集到返回列表中对应位置，其他结果正常返回",
+        "异常被转换为 None 放入结果列表"
+      ],
+      "answer": 0,
+      "explanation": "默认 return_exceptions=False 时，第一个抛出的异常会立即向调用方传播；其他任务不会被自动取消，但 gather 的结果无法通过返回值获取。",
+      "error_tag": "异常处理语义误解",
+      "variant_group": "gather.exceptions"
+    },
+    {
+      "kp": "py.async.gather",
+      "type": "single_choice",
+      "question": "希望 gather 在某个任务抛出异常时仍返回所有结果（异常作为返回值放入列表），应如何调用？",
+      "options": [
+        "asyncio.gather(*aws, return_exceptions=True)",
+        "asyncio.gather(*aws, ignore_errors=True)",
+        "asyncio.gather(*aws, suppress=True)",
+        "asyncio.gather(*aws).catch()"
+      ],
+      "answer": 0,
+      "explanation": "return_exceptions=True 时，异常会作为结果对象放入返回列表，而不是向外传播。其他关键字参数名不存在。",
+      "error_tag": "API 参数记忆错误",
+      "variant_group": "gather.exceptions"
+    },
+    {
+      "kp": "py.async.gather",
+      "type": "single_choice",
+      "question": "以下代码在 return_exceptions=True 时的打印结果最可能是？\n\nimport asyncio\n\nasync def ok():\n    return 1\n\nasync def bad():\n    raise ValueError('x')\n\nasync def main():\n    r = await asyncio.gather(ok(), bad(), return_exceptions=True)\n    print([type(x).__name__ for x in r])\n\nasyncio.run(main())",
+      "options": [
+        "['int', 'ValueError']",
+        "['int', 'NoneType']",
+        "['ValueError', 'int']",
+        "程序抛出 ValueError"
+      ],
+      "answer": 0,
+      "explanation": "return_exceptions=True 时异常对象原样作为结果返回，位置与传入顺序对应。",
+      "error_tag": "返回内容误判",
+      "variant_group": "gather.exceptions"
+    },
+    {
+      "kp": "py.async.gather",
+      "type": "single_choice",
+      "question": "关于 asyncio.gather 是否并发，下列说法正确的是？",
+      "options": [
+        "传入协程时，gather 会先把它们包装成 Task 再并发调度",
+        "传入协程时 gather 会顺序 await，因为协程本身不能并发",
+        "gather 会把协程提交到后台线程执行以并发",
+        "gather 只在传入 Task 时才并发，传入协程时会顺序执行"
+      ],
+      "answer": 0,
+      "explanation": "gather 对传进来的协程调用 ensure_future 包装为 Task（或直接调度 Future），因此它们会在事件循环中并发推进。",
+      "error_tag": "调度机制误解",
+      "variant_group": "gather.scheduling"
+    },
+    {
+      "kp": "py.async.gather",
+      "type": "single_choice",
+      "question": "有一段代码：\n\nimport asyncio\n\nasync def main():\n    asyncio.gather(asyncio.sleep(1))\n\nasyncio.run(main())\n\n运行结果最可能是？",
+      "options": [
+        "几乎立即结束并给出 'coroutine was never awaited' 类警告",
+        "阻塞 1 秒后正常结束",
+        "抛出 RuntimeError",
+        "卡死不动"
+      ],
+      "answer": 0,
+      "explanation": "gather 返回的是 awaitable，没有被 await，创建的协程/任务不会等待；协程未被 await 会触发警告。",
+      "error_tag": "忘记 await",
+      "variant_group": "gather.await_required"
+    },
+    {
+      "kp": "py.async.gather",
+      "type": "single_choice",
+      "question": "关于 asyncio.gather 返回对象的说法，正确的是？",
+      "options": [
+        "它返回一个 Future，可被 await，结果在完成后取回",
+        "它返回一个列表，可以直接下标取值",
+        "它返回一个协程对象，必须用 asyncio.run 运行",
+        "它返回 None，结果通过回调获取"
+      ],
+      "answer": 0,
+      "explanation": "gather 返回一个聚合 Future，await 它才能拿到结果列表。",
+      "error_tag": "返回类型误解",
+      "variant_group": "gather.basic"
+    },
+    {
+      "kp": "py.async.wait",
+      "type": "single_choice",
+      "question": "以下关于 asyncio.wait 的描述，哪一项是正确的？",
+      "options": [
+        "asyncio.wait 接受一个协程列表，返回它们的返回值列表",
+        "asyncio.wait 接受一个 Task/Future 集合，返回 (done, pending) 两个集合",
+        "asyncio.wait 会按传入顺序返回结果",
+        "asyncio.wait 只能等待单个协程"
+      ],
+      "answer": 1,
+      "explanation": "asyncio.wait 接收的是可等待对象（通常已包装为 Task/Future）的集合，返回 (done, pending) 两个集合，并不保证顺序，也不返回返回值本身。",
+      "error_tag": "概念混淆",
+      "variant_group": "asyncio.wait.return"
+    },
+    {
+      "kp": "py.async.wait",
+      "type": "single_choice",
+      "question": "调用 asyncio.wait 时，下面哪种传参方式是合法的？",
+      "options": [
+        "asyncio.wait(coro1, coro2)",
+        "asyncio.wait([coro1, coro2]) —— 传入未包装的协程列表",
+        "asyncio.wait({task1, task2}) —— 传入 Task 的集合",
+        "asyncio.wait(task1)"
+      ],
+      "answer": 2,
+      "explanation": "在 Python 3.8+ 中，asyncio.wait 要求传入可等待对象（通常为 Task/Future）的可迭代集合；直接传协程在 3.8 起会报错，且位置参数必须是单个可迭代对象而非多个参数。",
+      "error_tag": "边界错误",
+      "variant_group": "asyncio.wait.params"
+    },
+    {
+      "kp": "py.async.wait",
+      "type": "multi_choice",
+      "question": "使用 asyncio.wait 时，以下哪些做法是推荐的？",
+      "options": [
+        "传入可等待对象前先用 asyncio.create_task 包装为 Task",
+        "超时后对不再需要的 pending 任务调用 cancel()",
+        "依赖返回顺序来匹配任务与结果",
+        "通过 task.result() 或 task.exception() 获取 done 中的结果或异常",
+        "把 timeout 当作每个任务的独立超时"
+      ],
+      "answer": [
+        0,
+        1,
+        3
+      ],
+      "explanation": "wait 的返回不保序，不能依赖集合顺序匹配结果；timeout 是对整体等待的上限，不是每个任务独立超时。包装为 Task、显式取消、正确取结果都是推荐做法。",
+      "error_tag": "边界错误",
+      "variant_group": "asyncio.wait.usage"
+    },
+    {
+      "kp": "py.async.wait",
+      "type": "multi_choice",
+      "question": "下列哪些对象可以作为 asyncio.wait 的参数元素？（Python 3.8+ 语境）",
+      "options": [
+        "asyncio.Task 实例",
+        "asyncio.Future 实例",
+        "未包装的协程对象",
+        "实现了 __await__ 的普通可等待对象"
+      ],
+      "answer": [
+        0,
+        1,
+        3
+      ],
+      "explanation": "在 3.8+ 中，wait 要求传入可等待对象的集合，通常为 Task/Future；直接传协程会报 TypeError，因为协程在传入后无法被调度跟踪。可等待对象理论上也可，但推荐包装为 Task。",
+      "error_tag": "边界错误",
+      "variant_group": "asyncio.wait.params"
+    },
+    {
+      "kp": "py.async.wait",
+      "type": "multi_choice",
+      "question": "关于 asyncio.wait 的返回值 (done, pending)，下列说法正确的有？",
+      "options": [
+        "两者都是 set 类型",
+        "done 中的任务已完成（成功、异常或取消）",
+        "pending 中的任务一定被取消了",
+        "没有超时且全部完成时 pending 为空集",
+        "done 集合中的 Task 已经无法访问其异常信息"
+      ],
+      "answer": [
+        0,
+        1,
+        3
+      ],
+      "explanation": "wait 返回两个 set；done 包含已完成任务（正常/异常/取消），pending 包含尚未完成任务，全完成后 pending 为空。done 中的 Task 仍可通过 exception() 访问异常。",
+      "error_tag": "概念混淆",
+      "variant_group": "asyncio.wait.return"
+    },
+    {
+      "kp": "py.async.wait",
+      "type": "fill_blank",
+      "question": "asyncio.wait 的返回结构是 (done, ____) 两个集合，其中后者表示未完成的任务。",
+      "options": [],
+      "answer": [
+        "pending"
+      ],
+      "explanation": "asyncio.wait 返回 (done, pending)，pending 是尚未完成的任务集合。",
+      "error_tag": "记忆缺失",
+      "variant_group": "asyncio.wait.return"
+    },
+    {
+      "kp": "py.async.wait",
+      "type": "fill_blank",
+      "question": "要让 asyncio.wait 在任意一个任务完成时就返回，应将 return_when 设为 asyncio.____。",
+      "options": [],
+      "answer": [
+        "FIRST_COMPLETED",
+        "asyncio.FIRST_COMPLETED"
+      ],
+      "explanation": "return_when=asyncio.FIRST_COMPLETED 表示任一任务完成即返回。",
+      "error_tag": "记忆缺失",
+      "variant_group": "asyncio.wait.return_when"
+    },
+    {
+      "kp": "py.async.wait",
+      "type": "fill_blank",
+      "question": "在不设置 timeout 的情况下，asyncio.wait 默认会等到所有任务全部完成后才返回，对应的默认 return_when 是 asyncio.____。",
+      "options": [],
+      "answer": [
+        "ALL_COMPLETED",
+        "asyncio.ALL_COMPLETED"
+      ],
+      "explanation": "默认 return_when 为 ALL_COMPLETED，即全部任务完成后返回。",
+      "error_tag": "记忆缺失",
+      "variant_group": "asyncio.wait.return_when"
+    },
+    {
+      "kp": "py.async.wait",
+      "type": "code_reading",
+      "question": "阅读以下代码片段：\n\nasync def main():\n    tasks = [asyncio.create_task(asyncio.sleep(i)) for i in (1, 2, 3)]\n    done, pending = await asyncio.wait(tasks, timeout=1.5)\n    print(len(done), len(pending))\n\n问：输出最接近哪一对数字，并简述原因。",
+      "options": [],
+      "answer": "大约 1 与 2（done 至少包含 sleep(1) 对应的已完成任务，其余因 1.5 秒超时仍在 pending 中）。",
+      "explanation": "timeout=1.5 秒内只有 sleep(1) 会完成；sleep(2)、sleep(3) 未完成，因此 done≈1、pending≈2。wait 不会自动取消 pending。",
+      "error_tag": "边界错误",
+      "variant_group": "asyncio.wait.code"
+    },
+    {
+      "kp": "py.async.wait",
+      "type": "code_reading",
+      "question": "阅读以下代码片段：\n\nasync def main():\n    t1 = asyncio.create_task(asyncio.sleep(0.1, result='A'))\n    t2 = asyncio.create_task(asyncio.sleep(0.2, result='B'))\n    done, pending = await asyncio.wait({t1, t2}, return_when=asyncio.FIRST_COMPLETED)\n    results = [t.result() for t in done]\n    print(sorted(results))\n\n问：程序通常输出什么？并说明 pending 中还有谁。",
+      "options": [],
+      "answer": "通常输出 ['A']，pending 中还包含 t2。",
+      "explanation": "FIRST_COMPLETED 下 sleep(0.1) 先完成，done 只有 t1，其结果为 'A'；t2 尚未完成，留在 pending 中且不会被自动取消。",
+      "error_tag": "边界错误",
+      "variant_group": "asyncio.wait.code"
+    },
+    {
+      "kp": "py.async.wait",
+      "type": "code_reading",
+      "question": "阅读以下代码片段：\n\nasync def main():\n    tasks = [asyncio.create_task(asyncio.sleep(0.05)) for _ in range(3)]\n    done, pending = await asyncio.wait(tasks)\n    print(isinstance(done, set), len(pending))\n\n问：输出是什么？解释为何 pending 的长度为 0 而 done 是 set。",
+      "options": [],
+      "answer": "输出 True 0；因为无 timeout 且默认 ALL_COMPLETED，所有任务完成，done 为包含 3 个任务的 set，pending 为空集。",
+      "explanation": "默认等待全部完成，因此 pending 为空；asyncio.wait 返回两个 set 对象。",
+      "error_tag": "概念混淆",
+      "variant_group": "asyncio.wait.code"
+    },
+    {
+      "kp": "py.async.wait",
+      "type": "scenario",
+      "question": "工程场景：你有一段代码并发抓取多个 URL，使用 asyncio.wait(tasks, timeout=5) 后处理 done 和 pending。上线后发现部分请求仍在后台发出，日志里出现『任务已取消但仍结果上报』，且进程退出变慢。你会如何修改？请说明处理 pending 的正确做法及原因。",
+      "options": [],
+      "answer": null,
+      "explanation": "asyncio.wait 超时后不会自动取消 pending；若不显式 cancel 并 await 它们，任务会继续在后台运行，导致额外请求与退出延迟。正确做法是遍历 pending 调用 task.cancel()，并用 asyncio.gather(*pending, return_exceptions=True) 等方式 await 收尾。",
+      "error_tag": "边界错误",
+      "variant_group": "asyncio.wait.pending",
+      "required_keywords": [
+        "asyncio.wait",
+        "task.cancel",
+        "asyncio.gather"
+      ]
+    },
+    {
+      "kp": "py.async.wait",
+      "type": "single_choice",
+      "question": "asyncio.wait 中 timeout 参数的含义是？",
+      "options": [
+        "每个任务单独的最长运行时间",
+        "所有任务合计允许运行的最长时间，超时后未完成的任务会被放入 pending",
+        "等待第一个任务完成的最长时间",
+        "重启任务的间隔时间"
+      ],
+      "answer": 1,
+      "explanation": "timeout 是对整体等待时间的上限，超时后返回的 pending 集合包含尚未完成的任务；它们不会被自动取消。",
+      "error_tag": "概念混淆",
+      "variant_group": "asyncio.wait.timeout"
+    },
+    {
+      "kp": "py.async.wait",
+      "type": "scenario",
+      "question": "工程场景：你希望并发请求多个服务，但只要有一个服务快速返回成功就继续后续流程，而在出现异常时也能尽早得知。你会如何设置 asyncio.wait 的 return_when，以及如何在返回后区分『成功、异常、未完成』三种情况？",
+      "options": [],
+      "answer": null,
+      "explanation": "若优先要最早结果，用 FIRST_COMPLETED；若要尽早捕获异常，用 FIRST_EXCEPTION。返回后遍历 done，用 task.exception() 判断是否异常、task.result() 取值，遍历 pending 处理未完成任务（是否取消）。",
+      "error_tag": "概念混淆",
+      "variant_group": "asyncio.wait.return_when",
+      "required_keywords": [
+        "task.exception",
+        "task.result"
+      ]
+    },
+    {
+      "kp": "py.async.wait",
+      "type": "single_choice",
+      "question": "asyncio.wait 的 return_when 参数默认值是？",
+      "options": [
+        "asyncio.FIRST_COMPLETED",
+        "asyncio.FIRST_EXCEPTION",
+        "asyncio.ALL_COMPLETED",
+        "asyncio.NONE_COMPLETED"
+      ],
+      "answer": 2,
+      "explanation": "默认 return_when 是 ALL_COMPLETED，即所有任务完成或超时后才返回。",
+      "error_tag": "记忆缺失",
+      "variant_group": "asyncio.wait.return_when"
+    },
+    {
+      "kp": "py.async.wait",
+      "type": "single_choice",
+      "question": "下列哪个不是 asyncio.wait 支持的 return_when 取值？",
+      "options": [
+        "asyncio.FIRST_COMPLETED",
+        "asyncio.FIRST_EXCEPTION",
+        "asyncio.ALL_COMPLETED",
+        "asyncio.LAST_COMPLETED"
+      ],
+      "answer": 3,
+      "explanation": "asyncio.wait 仅支持 FIRST_COMPLETED、FIRST_EXCEPTION、ALL_COMPLETED 三个常量。",
+      "error_tag": "记忆缺失",
+      "variant_group": "asyncio.wait.return_when"
+    },
+    {
+      "kp": "py.async.wait",
+      "type": "single_choice",
+      "question": "使用 return_when=asyncio.FIRST_COMPLETED 时，asyncio.wait 何时返回？",
+      "options": [
+        "当任何一个任务完成或取消时立即返回",
+        "只有当所有任务都成功完成时才返回",
+        "当第一个任务抛出未处理异常时返回",
+        "永不返回，需立即取消"
+      ],
+      "answer": 0,
+      "explanation": "FIRST_COMPLETED 表示任一任务完成（包括被取消）即返回，返回的 pending 中仍有未完成的任务。",
+      "error_tag": "概念混淆",
+      "variant_group": "asyncio.wait.return_when"
+    },
+    {
+      "kp": "py.async.wait",
+      "type": "single_choice",
+      "question": "使用 return_when=asyncio.FIRST_EXCEPTION 时，asyncio.wait 的行为是？",
+      "options": [
+        "任何任务产生未处理异常时返回，否则等全部完成",
+        "只有全部任务都抛异常时才返回",
+        "任何异常都被吞掉，正常返回全部结果",
+        "第一次调用即返回"
+      ],
+      "answer": 0,
+      "explanation": "FIRST_EXCEPTION 会在有任务抛出未处理异常时提前返回；若没有异常，则行为等价于 ALL_COMPLETED。",
+      "error_tag": "概念混淆",
+      "variant_group": "asyncio.wait.return_when"
+    },
+    {
+      "kp": "py.async.wait",
+      "type": "single_choice",
+      "question": "asyncio.wait 返回的 done 集合中的 Task，如何获取其结果？",
+      "options": [
+        "直接迭代 done，每个元素就是结果值",
+        "对 done 中的 Task 调用 .result()",
+        "调用 asyncio.gather 再取结果",
+        "结果已经丢失，无法获取"
+      ],
+      "answer": 1,
+      "explanation": "done 中的元素是已完成的 Task/Future，需要通过 .result() 获取其返回值，或 .exception() 检查异常。",
+      "error_tag": "概念混淆",
+      "variant_group": "asyncio.wait.result"
+    },
+    {
+      "kp": "py.async.wait",
+      "type": "single_choice",
+      "question": "关于 asyncio.wait 超时后 pending 中的任务，下列说法正确的是？",
+      "options": [
+        "pending 中的任务会被自动取消",
+        "pending 中的任务继续运行，需要调用方自行决定是否取消",
+        "pending 中的任务会被自动重新执行",
+        "pending 集合总是为空"
+      ],
+      "answer": 1,
+      "explanation": "asyncio.wait 不会自动取消未完成的任务，若不再需要应显式调用 task.cancel()，否则它们会继续后台运行。",
+      "error_tag": "边界错误",
+      "variant_group": "asyncio.wait.pending"
+    },
+    {
+      "kp": "py.async.wait",
+      "type": "multi_choice",
+      "question": "关于 asyncio.wait 与 asyncio.gather 的区别，下列描述正确的有哪些？",
+      "options": [
+        "gather 按输入顺序返回结果，wait 返回 (done, pending) 集合",
+        "wait 支持 return_when 控制提前返回，gather 默认等全部完成",
+        "gather 若某个任务抛异常会传播，wait 不会主动抛出任务异常",
+        "两者都必须传入协程对象，不能传 Task"
+      ],
+      "answer": [
+        0,
+        1,
+        2
+      ],
+      "explanation": "gather 返回结果列表并保持顺序、异常会向上传播；wait 返回 done/pending 集合、提供 return_when，任务异常不会由 wait 本身抛出。两者都可接收协程或 Task。",
+      "error_tag": "概念混淆",
+      "variant_group": "asyncio.wait.vs_gather"
+    }
+  ]
+}

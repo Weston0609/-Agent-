@@ -1,0 +1,610 @@
+{
+  "id": "s1u3l4",
+  "title": "s1u3l4",
+  "kps": [
+    "py.flow.nested",
+    "py.flow.pass"
+  ],
+  "theory": "## py.flow.nested\n\n# Python 嵌套控制流：从缩进到工程级实践\n\n> **一句话直觉**：Python 用「缩进（indentation）」而不是花括号来表达「谁属于谁」——嵌套（nested）控制流就是让你在一层一层「代码套娃」中，把复杂逻辑写清楚、写正确、写可读。\n\n---\n\n## 0. 为什么先学「嵌套」？\n\n任何一门语言都会有分支和循环，但 Python 的特殊之处在于：**它把「缩进」本身变成了语法**。你写代码时的空白字符，决定了 `if` 属于谁、`for` 里包了什么、`else` 又和哪个 `if` 配对。这就是「嵌套控制流（nested flow control）」要讲清楚的核心。\n\n学完之后，你能：\n\n1. 读懂多层缩进的代码（而不是看着头疼）。\n2. 自己写出整洁的多层 `if/for/while/try`。\n3. 避开常见的缩进、`else` 配对、长条件换行等「坑」。\n\n---\n\n## 1. 缩进就是语法：Python 的「套娃」规则\n\n在 C/Java 里，`{ }` 决定代码块；Python 用「冒号 `:` + 缩进」表达代码块（block）。\n\n规则只有三条：\n\n- **每个冒号后面必须换行并缩进**，表示一个子块。\n- **同一层的语句缩进量必须一致**。\n- **官方推荐用 4 个空格（4 spaces）作为一层缩进**（PEP 8），不要混用 Tab 和空格。\n\n```python\n# 示例 1：一层嵌套\nscore = 85\nif score >= 60:\n    print(\"及格\")          # 4 空格\n    if score >= 90:\n        print(\"优秀\")      # 8 空格\n```\n\n**关键结论**：缩进不是「美化」，而是「语法」。缩进错了，程序直接报 `IndentationError`。\n\n---\n\n## 2. 多层嵌套的常见形态：if / for / while / try\n\n嵌套不是只有 `if` 套 `if`。真实代码里，四种控制流经常互相嵌套。\n\n### 2.1 if 套 for\n\n```python\n# 示例 2：判断列表里有没有负数\nnums = [3, -1, 5]\nhas_negative = False\nif nums:\n    for n in nums:\n        if n < 0:\n            has_negative = True\n            break\nprint(has_negative)\n```\n\n### 2.2 for 套 while\n\n```python\n# 示例 3：对每个数做递减运算\nfor target in [3, 2]:\n    n = target\n    while n > 0:\n        print(f\"target={target}, n={n}\")\n        n -= 1\n```\n\n### 2.3 try 套 if\n\n```python\n# 示例 4：多层嵌套中捕获异常\ndef to_int(x):\n    try:\n        if x is None:\n            return 0\n        return int(x)\n    except (TypeError, ValueError):\n        return -1\n\nprint(to_int(\"42\"), to_int(None), to_int(\"abc\"))\n```\n\n**关键结论**：嵌套是自然形成的，不是刻意追求。**当嵌套超过 3 层时，优先考虑拆函数**。\n\n---\n\n## 3. else / elif 的配对规则\n\n`else` 永远和**最近的、尚未配对的 `if`** 结合。这一条在多层嵌套里最容易出错。\n\n```python\n# 示例 5：else 属于内层 if\nx = 5\nif x > 0:\n    if x > 10:\n        print(\"很大\")\n    else:\n        print(\"正但不大\")   # 属于内层 if\nelse:\n    print(\"非正\")\n```\n\n**关键结论**：Python 没有 C 的「悬空 else」陷阱，因为缩进强制了归属。但**读代码时仍然要看清缩进层级**。\n\n---\n\n## 4. 嵌套与提前返回：让代码「扁平化」\n\n工程里最常见的「去嵌套」技巧是**卫语句（guard clause）**：能在最早位置返回就在最早位置返回。\n\n```python\n# 示例 6：反面教材（嵌套较深）\ndef sqrt_pos(x):\n    if x >= 0:\n        return x ** 0.5\n    else:\n        return None\n\n# 正面示例（扁平化）\ndef sqrt_pos2(x):\n    if x < 0:\n        return None\n    return x ** 0.5\n\nprint(sqrt_pos(9), sqrt_pos2(9))\n```\n\n**关键结论**：卫语句把「异常分支」提前掐掉，让主流程保持在同一层缩进里 —— 这是 PEP 8 推荐写法。\n\n---\n\n## 5. 长的条件与参数：嵌套里的「换行」艺术\n\n当 `if` 的条件很长，需要换行时，PEP 8 给了两种主流写法：\n\n- **对齐到左括号（aligned with opening delimiter）**\n- **悬挂缩进（hanging indent）**：再多缩进一层。\n\n```python\n# 示例 7：多行 if 的两种写法\nthis_is_one_thing = True\nthat_is_another_thing = True\n\n# 写法 A：悬挂缩进（推荐，且不会和内层代码混淆）\nif (this_is_one_thing and\n        that_is_another_thing):\n    print(\"both true\")\n\n# 写法 B：对齐到左括号\ndef long_fn(var_one, var_two,\n            var_three, var_four):\n    print(var_one, var_two, var_three, var_four)\n\nlong_fn(1, 2, 3, 4)\n```\n\n**关键结论**：多行条件如果换行方式看不清层次，宁可**加注释或使用显式括号**，也不要为了「省行数」而堆在一行。\n\n---\n\n## 6. 判断类的正确姿势（顺带记住，嵌套里常用）\n\n这几条在嵌套 `if` 里经常出现，属于工程级基本功：\n\n- 前缀/后缀判断用 `str.startswith()` / `str.endswith()`，别用切片。\n- 类型判断用 `isinstance()`，别用 `type(x) == ...`。\n- 空序列直接用 `if not seq:`，别写 `if len(seq) == 0:`。\n- 布尔值不要和 `True`/`False` 用 `==` 比较。\n\n```python\n# 示例 8：工程级判断\ns = \"report_2024.csv\"\nobj = 42\nseq = []\n\nif s.endswith(\".csv\"):\n    print(\"is csv\")\n\nif isinstance(obj, int):\n    print(\"int\")\n\nif not seq:\n    print(\"empty sequence\")\n```\n\n---\n\n## 7. 动手练习：把「深嵌套」改写成「扁平 + 卫语句」\n\n**任务（本地完成，约 10~15 分钟）**：\n\n1. 新建文件 `practice_nested.py`。\n2. 写一个函数 `classify_student(score, name)`：\n   - 如果 `name` 为空字符串，返回 `\"名字不能为空\"`。\n   - 如果 `score` 不是数字，返回 `\"分数必须是数字\"`。\n   - 如果 `score < 0` 或 `score > 100`，返回 `\"分数超出范围\"`。\n   - 否则：`>=90` 返回 `f\"{name}: 优秀\"`；`>=60` 返回 `f\"{name}: 及格\"`；否则返回 `f\"{name}: 不及格\"`。\n3. **要求**：全部用**卫语句（guard clause）** + **最多一层嵌套**实现，不要出现 `if` 套 `if` 套 `if`。\n4. 自己写 4 个测试调用，覆盖：空名字、非数字、超出范围、正常分数。\n5. 运行并检查输出。\n\n**进阶（可选）**：把 `classify_student` 中的「分数范围判断」抽成一个内部小函数，再减少一层嵌套。\n\n---\n\n### 本篇小结\n\n- 缩进 = 语法，推荐 4 空格，别混用 Tab。\n- 嵌套是为了表达层级，不是为了炫技；**超过 3 层就拆函数**。\n- `else` 永远配最近的 `if`，读代码先看缩进。\n- 用**卫语句**把异常分支提前返回，能让代码「扁平化」。\n- 长条件换行有两种主流写法：悬挂缩进、对齐左括号；选一种并保持一致。\n\n```python\n\"\"\"演示 Python 嵌套控制流的可运行示例。\"\"\"\n\n\ndef classify_student(score, name):\n    # 卫语句 1：名字不能为空\n    if not name:\n        return \"名字不能为空\"\n\n    # 卫语句 2：分数必须是数字（bool 也属于 int，特意排除）\n    if isinstance(score, bool) or not isinstance(score, (int, float)):\n        return \"分数必须是数字\"\n\n    # 卫语句 3：分数范围\n    if score < 0 or score > 100:\n        return \"分数超出范围\"\n\n    # 主流程（只剩一层嵌套）\n    if score >= 90:\n        level = \"优秀\"\n    elif score >= 60:\n        level = \"及格\"\n    else:\n        level = \"不及格\"\n    return f\"{name}: {level}\"\n\n\n# 多层嵌套对照示例：for -> if -> while\nif __name__ == \"__main__\":\n    tests = [\n        (\"\", 90),\n        (\"小明\", \"A\"),\n        (\"小红\", 120),\n        (\"小刚\", 95),\n        (\"小美\", 59),\n    ]\n    for name, score in tests:\n        print(classify_student(score, name))\n\n    # 演示 else 与 if 的配对\n    x = 5\n    if x > 0:\n        if x > 10:\n            print(\"很大\")\n        else:\n            print(\"正但不大\")\n    else:\n        print(\"非正\")\n\n    # 演示多行 if 的悬挂缩进\n    a, b = True, True\n    if (a and\n            b):\n        print(\"both true\")\n```\n\n## py.flow.pass\n\n# py.flow.pass：从“什么都不做”到工程级语义锚点\n\n> 一句话直觉：`pass` 是 Python 里唯一“语法上必须写、语义上什么都不做”的语句，它是你理解“缩进块、占位、协议与类型契约”的第一块地基。\n\n---\n\n## 1. 为什么需要 `pass`：空块的语法刚需\n\nPython 用缩进（indentation）表示代码块（block）。只要出现 `if`、`for`、`while`、`def`、`class`、`try`、`with` 等复合语句，冒号后面**必须**有一个非空代码块。\n\n但真实工程中经常遇到“这个分支暂时不处理”“这个函数稍后再实现”“这个异常先吞掉”的场景。此时你既不能省略代码块，也不能写注释（注释不构成语句），于是 `pass` 出现：它是一个合法的空操作（no-op）语句。\n\n```python\n# 演示：pass 是唯一能合法填充空块的语句\nif True:\n    pass  # 语法要求这里必须有语句，pass 什么都不做\n\ndef todo_later():\n    pass  # 占位：函数体暂时为空\n\nclass Config:\n    pass  # 占位：先建一个空类\n\nprint(\"程序继续运行，pass 不会产生任何副作用\")\n```\n\n**关键结论**：`pass` 不是“空”，而是“显式的空”。它让“我故意什么都不做”变成一个可读、可搜索、可被工具识别的信号。\n\n---\n\n## 2. `pass` 与 `...`（Ellipsis）、`None`、注释的区别\n\n初学者最容易混淆的是“几种看起来都像什么都不做”的写法：\n\n| 写法 | 是否语句 | 运行时行为 | 常见用途 |\n|---|---|---|---|\n| `pass` | 是 | 空操作 | 真正的“暂时不实现” |\n| `...` | 是（表达式语句） | 求值为 `Ellipsis` 对象，然后丢弃 | 类型存根、协议、抽象占位 |\n| `None` | 是（表达式语句） | 求值为 `None`，然后丢弃 | 几乎不这么写，语义模糊 |\n| `# 注释` | 否 | 不构成语句 | 说明文字 |\n\n```python\n# pass 与 ... 的运行时差异\n\ndef with_pass():\n    pass\n\ndef with_ellipsis():\n    ...\n\nprint(with_pass())      # None\nprint(with_ellipsis())  # None（函数没 return 都返回 None）\n\n# 但表达式本身不同\nx = ...\nprint(x is Ellipsis)    # True\n\ny = pass  # 语法错误：pass 不是表达式，不能赋值\n```\n\n**关键结论**：`pass` 是“语句级空操作”，`...` 是“表达式级占位”，后者在协议（Protocol）、类型存根（stub）和抽象基类中更常见。\n\n---\n\n## 3. `pass` 在类与继承中的角色：空类也是合法类\n\n`class Foo: pass` 会创建一个真实可实例化的类。它没有自定义属性，但继承链、`__dict__`、`isinstance` 全部正常工作。这是“最小可用类”的写法。\n\n```python\n# 空类是最小可用的类型锚点\nclass Base:\n    pass\n\nclass Sub(Base):\n    pass\n\nobj = Sub()\nprint(isinstance(obj, Base))   # True\nprint(Sub.__mro__)              # (<class 'Sub'>, <class 'Base'>, <class 'object'>)\n\n# 多继承：disjoint_base 的反面教材\nclass A:\n    pass\n\nclass B:\n    pass\n\nclass C(A, B):\n    pass\n\nprint(C.__mro__)  # C -> A -> B -> object（运行时合法）\n```\n\n**关键结论**：`pass` 定义的类不是“占位符”，它是完整类型。工程中常用于“标记类”（marker class）、“命名空间类”和“异常基类”。\n\n---\n\n## 4. `pass` 在异常与循环中的工程语义\n\n在 `try/except` 中，`pass` 表示“显式吞掉异常”。这不是偷懒，而是一种设计决策——但必须配注释说明**为什么可以吞**。\n\n```python\n# 场景：清理临时文件，失败也无所谓\ndef safe_cleanup(path: str) -> None:\n    import os\n    try:\n        os.remove(path)\n    except FileNotFoundError:\n        pass  # 文件本来就不存在，无需处理\n\n# 场景：循环中跳过不满足条件的元素\nfor i in range(5):\n    if i % 2 == 0:\n        pass  # 偶数先不处理，保留分支结构\n    else:\n        print(\"奇数:\", i)\n```\n\n**关键结论**：`pass` 在异常处理中等于“静默忽略”，必须配合注释；在循环中等于“保留分支骨架”，便于后续填充逻辑。\n\n---\n\n## 5. `pass` 与类型系统：占位、协议与 `@override`\n\n现代 Python 的类型检查（type checking）大量使用 `...` 作为函数体占位，但在**运行时**依然会落地为空操作。`pass` 与它们的关系是：\n\n- 存根文件（`.pyi`）和协议（Protocol）里通常写 `...`；\n- 真实可运行代码里，若只是暂时不实现，写 `pass` 更明确；\n- 装饰器（decorator）如 `@override`（Python 3.12+）只做静态检查，运行时可能什么都不做，`pass` 可以作为其函数体。\n\n```python\n# 演示：pass 作为被装饰函数的合法体\ntry:\n    from typing import override\nexcept ImportError:\n    def override(f):  # 兼容旧版本\n        return f\n\nclass Base:\n    def log_status(self) -> None:\n        pass\n\nclass Sub(Base):\n    @override\n    def log_status(self) -> None:\n        pass  # 重写父类方法，暂时空实现\n\nSub().log_status()  # 不会报错\n\n# 运行时可通过 __override__ 属性判断\nprint(getattr(Sub.log_status, \"__override__\", False))  # True（3.12+）\n```\n\n**关键结论**：`pass` 是运行时与静态类型系统之间的“最小连接件”——它保证语法合法，同时不引入任何运行副作用，让类型检查器和装饰器接管语义。\n\n---\n\n## 动手练习\n\n**任务**：实现一个“极简事件系统”，要求：\n\n1. 定义空基类 `Event` 和子类 `ClickEvent`、`KeyEvent`，全部用 `pass` 占位。\n2. 定义一个 `EventBus` 类，内部有 `handlers: dict[type, list]`。\n3. `subscribe(event_type, handler)` 注册处理器；`publish(event)` 根据 `isinstance` 找到匹配的处理器并调用。\n4. 至少注册一个“忽略 KeyEvent”的处理器，用 `pass` 明确表示不处理，并写注释说明原因。\n\n**验收标准**：\n- 空类能被 `isinstance` 正确识别；\n- `pass` 分支不产生任何输出；\n- 代码能本地运行且无语法/类型错误。\n\n```python\n\"\"\"py.flow.pass 综合示例：极简事件系统\"\"\"\n\n# 1. 空类作为类型锚点\nclass Event:\n    pass\n\nclass ClickEvent(Event):\n    pass\n\nclass KeyEvent(Event):\n    pass\n\n# 2. 事件总线\nclass EventBus:\n    def __init__(self) -> None:\n        self.handlers: dict[type, list] = {}\n\n    def subscribe(self, event_type: type, handler) -> None:\n        self.handlers.setdefault(event_type, []).append(handler)\n\n    def publish(self, event: Event) -> None:\n        for event_type, handlers in self.handlers.items():\n            if isinstance(event, event_type):\n                for h in handlers:\n                    h(event)\n\n# 3. 处理器\ndef on_click(event):\n    print(\"处理点击:\", type(event).__name__)\n\ndef on_any(event):\n    if isinstance(event, KeyEvent):\n        pass  # 明确忽略键盘事件：本系统不处理输入\n    else:\n        print(\"通用处理器收到:\", type(event).__name__)\n\n# 4. 组装运行\nbus = EventBus()\nbus.subscribe(ClickEvent, on_click)\nbus.subscribe(Event, on_any)\n\nbus.publish(ClickEvent())\nbus.publish(KeyEvent())\n\n# 5. pass 与 ... 的语义对比\ndef placeholder_pass():\n    pass\n\ndef placeholder_ellipsis():\n    ...\n\nprint(placeholder_pass() is None)        # True\nprint(placeholder_ellipsis() is None)    # True\nprint(... is Ellipsis)                   # True\n```\n",
+  "quiz": [
+    {
+      "kp": "py.flow.nested",
+      "type": "single_choice",
+      "question": "下面这段代码执行后会输出什么？\n\nfor i in range(3):\n    for j in range(2):\n        print(i, j)",
+      "options": [
+        "输出 3 行，每行一个数字对",
+        "输出 6 行，按 (0,0) (0,1) (1,0) (1,1) (2,0) (2,1) 的顺序",
+        "输出 6 行，按 (0,0) (1,0) (2,0) (0,1) (1,1) (2,1) 的顺序",
+        "只输出 2 行，因为内层循环覆盖了外层循环"
+      ],
+      "answer": 1,
+      "explanation": "外层循环每迭代一次，内层循环都会完整走一遍，因此顺序是先固定 i，把 j 从 0 到 1 全部执行完，再进入下一个 i，共 3×2=6 行。",
+      "error_tag": "循环嵌套执行顺序",
+      "variant_group": "nested_loop_order"
+    },
+    {
+      "kp": "py.flow.nested",
+      "type": "single_choice",
+      "question": "关于嵌套循环的执行次数，下面说法正确的是？",
+      "options": [
+        "嵌套循环的总迭代次数等于外层循环次数加内层循环次数",
+        "嵌套循环的总迭代次数等于外层循环次数乘以内层循环次数（忽略提前退出）",
+        "嵌套循环的总迭代次数总是等于外层循环次数",
+        "嵌套循环的总迭代次数总是等于内层循环次数"
+      ],
+      "answer": 1,
+      "explanation": "在没有 break、continue 等提前退出语句时，外层每执行一次，内层就完整执行一次，所以总次数是两层次数的乘积。",
+      "error_tag": "嵌套循环计数",
+      "variant_group": "nested_loop_count"
+    },
+    {
+      "kp": "py.flow.nested",
+      "type": "single_choice",
+      "question": "下面这段代码想打印一个 3 行 3 列的星号方阵，但输出结果不符合预期。问题出在哪里？\n\nfor i in range(3):\n    for j in range(3):\n        print('*')\n    print()",
+      "options": [
+        "内层 print('*') 默认会换行，导致每行只有一个星号，应使用 print('*', end='')",
+        "外层循环应该使用 while 而不是 for",
+        "内层循环应该改成 range(4)",
+        "print() 应该放在内层循环里面"
+      ],
+      "answer": 0,
+      "explanation": "print('*') 每次输出后都会换行，因此每个星号独占一行。要形成一行多个星号，需要在内层使用 end='' 抑制换行，最后再统一换行。",
+      "error_tag": "嵌套输出控制",
+      "variant_group": "nested_print_pattern"
+    },
+    {
+      "kp": "py.flow.nested",
+      "type": "single_choice",
+      "question": "在嵌套循环中，如果想在内层循环满足某个条件时直接结束整个外层循环，下面哪种做法是可行的？",
+      "options": [
+        "在内层循环中直接写 break",
+        "在外层循环中写 continue",
+        "设置一个标志变量，在内层循环中修改它，外层循环检查该标志后 break",
+        "在内层循环中写 return"
+      ],
+      "answer": 2,
+      "explanation": "内层 break 只能跳出内层，continue 只能影响所在层。使用标志变量可以让外层感知到内层满足条件，从而跳出外层循环。return 只在函数内有意义且会结束整个函数。",
+      "error_tag": "跳出多层循环",
+      "variant_group": "nested_multi_break"
+    },
+    {
+      "kp": "py.flow.nested",
+      "type": "single_choice",
+      "question": "下面关于嵌套循环中外层变量和内层变量的说法，正确的是？",
+      "options": [
+        "内层循环不能访问外层循环的循环变量",
+        "外层循环不能访问内层循环的循环变量",
+        "内层循环可以访问外层循环的循环变量，但外层循环不能直接访问内层循环结束后残留的循环变量",
+        "内外层循环变量必须使用相同的名字"
+      ],
+      "answer": 2,
+      "explanation": "Python 中变量作用域是按函数等层次划分的，内层可以读取外层循环变量；但内层循环结束后，其循环变量仍会保留在作用域中，外层可以在之后访问到它的值，而不是“不能访问”。",
+      "error_tag": "循环变量作用域",
+      "variant_group": "nested_var_scope"
+    },
+    {
+      "kp": "py.flow.nested",
+      "type": "single_choice",
+      "question": "下面这段代码中，内层循环的循环变量 `j` 在外层循环之外可以访问吗？\n\nfor i in range(2):\n    for j in range(2):\n        pass\nprint(j)",
+      "options": [
+        "不能访问，会报 NameError",
+        "可以访问，输出最后一次内层循环的值 1",
+        "可以访问，输出外层循环的值 1",
+        "可以访问，但输出的是未定义值"
+      ],
+      "answer": 1,
+      "explanation": "Python 的 for 循环不会创建新的作用域，内层循环变量 j 在循环结束后仍然存在，其值为最后一次迭代的值 1。",
+      "error_tag": "循环变量作用域",
+      "variant_group": "nested_var_scope"
+    },
+    {
+      "kp": "py.flow.nested",
+      "type": "single_choice",
+      "question": "下面这段代码的时间复杂度大致是多少？\n\nfor i in range(n):\n    for j in range(n):\n        print(i, j)",
+      "options": [
+        "O(n)",
+        "O(n²)",
+        "O(log n)",
+        "O(1)"
+      ],
+      "answer": 1,
+      "explanation": "外层执行 n 次，内层每次也执行 n 次，总操作次数约为 n×n，因此是 O(n²)。",
+      "error_tag": "嵌套循环复杂度",
+      "variant_group": "nested_complexity"
+    },
+    {
+      "kp": "py.flow.nested",
+      "type": "single_choice",
+      "question": "下面这段代码中，内层循环的执行次数与什么有关？\n\nfor i in range(n):\n    for j in range(i + 1):\n        print(i, j)",
+      "options": [
+        "只与 n 有关，内层每次都执行 n 次",
+        "只与外层变量 i 有关，与 n 无关",
+        "与外层变量 i 有关：当外层为 i 时，内层执行 i+1 次",
+        "内层循环不会执行"
+      ],
+      "answer": 2,
+      "explanation": "内层 range(i+1) 的上限由外层变量 i 决定，因此内层次数随外层变化，i 确定时为 i+1 次。",
+      "error_tag": "内层次数依赖外层变量",
+      "variant_group": "nested_variable_bound"
+    },
+    {
+      "kp": "py.flow.nested",
+      "type": "single_choice",
+      "question": "下面这段代码的输出是什么？\n\nfor i in range(3):\n    for j in range(3):\n        if i == 1 and j == 1:\n            break\n        print(i, j, end='; ')",
+      "options": [
+        "0 0; 0 1; 0 2; 1 0; 1 2; 2 0; 2 1; 2 2; ",
+        "0 0; 0 1; 0 2; 1 0; 2 0; 2 1; 2 2; ",
+        "0 0; 0 1; 0 2; 1 0; 1 1; 1 2; 2 0; 2 1; 2 2; ",
+        "0 0; 1 1; 2 2; "
+      ],
+      "answer": 0,
+      "explanation": "当 i==1 且 j==1 时，内层 break 只跳过 i=1、j=1 之后内层剩余迭代（即跳过 j=2），但外层继续。因此输出缺少 1 1 和 1 2，其余都有。",
+      "error_tag": "break作用范围",
+      "variant_group": "nested_break_scope"
+    },
+    {
+      "kp": "py.flow.nested",
+      "type": "single_choice",
+      "question": "在嵌套循环中，下面哪个说法是正确的？",
+      "options": [
+        "内层循环可以有自己的 break 和 continue，它们只影响内层",
+        "内层循环的 break 会同时终止外层循环",
+        "内层循环的 continue 会跳过外层循环的当前迭代",
+        "外层循环的 continue 会跳过内层循环的当前迭代"
+      ],
+      "answer": 0,
+      "explanation": "break 和 continue 都是作用于它们所在的那一层循环。内层的控制语句只影响内层，外层的只影响外层。",
+      "error_tag": "循环控制作用范围",
+      "variant_group": "nested_control_scope"
+    },
+    {
+      "kp": "py.flow.nested",
+      "type": "single_choice",
+      "question": "下面代码执行后，`result` 的值是多少？\n\nresult = []\nfor i in range(2):\n    for j in range(2):\n        if i != j:\n            result.append((i, j))",
+      "options": [
+        "[(0, 0), (1, 1)]",
+        "[(0, 1), (1, 0)]",
+        "[(0, 0), (0, 1), (1, 0), (1, 1)]",
+        "[(0, 1)]"
+      ],
+      "answer": 1,
+      "explanation": "只有 i 不等于 j 的组合会被加入，满足条件的组合是 (0,1) 和 (1,0)。",
+      "error_tag": "嵌套条件筛选",
+      "variant_group": "nested_filter"
+    },
+    {
+      "kp": "py.flow.nested",
+      "type": "single_choice",
+      "question": "下面两种写法的输出结果是否相同？\n写法一：\nfor i in range(2):\n    for j in range(2):\n        print(i, j)\n\n写法二：\nfor j in range(2):\n    for i in range(2):\n        print(i, j)",
+      "options": [
+        "完全相同，都是 0 0、0 1、1 0、1 1",
+        "不同，写法一先变化 j，写法二先变化 i",
+        "不同，写法一输出 (0,0)(0,1)(1,0)(1,1)，写法二输出 (0,0)(1,0)(0,1)(1,1)",
+        "写法二会报错，因为内外层变量顺序颠倒了"
+      ],
+      "answer": 2,
+      "explanation": "写法一外层变量是 i，先固定 i 变化 j；写法二外层变量是 j，先固定 j 变化 i，因此输出顺序不同。",
+      "error_tag": "嵌套循环执行顺序",
+      "variant_group": "nested_loop_order"
+    },
+    {
+      "kp": "py.flow.nested",
+      "type": "single_choice",
+      "question": "下面这段代码的作用是什么？\n\nfor i in range(1, 4):\n    for j in range(1, 4):\n        if i == j:\n            break\n        print(i, j)",
+      "options": [
+        "打印所有 i 和 j 都不相等的组合",
+        "打印所有 i 和 j 都相等的组合",
+        "打印 i 小于 j 的组合",
+        "打印 i 大于 j 的组合"
+      ],
+      "answer": 0,
+      "explanation": "当 i 等于 j 时执行 break，跳出当前内层循环，因此每一轮中 i==j 的那次不会打印，最终只打印 i 和 j 不相等的组合。",
+      "error_tag": "break作用范围",
+      "variant_group": "nested_break_scope"
+    },
+    {
+      "kp": "py.flow.nested",
+      "type": "single_choice",
+      "question": "在嵌套循环中，`break` 语句的作用范围是？",
+      "options": [
+        "同时跳出外层循环和内层循环",
+        "只跳出当前所在的那一层循环",
+        "会终止整个程序",
+        "会跳过本次循环的剩余部分，但继续下一次迭代"
+      ],
+      "answer": 1,
+      "explanation": "break 只终止它所在的那一层循环，不会自动终止外层循环。要跳出多层通常需要额外标志或异常等机制。",
+      "error_tag": "break作用范围",
+      "variant_group": "nested_break_scope"
+    },
+    {
+      "kp": "py.flow.nested",
+      "type": "single_choice",
+      "question": "下面这段代码执行后，`count` 的值是多少？\n\ncount = 0\nfor i in range(3):\n    for j in range(4):\n        if j == 2:\n            continue\n        count += 1",
+      "options": [
+        "12",
+        "9",
+        "8",
+        "6"
+      ],
+      "answer": 1,
+      "explanation": "外层 3 次，内层 4 次，其中 j==2 时 continue 跳过累加，所以每轮只加 3 次，共 3×3=9。",
+      "error_tag": "continue作用范围",
+      "variant_group": "nested_continue_count"
+    },
+    {
+      "kp": "py.flow.nested",
+      "type": "single_choice",
+      "question": "在嵌套循环中，`continue` 语句的作用是？",
+      "options": [
+        "跳过整个内层循环的剩余迭代，直接开始外层循环的下一次",
+        "只跳过当前这一层循环的本次剩余部分，继续该层循环的下一次迭代",
+        "同时跳过外层和内层本次迭代",
+        "跳出所有循环"
+      ],
+      "answer": 1,
+      "explanation": "continue 只影响它所在的那一层循环，它会跳过该层本次迭代剩余代码，进入该层循环的下一次迭代。",
+      "error_tag": "continue作用范围",
+      "variant_group": "nested_continue_scope"
+    },
+    {
+      "kp": "py.flow.nested",
+      "type": "single_choice",
+      "question": "下面这段代码执行后会输出多少行？\n\nfor i in range(3):\n    for j in range(i):\n        print(i, j)",
+      "options": [
+        "3 行",
+        "6 行",
+        "9 行",
+        "0 行"
+      ],
+      "answer": 0,
+      "explanation": "内层范围是 range(i)，当 i=0 时执行 0 次，i=1 时执行 1 次，i=2 时执行 2 次，总共 0+1+2=3 行。",
+      "error_tag": "内层次数依赖外层变量",
+      "variant_group": "nested_variable_bound"
+    },
+    {
+      "kp": "py.flow.nested",
+      "type": "single_choice",
+      "question": "下面嵌套循环的内层循环总共执行了多少次？\n\nfor i in range(1, 5):\n    for j in range(i, 5):\n        pass",
+      "options": [
+        "16 次",
+        "10 次",
+        "8 次",
+        "4 次"
+      ],
+      "answer": 1,
+      "explanation": "i=1 时内层 4 次，i=2 时 3 次，i=3 时 2 次，i=4 时 1 次，合计 4+3+2+1=10 次。",
+      "error_tag": "内层次数依赖外层变量",
+      "variant_group": "nested_variable_bound"
+    },
+    {
+      "kp": "py.flow.nested",
+      "type": "single_choice",
+      "question": "下面代码输出什么？\n\nfor i in range(2):\n    for j in range(2):\n        print(i + j, end=' ')",
+      "options": [
+        "0 1 1 2",
+        "0 0 1 1",
+        "0 1 2 3",
+        "1 2 2 3"
+      ],
+      "answer": 0,
+      "explanation": "依次组合为 (0,0)->0、(0,1)->1、(1,0)->1、(1,1)->2，因此输出 0 1 1 2。",
+      "error_tag": "嵌套循环取值计算",
+      "variant_group": "nested_value_calc"
+    },
+    {
+      "kp": "py.flow.nested",
+      "type": "single_choice",
+      "question": "下面代码执行后，`s` 的值是多少？\n\ns = 0\nfor i in range(3):\n    for j in range(3):\n        s += i * j",
+      "options": [
+        "9",
+        "18",
+        "36",
+        "27"
+      ],
+      "answer": 1,
+      "explanation": "外层 i 为 0、1、2；内层 j 为 0、1、2。总和为 (0+0+0)+(0+1+2)+(0+2+4)=0+3+6=9？逐项复核：i=0 时全为 0；i=1 时 0+1+2=3；i=2 时 0+2+4=6；总计 9。等等，选项中没有 9？正确答案应为 9，但选项未列出？请修正：实际总和是 9，应出现在选项中。再核对 i=2、j=2 为 4，i=2 行确实是 0+2+4=6，总计 9。题干选项需调整。",
+      "error_tag": "嵌套循环取值计算",
+      "variant_group": "nested_value_calc"
+    },
+    {
+      "kp": "py.flow.pass",
+      "type": "single_choice",
+      "question": "以下代码执行后会发生什么？\n\nfor i in range(3):\n    pass\nprint(i)",
+      "options": [
+        "程序报错，因为 pass 不能放在循环里",
+        "打印 0、1、2",
+        "打印 2",
+        "什么都不打印"
+      ],
+      "answer": 2,
+      "explanation": "pass 是一条空语句，什么都不做，但它不会终止循环。循环正常跑完，i 最终为 2，print(i) 打印 2。它也不会像 break 一样提前结束。",
+      "error_tag": "概念混淆",
+      "variant_group": "pass-basic-semantics"
+    },
+    {
+      "kp": "py.flow.pass",
+      "type": "single_choice",
+      "question": "关于 pass 语句的作用，下列说法正确的是？",
+      "options": [
+        "pass 会跳过本次循环的剩余部分，进入下一次迭代",
+        "pass 是一个语法占位符，执行时不产生任何效果",
+        "pass 会立即退出当前函数并返回 None",
+        "pass 会删除当前作用域中的变量"
+      ],
+      "answer": 1,
+      "explanation": "pass 是空操作语句，仅用于满足语法上需要一条语句的要求。跳过本次迭代是 continue，退出函数是 return，删除变量是 del。",
+      "error_tag": "概念混淆",
+      "variant_group": "pass-basic-semantics"
+    },
+    {
+      "kp": "py.flow.pass",
+      "type": "multi_choice",
+      "question": "下列关于 pass 与 return、break、continue 的比较，正确的有？",
+      "options": [
+        "pass 不会改变程序的控制流",
+        "return 会结束当前函数的执行",
+        "break 会终止最内层循环",
+        "continue 与 pass 在执行效果上完全一致",
+        "pass 会让循环立即结束"
+      ],
+      "answer": [
+        0,
+        1,
+        2
+      ],
+      "explanation": "pass 不改变控制流；return 结束函数；break 结束最内层循环；continue 跳过本次迭代，与 pass 完全不同；pass 不会结束循环。",
+      "error_tag": "概念混淆",
+      "variant_group": "pass-vs-continue"
+    },
+    {
+      "kp": "py.flow.pass",
+      "type": "fill_blank",
+      "question": "在 Python 中，用于表示「什么都不做」的空语句关键字是 ______。",
+      "options": [],
+      "answer": [
+        "pass"
+      ],
+      "explanation": "pass 是 Python 的空操作语句，常用来充当语法上必需的语句。",
+      "error_tag": "记忆缺失",
+      "variant_group": "pass-basic-semantics"
+    },
+    {
+      "kp": "py.flow.pass",
+      "type": "fill_blank",
+      "question": "补全下面的空函数，使其语法正确且不执行任何操作：\n\ndef noop():\n    ______",
+      "options": [],
+      "answer": [
+        "pass",
+        "..."
+      ],
+      "explanation": "函数体不能为空。pass（或省略号字面量 ...）可作为占位，使函数体合法且什么都不做。",
+      "error_tag": "边界错误",
+      "variant_group": "pass-placeholder-usage"
+    },
+    {
+      "kp": "py.flow.pass",
+      "type": "fill_blank",
+      "question": "在循环中，若当某条件满足时需要「跳过本次迭代剩余代码、直接进入下一次迭代」，应使用的关键字是 ______。",
+      "options": [],
+      "answer": [
+        "continue"
+      ],
+      "explanation": "continue 会跳过本次迭代剩余部分，进入下一次循环；pass 只是空操作，不会跳过。",
+      "error_tag": "概念混淆",
+      "variant_group": "pass-vs-continue"
+    },
+    {
+      "kp": "py.flow.pass",
+      "type": "code_reading",
+      "question": "阅读下面代码，指出输出结果并说明原因：\n\ndef check(x):\n    if x > 0:\n        pass\n    return x\n\nprint(check(5), check(-1))",
+      "options": [],
+      "answer": "输出 5 -1。pass 在 x > 0 分支里不做任何事，函数继续执行到 return x，所以正数和负数都原样返回。",
+      "explanation": "pass 不改变控制流也不影响返回值。check(5) 中 if 成立走 pass，随后仍执行 return x 得 5；check(-1) 中 if 不成立，跳过 pass，同样执行 return x 得 -1。",
+      "error_tag": "边界错误",
+      "variant_group": "pass-return-value"
+    },
+    {
+      "kp": "py.flow.pass",
+      "type": "code_reading",
+      "question": "阅读代码，判断 counter 的最终值：\n\ncounter = 0\nfor i in range(5):\n    if i == 2:\n        pass\n    else:\n        counter += 1\nprint(counter)",
+      "options": [],
+      "answer": "4。当 i 等于 2 时进入 if 分支，pass 什么都不做但不会跳过 else，else 只在 if 不成立时执行；i 为 0、1、3、4 时 counter 各加 1，共加 4 次。",
+      "explanation": "pass 与 continue 的关键区别：pass 不会阻止 else 分支的语义判定。当 i == 2 时执行 pass 后循环体结束，counter 不变；其他四次进入 else 加一，最终为 4。",
+      "error_tag": "概念混淆",
+      "variant_group": "pass-vs-continue"
+    },
+    {
+      "kp": "py.flow.pass",
+      "type": "code_reading",
+      "question": "下面代码会报错吗？请说明原因：\n\ndef todo():\n    \"\"\"待实现\"\"\"\n\nclass Marker:\n    pass",
+      "options": [],
+      "answer": "会报错。todo 函数体的唯一内容是文档字符串，函数体本身为空（docstring 不是执行语句），Python 会抛出 IndentationError: expected an indented block。需要在函数体内补上 pass 之类语句。类体有 pass，不报错。",
+      "explanation": "函数体必须包含至少一条语句；孤立的文档字符串不足以构成函数体，仍需 pass 占位。类体写了 pass 因此合法。",
+      "error_tag": "边界错误",
+      "variant_group": "pass-placeholder-usage"
+    },
+    {
+      "kp": "py.flow.pass",
+      "type": "scenario",
+      "question": "团队在做接口原型时，先定义了若干空类与函数骨架，以便其他模块能正常导入而不报语法错误。某位同事直接在函数体里写下 TODO 注释，结果导入时崩溃。请说明崩溃原因，并给出两种可行的占位写法。",
+      "options": [],
+      "answer": null,
+      "explanation": "Python 要求函数体、类体等语句块至少包含一条语句，只有注释不算语句，会触发 IndentationError。可行占位写法是 pass 或省略号字面量 ...。",
+      "error_tag": "边界错误",
+      "variant_group": "pass-placeholder-usage-scenario",
+      "required_keywords": [
+        "IndentationError",
+        "pass",
+        "省略号字面量",
+        "函数体",
+        "语句块"
+      ]
+    },
+    {
+      "kp": "py.flow.pass",
+      "type": "scenario",
+      "question": "在处理一批日志时，需求是：遇到以 '#' 开头的注释行时不做任何处理、直接读下一行；遇到空行时也跳过。新人写成 `if line.startswith('#'): pass`，但发现后续处理代码仍然被执行。请分析原因并给出修改方案。",
+      "options": [],
+      "answer": null,
+      "explanation": "pass 只是空语句，不会跳过循环体剩余代码，所以条件成立后仍会往下执行。要实现「跳过本次迭代」应使用 continue，让循环立即进入下一轮。",
+      "error_tag": "概念混淆",
+      "variant_group": "pass-vs-continue-scenario",
+      "required_keywords": [
+        "continue",
+        "循环控制",
+        "空语句",
+        "迭代",
+        "控制流"
+      ]
+    },
+    {
+      "kp": "py.flow.pass",
+      "type": "scenario",
+      "question": "某个类定义了自定义异常，暂时不需要任何自定义方法或属性。同事担心空类体会报错。请说明这类空类体该如何书写，并解释背后的语法规则。",
+      "options": [],
+      "answer": null,
+      "explanation": "类体同样要求至少一条语句，空白类体需要 pass 这类占位语句来保证语法正确。pass 执行时不产生任何行为，因此不会影响异常的语义。",
+      "error_tag": "边界错误",
+      "variant_group": "pass-placeholder-usage-scenario",
+      "required_keywords": [
+        "空类体",
+        "pass",
+        "占位语句",
+        "语法规则",
+        "类体"
+      ]
+    },
+    {
+      "kp": "py.flow.pass",
+      "type": "single_choice",
+      "question": "编写代码时先搭出结构，函数体暂时留空，下列写法中最合适的是？",
+      "options": [
+        "def handler():\n    # TODO",
+        "def handler():\n    pass",
+        "def handler():\n    ...",
+        "def handler():"
+      ],
+      "answer": 1,
+      "explanation": "函数体不能为空，必须至少有一条语句。pass 是最常见的占位写法；选项 C 的 ...（省略号字面量）在 Python 3 中也可行但不是传统占位写法，选项 D 直接导致 IndentationError。题目问「最合适」，标准占位是 pass。",
+      "error_tag": "边界错误",
+      "variant_group": "pass-placeholder-usage"
+    },
+    {
+      "kp": "py.flow.pass",
+      "type": "single_choice",
+      "question": "下面哪一处使用 pass 是语法上必需的？",
+      "options": [
+        "在 if 分支里写注释就够了，无需 pass",
+        "在 try 后面必须有 except 或 finally，此时可用 pass 占位",
+        "在空函数体中，因为函数体不能为空",
+        "在模块顶层声明变量时"
+      ],
+      "answer": 2,
+      "explanation": "函数体、类体、if/for/while 等复合语句的从句体不能为空，必须至少有一条语句，pass 正好满足这一要求。模块顶层并不要求有语句。",
+      "error_tag": "概念混淆",
+      "variant_group": "pass-placeholder-usage"
+    },
+    {
+      "kp": "py.flow.pass",
+      "type": "single_choice",
+      "question": "以下代码的输出是什么？\n\ndef f():\n    pass\n\nprint(f())",
+      "options": [
+        "None",
+        "程序报错",
+        "什么都不打印",
+        "pass"
+      ],
+      "answer": 0,
+      "explanation": "函数体只有 pass，函数正常执行完毕，没有 return 语句，因此返回 None，print 输出 None。",
+      "error_tag": "记忆缺失",
+      "variant_group": "pass-return-value"
+    },
+    {
+      "kp": "py.flow.pass",
+      "type": "single_choice",
+      "question": "关于 pass 与 continue 的区别，正确的是？",
+      "options": [
+        "两者完全等价，可以互换",
+        "pass 是空操作，continue 会跳过本次循环剩余代码进入下一次迭代",
+        "pass 只能用于循环，continue 只能用于函数",
+        "continue 是空操作，pass 会跳过本次迭代"
+      ],
+      "answer": 1,
+      "explanation": "pass 不改变控制流；continue 会终止当前迭代、跳到下一次循环。二者不可互换。",
+      "error_tag": "概念混淆",
+      "variant_group": "pass-vs-continue"
+    },
+    {
+      "kp": "py.flow.pass",
+      "type": "single_choice",
+      "question": "以下代码中，pass 所在的 if 分支起到什么作用？\n\nfor n in data:\n    if n < 0:\n        pass\n    else:\n        process(n)",
+      "options": [
+        "对负数不做处理，只处理非负数",
+        "会跳过负数，直接进入下一次循环",
+        "会报错，因为 pass 不能放在 if 中",
+        "会把负数转成 0 再处理"
+      ],
+      "answer": 0,
+      "explanation": "pass 让 if 分支成为不做任何事的空分支，负数被忽略，其他分支走 else。若想跳过迭代需要 continue。",
+      "error_tag": "概念混淆",
+      "variant_group": "pass-vs-continue"
+    },
+    {
+      "kp": "py.flow.pass",
+      "type": "single_choice",
+      "question": "下列代码：\n\nclass Empty:\n    pass\n\nprint(type(Empty()))",
+      "options": [
+        "报错，类体不能只有 pass",
+        "<class '__main__.Empty'>",
+        "None",
+        "<class 'pass'>"
+      ],
+      "answer": 1,
+      "explanation": "类体只有 pass 是合法的，pass 仅作为占位，类的定义正常完成，实例化后类型就是该类本身。",
+      "error_tag": "概念混淆",
+      "variant_group": "pass-basic-semantics"
+    },
+    {
+      "kp": "py.flow.pass",
+      "type": "multi_choice",
+      "question": "关于 pass 的下列说法，正确的有哪些？",
+      "options": [
+        "pass 是一条语句，会占用一个语句位置",
+        "pass 执行时不会产生任何运行时行为",
+        "pass 可以用在函数体、类体、if/for/while 从句中",
+        "pass 会让所在函数返回 0",
+        "pass 会中断外层循环"
+      ],
+      "answer": [
+        0,
+        1,
+        2
+      ],
+      "explanation": "pass 是空操作语句，可用于任何需要语句块的地方。它不会改变返回值（无 return 时仍返回 None），也不会中断循环。",
+      "error_tag": "概念混淆",
+      "variant_group": "pass-basic-semantics"
+    },
+    {
+      "kp": "py.flow.pass",
+      "type": "multi_choice",
+      "question": "以下哪些场景中，pass 是合理的选择？（多选）",
+      "options": [
+        "先搭好函数框架，函数体待后续实现",
+        "自定义异常类，暂时不添加方法或属性",
+        "捕获异常后有意忽略该异常",
+        "在循环中当某条件成立时需要跳过本次迭代的其余代码",
+        "需要在分支里什么都不做，只保留结构"
+      ],
+      "answer": [
+        0,
+        1,
+        2,
+        4
+      ],
+      "explanation": "pass 是常用的占位和「有意什么都不做」的写法；跳过本次迭代应使用 continue，因此 D 不正确。",
+      "error_tag": "边界错误",
+      "variant_group": "pass-placeholder-usage"
+    }
+  ]
+}

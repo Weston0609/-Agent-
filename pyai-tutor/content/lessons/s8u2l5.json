@@ -1,0 +1,270 @@
+{
+  "id": "s8u2l5",
+  "title": "s8u2l5",
+  "kps": [
+    "arch.edge.on_device",
+    "arch.edge.collaboration"
+  ],
+  "theory": "## arch.edge.on_device\n\n# 端侧 AI：把模型塞进手机和汽车\n\n> **一句话直觉**：端侧 AI 不是「把云上的模型搬到本地」这么简单，而是一场**预算战争**：显存、功耗、延迟、成本四项同时被卡死，你必须在每一项上都省着花。\n\n## 1. 端侧的四个硬约束\n\n| 约束 | 典型数字 | 影响 |\n| --- | --- | --- |\n| 内存 | 手机可用 2~6 GB，车机 8~16 GB | 决定能跑多大模型 |\n| 功耗 | 手机持续推理 3~5 W 就会烫 | 决定能跑多久 |\n| 延迟 | 首 token < 200 ms 才像「实时」 | 决定架构（是否流式、是否预加载） |\n| 成本 | 每台设备 BOM 增加 0 | 不能加硬件，只能压模型 |\n\n这四条互相牵制：想快就得多算，多算就费电，费电就降频，降频就变慢。所以端侧的核心工作不是「训练更好的模型」，而是**在固定预算下把模型压到刚好够用**。\n\n## 2. 量化：最有效的第一刀\n\n把权重从 FP16 压到 INT8/INT4，显存直接除以 2 或 4，速度通常还能提升 1.5~3 倍（取决于硬件是否支持低精度指令）。\n\n| 精度 | 7B 模型显存 | 质量损失 |\n| --- | --- | --- |\n| FP16 | ~14 GB | 基准 |\n| INT8 | ~7 GB | 很小 |\n| INT4 | ~3.5 GB | 可感知，需评估 |\n| 混合精度 | 按层分配 | 关键层保高精度，其余压低 |\n\n实践中的做法是**混合精度**：attention 的 QKV 和首尾层保持高精度，FFN 中间层压到 4bit。这样质量损失集中在最不敏感的地方。\n\n```python\n# llama.cpp 的量化调用（端侧最常见路径）\n# ./quantize model-f16.gguf model-q4_k_m.gguf Q4_K_M\n# Q4_K_M 是质量/体积的常用平衡点\n```\n\n## 3. 蒸馏：用小模型学大模型的行为\n\n量化是「压缩同一个模型」，蒸馏是「换一个更小的模型」。两种常见形态：\n\n- **logit 蒸馏**：小模型拟合大模型的输出分布（需要大模型 logits，白盒才行）。\n- **数据蒸馏**：用大模型生成一批高质量问答，小模型在这批数据上做 SFT。这是现在最主流的做法（黑盒可用、工程简单）。\n\n一个经验：**7B 蒸馏到 1.5B 通常能保留 80~90% 的领域能力**，但通用推理会掉得更多。所以端侧模型通常做「任务特化」而不是「全能」。\n\n## 4. 推理引擎的选择\n\n端侧不是「装个 vLLM」就行，服务端引擎假设有 GPU 和大显存。端侧常用：\n\n- **llama.cpp / GGUF**：CPU + 各种加速后端，生态最广，量化格式最成熟。\n- **MLC / TVM**：编译到具体硬件，性能好但适配工作量大。\n- **ONNX Runtime / Core ML / NNAPI**：走各家系统级推理框架，能吃到 NPU。\n- **MNN / TFLite**：移动端传统选择，模型支持有限。\n\n选型判断：**要不要吃 NPU**。要，就必须走系统框架（Core ML/NNAPI/QNN），代价是算子支持受限、模型要改写；不要，llama.cpp 一条路能覆盖大部分场景。\n\n## 5. KV cache 是端侧最容易被忽略的开销\n\n模型权重压到 3.5 GB 听起来能跑，但长对话时 KV cache 会持续增长：\n\n```\nKV cache ≈ 2 × 层数 × 头数 × head_dim × 序列长度 × 精度字节\n```\n\n7B 模型、4K 上下文、FP16 的 KV cache 大约 1~2 GB——比量化后的权重还大。所以端侧必须做：\n\n- **限制上下文长度**（2K 而不是 32K）；\n- **KV cache 量化**（INT8 KV）；\n- **滑动窗口 / 分页**，及时释放早期 token 的缓存。\n\n## 6. 端侧能做什么、不能做什么\n\n能：输入法联想、离线翻译、语音唤醒词、图像分类与检测、本地摘要、隐私敏感的个人数据处理。\n\n不能（或者说体验不可接受）：长文档推理、复杂多步 Agent、需要世界知识的开放问答、需要最新信息的任务。\n\n一句话判据：**任务越窄、输入越短、对隐私越敏感，越适合端侧**。\n\n## 小结\n\n端侧 AI 的工程核心是「在内存/功耗/延迟/成本四重预算下做取舍」：量化压体积、蒸馏换小模型、选对推理引擎吃 NPU、管住 KV cache。它的价值不在能力上限，而在**离线可用、低延迟、数据不出设备**。\n\n## arch.edge.collaboration\n\n# 端云协同：什么时候该上云，什么时候该留在端\n\n> **一句话直觉**：端侧负责「快、私密、便宜」，云端负责「强、新、通用」。端云协同要解决的不是「选哪边」，而是**怎么在两边之间划一条动态的线**。\n\n## 1. 三种协同模式\n\n| 模式 | 做法 | 适合 |\n| --- | --- | --- |\n| 端侧兜底 | 默认端侧，失败或低置信才上云 | 高频简单任务，追求成本与延迟 |\n| 云侧兜底 | 默认云端，离线/弱网时降级到端侧 | 复杂任务为主，要求可用性 |\n| 路由分流 | 按任务类型/输入长度/置信度动态选择 | 混合负载，最主流 |\n\n第三种的关键是**路由器**。最简单的路由器是一个分类器或几条规则：\n\n```python\ndef route(query, ctx):\n    if not ctx.online:\n        return \"edge\"                      # 没网只能端侧\n    if ctx.sensitive:                      # 隐私数据不出设备\n        return \"edge\"\n    if len(query) < 30 and ctx.task in SIMPLE_TASKS:\n        return \"edge\"                     # 简单任务端侧够用\n    return \"cloud\"\n```\n\n## 2. 置信度驱动的升级\n\n比「按任务类型」更精细的做法是**让端侧先答，答不好再升级**：\n\n- 端侧模型输出带一个置信信号（logprob、自我评估、或校验规则是否通过）。\n- 低于阈值 → 把 query 连同端侧的草稿一起上云，云端做「改写/确认」而不是从零回答。\n\n这种「草稿 + 修订」模式能显著降低云端成本：云端只需处理 hard case，而且输入更短。\n\n## 3. 隐私边界必须写进架构\n\n端云协同最容易出事的不是性能，是**数据流向**。设计时要明确三件事：\n\n1. **哪些字段永不出端**：原始音频、原始图像、身份信息。可以出端的只有脱敏后的文本或特征向量。\n2. **出端前的脱敏在哪做**：必须在端侧完成，不能「先上传再脱敏」。\n3. **日志与遥测**：默认只上报指标（延迟、成功率、模型版本），不上报内容。\n\n```python\ndef to_cloud(payload):\n    payload = redact_pii(payload)        # 端侧脱敏，出网前最后一步\n    assert not contains_pii(payload), \"脱敏失败，拒绝上传\"\n    return upload(payload)\n```\n\n这个 `assert` 不是形式主义——它是防止某次重构把未脱敏数据送出去的最后一道闸。\n\n## 4. 弱网与离线是第一优先级\n\n移动场景下网络是常态性不可靠的。所以：\n\n- **端侧必须有可用能力**，不能「没网就白屏」。\n- **请求要幂等可重试**，云端返回后本地状态能合并。\n- **模型与配置要能热更新**，通过差分下发而不是整包下载。\n- **超时要短**（2~3 秒），超时立刻降级到端侧，不要挂在那里转圈。\n\n## 5. 成本模型\n\n端云协同的账要算清楚：\n\n```\n总成本 = 端侧推理成本（≈0，但耗电）+ 云端调用次数 × 单次成本 + 模型分发带宽\n```\n\n端侧推理的边际成本几乎为零，这是它最大的经济优势。所以只要质量可接受，把流量往端侧推永远划算。反过来说，**如果端侧模型质量不够导致大量升级到云端，那端侧投入就白花了**——这时不如直接全云。\n\n## 6. 版本与灰度\n\n端侧模型更新比服务端难得多（要过应用商店、用户可能长期不升级）。所以：\n\n- 端侧模型要**向后兼容**：新模型能读旧配置，旧模型遇到不认识的字段要能忽略。\n- 云端要能**识别端侧版本**并调整下发策略（老版本端侧就少给它复杂任务）。\n- 灰度按设备维度而不是请求维度，避免同一用户在两套逻辑间抖动。\n\n## 小结\n\n端云协同的核心是**动态路由 + 隐私边界 + 离线兜底**。技术上不难，难在把「数据不出端」写成代码里的硬约束，以及接受「端侧质量略差但体验更好」这个产品取舍。\n\n",
+  "quiz": [
+    {
+      "kp": "arch.edge.on_device",
+      "type": "single_choice",
+      "question": "端侧 AI 最核心的工程矛盾是？",
+      "options": [
+        "模型太大无法训练",
+        "内存、功耗、延迟、成本四重预算同时被卡死，必须互相取舍",
+        "端侧没有 Python 环境",
+        "端侧无法做量化"
+      ],
+      "answer": 1,
+      "explanation": "四条约束互相牵制：想快就费电，费电就降频，降频就变慢。",
+      "error_tag": "概念混淆",
+      "variant_group": "edge_budget_war"
+    },
+    {
+      "kp": "arch.edge.on_device",
+      "type": "single_choice",
+      "question": "把 7B 模型从 FP16 量化到 INT4，权重体积大致变为？",
+      "options": ["不变", "约 1/2", "约 1/4", "约 1/16"],
+      "answer": 2,
+      "explanation": "FP16→INT4 是 16bit→4bit，约压缩 4 倍，7B 从约 14GB 降到约 3.5GB。",
+      "error_tag": "记忆缺失",
+      "variant_group": "edge_quant_ratio"
+    },
+    {
+      "kp": "arch.edge.on_device",
+      "type": "single_choice",
+      "question": "端侧长对话时最容易被忽略、且可能超过量化后权重大小的开销是？",
+      "options": [
+        "词表大小",
+        "KV cache",
+        "tokenizer 文件",
+        "日志文件"
+      ],
+      "answer": 1,
+      "explanation": "4K 上下文的 KV cache 可达 1~2GB，必须限制上下文、量化 KV 或分页释放。",
+      "error_tag": "工程实践缺失",
+      "variant_group": "edge_kv_cache"
+    },
+    {
+      "kp": "arch.edge.on_device",
+      "type": "single_choice",
+      "question": "如果目标是「吃到手机 NPU」，推理路径通常必须选择？",
+      "options": [
+        "vLLM",
+        "系统级推理框架（Core ML / NNAPI / QNN 等）",
+        "纯 Python 解释执行",
+        "TorchServe"
+      ],
+      "answer": 1,
+      "explanation": "NPU 只能通过系统框架访问，代价是算子支持受限、模型需改写。",
+      "error_tag": "选型错误",
+      "variant_group": "edge_npu_path"
+    },
+    {
+      "kp": "arch.edge.on_device",
+      "type": "single_choice",
+      "question": "以下哪类任务最适合放端侧？",
+      "options": [
+        "长文档的跨章节推理",
+        "需要最新世界知识的开放问答",
+        "输入法联想与离线翻译",
+        "多步工具调用的复杂 Agent"
+      ],
+      "answer": 2,
+      "explanation": "任务窄、输入短、隐私敏感的才适合端侧；开放知识与长推理需要云端。",
+      "error_tag": "边界错误",
+      "variant_group": "edge_task_fit"
+    },
+    {
+      "kp": "arch.edge.on_device",
+      "type": "multi_choice",
+      "question": "关于端侧模型压缩，以下说法正确的有哪些？（多选）",
+      "options": [
+        "量化直接压体积，速度通常还能提升（取决于硬件低精度指令）",
+        "混合精度可让关键层保高精度、其余压到低位",
+        "蒸馏是换更小的模型，常通过大模型生成数据做 SFT 实现",
+        "量化越激进越好，4bit 永远优于 8bit",
+        "端侧模型通常做任务特化而不是追求全能"
+      ],
+      "answer": [0, 1, 2, 4],
+      "explanation": "4bit 有明显质量损失，需要评估；不能无条件说越激进越好。",
+      "error_tag": "概念混淆",
+      "variant_group": "edge_compression"
+    },
+    {
+      "kp": "arch.edge.on_device",
+      "type": "fill_blank",
+      "question": "把 FP16 权重压到 INT8/INT4 以减小显存、提升速度的技术叫 ______。",
+      "options": [],
+      "answer": ["量化", "quantization", "Quantization"],
+      "explanation": "量化是端侧压缩的第一刀，配合混合精度可平衡质量。",
+      "error_tag": "记忆缺失",
+      "variant_group": "edge_quantization"
+    },
+    {
+      "kp": "arch.edge.on_device",
+      "type": "fill_blank",
+      "question": "端侧最常见的开源推理方案之一，使用 GGUF 模型格式，叫 ______.cpp。",
+      "options": [],
+      "answer": ["llama", "llama.cpp", "llamacpp"],
+      "explanation": "llama.cpp 支持 CPU 与多种加速后端，量化格式成熟，端侧生态最广。",
+      "error_tag": "记忆缺失",
+      "variant_group": "edge_llamacpp"
+    },
+    {
+      "kp": "arch.edge.on_device",
+      "type": "code_reading",
+      "question": "以下端侧部署配置有什么问题：\n\ncfg = {\n    \"model\": \"qwen2.5-7b-fp16.gguf\",\n    \"context_len\": 32768,\n    \"kv_cache_dtype\": \"fp16\",\n    \"batch_size\": 8,\n}",
+      "options": [],
+      "answer": "三个问题：一是用 fp16 权重，7B 约 14GB，手机/车机装不下，应先量化到 Q4/Q5；二是 32K 上下文的 fp16 KV cache 会占数 GB，端侧内存直接爆，应降到 2K~4K 或量化 KV；三是 batch_size=8 在单用户设备上没有意义，反而倍增显存。端侧应针对单请求、短上下文、低精度做配置。",
+      "explanation": "端侧配置的每一项都在和内存预算搏斗，服务端默认值直接搬过来必然爆。",
+      "error_tag": "工程实践缺失",
+      "variant_group": "edge_bad_config"
+    },
+    {
+      "kp": "arch.edge.on_device",
+      "type": "scenario",
+      "question": "要给一款离线翻译耳机做语音翻译：设备只有 2GB 可用内存、电池续航要求 8 小时、要支持中英日三语。请说明你的模型方案与关键取舍。",
+      "options": [],
+      "answer": null,
+      "explanation": "考查：任务特化（不追求通用模型）、蒸馏+量化、分语言小模型或共享编码器、流式分句翻译降低上下文、功耗与延迟取舍、离线数据分发。",
+      "error_tag": "场景分析不足",
+      "variant_group": "edge_earphone_scenario",
+      "required_keywords": ["量化", "蒸馏", "特化", "上下文", "功耗", "离线"]
+    },
+    {
+      "kp": "arch.edge.collaboration",
+      "type": "single_choice",
+      "question": "端云协同中最主流的模式是？",
+      "options": [
+        "全部端侧",
+        "全部云端",
+        "按任务类型/输入长度/置信度动态路由分流",
+        "随机选择"
+      ],
+      "answer": 2,
+      "explanation": "混合负载需要动态路由，单纯偏向一侧都会浪费或体验差。",
+      "error_tag": "概念混淆",
+      "variant_group": "edgecloud_routing"
+    },
+    {
+      "kp": "arch.edge.collaboration",
+      "type": "single_choice",
+      "question": "「端侧先答、答不好再上云」相比直接上云的优势是？",
+      "options": [
+        "云端完全不需要",
+        "云端只处理 hard case 且输入更短（草稿+修订），成本显著下降",
+        "质量一定更好",
+        "不需要网络"
+      ],
+      "answer": 1,
+      "explanation": "置信度驱动的升级能大幅削减云端调用量与输入长度。",
+      "error_tag": "工程实践缺失",
+      "variant_group": "edgecloud_draft_revise"
+    },
+    {
+      "kp": "arch.edge.collaboration",
+      "type": "single_choice",
+      "question": "关于隐私边界，以下做法正确的是？",
+      "options": [
+        "先把原始数据上传，再在云端脱敏",
+        "在端侧完成脱敏，出网前做硬校验，原始音频/图像永不出端",
+        "只上报内容不报指标",
+        "把用户身份信息放在日志里方便排查"
+      ],
+      "answer": 1,
+      "explanation": "脱敏必须在出网前、在端侧完成，并加断言防止重构误传。",
+      "error_tag": "安全意识缺失",
+      "variant_group": "edgecloud_privacy"
+    },
+    {
+      "kp": "arch.edge.collaboration",
+      "type": "single_choice",
+      "question": "移动场景下端云协同的第一优先级是？",
+      "options": [
+        "模型精度",
+        "弱网与离线可用性：端侧必须有兜底能力，超时立即降级",
+        "界面美观",
+        "日志完整性"
+      ],
+      "answer": 1,
+      "explanation": "网络在移动场景常态性不可靠，「没网就白屏」是不可接受的。",
+      "error_tag": "工程实践缺失",
+      "variant_group": "edgecloud_offline_first"
+    },
+    {
+      "kp": "arch.edge.collaboration",
+      "type": "single_choice",
+      "question": "如果端侧模型质量不够，导致大量请求升级到云端，说明？",
+      "options": [
+        "应该继续加大端侧模型",
+        "端侧投入基本白费，不如直接全云，需要重新评估端侧策略",
+        "应该关闭云端",
+        "说明路由器坏了"
+      ],
+      "answer": 1,
+      "explanation": "端侧的经济优势建立在「大部分流量留在端侧」之上，升级率过高就不划算。",
+      "error_tag": "诊断能力缺失",
+      "variant_group": "edgecloud_cost_verdict"
+    },
+    {
+      "kp": "arch.edge.collaboration",
+      "type": "multi_choice",
+      "question": "端云协同的工程要点包括哪些？（多选）",
+      "options": [
+        "动态路由：按任务、长度、置信度选择端或云",
+        "端侧脱敏 + 出网前断言校验",
+        "超时短（2~3 秒）并立即降级到端侧",
+        "请求幂等可重试，返回后能合并本地状态",
+        "端侧模型更新可以随意破坏兼容性"
+      ],
+      "answer": [0, 1, 2, 3],
+      "explanation": "端侧版本难统一，必须向后兼容；破坏兼容性会让老设备直接不可用。",
+      "error_tag": "工程实践缺失",
+      "variant_group": "edgecloud_engineering"
+    },
+    {
+      "kp": "arch.edge.collaboration",
+      "type": "fill_blank",
+      "question": "端云协同里根据任务类型、输入长度或置信度决定走端还是走云的组件叫 ______（router）。",
+      "options": [],
+      "answer": ["路由器", "router", "路由", "Router"],
+      "explanation": "路由器是端云协同的核心决策点，规则或分类器皆可。",
+      "error_tag": "记忆缺失",
+      "variant_group": "edgecloud_router"
+    },
+    {
+      "kp": "arch.edge.collaboration",
+      "type": "fill_blank",
+      "question": "端侧推理的边际成本几乎为零，这是它相比云端最大的 ______ 优势。",
+      "options": [],
+      "answer": ["成本", "经济", "成本经济"],
+      "explanation": "把流量留在端侧永远更省钱，前提是质量可接受。",
+      "error_tag": "概念混淆",
+      "variant_group": "edgecloud_cost_advantage"
+    },
+    {
+      "kp": "arch.edge.collaboration",
+      "type": "code_reading",
+      "question": "以下代码的数据流向有什么风险：\n\ndef handle(audio_bytes, user):\n    text = upload_to_cloud_asr(audio_bytes)      # 原始音频直接上传\n    log.info(\"asr ok\", user_id=user.id, raw=audio_bytes)\n    return text",
+      "options": [],
+      "answer": "原始音频未经脱敏直接上传到云端，违反「敏感原始数据不出端」；同时把原始音频写进日志，等于二次泄漏（日志往往保留更久、权限更宽）。应改为端侧先做 ASR 或至少提取特征，只上传脱敏文本；日志只记录指标（时长、成功率、模型版本），绝不记录原始内容或用户身份。",
+      "explanation": "端云协同最常出事的是数据流向而非性能，原始数据上传+落日志是双重违规。",
+      "error_tag": "安全意识缺失",
+      "variant_group": "edgecloud_leak_code"
+    },
+    {
+      "kp": "arch.edge.collaboration",
+      "type": "scenario",
+      "question": "一款手机输入法要接入 AI 联想：要求打字延迟低于 100ms、不能把用户输入内容上传、但希望复杂长句也能补全得好。请设计端云协同方案并说明取舍。",
+      "options": [],
+      "answer": null,
+      "explanation": "考查：简单高频走端侧（延迟+隐私），复杂长句在用户明确同意/脱敏后走云端；路由规则；端侧兜底保证离线可用；隐私硬约束用断言与日志策略保证。",
+      "error_tag": "场景分析不足",
+      "variant_group": "edgecloud_ime_scenario",
+      "required_keywords": ["端侧", "路由", "脱敏", "延迟", "离线", "隐私"]
+    }
+  ]
+}

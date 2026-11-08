@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pyai-tutor"
+version = "0.1.0"
+description = "Python & AI 架构师离线学习系统 —— 闯关式、40 分钟自动排课、离线零 token"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+dependencies = [
+    "pyyaml>=6.0",      # 课程树 full_curriculum.yaml
+    "jinja2>=3.1",      # 更新管道的 prompt 模板
+    "apscheduler>=3.10",  # TimeDaemon 时间守护
+    "fsrs>=5.0",        # 间隔重复复习调度
+]
+
+[project.scripts]
+pyai = "pyai.ui.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+"pyai" = ["ui/web/templates/*.html", "ui/web/static/*"]

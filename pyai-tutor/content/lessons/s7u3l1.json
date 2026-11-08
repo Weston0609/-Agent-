@@ -1,0 +1,653 @@
+{
+  "id": "s7u3l1",
+  "title": "s7u3l1",
+  "kps": [
+    "agent.pattern.react",
+    "agent.pattern.plan_execute"
+  ],
+  "theory": "## agent.pattern.react\n\n# Agent 模式之 ReAct：让模型学会「边想边做」\n\n## 一句话直觉\n\n**ReAct（Reasoning + Acting，推理 + 行动）** 是让大语言模型（LLM，Large Language Model）像一位边思考边动手的助手：它先写下一段推理，再决定调用哪个工具，看到工具结果后继续推理，如此循环，直到能给出最终答案。\n\n为什么要学它？因为**纯推理**的模型容易一本正经地胡说八道（幻觉，hallucination），而**纯行动**的模型又不知道下一步该做什么。ReAct 把两者交替进行，让 Agent（智能体）既能「想清楚」，又能「做到位」。\n\n---\n\n## 1. 为什么需要 ReAct：从「一问一答」到「边想边做」\n\n传统 LLM 调用是「输入 prompt → 输出文本」的一次性过程。面对「北京今天比上海冷吗？」这类问题，模型只能靠记忆答，答案可能过期或错误。\n\nReAct 的核心思想是引入一个**循环（loop）**：\n\n1. **Thought（思考）**：模型用自然语言写下当前推理。\n2. **Action（行动）**：模型选择一个工具并给出参数。\n3. **Observation（观察）**：把工具返回的结果喂回模型。\n4. 回到第 1 步，直到模型输出 **Final Answer（最终答案）**。\n\n这个循环让模型能用外部世界的真实信息不断修正自己的推理。\n\n```python\n# 用伪代码展示 ReAct 的核心循环，帮助建立整体印象\n\ndef react_loop(question: str, max_steps: int = 5):\n    \"\"\"最简 ReAct 循环：Thought -> Action -> Observation -> ...\"\"\"\n    scratchpad = f\"Question: {question}\\n\"  # 草稿纸，累积历史\n    for step in range(max_steps):\n        llm_output = fake_llm(scratchpad)       # 让 LLM 决定下一步\n        if \"Final Answer:\" in llm_output:       # 若已能给答案，就收工\n            return llm_output.split(\"Final Answer:\")[-1].strip()\n        scratchpad += llm_output + \"\\n\"        # 记录 Thought + Action\n        obs = run_tool(llm_output)              # 执行工具\n        scratchpad += f\"Observation: {obs}\\n\"  # 把观察结果写回草稿\n    return \"达到最大步数，未能完成\"\n\ndef fake_llm(prompt: str) -> str:\n    return \"Thought: 我需要先查天气。\\nAction: get_weather[city=北京]\"\n\ndef run_tool(action: str) -> str:\n    return \"北京：-2℃\"\n\nprint(react_loop(\"北京今天冷吗？\"))  # 仅演示循环骨架\n```\n\n---\n\n## 2. 三件套：Thought / Action / Observation 的协议\n\nReAct 的本质是一套**文本协议（text protocol）**。模型和外部程序约定好几个关键前缀词，程序靠解析它们来触发动作。\n\n| 字段 | 含义 | 谁产生 |\n|------|------|--------|\n| `Thought` | 模型的内部推理 | LLM |\n| `Action` | 要调用的工具名 + 参数 | LLM |\n| `Observation` | 工具执行后的返回值 | 宿主程序 |\n| `Final Answer` | 最终回答 | LLM |\n\n只要约定好这套前缀，任何 LLM 都能被「套上」ReAct 外壳。\n\n```python\nimport re\n\n# 用正则从 LLM 输出里解析 Action 与参数\nACTION_RE = re.compile(r\"Action:\\s*(\\w+)\\[(.*?)\\]\")\n\ndef parse_action(text: str):\n    \"\"\"从 LLM 输出文本中抽取 (工具名, 参数字符串)。\"\"\"\n    match = ACTION_RE.search(text)\n    if not match:\n        return None, None\n    tool_name, args_str = match.group(1), match.group(2)\n    return tool_name, args_str\n\nsample = \"Thought: 我需要查天气。\\nAction: get_weather[city=北京]\"\nprint(parse_action(sample))  # ('get_weather', 'city=北京')\n```\n\n---\n\n## 3. 工具注册表：让 Agent 知道能「动手」做什么\n\nReAct 里的「行动」不是一个抽象概念，而是一张**工具表（tool registry）**：键是工具名，值是可调用的 Python 函数。每一轮模型选择工具，程序就查表执行。\n\n```python\n# 一个极简工具注册表\nTOOLS = {}\n\ndef tool(name: str):\n    \"\"\"装饰器：把函数注册到 TOOLS 表里。\"\"\"\n    def wrap(fn):\n        TOOLS[name] = fn\n        return fn\n    return wrap\n\n@tool(\"get_weather\")\ndef get_weather(city: str) -> str:\n    \"\"\"假装查天气，返回字符串。\"\"\"\n    data = {\"北京\": \"-2℃ 晴\", \"上海\": \"6℃ 多云\"}\n    return data.get(city, \"未知城市\")\n\n@tool(\"calc\")\ndef calc(expr: str) -> str:\n    \"\"\"安全计算简单算术表达式。\"\"\"\n    try:\n        return str(eval(expr, {\"__builtins__\": {}}, {}))\n    except Exception as e:\n        return f\"计算错误: {e}\"\n\nprint(TOOLS.keys())          # dict_keys(['get_weather', 'calc'])\nprint(get_weather(\"北京\"))   # -2℃ 晴\n```\n\n---\n\n## 4. 组装一个最小可跑的 ReAct Agent\n\n现在把前面几块拼起来：**解析 + 工具表 + 循环**，得到可运行的 ReAct 骨架。为了让代码离线可跑，用一个「假 LLM」模拟模型输出，你可以随时把它替换成真实的 OpenAI / 本地模型调用。\n\n```python\nimport re\n\nTOOLS = {}\ndef tool(name):\n    def wrap(fn): TOOLS[name] = fn; return fn\n    return wrap\n\n@tool(\"get_weather\")\ndef get_weather(city: str) -> str:\n    return {\"北京\": \"-2℃\", \"上海\": \"6℃\"}.get(city, \"未知\")\n\nACTION_RE = re.compile(r\"Action:\\s*(\\w+)\\[(.*?)\\]\")\n\ndef parse_kv(args_str: str):\n    \"\"\"把 'city=北京' 解析成 {'city': '北京'}。\"\"\"\n    kv = {}\n    for part in args_str.split(\",\"):\n        if \"=\" in part:\n            k, v = part.split(\"=\", 1)\n            kv[k.strip()] = v.strip()\n    return kv\n\ndef fake_llm(scratchpad: str) -> str:\n    \"\"\"用一个基于规则的'假模型'演示协议；真实使用时换为真正的 LLM。\"\"\"\n    if \"Observation:\" not in scratchpad:\n        return \"Thought: 先查北京天气。\\nAction: get_weather[city=北京]\"\n    return \"Thought: 已经知道结果。\\nFinal Answer: 北京 -2℃。\"\n\ndef react(question: str, max_steps: int = 5) -> str:\n    scratchpad = f\"Question: {question}\\n\"\n    for _ in range(max_steps):\n        out = fake_llm(scratchpad)\n        scratchpad += out + \"\\n\"\n        if \"Final Answer:\" in out:\n            return out.split(\"Final Answer:\")[-1].strip()\n        m = ACTION_RE.search(out)\n        if not m:\n            return \"解析失败，终止\"\n        name, args_str = m.group(1), m.group(2)\n        obs = TOOLS[name](**parse_kv(args_str)) if name in TOOLS else \"未知工具\"\n        scratchpad += f\"Observation: {obs}\\n\"\n    return \"超过最大步数\"\n\nprint(react(\"北京今天冷不冷？\"))\n```\n\n---\n\n## 5. 工程化要点：让 ReAct 从玩具走向生产\n\n一个能上线的 ReAct Agent，需要处理下面这些工程问题：\n\n1. **最大步数（max_steps）**：防止死循环。\n2. **超时与重试**：工具调用可能失败。\n3. **输出格式约束**：用 JSON 或函数调用（function calling）让解析更稳。\n4. **上下文长度管理**：scratchpad 会越来越长，要截断或摘要。\n5. **可观测性（observability）**：记录每一轮 Thought/Action/Observation，方便调试。\n6. **安全**：工具执行要沙箱化，禁止 `eval` 执行任意代码。\n\n```python\n# 演示带超时与日志的健壮性增强\nimport time, json\n\ndef safe_call(fn, timeout=2.0, **kwargs):\n    start = time.time()\n    result = fn(**kwargs)\n    elapsed = time.time() - start\n    if elapsed > timeout:\n        return f\"工具超时: {elapsed:.2f}s\"\n    return result\n\ndef log_step(step: int, kind: str, content: str):\n    \"\"\"结构化日志，便于事后回放。\"\"\"\n    print(json.dumps({\"step\": step, \"kind\": kind, \"content\": content}, ensure_ascii=False))\n\nlog_step(1, \"Thought\", \"先查北京天气\")\nlog_step(1, \"Action\", \"get_weather(city=北京)\")\nprint(safe_call(get_weather, city=\"北京\"))\n```\n\n---\n\n## 小结\n\n- ReAct = **推理（Reasoning）+ 行动（Acting）**，通过 Thought/Action/Observation 循环让 Agent 边想边做。\n- 关键部件：**文本协议、工具注册表、循环控制器、解析器**。\n- 工程化重点：步数限制、超时重试、格式约束、可观测性、安全沙箱。\n- 它是一切现代 Agent（如 LangChain Agent、AutoGPT、OpenAI Assistants）的思想基础。\n\n---\n\n## 动手练习\n\n**任务**：给自己写一个能回答「两数相减结果是否是质数」的 ReAct Agent。\n\n要求：\n1. 注册两个工具：`subtract[a,b]` 返回 `a-b`；`is_prime[n]` 返回 `True/False`。\n2. 用「假 LLM」模拟三轮：先 `subtract`，拿到 Observation 后再 `is_prime`，最后给出 Final Answer。\n3. 打印每一步的 `Thought / Action / Observation`，方便观察循环。\n4. 加入 `max_steps=5` 和「未知工具」的兜底处理。\n\n提示：可以复用本讲义第 4 节的骨架，把工具表和 fake_llm 换掉即可。完成后再尝试把 `fake_llm` 换成真实的 OpenAI `chat.completions` 调用，只需把 Tool 表转成函数描述放入 prompt 即可。\n\n```python\nimport re\n\n# ===== 工具注册表 =====\nTOOLS = {}\n\ndef tool(name: str):\n    def wrap(fn):\n        TOOLS[name] = fn\n        return fn\n    return wrap\n\n@tool(\"get_weather\")\ndef get_weather(city: str) -> str:\n    return {\"北京\": \"-2℃ 晴\", \"上海\": \"6℃ 多云\"}.get(city, \"未知城市\")\n\n@tool(\"calc\")\ndef calc(expr: str) -> str:\n    try:\n        return str(eval(expr, {\"__builtins__\": {}}, {}))\n    except Exception as e:\n        return f\"计算错误: {e}\"\n\n# ===== 协议解析 =====\nACTION_RE = re.compile(r\"Action:\\s*(\\w+)\\[(.*?)\\]\")\n\ndef parse_kv(args_str: str):\n    kv = {}\n    for part in args_str.split(\",\"):\n        if \"=\" in part:\n            k, v = part.split(\"=\", 1)\n            kv[k.strip()] = v.strip()\n    return kv\n\n# ===== 假 LLM，方便离线运行 =====\ndef fake_llm(scratchpad: str) -> str:\n    if \"Observation:\" not in scratchpad:\n        return \"Thought: 我需要先查询北京天气。\\nAction: get_weather[city=北京]\"\n    return \"Thought: 已有结果，可以回答。\\nFinal Answer: 北京今天 -2℃，很冷。\"\n\n# ===== ReAct 主循环 =====\ndef react(question: str, max_steps: int = 5) -> str:\n    scratchpad = f\"Question: {question}\\n\"\n    for step in range(1, max_steps + 1):\n        out = fake_llm(scratchpad)\n        print(f\"--- Step {step} ---\\n{out}\")\n        scratchpad += out + \"\\n\"\n        if \"Final Answer:\" in out:\n            return out.split(\"Final Answer:\")[-1].strip()\n        m = ACTION_RE.search(out)\n        if not m:\n            return \"解析失败，终止\"\n        name, args_str = m.group(1), m.group(2)\n        obs = TOOLS[name](**parse_kv(args_str)) if name in TOOLS else \"未知工具\"\n        print(f\"Observation: {obs}\")\n        scratchpad += f\"Observation: {obs}\\n\"\n    return \"超过最大步数\"\n\nif __name__ == \"__main__\":\n    print(\"最终答案:\", react(\"北京今天冷不冷？\"))\n```\n\n## agent.pattern.plan_execute\n\n# Agent 设计模式：Plan-Execute（先规划，后执行）\\n\\n> 一句话直觉：复杂的任务不要一步到位，先让 AI 拆成步骤清单，再一步一步去做，比“一口气干完”更稳、更准、更好调试。\\n\\n---\\n\\n## 一、为什么需要 Plan-Execute？\\n\\n当我们让大语言模型（LLM，Large Language Model）直接完成一个复杂任务时（比如“帮我研究三家竞品并写一份报告”），它常常会：\\n- 遗漏步骤；\\n- 顺序错乱；\\n- 中途跑偏；\\n- 出错后不知道从哪继续。\\n\\n**Plan-Execute 模式**把任务拆成两个阶段：\\n\\n1. **Plan（规划）**：先把任务拆成有序的步骤清单。\\n2. **Execute（执行）**：逐步执行每一步，可以让不同步骤用不同工具或不同提示词。\\n\\n这样做的好处是**可解释、可调试、可复用**：你能看到 Agent 到底想干嘛，也能在任一步骤插桩、重试或替换。\\n\\n---\\n\\n## 二、Plan-Execute 的最小骨架\\n\\n最朴素的实现只有两个函数：\\n\\n```python\\nfrom typing import List\\n\\ndef plan(task: str) -> List[str]:\\n    \\\"\\\"\\\"把任务拆成步骤列表。\\\"\\\"\\\"\\n    ...\\n\\ndef execute(step: str) -> str:\\n    \\\"\\\"\\\"执行单个步骤，返回结果。\\\"\\\"\\\"\\n    ...\\n```\\n\\n然后把它们串起来：\\n\\n```python\\ndef run(task: str) -> List[str]:\\n    results = []\\n    for step in plan(task):\\n        results.append(execute(step))\\n    return results\\n```\\n\\n**关键结论**：Plan-Execute 的本质是“O(=结构化输出) + 循环”。规划阶段把自然语言任务转成**结构化的步骤列表**（通常是 `List[str]` 或 `List[dict]`），执行阶段就是一个 for 循环。\\n\\n---\\n\\n## 三、把 Planner 交给 LLM\\n\\n零基础阶段可以先用规则模拟，工程级阶段就要让 LLM 输出结构化步骤。做法是：**在提示词中明确要求返回 JSON 数组**。\\n\\n```python\\nimport json\\nfrom typing import List\\n\\nPLANNER_PROMPT = \\\"\\\"\\\"\\n你是一个规划器。把用户任务拆成 3~6 个有序步骤。\\n只输出 JSON 数组，元素是字符串，不要任何解释。\\n任务：{task}\\n\\\"\\\"\\\"\\n\\ndef plan_with_llm(llm, task: str) -> List[str]:\\n    raw = llm(PLANNER_PROMPT.format(task=task))\\n    steps = json.loads(raw)          # 若模型可能加代码块，需先 strip\\n    assert isinstance(steps, list)\\n    return [str(s) for s in steps]\\n```\\n\\n**要点**：\\n- 明确要求 JSON，避免模型返回“第一步……第二步……”这种非结构化文本。\\n- 加 `assert` 或 `try/except` 做校验，这是工程级与玩具代码的分水岭。\\n\\n---\\n\\n## 四、执行阶段：把每个步骤当一次独立调用\\n\\n执行阶段不要偷懒把“原任务 + 全部步骤 + 当前步骤”一股脑塞给 LLM，**要让每一步的上下文最小必要**。这样能减少幻觉（hallucination）和串扰。\\n\\n```python\\ndef execute_step(llm, task: str, step: str, history: List[str]) -> str:\\n    prompt = f\\\"\\\"\\\"\\n总任务：{task}\\n已完成：{history}\\n当前步骤：{step}\\n请只完成当前步骤，并输出这一步的结果。\\n\\\"\\\"\\\"\\n    return llm(prompt)\\n```\\n\\n**关键结论**：Plan 是“共享上下文”，Execute 是“隔离上下文”。每个步骤只关心自己和已经完成的部分，避免上下文越长越糊涂。\\n\\n---\\n\\n## 五、加上重规划（Re-plan）才能实用\\n\\n真实任务里，某一步失败或输出不符合预期是常态。工程级 Plan-Execute 会在执行中检查结果，必要时**触发重规划**。\\n\\n```python\\ndef run_with_replan(llm, task: str, max_rounds: int = 3) -> List[str]:\\n    steps = plan_with_llm(llm, task)\\n    results: List[str] = []\\n    for _ in range(max_rounds):\\n        failed = False\\n        for step in steps:\\n            out = execute_step(llm, task, step, results)\\n            if not out or \\\"失败\\\" in out:\\n                failed = True\\n                break\\n            results.append(out)\\n        if not failed:\\n            return results\\n        # 失败则重新规划剩下的部分\\n        steps = plan_with_llm(llm, f\\\"原任务：{task}；已完成：{results}\\\")\\n    return results\\n```\\n\\n**要点**：\\n- 重规划时把“已完成结果”作为输入，避免重复劳动。\\n- 设置 `max_rounds` 防死循环，这是生产环境的必备。\\n\\n---\\n\\n## 六、工程级建议小结\\n\\n| 维度 | 建议 |\\n|---|---|\\n| 规划输出 | 强制 JSON，校验类型 |\\n| 步骤粒度 | 3~6 步，太细碎反而增加 token |\\n| 执行上下文 | 只给当前步骤 + 已完成的摘要 |\\n| 失败处理 | 检查输出 + 重规划 + 最大轮数 |\\n| 可观测性 | 每步日志（logging）记输入输出 |\\n| 可测试性 | Planner / Executor 解耦，方便单测 |\\n\\n---\\n\\n## 七、动手练习\\n\\n**任务**：实现一个 `ResearchAgent`，用 Plan-Execute 模式完成“调研 3 个 Python Web 框架并输出对比”。\\n\\n要求：\\n1. 实现 `plan(task) -> List[str]`，用**规则**返回 5 步（如：列出候选框架 → 收集资料 → 对比维度 → 写结论 → 整理输出）。\\n2. 实现 `execute(step) -> str`，用一个假的 `fake_llm(prompt)` 函数（谁调用都返回 `f\\\"已完成：{prompt[:20]}...\\\"`）。\\n3. 写 `run(task)` 依次执行并打印每一步结果。\\n4. **进阶**：给 `execute` 加一个“随机失败”模拟，失败时触发重规划。\\n\\n完成后你会对 Plan-Execute 的“结构化规划 + 循环执行 + 失败容错”有完整的手感。\n\n```python\nfrom typing import List\nimport json\n\n# ---------- 1. 一个假的 LLM，用于演示（真实项目换成 API 调用） ----------\ndef fake_llm(prompt: str) -> str:\n    # 若是规划阶段，返回 JSON 步骤列表\n    if \"规划器\" in prompt or \"JSON\" in prompt:\n        return json.dumps([\n            \"列出候选项\",\n            \"收集每个候选项的信息\",\n            \"按统一维度对比\",\n            \"给出结论\"\n        ], ensure_ascii=False)\n    # 否则当作执行阶段\n    return f\"已完成步骤：{prompt[:30]}...\"\n\n# ---------- 2. Planner ----------\ndef plan(task: str) -> List[str]:\n    prompt = f\"你是规划器，把任务拆成 3~6 步，只输出 JSON 数组。任务：{task}\"\n    raw = fake_llm(prompt)\n    steps = json.loads(raw)\n    assert isinstance(steps, list) and all(isinstance(s, str) for s in steps)\n    return steps\n\n# ---------- 3. Executor ----------\ndef execute(task: str, step: str, history: List[str]) -> str:\n    prompt = f\"任务：{task}\\n已完成：{history}\\n当前步骤：{step}\"\n    return fake_llm(prompt)\n\n# ---------- 4. 串联：Plan -> Execute ----------\ndef run(task: str) -> List[str]:\n    steps = plan(task)\n    print(\"[Plan]\", steps)\n    results: List[str] = []\n    for i, step in enumerate(steps, 1):\n        out = execute(task, step, results)\n        print(f\"[Step {i}] {step} -> {out}\")\n        results.append(out)\n    return results\n\nif __name__ == \"__main__\":\n    run(\"调研 3 个 Python Web 框架并输出对比\")\n```\n",
+  "quiz": [
+    {
+      "kp": "agent.pattern.react",
+      "type": "single_choice",
+      "question": "在 ReAct（Reasoning + Acting）模式的智能体中，模型输出通常是「思考 → 行动 → 观察」的循环。以下哪种做法最符合 ReAct 范式的核心思想？",
+      "options": [
+        "先一次性输出最终答案，再补充说明推理过程",
+        "在每一步交替输出自然语言推理与一个可供外部执行的动作，并根据动作返回的结果继续推理",
+        "只输出工具调用的 JSON，不输出任何自然语言推理",
+        "把所有可能的工具调用全部并行发出，最后再统一汇总"
+      ],
+      "answer": 1,
+      "explanation": "ReAct 的关键在于推理（Thought）与行动（Action）交替进行，并把环境返回的 Observation 反馈到下一轮推理中。A 是事后解释，C 丢失了推理轨迹，D 忽略了 Observation 对后续决策的影响。",
+      "error_tag": "概念混淆",
+      "variant_group": "react_core_idea"
+    },
+    {
+      "kp": "agent.pattern.react",
+      "type": "single_choice",
+      "question": "某个 ReAct 智能体在循环中已经连续 10 轮只输出思考文本，却从未给出任何行动。最可能的原因是？",
+      "options": [
+        "外部工具返回的 Observation 太长，模型无法处理",
+        "提示或输出解析规则没有强制要求每轮必须产生一个可执行动作，模型停留在纯推理状态",
+        "模型上下文窗口不足，无法记住之前的思考",
+        "温度参数被设置为 0，导致模型不输出动作"
+      ],
+      "answer": 1,
+      "explanation": "ReAct 的循环依赖「每轮产出一个动作」。若提示未约束输出格式或解析器允许纯文本通过，模型可能一直停留在 Thought 阶段。温度、上下文长度、Observation 长度都可能影响效果，但不是这种「从不行动」现象的直接原因。",
+      "error_tag": "因果误判",
+      "variant_group": "react_stuck_in_thought"
+    },
+    {
+      "kp": "agent.pattern.react",
+      "type": "single_choice",
+      "question": "某 ReAct 智能体在收到用户问题后直接输出了最终答案，没有产生任何 Action。下面哪种解释最合理？",
+      "options": [
+        "该问题可能不需要外部信息，模型判断可直接作答",
+        "ReAct 模式不允许直接回答，一定是实现有 bug",
+        "模型一定没有读取到工具列表",
+        "Observation 一定被清空了"
+      ],
+      "answer": 0,
+      "explanation": "ReAct 并不强制每次都必须调用工具。如果模型判断问题可由既有知识直接回答，跳过 Action 是允许的。B 把模式当成硬约束，C/D 是无依据的推断。",
+      "error_tag": "过度断言",
+      "variant_group": "react_no_action_needed"
+    },
+    {
+      "kp": "agent.pattern.react",
+      "type": "single_choice",
+      "question": "把上一轮的 Observation 原封不动地重复拼接到上下文中，多轮之后最可能出现什么问题？",
+      "options": [
+        "模型参数被修改",
+        "上下文迅速膨胀，并可能让模型重复执行相同动作",
+        "工具调用会被自动禁用",
+        "模型的温度参数被重置"
+      ],
+      "answer": 1,
+      "explanation": "无节制地累积 Observation 会消耗上下文窗口，并可能诱导模型重复相同动作（因为看起来任务尚未完成）。常见缓解方式是摘要、截断或只保留关键片段。A/C/D 都不是真实机制。",
+      "error_tag": "上下文管理忽视",
+      "variant_group": "react_context_bloat"
+    },
+    {
+      "kp": "agent.pattern.react",
+      "type": "single_choice",
+      "question": "关于 ReAct 中的「Thought」部分，下列说法正确的是？",
+      "options": [
+        "它必须被外部工具执行后才能生效",
+        "它是对当前状态的自然语言推理，用于决定下一步动作",
+        "它必须与 Action 输出完全相同",
+        "它是可选的，去掉后 ReAct 效果不变"
+      ],
+      "answer": 1,
+      "explanation": "Thought 是模型内部的推理表征，用于指导动作选择；它本身不被执行。它与 Action 是不同字段，去掉后智能体就退化为「直接动作」的策略，丧失 ReAct 的推理-行动耦合优势。",
+      "error_tag": "角色混淆",
+      "variant_group": "react_thought_role"
+    },
+    {
+      "kp": "agent.pattern.react",
+      "type": "single_choice",
+      "question": "某团队希望 ReAct 智能体在调用工具时更少出现参数错误。以下哪项措施最直接有效？",
+      "options": [
+        "提高生成时的随机性",
+        "在提示中给出工具参数的 schema 以及正确/错误示例",
+        "增加最大轮数到 100",
+        "把 Observation 全部翻译成英文"
+      ],
+      "answer": 1,
+      "explanation": "参数错误主要源于模型对参数格式与含义理解不足。给出 schema 和正反示例是最直接的约束手段。随机性、轮数、语言转换都不是针对参数正确性的直接措施。",
+      "error_tag": "措施错配",
+      "variant_group": "react_param_errors"
+    },
+    {
+      "kp": "agent.pattern.react",
+      "type": "single_choice",
+      "question": "在 ReAct 循环中，如果某一轮的工具执行抛出了异常，最符合范式的处理是？",
+      "options": [
+        "把异常信息作为 Observation 反馈给模型，让它决定如何调整",
+        "静默吞掉异常，继续下一轮",
+        "直接把异常堆栈作为最终答案返回给用户",
+        "回滚到上一轮并重复执行同一个动作"
+      ],
+      "answer": 0,
+      "explanation": "ReAct 的鲁棒性来自「反馈闭环」。把错误信息作为 Observation 让模型换参数或换工具，是符合范式的做法。静默吞掉会丢失信息，把堆栈当答案对用户无意义，无条件重试可能造成死循环。",
+      "error_tag": "异常处理不当",
+      "variant_group": "react_tool_exception"
+    },
+    {
+      "kp": "agent.pattern.react",
+      "type": "single_choice",
+      "question": "下面哪一项最不像是 ReAct 智能体中合理的「Action」？",
+      "options": [
+        "调用计算器求一个表达式的值",
+        "查询数据库获取某条记录",
+        "在模型内部直接修改自己的权重参数",
+        "调用搜索接口获取最新资料"
+      ],
+      "answer": 2,
+      "explanation": "ReAct 的 Action 是通过外部接口可执行的离散操作。推理阶段的模型不能也不应在线修改自身权重。A/B/D 都是典型的外部工具调用。",
+      "error_tag": "概念边界不清",
+      "variant_group": "react_action_scope"
+    },
+    {
+      "kp": "agent.pattern.react",
+      "type": "single_choice",
+      "question": "若 ReAct 智能体反复调用同一个工具、传入完全相同的参数，最可能的原因是？",
+      "options": [
+        "工具返回的 Observation 被截断或未拼回上下文，模型不知道已经执行过",
+        "模型的上下文窗口过大",
+        "工具数量太少",
+        "用户的问题过于简单"
+      ],
+      "answer": 0,
+      "explanation": "重复相同动作通常意味着模型看不到或误解了上轮结果。Observation 未回填、被截断、或被摘要时丢掉了关键信息，都会导致这种循环。上下文更大、工具更少、问题更简单都不是直接原因。",
+      "error_tag": "循环成因误判",
+      "variant_group": "react_repeat_action"
+    },
+    {
+      "kp": "agent.pattern.react",
+      "type": "single_choice",
+      "question": "关于 ReAct 与「直接让模型输出最终答案」相比的代价，下列说法正确的是？",
+      "options": [
+        "ReAct 总是一次调用就能完成，因此更快",
+        "ReAct 需要多轮模型调用与工具执行，延迟和成本通常更高",
+        "ReAct 不需要任何提示词",
+        "ReAct 可以完全避免模型幻觉"
+      ],
+      "answer": 1,
+      "explanation": "ReAct 通过多轮推理和外部调用换取事实性与可调整性，代价是更多的模型调用、工具延迟与 token 消耗。它不能完全消除幻觉，也需要提示与格式约束。",
+      "error_tag": "成本认知偏差",
+      "variant_group": "react_cost_tradeoff"
+    },
+    {
+      "kp": "agent.pattern.react",
+      "type": "single_choice",
+      "question": "为了在 ReAct 循环中判断任务是否已完成，通常引入什么机制？",
+      "options": [
+        "让模型在 Thought 中输出一个特殊标记或使用专门的结束动作，表示不再需要调用工具",
+        "固定跑满最大轮数才停止",
+        "只要出现 Observation 就判定完成",
+        "由工具自行决定何时结束并关闭进程"
+      ],
+      "answer": 0,
+      "explanation": "ReAct 循环需要一个可识别的终止信号，常见做法是模型输出 final answer 标记或调用一个终结动作。跑满最大轮数是兜底而非正常终止，出现 Observation 并不代表任务完成，工具通常不具备全局停止权。",
+      "error_tag": "终止条件设计不当",
+      "variant_group": "react_termination"
+    },
+    {
+      "kp": "agent.pattern.react",
+      "type": "single_choice",
+      "question": "在 ReAct 的提示词中给出完整的一轮示例（Thought / Action / Action Input / Observation），最直接的好处是？",
+      "options": [
+        "减少模型需要生成的 token 总数",
+        "帮助模型模仿正确的输出结构，提高格式服从率",
+        "让模型不再需要工具描述",
+        "自动提升模型的基础能力"
+      ],
+      "answer": 1,
+      "explanation": "few-shot 示例的作用是示范输出结构与循环模式，提升格式服从性与动作选择质量。它不减少总 token，也不能替代工具描述，更不会改变模型本身的能力。",
+      "error_tag": "效果夸大",
+      "variant_group": "react_few_shot"
+    },
+    {
+      "kp": "agent.pattern.react",
+      "type": "single_choice",
+      "question": "在实现 ReAct 循环时，下述哪种顺序是正确的？",
+      "options": [
+        "Observation → Thought → Action",
+        "Action → Thought → Observation",
+        "Thought → Action → Observation",
+        "Thought → Observation → Action"
+      ],
+      "answer": 2,
+      "explanation": "ReAct 的典型顺序是：先产生推理（Thought），据此选择一个动作（Action），执行该动作后得到环境反馈（Observation），再将 Observation 作为下一轮 Thought 的输入。",
+      "error_tag": "顺序错乱",
+      "variant_group": "react_loop_order"
+    },
+    {
+      "kp": "agent.pattern.react",
+      "type": "single_choice",
+      "question": "某 ReAct 智能体在观察到一个明显与预期不符的工具结果后，仍然在下一轮重复同样的思路。最应该优先检查的是？",
+      "options": [
+        "模型是否被要求只输出 JSON",
+        "Observation 是否真的进入了下一轮提示词，以及提示中是否有鼓励「根据观察调整」的指令",
+        "工具是否用 Python 编写",
+        "用户问题是否过长"
+      ],
+      "answer": 1,
+      "explanation": "「看到结果却不变招」通常意味着反馈没有进入上下文，或提示未强调依据 Observation 调整。检查提示拼装与指令是最优先的。输出格式、工具语言、问题长度都不是首要因素。",
+      "error_tag": "排查优先级错误",
+      "variant_group": "react_feedback_not_used"
+    },
+    {
+      "kp": "agent.pattern.react",
+      "type": "single_choice",
+      "question": "以下哪项最能说明 Observation 在 ReAct 循环中的作用？",
+      "options": [
+        "它是模型对自身推理过程的总结，不依赖外部环境",
+        "它是外部工具或环境对前一动作的返回结果，作为下一轮推理的输入",
+        "它是用户最初提出的问题，只在第一轮出现",
+        "它是模型在无法继续时输出的终止标记"
+      ],
+      "answer": 1,
+      "explanation": "Observation 是环境/工具对 Action 的执行结果，它被拼回上下文，影响下一轮 Thought 和 Action，是 ReAct 与纯思维链（CoT）的关键差别。",
+      "error_tag": "概念混淆",
+      "variant_group": "react_observation_role"
+    },
+    {
+      "kp": "agent.pattern.react",
+      "type": "single_choice",
+      "question": "当 ReAct 智能体调用一个搜索工具后，返回内容显示「未找到相关结果」。接下来最合理的行为是？",
+      "options": [
+        "忽略该 Observation，直接编造一个答案",
+        "把该 Observation 原样重复作为最终答案输出",
+        "在下一轮 Thought 中考虑换关键词、换工具或承认无法完成，再决定下一步 Action",
+        "立即抛出异常终止整个循环"
+      ],
+      "answer": 2,
+      "explanation": "ReAct 的价值在于把失败反馈纳入推理。合理的做法是在下一轮 Thought 中调整策略（换查询、换工具或给出无法完成的结论）。A 违背忠实性，B 不是任务答案，D 过于粗暴且不具备鲁棒性。",
+      "error_tag": "策略选择不当",
+      "variant_group": "react_handle_failure"
+    },
+    {
+      "kp": "agent.pattern.react",
+      "type": "single_choice",
+      "question": "与纯思维链（Chain-of-Thought）相比，ReAct 模式最本质的增益来自哪里？",
+      "options": [
+        "生成的推理文本更长，因此答案更准确",
+        "模型参数更多，因此推理能力更强",
+        "能够通过动作与环境交互，把真实信息引入推理过程",
+        "不需要任何提示词，模型会自动进入推理状态"
+      ],
+      "answer": 2,
+      "explanation": "ReAct 的核心增益是「与外部环境交互」：动作可以查询、计算、访问数据库，Observation 为推理提供事实依据。文本长度、参数规模、提示词是否存在都不是其本质区别。",
+      "error_tag": "本质理解偏差",
+      "variant_group": "react_vs_cot"
+    },
+    {
+      "kp": "agent.pattern.react",
+      "type": "single_choice",
+      "question": "某开发者把 ReAct 循环的最大轮数设为 1。这会导致什么后果？",
+      "options": [
+        "模型仍然可以完成多步任务，只是日志更短",
+        "模型只有一次思考与一次行动机会，无法根据 Observation 修正后续决策",
+        "模型会进入无限循环",
+        "模型会自动切换为思维链模式"
+      ],
+      "answer": 1,
+      "explanation": "ReAct 需要多轮迭代才能利用 Observation 调整策略。最大轮数为 1 时，Observation 无法进入第二轮推理，退化为「一步动作 + 直接回答」。",
+      "error_tag": "参数影响误判",
+      "variant_group": "react_max_steps"
+    },
+    {
+      "kp": "agent.pattern.react",
+      "type": "single_choice",
+      "question": "下面哪种输出格式最不利于 ReAct 循环的稳定解析？",
+      "options": [
+        "使用明确的分隔标记把 Thought、Action、Action Input 分开",
+        "把所有内容写成一段自由散文，没有固定字段或结束标记",
+        "要求 Action 只能是预定义工具名之一",
+        "在提示中给出完整的循环示例作为格式示范"
+      ],
+      "answer": 1,
+      "explanation": "ReAct 依赖程序从模型输出中抽取 Action 及其输入。自由散文缺乏可解析结构，会导致抽取失败或误抽取。分隔标记、枚举工具名、few-shot 示例都是提升稳定性的常见做法。",
+      "error_tag": "格式设计误区",
+      "variant_group": "react_output_format"
+    },
+    {
+      "kp": "agent.pattern.react",
+      "type": "single_choice",
+      "question": "ReAct 智能体在某一轮同时输出了两个不同的 Action。合理的处理方式是？",
+      "options": [
+        "两个都执行，把两个 Observation 都拼回上下文",
+        "只执行第一个，忽略第二个",
+        "丢弃本轮输出并提示模型重新生成，要求本轮只给出一个 Action",
+        "任选一个执行，并在下一轮禁止模型再使用工具"
+      ],
+      "answer": 2,
+      "explanation": "ReAct 的设计是每轮一个动作，以保证 Thought–Action–Observation 的因果链清晰。出现多个动作通常意味着格式违约，应重新生成而不是随意选择（A 会破坏因果链，B/C 的随意性会引入不可预测行为）。",
+      "error_tag": "流程约束忽略",
+      "variant_group": "react_multiple_actions"
+    },
+    {
+      "kp": "agent.pattern.react",
+      "type": "single_choice",
+      "question": "在 ReAct 的提示词中，把可用工具及其参数说明写清楚，主要目的是？",
+      "options": [
+        "减少模型输出的 token 数量",
+        "提高模型选择正确动作并正确构造参数的几率",
+        "让模型不再需要 Observation",
+        "绕过最大轮数限制"
+      ],
+      "answer": 1,
+      "explanation": "工具描述是模型进行动作选择的依据。描述越清晰（名称、用途、参数类型与示例），越不容易选错工具或传错参数。它不改变 Observation 的必要性，也与轮数限制无关。",
+      "error_tag": "作用夸大",
+      "variant_group": "react_tool_description"
+    },
+    {
+      "kp": "agent.pattern.plan_execute",
+      "type": "single_choice",
+      "question": "在 Plan-and-Execute（先规划后执行）的智能体模式中，最核心的特征是？",
+      "options": [
+        "每一步都根据上一步的观察结果即时决定下一个动作",
+        "先产出一个完整的、分解好的任务步骤清单，再按清单逐项执行",
+        "把所有工具调用并行发出，再统一汇总结果",
+        "完全不做规划，直接由模型一次性生成最终答案"
+      ],
+      "answer": 1,
+      "explanation": "Plan-and-Execute 的关键是「先规划、后执行」：规划器一次性给出分解后的步骤序列，执行器再逐步完成。选项 0 描述的是 ReAct 式的逐步推理-行动循环，选项 2 描述的是并行工具调用，选项 3 是无规划的直出，均不符合。",
+      "error_tag": "概念混淆",
+      "variant_group": "plan_execute_core_idea"
+    },
+    {
+      "kp": "agent.pattern.plan_execute",
+      "type": "single_choice",
+      "question": "关于 Plan-and-Execute 与「边想边做」的逐步推理模式（如 ReAct）的对比，下列说法正确的是？",
+      "options": [
+        "Plan-and-Execute 通常减少了对大模型的调用次数，因为规划只做一次而执行按步进行",
+        "Plan-and-Execute 完全不需要执行阶段的模型调用",
+        "逐步推理模式一定比 Plan-and-Execute 更节省 token",
+        "Plan-and-Execute 无法处理多步骤任务"
+      ],
+      "answer": 0,
+      "explanation": "Plan-and-Execute 把「规划」与「执行」分离，规划只需一次较大调用，执行阶段可以用更小/更便宜的模型按步执行，总体上减少了昂贵模型的反复调用。它仍需要执行阶段的模型调用，也能处理多步骤任务，因此其余选项错误。",
+      "error_tag": "概念混淆",
+      "variant_group": "plan_execute_vs_react"
+    },
+    {
+      "kp": "agent.pattern.plan_execute",
+      "type": "multi_choice",
+      "question": "下列哪些是 Plan-and-Execute 模式相对逐步推理（ReAct）可能带来的好处？（多选）",
+      "options": [
+        "规划阶段可以一次性看到全局，减少局部最优导致的任务遗漏",
+        "执行阶段可用更小或更廉价的模型逐步完成，降低成本",
+        "执行器可以按步骤并行调度互不依赖的子任务",
+        "完全消除模型幻觉，保证输出一定正确",
+        "无需任何外部工具即可完成所有任务"
+      ],
+      "answer": [
+        0,
+        1,
+        2
+      ],
+      "explanation": "全局规划、降低执行阶段模型成本、以及按依赖并行调度都是 Plan-and-Execute 的典型好处。但它不能消除幻觉，也不能脱离外部工具完成所有任务。",
+      "error_tag": "概念混淆",
+      "variant_group": "plan_execute_benefits"
+    },
+    {
+      "kp": "agent.pattern.plan_execute",
+      "type": "multi_choice",
+      "question": "关于 Plan-and-Execute 中「计划器」和「执行器」的关系，下列说法正确的有？（多选）",
+      "options": [
+        "计划器负责把复杂任务分解为可执行的步骤序列",
+        "执行器负责实际调用工具、收集观察结果",
+        "计划器和执行器可以由同一个语言模型扮演，但职责不同",
+        "执行器的反馈可以回流给计划器，从而驱动重规划",
+        "执行器一旦启动，就必须严格执行原计划、不允许任何改变"
+      ],
+      "answer": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "explanation": "两个角色可以共用同一模型，但逻辑职责不同：规划产出步骤，执行落实步骤，并把反馈回流以支持重规划。执行器并非不可变更，重规划正是对计划进行调整。",
+      "error_tag": "概念混淆",
+      "variant_group": "plan_execute_roles"
+    },
+    {
+      "kp": "agent.pattern.plan_execute",
+      "type": "multi_choice",
+      "question": "在 Plan-and-Execute 中，采用「并行执行互不依赖的步骤」需要注意哪些问题？（多选）",
+      "options": [
+        "必须先明确步骤之间的数据依赖关系",
+        "需要处理并发写同一资源时的冲突",
+        "并行步骤的失败要有统一的汇总和重试策略",
+        "并行步骤必须使用同一个随机种子才能保证正确性"
+      ],
+      "answer": [
+        0,
+        1,
+        2
+      ],
+      "explanation": "并行执行的前提是依赖清晰，其次要处理资源竞争与失败汇总。随机种子与并行正确性无直接关系，属于错误干扰项。",
+      "error_tag": "边界错误",
+      "variant_group": "plan_execute_parallel"
+    },
+    {
+      "kp": "agent.pattern.plan_execute",
+      "type": "multi_choice",
+      "question": "以下哪些现象说明当前任务可能更适合从逐步推理（ReAct）切换到 Plan-and-Execute？（多选）",
+      "options": [
+        "任务步骤多，逐步推理经常在中间迷路、遗漏后续子任务",
+        "每个子任务都依赖前面的输出，且数量固定、可预先列举",
+        "需要在执行前先向用户展示完整任务清单以获得确认",
+        "任务只是一次简单的加法运算"
+      ],
+      "answer": [
+        0,
+        1,
+        2
+      ],
+      "explanation": "步数多容易迷路、依赖强且可预列举、需要展示清单给用户确认，这些都是 Plan-and-Execute 的适用信号。简单加法属于过度设计，不构成切换理由。",
+      "error_tag": "概念混淆",
+      "variant_group": "plan_execute_applicability"
+    },
+    {
+      "kp": "agent.pattern.plan_execute",
+      "type": "fill_blank",
+      "question": "在 Plan-and-Execute 模式中，执行器在每一步结束后会把观察结果交给下一步；当某步失败或与预期不符时，系统通常会把该反馈送回给______模块，由其修订剩余步骤。请填出该模块的中文名称。",
+      "options": [],
+      "answer": [
+        "规划器",
+        "计划器",
+        "planner",
+        "Planner"
+      ],
+      "explanation": "重规划由规划器（Planner）执行：收到执行器反馈后修订剩余步骤。",
+      "error_tag": "记忆缺失",
+      "variant_group": "plan_execute_replan"
+    },
+    {
+      "kp": "agent.pattern.plan_execute",
+      "type": "fill_blank",
+      "question": "Plan-and-Execute 中，负责调用工具、收集观察结果的角色称为______（中文）。",
+      "options": [],
+      "answer": [
+        "执行器",
+        "Executor",
+        "executor"
+      ],
+      "explanation": "执行器（Executor）负责落实每一步的具体动作并收集结果。",
+      "error_tag": "记忆缺失",
+      "variant_group": "plan_execute_roles"
+    },
+    {
+      "kp": "agent.pattern.plan_execute",
+      "type": "fill_blank",
+      "question": "在 Plan-and-Execute 中，为了让执行器能按步骤调用具体工具，计划中的每一步通常需要声明它可用的______（填写：工具/参数/依赖等，最贴切的一个）。",
+      "options": [],
+      "answer": [
+        "工具",
+        "工具列表",
+        "tools",
+        "tool"
+      ],
+      "explanation": "每步需要声明可用工具（以及参数），执行器才知道该调用哪个具体函数。",
+      "error_tag": "记忆缺失",
+      "variant_group": "plan_execute_representation"
+    },
+    {
+      "kp": "agent.pattern.plan_execute",
+      "type": "code_reading",
+      "question": "阅读下面伪代码：\n\nplan = planner(task)          # 返回有序步骤列表\nresults = []\nfor step in plan:\n    out = executor(step, context=results)\n    if out.error:\n        plan = planner.replan(task, plan, step, out.error)\n        break\n    results.append(out)\n\n问：当某一步执行返回错误时，这段代码的行为是什么？请说明 break 带来的影响。",
+      "options": [],
+      "answer": "当某步出错时，代码调用 planner.replan(...) 让规划器基于原任务、原计划、出错步骤和错误信息生成一份新的计划，赋值给 plan 后立即 break 跳出当前 for 循环。break 的作用是中止对旧计划的继续执行，避免沿着已经失效的旧步骤序列继续往下走，从而让后续逻辑可以用新的 plan 重新开始执行。",
+      "explanation": "此伪代码演示 Plan-and-Execute 的重规划触发：出错 → 重新规划 → 跳出旧循环。break 防止在旧计划上继续执行错误步骤。",
+      "error_tag": "边界错误",
+      "variant_group": "plan_execute_replan"
+    },
+    {
+      "kp": "agent.pattern.plan_execute",
+      "type": "code_reading",
+      "question": "阅读下面伪代码：\n\ndef run(task):\n    steps = planner(task)\n    ctx = {}\n    for s in steps:\n        if s.needs and not all(n in ctx for n in s.needs):\n            return \"dependency_missing: \" + s.name\n        ctx[s.name] = executor(s, ctx)\n    return ctx\n\n问：当某步骤 s 声明它需要的数据尚未在 ctx 中时，run 的返回值是什么？这样设计的好处是什么？",
+      "options": [],
+      "answer": "返回字符串 \"dependency_missing: \" 加上该步骤的名称。这样设计的好处是在执行前就检查数据依赖是否满足，能及早发现计划中步骤顺序安排错误，避免把不满足依赖的步骤强行执行而导致的隐蔽错误或崩溃。",
+      "explanation": "该代码在每步执行前检查依赖，未满足则提前返回带步骤名的错误信息，属于「依赖前置检查」的典型做法。",
+      "error_tag": "边界错误",
+      "variant_group": "plan_execute_representation"
+    },
+    {
+      "kp": "agent.pattern.plan_execute",
+      "type": "scenario",
+      "question": "场景：你的智能体需要为用户生成「竞品分析报告」。该任务包括：搜索 5 家竞品、抓取各自官网、提取定价、汇总对比表、撰写结论。目前你用 ReAct 式逐步推理，发现模型在搜到第 3 家后经常忘记还要对比定价和写结论，导致报告不完整。请问应该怎么调整，为什么？",
+      "options": [],
+      "answer": null,
+      "explanation": "该场景的关键失败模式是逐步推理在长任务中迷失全局，适合切换到 Plan-and-Execute：先一次性产出步骤清单（搜索、抓取、提取、汇总、撰写），明确步骤依赖，执行时按步推进；对抓取失败等异常做重规划。这样能避免遗漏后续子任务。",
+      "error_tag": "概念混淆",
+      "variant_group": "plan_execute_applicability",
+      "required_keywords": [
+        "Plan-and-Execute",
+        "步骤清单",
+        "依赖",
+        "重规划",
+        "全局"
+      ]
+    },
+    {
+      "kp": "agent.pattern.plan_execute",
+      "type": "single_choice",
+      "question": "在一个 Plan-and-Execute 智能体中，规划器（Planner）输出了一份步骤列表，但第 3 步执行时失败了。最符合该模式设计思想的做法是？",
+      "options": [
+        "直接放弃整个任务并返回错误",
+        "忽略失败步骤，继续执行第 4 步及之后的所有步骤",
+        "把失败信息反馈给规划器（或重规划模块），让它修订后续步骤后再继续",
+        "重新从第 1 步开始无条件重跑整份计划"
+      ],
+      "answer": 2,
+      "explanation": "Plan-and-Execute 的经典增强是「重规划」（re-plan）：执行器把观察/错误反馈给规划器，规划器据此调整剩余步骤。直接放弃或忽略失败都不合理；无条件重跑整份计划代价高且可能死循环。",
+      "error_tag": "边界错误",
+      "variant_group": "plan_execute_replan"
+    },
+    {
+      "kp": "agent.pattern.plan_execute",
+      "type": "scenario",
+      "question": "场景：你已有的 Plan-and-Execute 系统中，规划器基于任务生成了 8 步计划，执行器执行到第 5 步时调用某外部 API 超时。当前实现只是把异常往上抛，整个任务失败。请描述一个更健壮的处理方案，并说明为什么会更好。",
+      "options": [],
+      "answer": null,
+      "explanation": "健壮方案应把第 5 步的超时作为观察/错误反馈给规划器，触发重规划：考虑重试、更换工具或调整后续步骤。这样任务不必整体失败，可继续被完成。",
+      "error_tag": "边界错误",
+      "variant_group": "plan_execute_replan",
+      "required_keywords": [
+        "重规划",
+        "观察",
+        "错误反馈",
+        "重试",
+        "规划器"
+      ]
+    },
+    {
+      "kp": "agent.pattern.plan_execute",
+      "type": "single_choice",
+      "question": "下列关于 Plan-and-Execute 中「执行器（Executor）」职责的描述，最准确的是？",
+      "options": [
+        "负责拆解用户意图并生成完整步骤清单",
+        "负责按当前步骤调用工具并收集观察结果，把结果交给下一步或反馈给规划器",
+        "只负责把最终答案格式化输出，不参与任何工具调用",
+        "负责决定是否终止整个智能体进程"
+      ],
+      "answer": 1,
+      "explanation": "执行器接收规划好的单步（或一组步骤），完成工具调用、结果收集，并把观察结果传递下去或反馈给规划器。步骤拆解是规划器的职责，格式化输出与进程终止都不是执行器的核心定义。",
+      "error_tag": "概念混淆",
+      "variant_group": "plan_execute_roles"
+    },
+    {
+      "kp": "agent.pattern.plan_execute",
+      "type": "single_choice",
+      "question": "判断一个任务是否适合采用 Plan-and-Execute 模式，以下哪种情况最合适？",
+      "options": [
+        "一句话闲聊，需要极低延迟返回",
+        "需要多步骤、跨多个工具、有明确依赖顺序的复杂任务",
+        "只需要一次简单的字符串大小写转换",
+        "任务无法被分解为任何子步骤"
+      ],
+      "answer": 1,
+      "explanation": "Plan-and-Execute 的优势在于面对多步骤、工具依赖强的复杂任务时，先有全局规划可以保证步骤有序、减少遗漏。闲聊、简单单步操作或不可分解任务，用该模式属于过度设计。",
+      "error_tag": "概念混淆",
+      "variant_group": "plan_execute_applicability"
+    },
+    {
+      "kp": "agent.pattern.plan_execute",
+      "type": "single_choice",
+      "question": "Plan-and-Execute 相比 ReAct 的一个主要潜在缺点是？",
+      "options": [
+        "无法使用任何外部工具",
+        "初始规划一旦偏离真实情况，后续步骤会沿着错误路线执行，直到被重规划纠正",
+        "不需要任何语言模型参与",
+        "只能处理单步任务"
+      ],
+      "answer": 1,
+      "explanation": "因为计划是先于执行整体生成的，如果初始假设与实际环境不符，错误会沿着计划传播。这正是需要重规划机制的原因。Plan-and-Execute 依然用工具、用模型，也能处理多步任务。",
+      "error_tag": "概念混淆",
+      "variant_group": "plan_execute_vs_react"
+    },
+    {
+      "kp": "agent.pattern.plan_execute",
+      "type": "single_choice",
+      "question": "在 Plan-and-Execute 系统中，「工具描述（tool schema）」通常由谁在何时被使用？",
+      "options": [
+        "只在规划阶段被使用，用于生成步骤清单",
+        "只在执行阶段被使用，用于决定调用哪个具体函数",
+        "在规划阶段和执行阶段都可能被使用，用于约束可用动作空间",
+        "只在最后总结阶段被使用"
+      ],
+      "answer": 2,
+      "explanation": "规划时规划器需要知道有哪些可用工具，才能把步骤映射到工具上；执行时执行器也要根据工具描述构造调用参数。因此两个阶段都可能用到工具描述。",
+      "error_tag": "记忆缺失",
+      "variant_group": "plan_execute_roles"
+    },
+    {
+      "kp": "agent.pattern.plan_execute",
+      "type": "single_choice",
+      "question": "关于 Plan-and-Execute 中「计划（plan）」的数据表示，下列哪种描述最常见？",
+      "options": [
+        "一个字符串，只是自然语言概述",
+        "一个有序的步骤列表，每步包含描述、可用工具和预期输出",
+        "一个随机整数种子",
+        "一个包含所有工具源码的字典"
+      ],
+      "answer": 1,
+      "explanation": "实用系统通常把计划表示为有序步骤列表，每步包含任务描述、可用的工具/参数和预期输出，方便执行器按步消费。纯自然语言概述对执行器帮助有限，种子和工具源码都不是计划表示。",
+      "error_tag": "概念混淆",
+      "variant_group": "plan_execute_representation"
+    },
+    {
+      "kp": "agent.pattern.plan_execute",
+      "type": "single_choice",
+      "question": "某 Plan-and-Execute 系统要求「步骤之间不允许存在未声明的数据依赖」。这一约束的主要目的是？",
+      "options": [
+        "减少模型的 token 消耗",
+        "避免执行时某步需要的数据尚未被上游步骤产出，导致中途失败",
+        "防止工具被重复调用",
+        "强制所有步骤并行运行"
+      ],
+      "answer": 1,
+      "explanation": "依赖声明能让执行器确定步骤顺序或并行度。如果步骤需要的数据尚未产出，就会执行失败。明确依赖可以避免这种顺序性错误。",
+      "error_tag": "边界错误",
+      "variant_group": "plan_execute_representation"
+    },
+    {
+      "kp": "agent.pattern.plan_execute",
+      "type": "single_choice",
+      "question": "在 Plan-and-Execute 中，「重规划（re-plan）」触发条件通常不包括以下哪一项？",
+      "options": [
+        "某步工具调用返回错误",
+        "执行结果与规划时的预期输出明显不符",
+        "执行器发现需要执行一个新步骤，而它不在原计划中",
+        "系统检测到用户界面颜色发生变化"
+      ],
+      "answer": 3,
+      "explanation": "重规划的触发来自执行层面的反馈：工具报错、结果异常、出现计划外步骤等。用户界面颜色与业务规划无关，不属于触发条件。",
+      "error_tag": "概念混淆",
+      "variant_group": "plan_execute_replan"
+    }
+  ]
+}

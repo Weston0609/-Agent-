@@ -1,0 +1,615 @@
+{
+  "id": "s5u3l2",
+  "title": "s5u3l2",
+  "kps": [
+    "py.mq.celery",
+    "py.mq.arq"
+  ],
+  "theory": "## py.mq.celery\n\n# Celery 与消息队列：让 Python 任务异步飞起来\n\n## 一句话直觉\n\n> 当用户点下「下单」按钮，你不希望页面卡 30 秒等发票邮件发完才返回——**Celery** 就是把这件「慢活」丢进消息队列（Message Queue），让另一台机器上的工人（Worker）慢慢做，主程序立刻回应用户。\n\n---\n\n## 1. 为什么需要 Celery：从同步阻塞说起\n\n一个 Web 请求从浏览器出发，通常要在几百毫秒内返回，否则用户就会觉得「卡」。但现实中有大量耗时的活：\n\n- 发送邮件 / 短信\n- 生成 PDF 报表、转码视频\n- 调用慢速第三方 API（AI 推理、支付回调）\n- 批量写数据库、跑定时统计\n\n如果把这些逻辑写在视图（View）函数里同步执行，会带来三个问题：\n\n1. **延迟高**：用户必须等所有步骤完成。\n2. **易失败**：发邮件超时会连带整个请求失败。\n3. **难扩展**：流量大时只能加机器跑 Web，但其实该加的是「干重活」的机器。\n\n**消息队列（Message Queue）** 的核心思想：把「要做什么」打包成一条消息（Message）塞进队列（Broker），由一个或多个消费者（Consumer）异步取出执行。\n\n**Celery** 是 Python 生态里最主流的分布式任务队列（Distributed Task Queue）——它把「定义任务、发消息、消费消息、追踪结果、定时调度」这一整条链路都封装好了。\n\n---\n\n## 2. Celery 的四个核心角色\n\n学 Celery 一定要先把这张图刻进脑子：\n\n```\n  [你的代码]                  [消息中间件]                [工人]                 [结果存储]\n  Producer  ──发送任务──▶  Broker (Redis/RabbitMQ) ──▶  Worker ──结果──▶  Backend (Redis/DB)\n```\n\n| 角色 | 英文 | 作用 | 常见选型 |\n|------|------|------|----------|\n| 生产者 | Producer | 定义并发起任务 | 你的 Django/Flask/FastAPI 代码 |\n| 消息中间件 | Broker | 存放待执行任务 | Redis、RabbitMQ |\n| 工人 | Worker | 拉取并执行任务 | `celery -A app worker` 启动的进程 |\n| 结果存储 | Backend | 存放任务返回值/状态 | Redis、数据库 |\n\n关键结论：**Broker 必须比 Worker 先可用**，Worker 才能取任务；Backend 只在需要拿返回值时才需要。\n\n---\n\n## 3. 从零写一个最小 Celery\n\n### 3.1 定义 Task\n\n```python\n# tasks.py\nfrom celery import Celery\n\n# 用 Redis 做 broker 和 backend\napp = Celery(\n    \"demo\",\n    broker=\"redis://localhost:6379/0\",   # 任务队列\n    backend=\"redis://localhost:6379/1\",  # 任务结果\n)\n\n@app.task                    # 装饰器把普通函数变成「可被 Celery 调度的任务」\ndef add(x: int, y: int) -> int:\n    \"\"\"最简单的任务：两数相加\"\"\"\n    return x + y\n\n@app.task\ndef send_email(to: str, subject: str) -> str:\n    \"\"\"模拟一个耗时任务：假装发邮件 3 秒\"\"\"\n    import time\n    time.sleep(3)\n    return f\"Mail to {to} sent\"\n```\n\n`@app.task` 是全部魔法所在——它把函数改造成一个 `Task` 对象，既能在本地同步执行（`add()`），也能异步分发（`add.delay(...)`）。\n\n### 3.2 启动 Worker\n\n在终端执行：\n\n```bash\ncelery -A tasks worker --loglevel=info\n```\n\n你会看到 Worker 开始监听 Redis 中的 `celery` 队列。\n\n### 3.3 从主程序发送任务\n\n```python\n# main.py\nfrom tasks import add, send_email\n\n# 同步调用（在本进程直接执行，不经过队列）\nprint(\"sync:\", add(2, 3))         # 直接返回 5\n\n# 异步调用：扔进队列，立即返回一个 AsyncResult\nresult = add.delay(2, 3)\nprint(\"task id:\", result.id)\n\n# 阻塞式拿结果（生产环境通常不用 get，而是靠轮询或回调）\nprint(\"result:\", result.get(timeout=10))   # 5\n\n# 耗时任务立刻返回，不阻塞\nr = send_email.delay(\"a@b.com\", \"hello\")\nprint(\"已派发，主程序继续往下走\")\n```\n\n关键结论：`.delay()` 与 `apply_async()` 是异步派发入口；前者是后者的语法糖。\n\n---\n\n## 4. 生产里的四个关键话题\n\n### 4.1 任务状态与重试\n\n任务可能失败（网络抖动、第三方限流）。Celery 提供内建重试：\n\n```python\n@app.task(bind=True, max_retries=3, default_retry_delay=5)\ndef fetch_url(self, url: str) -> str:\n    try:\n        import requests\n        return requests.get(url, timeout=5).text\n    except Exception as exc:\n        # 5 秒后重试，最多 3 次\n        raise self.retry(exc=exc)\n```\n\n`bind=True` 让函数第一个参数变成 `self`（任务实例），这样才能调用 `self.retry`。\n\n### 4.2 幂等性与任务 ID\n\n现实世界中没有「恰好一次」的保证，只有 **至少一次（at-least-once）**。这意味着**同一个任务可能被执行多次**。所以：\n\n- 发邮件前先查「这个用户今天是否已收到」\n- 扣库存用数据库唯一键约束\n- 关键任务用 `task_id` 做去重\n\n### 4.3 定时任务（Celery Beat）\n\nCelery 自带一个「节拍器」进程 Beat，按 crontab 语法周期性派发任务：\n\n```python\napp.conf.beat_schedule = {\n    \"every-30s\": {\n        \"task\": \"tasks.add\",\n        \"schedule\": 30.0,\n        \"args\": (1, 2),\n    },\n}\n```\n\n启动：`celery -A tasks beat --loglevel=info`。\n\n### 4.4 队列隔离与限流\n\n不要把「慢任务」和「快任务」混在一个队列里，否则慢任务会饿死快任务：\n\n```python\n@app.task(queue=\"slow\")\ndef render_video(path: str): ...\n\n@app.task(queue=\"fast\")\ndef send_sms(phone: str, text: str): ...\n```\n\n启动不同 Worker 监听不同队列：`celery -A tasks worker -Q fast`。\n\n---\n\n## 5. 把 Celery 放进一个真实工程\n\n推荐布局（以 Django/Flask 为例）：\n\n```\nmyproject/\n├── myproject/celery.py     # 创建 app 实例\n├── myproject/settings.py   # broker_url、backend_url\n├── myapp/tasks.py          # 具体任务\n└── manage.py\n```\n\n```python\n# myproject/celery.py\nimport os\nfrom celery import Celery\n\nos.environ.setdefault(\"DJANGO_SETTINGS_MODULE\", \"myproject.settings\")\napp = Celery(\"myproject\")\napp.config_from_object(\"django.conf:settings\", namespace=\"CELERY\")\napp.autodiscover_tasks()      # 自动扫描所有 app/tasks.py\n```\n\n视图里只需要 `send_email.delay(...)` 一行，业务逻辑与异步解耦。\n\n---\n\n## 小结表\n\n| 概念 | 一句话 |\n|------|--------|\n| Broker | 存任务的仓库（Redis / RabbitMQ） |\n| Worker | 真正的执行进程 |\n| Backend | 存结果的仓库 |\n| `@app.task` | 把函数变成任务 |\n| `.delay()` | 异步派发（立即返回） |\n| `.get()` | 阻塞拿结果（谨慎使用） |\n| Beat | 定时派发器 |\n| `-Q` | 按队列隔离 Worker |\n\n学了这一节，你已经掌握了 Celery 的 80%：定义任务、派发任务、消费任务、拿结果、定时、隔离。剩下的 20% 是在具体项目里根据业务打磨重试策略、监控（Flower）和队列容量。\n\n## py.mq.arq\n\n# py.mq.arq：用 ARQ 构建基于 Redis 的 Python 异步任务队列\n\n## 一句话直觉\n\n**当你有一个 Web 请求不能让用户干等 30 秒（比如发邮件、跑模型推理、生成报表），你就要把这件事「扔给后台」异步执行——ARQ（Async Redis Queue）就是干这件事的：它是一个用 Python `asyncio` 写、以 Redis 为后端、可水平扩展的轻量任务队列（Task Queue）库。**\n\n本讲用 5 个小节，从「为什么需要队列」一路讲到「生产可用的 worker 结构」。\n\n---\n\n## 第 1 节：为什么需要任务队列？（Message Queue 的动机）\n\n### 1.1 同步阻塞的痛点\n\n假设你写了一个 FastAPI 接口，用户注册后要发一封欢迎邮件：\n\n```python\n@app.post(\"/signup\")\nasync def signup(email: str):\n    user = await db.create_user(email)\n    await send_email(email, \"Welcome!\")   # 慢！SMTP 可能要 2~5 秒\n    return {\"ok\": True}\n```\n\n问题：\n- 邮件 SMTP 服务器慢，**用户要陪着等**；\n- 邮件失败会让整个注册接口 500；\n- 流量高峰时，邮件任务把 Web 进程的协程（coroutine）全占满。\n\n### 1.2 解耦思路\n\n把「必须立刻完成」和「可以稍后完成」拆开：\n\n- Web 进程只负责 **入队（enqueue）**：把一个「任务描述」写到 Redis；\n- 独立的后台进程 **worker** 从 Redis 取任务、执行、写回结果。\n\n这就是 **生产者–消费者（Producer–Consumer）** 模式，也是所有任务队列（Celery、RQ、Dramatiq、ARQ）的共同骨架。\n\n### 1.3 ARQ 的定位\n\n| 库 | 语言模型 | 后端 | 特点 |\n|---|---|---|---|\n| Celery | 同步为主 | 多种 | 功能全但重 |\n| RQ | 同步 | Redis | 简单，但不支持 asyncio |\n| **ARQ** | **async/await** | Redis | 轻量、专为 asyncio 设计、类型友好 |\n\nARQ 的官方口号就是 *\"asyncio + redis = 💜\"*。\n\n---\n\n## 第 2 节：ARQ 三大核心概念\n\nARQ 只有三个概念，先记住这个心智模型：\n\n1. **Task（任务）**：一个 `async def` 函数，接收 `ctx` 和业务参数。\n2. **Queue / Redis**：任务的存储与传递介质。\n3. **Worker（工作进程）**：一个独立进程，不断从 Redis 拉任务执行。\n\n数据流：\n\n```\n生产者:  enqueue_job(\"send_email\", \"a@b.com\")\n            │\n            ▼\n         Redis (job 序列化后存这里)\n            │\n            ▼\n消费者:  worker 拉取 → 反序列化 → 执行 async def send_email(ctx, to)\n            │\n            ▼\n        结果写回 Redis（可选）\n```\n\n### 2.1 安装\n\n```bash\npip install arq redis\n# 还需要一个本地 Redis：docker run -p 6379:6379 redis:7\n```\n\n---\n\n## 第 3 节：最小可运行示例（Hello Worker）\n\n先看完整代码，再解释每一部分。\n\n### 3.1 定义任务与应用\n\n```python\n# worker.py\nimport asyncio\nfrom arq import create_pool\nfrom arq.connections import RedisSettings\n\nasync def send_email(ctx, to: str, subject: str) -> str:\n    \"\"\"任务函数：第一个参数必须是 ctx（WorkerContext）。\"\"\"\n    print(f\"[worker] 正在给 {to} 发送: {subject}\")\n    await asyncio.sleep(2)   # 模拟耗时 I/O\n    return f\"已发送给 {to}\"\n\nasync def startup(ctx):\n    \"\"\"worker 启动时执行一次，可初始化 DB 连接池等。\"\"\"\n    ctx[\"db\"] = object()    # 演示：把共享资源挂到 ctx 上\n    print(\"[worker] 启动完成\")\n\nasync def shutdown(ctx):\n    \"\"\"worker 关闭时执行一次，用于清理。\"\"\"\n    print(\"[worker] 已关闭\")\n\nclass WorkerSettings:\n    functions = [send_email]              # 注册所有任务\n    on_startup = startup\n    on_shutdown = shutdown\n    redis_settings = RedisSettings(host=\"localhost\", port=6379)\n    max_jobs = 10                         # 并发执行上限\n    job_timeout = 60                      # 单任务超时（秒）\n```\n\n### 3.2 生产者：入队\n\n```python\n# producer.py\nimport asyncio\nfrom arq import create_pool\nfrom arq.connections import RedisSettings\n\nasync def main():\n    # 创建 Redis 连接池\n    redis = await create_pool(RedisSettings())\n    # 入队：函数名 + 位置参数\n    job = await redis.enqueue_job(\"send_email\", \"alice@example.com\", \"Welcome\")\n    print(f\"已入队, job_id = {job.job_id}\")\n    await redis.close()\n\nif __name__ == \"__main__\":\n    asyncio.run(main())\n```\n\n### 3.3 启动 worker\n\n```bash\n# 方式 A：用 CLI（推荐）\narq worker.WorkerSettings\n\n# 方式 B：程序内启动\n# python -c \"import asyncio; from arq import run_worker; from worker import WorkerSettings; asyncio.run(run_worker(WorkerSettings))\"\n```\n\n打开两个终端：一个跑 worker，一个跑 `producer.py`。你会在 worker 终端看到任务被消费。\n\n---\n\n## 第 4 节：任务管理进阶\n\n### 4.1 带超时与重试的任务\n\nARQ 的重试是 **任务自己抛异常** 触发的：\n\n```python\nimport asyncio\nfrom arq import Retry\n\nasync def flaky_task(ctx, url: str):\n    attempt = ctx[\"job_try\"]         # 内置字段，第几次尝试\n    if attempt < 3:\n        raise Retry(defer=5)         # 5 秒后重试\n    return f\"第 {attempt} 次成功: {url}\"\n```\n\n### 4.2 延迟执行与定时任务\n\n```python\n# 30 秒后执行\nawait redis.enqueue_job(\"send_email\", \"bob@x.com\", \"Hi\", _defer_by=30)\n\n# 每天 9 点执行（cron 表达式）\nclass WorkerSettings:\n    cron_jobs = [\n        arq.cron(send_email, hour=9, minute=0, args=(\"ops@x.com\", \"Daily\")),\n    ]\n```\n\n### 4.3 取结果\n\n```python\njob = await redis.enqueue_job(\"send_email\", \"c@x.com\", \"Hey\")\nresult = await job.result(timeout=10)   # 阻塞等结果\nprint(result)\n```\n\n---\n\n## 第 5 节：工程级实践\n\n### 5.1 文件布局（推荐）\n\n```\nmyproj/\n├── tasks.py        # 定义所有 async 任务函数\n├── settings.py     # WorkerSettings\n├── producer.py     # 业务侧的入队入口\n└── worker.py       # 只是 import WorkerSettings\n```\n\n### 5.2 常见工程要点\n\n- **`ctx` 是状态总线**：把 DB pool、HTTP client 放进 `startup` 的 `ctx` 中，避免每个任务新建连接。\n- **任务函数要幂等（idempotent）**：重试机制下，同一任务可能被执行多次，发邮件、扣款等操作要能去重。\n- **序列化限制**：ARQ 默认用 `pickle`（老版本）或可配置 `pickle`/`json`。参数必须可序列化，不要传 ORM 对象，传 `id` 让 worker 自己查。\n- **监控**：Redis 里 `arq:queue`、`arq:job:*` 等 key 就是全部运行状态，`redis-cli llen arq:queue` 能看一眼积压。\n- **多 worker**：直接启动多个 `arq worker.WorkerSettings` 进程即可，靠 Redis 原子操作天然分流。\n- **优雅退出**：`on_shutdown` 里关闭连接池、flush 日志。worker 收到 SIGTERM 后会等正在跑的任务结束（受 `job_timeout` 约束）。\n\n### 5.3 FastAPI 中的典型用法\n\n```python\nfrom fastapi import FastAPI\nfrom arq import create_pool\nfrom arq.connections import RedisSettings\n\napp = FastAPI()\nredis = None\n\n@app.on_event(\"startup\")\nasync def _startup():\n    global redis\n    redis = await create_pool(RedisSettings())\n\n@app.post(\"/signup\")\nasync def signup(email: str):\n    await redis.enqueue_job(\"send_email\", email, \"Welcome\")\n    return {\"queued\": True}         # 立刻返回，不等邮件\n```\n\n这就是开头那个痛点的正解。\n\n---\n\n## 动手练习\n\n**目标：实现一个「图片处理队列」的最小闭环。**\n\n需求：\n1. 定义任务 `resize_image(ctx, image_id: int)`：模拟「读取 → 缩放 → 保存」三次 I/O（每次 `asyncio.sleep(1)`），并打印进度。\n2. 任务第一次执行有人为 40% 概率失败，通过 `Retry` 最多重试 3 次。\n3. 写一个 `producer.py`，一次入队 10 个不同 `image_id`，并打印所有 `job_id`。\n4. 启动 `arq` worker，观察：\n   - 同一时刻最多处理几个任务？（通过 `max_jobs=3` 控制）\n   - 重试日志里能看到 `ctx[\"job_try\"]` 从 1 递增。\n5. 附加题：给 `send_email` 加一个 cron 任务，每天早上 8:00 给 `admin@example.com` 发一封「今日报告」。\n\n**验收标准**：\n- 10 个任务全部最终成功；\n- worker 日志中每个任务的开始、结束时间可辨认；\n- `redis-cli keys 'arq:*'` 能看到队列与结果 key。\n\n**本地运行命令**：\n\n```bash\ndocker run -d -p 6379:6379 redis:7\narq worker.WorkerSettings          # 终端 1\npython producer.py                 # 终端 2\n```\n",
+  "quiz": [
+    {
+      "kp": "py.mq.celery",
+      "type": "single_choice",
+      "question": "在一个使用 Celery 的项目里，你写了一个函数并用 @app.task 装饰后，在另一个 Python 进程中直接调用 my_func.delay(1, 2)。关于这次调用，下列描述正确的是？",
+      "options": [
+        "它会把任务消息发送到 broker，由 worker 进程异步执行，调用方立即得到一个 AsyncResult",
+        "它会在当前进程中同步执行任务函数并返回计算结果",
+        "它会直接抛出异常，因为任务函数不能被其他进程调用",
+        "它会阻塞直到 worker 执行完毕并把返回值直接返回给调用方"
+      ],
+      "answer": 0,
+      "explanation": "delay 是 apply_async 的快捷方式，会把任务序列化后投递到 broker，立即返回 AsyncResult，不会等待结果。B 混淆了直接调用与 delay；C、D 误解了异步语义。",
+      "error_tag": "概念混淆",
+      "variant_group": "celery_task_delay"
+    },
+    {
+      "kp": "py.mq.celery",
+      "type": "single_choice",
+      "question": "下列哪种场景最适合使用 Celery 这类分布式任务队列，而不是在请求线程里直接执行？",
+      "options": [
+        "计算两个整数的和并在页面上立刻显示",
+        "用户注册后发送欢迎邮件，且邮件发送失败不应影响注册接口响应",
+        "读取当前请求的 URL 路径并做路由匹配",
+        "校验前端提交的表单字段是否为空"
+      ],
+      "answer": 1,
+      "explanation": "耗时或可能失败、且不要求同步返回的副作用类操作适合异步化；A、C、D 都是轻量且需要即时结果的操作，异步化反而增加复杂度。",
+      "error_tag": "适用场景误判",
+      "variant_group": "celery_use_case"
+    },
+    {
+      "kp": "py.mq.celery",
+      "type": "single_choice",
+      "question": "你希望 Celery 任务在每天的固定时间点被触发，最直接的做法是？",
+      "options": [
+        "在任务函数里使用 while True: time.sleep(86400) 循环",
+        "在系统中用 cron 每分钟调用一次 delay，并在代码里判断时间",
+        "使用 Celery beat 配合 crontab 或 schedule 配置定时调度",
+        "在 worker 启动命令中加上 --daily 参数"
+      ],
+      "answer": 2,
+      "explanation": "Celery beat 是内置的定时调度组件，支持 crontab 表达式。A 会长期占用一个 worker 槽位；B 可行但不属于 Celery 内建定时机制且实现繁琐；D 不存在该参数。",
+      "error_tag": "组件职责混淆",
+      "variant_group": "celery_beat"
+    },
+    {
+      "kp": "py.mq.celery",
+      "type": "single_choice",
+      "question": "Celery 任务函数中使用了全局变量来累计次数。若 worker 以 prefork 模式启动多个子进程，可能观察到什么现象？",
+      "options": [
+        "所有子进程共享同一份全局变量，计数完全准确",
+        "每个子进程有独立的全局变量副本，计数结果可能不符合预期",
+        "Celery 会自动把全局变量同步到 backend，不会出错",
+        "prefork 模式下任务只能串行执行，因此计数不会出错"
+      ],
+      "answer": 1,
+      "explanation": "prefork 使用多进程，进程间不共享内存，全局变量各自独立。A、C 误解了进程隔离；D 误以为 prefork 是串行的。",
+      "error_tag": "进程模型误解",
+      "variant_group": "celery_worker_model"
+    },
+    {
+      "kp": "py.mq.celery",
+      "type": "single_choice",
+      "question": "下列哪一项不是通常所说的 Celery broker？",
+      "options": [
+        "RabbitMQ",
+        "Redis",
+        "Amazon SQS",
+        "PostgreSQL 的 JSONB 字段"
+      ],
+      "answer": 3,
+      "explanation": "RabbitMQ、Redis、SQS 都是常见 broker 实现；数据库字段本身不是消息中间件，不能直接充当 broker（虽然结果可以存到数据库）。",
+      "error_tag": "组件识别错误",
+      "variant_group": "celery_broker_backend"
+    },
+    {
+      "kp": "py.mq.celery",
+      "type": "single_choice",
+      "question": "关于 Celery 的 apply_async 与 delay，下列说法正确的是？",
+      "options": [
+        "apply_async 只能同步执行任务，delay 才是异步的",
+        "delay 是 apply_async 的简化形式，apply_async 支持更多参数如 countdown、eta",
+        "两者完全等价，没有任何区别",
+        "delay 会把结果直接写入数据库，apply_async 不会"
+      ],
+      "answer": 1,
+      "explanation": "delay(*args) 等价于 apply_async(args)，命名参数不通过 delay 传递；apply_async 支持 countdown、eta、queue、routing_key 等。A 把两者语义弄反；C、D 与事实不符。",
+      "error_tag": "API 混淆",
+      "variant_group": "celery_task_delay"
+    },
+    {
+      "kp": "py.mq.celery",
+      "type": "single_choice",
+      "question": "你在 Celery 任务中调用一个普通函数，并希望它随任务一起被重试时也重复执行。下列描述正确的是？",
+      "options": [
+        "普通函数只有在被 @app.task 装饰后才会随任务重试而重复执行",
+        "普通函数在任务函数体内部被调用，任务重试时其函数体会再次执行",
+        "普通函数必须注册到 backend 才能被执行",
+        "普通函数会自动变成 Celery 任务"
+      ],
+      "answer": 1,
+      "explanation": "重试是重新执行整个任务函数体，函数体内调用的普通函数自然也会再次执行。A 把函数内调用与注册任务混淆；C、D 与事实不符。",
+      "error_tag": "执行模型误解",
+      "variant_group": "celery_retry"
+    },
+    {
+      "kp": "py.mq.celery",
+      "type": "single_choice",
+      "question": "下面哪种情况最可能导致任务一直堆积在队列中不被消费？",
+      "options": [
+        "backend 中结果存储空间不足",
+        "没有任何 worker 进程启动，或 worker 监听的路由与任务投递的队列不一致",
+        "任务函数返回了 None",
+        "任务函数使用了 @app.task 装饰器"
+      ],
+      "answer": 1,
+      "explanation": "消费依赖 worker 订阅相应队列。A 会影响结果查询但不阻止消费；C 返回 None 是正常情况；D 是使用任务的正常方式。",
+      "error_tag": "排错方向错误",
+      "variant_group": "celery_troubleshooting"
+    },
+    {
+      "kp": "py.mq.celery",
+      "type": "single_choice",
+      "question": "关于 Celery 的 acks_late 配置，下列理解正确的是？",
+      "options": [
+        "它表示任务在投递到 broker 时立即确认，因此绝不会重复执行",
+        "它表示任务在 worker 执行完成后才确认消息，可能提高可靠性但也更易重复执行",
+        "它决定任务结果被保存到 backend 的时间",
+        "它只对定时任务有效，对普通任务无影响"
+      ],
+      "answer": 1,
+      "explanation": "acks_late=True 使确认发生在执行后，worker 崩溃时任务可能被重新投递，从而重复执行，属于用幂等换可靠性。A 恰恰相反；C、D 与该配置无关。",
+      "error_tag": "投递语义误解",
+      "variant_group": "celery_acks"
+    },
+    {
+      "kp": "py.mq.celery",
+      "type": "single_choice",
+      "question": "在一个 Django 项目中配置 Celery 时，通常需要指定 BROKER_URL 与 RESULT_BACKEND。若只想异步执行任务、完全不关心结果，可以怎样？",
+      "options": [
+        "必须同时配置 BROKER_URL 和 RESULT_BACKEND，否则任务无法投递",
+        "可以只配置 broker，不配置 backend；此时不要调用 result.get()",
+        "必须把 backend 设置为 broker 的同一地址，否则会报错",
+        "只能把结果写入本地文件，无法关闭结果存储"
+      ],
+      "answer": 1,
+      "explanation": "broker 是必需项，backend 只在需要查询结果或使用某些 canvas 特性时才需要。A 过于绝对；C 不是必要条件；D 也不准确。",
+      "error_tag": "配置项混淆",
+      "variant_group": "celery_broker_backend"
+    },
+    {
+      "kp": "py.mq.celery",
+      "type": "single_choice",
+      "question": "你使用 Canvas 的 group 原语把多个任务组成一组并行执行，随后调用结果对象的 get()。下列描述最准确的是？",
+      "options": [
+        "get() 会返回第一个完成的任务的结果",
+        "get() 会返回按原顺序排列的结果列表，且会等待所有子任务完成",
+        "group 中的任务会串行执行，get() 返回最后一个结果",
+        "group 不能用于并行场景，只能配合 chain 使用"
+      ],
+      "answer": 1,
+      "explanation": "group 表示并行执行的一组任务，GroupResult.get() 会等待全部完成并返回对应顺序的结果。A 混淆了 first 语义；C、D 与 group 的设计目的相悖。",
+      "error_tag": "任务编排误用",
+      "variant_group": "celery_canvas_group"
+    },
+    {
+      "kp": "py.mq.celery",
+      "type": "single_choice",
+      "question": "下列哪一项最恰当地说明了为什么在 Web 请求处理中不应无限期地调用 task_result.get() 等待异步任务完成？",
+      "options": [
+        "因为 get() 会修改 backend 中的数据，导致结果丢失",
+        "因为 get() 会阻塞当前请求线程，可能导致请求超时或吞吐下降",
+        "因为 get() 只能在 worker 进程内调用，Web 进程中调用会报错",
+        "因为 get() 会取消任务的执行"
+      ],
+      "answer": 1,
+      "explanation": "get() 是阻塞调用，在请求线程中长时间等待会占用连接与线程资源。A、C、D 都是对 get() 行为的臆造。",
+      "error_tag": "架构模式误用",
+      "variant_group": "celery_result_get"
+    },
+    {
+      "kp": "py.mq.celery",
+      "type": "single_choice",
+      "question": "关于 Celery 中 broker 与 backend 的分工，下列理解正确的是？",
+      "options": [
+        "broker 负责存储任务执行结果，backend 负责传递任务消息",
+        "broker 和 backend 必须是同一个服务，否则任务无法执行",
+        "broker 负责传递任务消息，backend 负责存储任务执行结果（若需要获取结果）",
+        "backend 负责传递任务消息，broker 负责定时调度任务"
+      ],
+      "answer": 2,
+      "explanation": "broker（如 Redis、RabbitMQ）承担消息传输；backend 用于保存结果供 AsyncResult 查询。A、D 把两者职责颠倒，B 误以为二者必须相同。",
+      "error_tag": "概念混淆",
+      "variant_group": "celery_broker_backend"
+    },
+    {
+      "kp": "py.mq.celery",
+      "type": "single_choice",
+      "question": "为了让部署后的 Celery worker 能自动加载任务定义，下列说法正确的是？",
+      "options": [
+        "worker 启动时会根据配置中的 include/imports 或自动发现规则导入任务模块",
+        "worker 会在每个任务消息到达时，从消息中携带的源码动态执行任务",
+        "任务函数必须在 broker 中注册后才能被 worker 找到",
+        "worker 只能执行与自身同一文件内定义的任务"
+      ],
+      "answer": 0,
+      "explanation": "worker 需要预先导入定义任务的模块，通常通过 Celery(include=[...]) 或 autodiscover_tasks 等完成。B 混淆了消息与源码；C、D 与框架机制不符。",
+      "error_tag": "加载机制误解",
+      "variant_group": "celery_worker_config"
+    },
+    {
+      "kp": "py.mq.celery",
+      "type": "single_choice",
+      "question": "你定义了 @app.task 的 add 任务并执行 r = add.delay(2, 3)，随后立刻调用 r.get()。若 worker 尚未启动，可能发生什么？",
+      "options": [
+        "r.get() 会在当前进程内直接算出 5 并返回",
+        "任务被自动改为同步执行，r.get() 正常返回 5",
+        "r.get() 会一直阻塞等待结果，直到超时（若设置了 timeout）或永久等待",
+        "delay 会立即抛出异常，因此根本拿不到 r"
+      ],
+      "answer": 2,
+      "explanation": "消息已进入 broker 但没有 worker 消费，结果不会产生，get() 会阻塞等待。A、B 混淆了本地调用与任务执行；D 只在 broker 不可达等情况下才可能失败，消息成功入队不会立刻抛错。",
+      "error_tag": "运行时行为误判",
+      "variant_group": "celery_result_get"
+    },
+    {
+      "kp": "py.mq.celery",
+      "type": "single_choice",
+      "question": "下面关于 Celery 任务函数参数传递的说法，正确的是？",
+      "options": [
+        "任务参数会被 pickle 序列化后经 broker 传输，因此传入不可序列化的对象可能失败",
+        "任务参数通过共享内存传递给 worker，因此可以传任意 Python 对象",
+        "任务参数只支持字符串类型，其他类型会被自动转成字符串",
+        "任务参数由 worker 直接读取调用方的局部变量，无需序列化"
+      ],
+      "answer": 0,
+      "explanation": "消息需要序列化（默认 JSON，可配置 pickle 等），不可序列化对象会导致投递或消费失败。B、D 误解了跨进程通信方式；C 过于绝对，JSON 也支持数字、列表等。",
+      "error_tag": "序列化理解错误",
+      "variant_group": "celery_serialization"
+    },
+    {
+      "kp": "py.mq.celery",
+      "type": "single_choice",
+      "question": "在 Celery 中，你希望某个任务执行失败后自动重试最多 3 次。下列做法最符合框架语义的是？",
+      "options": [
+        "在任务函数里写 for 循环调用自身 3 次",
+        "使用任务对象的 retry 方法或 autoretry_for 配置，并设置 max_retries",
+        "把任务装饰器的 name 改成 retry_3_times",
+        "在 worker 启动命令后加 --retry-3"
+      ],
+      "answer": 1,
+      "explanation": "Celery 提供 self.retry()/retry() 与 autoretry_for、max_retries 等机制。A 会造成同步递归且丢失异步语义；C 只改名字无实际作用；D 不存在这样的启动参数。",
+      "error_tag": "API 误用",
+      "variant_group": "celery_retry"
+    },
+    {
+      "kp": "py.mq.celery",
+      "type": "single_choice",
+      "question": "关于 Celery 任务的幂等性，下列说法最合理的是？",
+      "options": [
+        "Celery 保证每个任务消息只会被消费一次，所以任务天然幂等",
+        "默认情况下任务可能因 worker 崩溃后重新入队等原因被多次执行，业务需自行保证幂等",
+        "只有在 broker 使用 RabbitMQ 时才可能重复执行，Redis 不会",
+        "只要设置了 acks_late=False 就绝对不会重复执行"
+      ],
+      "answer": 1,
+      "explanation": "Celery 默认是 at-least-once 语义，重试、确认时机、worker 崩溃等都可能导致重复执行。A、C、D 都是对投递语义的常见误解。",
+      "error_tag": "投递语义误解",
+      "variant_group": "celery_idempotency"
+    },
+    {
+      "kp": "py.mq.celery",
+      "type": "single_choice",
+      "question": "你写了 task_a.delay() 和 task_b.delay() 两行代码，希望 task_b 一定在 task_a 完成之后才执行。下列做法正确的是？",
+      "options": [
+        "按顺序写这两行 delay 调用即可保证先后执行",
+        "使用 chain(task_a.s(), task_b.s())() 构造任务链",
+        "在两个 delay 之间插入 time.sleep(1) 来保证顺序",
+        "把两个任务写在同一个模块中即可自动串行"
+      ],
+      "answer": 1,
+      "explanation": "delay 只是投递消息，两个 worker 可并行消费，无法保证顺序。chain 等 canvas 原语用于表达任务依赖。A、C、D 都误以为投递顺序或代码位置能决定执行顺序。",
+      "error_tag": "任务编排误用",
+      "variant_group": "celery_canvas_chain"
+    },
+    {
+      "kp": "py.mq.celery",
+      "type": "single_choice",
+      "question": "下列哪种对象通常不适合直接作为 Celery 任务的参数或返回值？",
+      "options": [
+        "字符串",
+        "整数",
+        "打开的数据库连接对象",
+        "由基本类型组成的列表"
+      ],
+      "answer": 2,
+      "explanation": "数据库连接、文件句柄、socket 等包含不可序列化的运行时状态，不能跨进程传递；字符串、整数和基本类型列表在 JSON 下都可序列化。",
+      "error_tag": "序列化边界不清",
+      "variant_group": "celery_serialization"
+    },
+    {
+      "kp": "py.mq.celery",
+      "type": "single_choice",
+      "question": "关于 Celery worker 的 concurrency 参数，下列描述正确的是？",
+      "options": [
+        "它决定了同时可以投递到 broker 的消息总数上限",
+        "它决定了单个 worker 进程/线程池中并发执行任务的槽位数量",
+        "它等于 broker 中队列的数量",
+        "它控制任务结果在 backend 中的保存时长"
+      ],
+      "answer": 1,
+      "explanation": "concurrency 是 worker 的并发度，例如 prefork 模式下的子进程数。A 混淆了队列长度与并发；C 与队列数量无关；D 对应 result_expires 之类的配置。",
+      "error_tag": "配置项混淆",
+      "variant_group": "celery_worker_config"
+    },
+    {
+      "kp": "py.mq.arq",
+      "type": "single_choice",
+      "question": "关于 arq（基于 Redis 的 Python 异步任务队列），下列说法正确的是？",
+      "options": [
+        "arq 基于 asyncio，Worker 与任务函数都是协程，依赖 Redis 存储队列与状态",
+        "arq 基于多线程，任务函数必须是普通同步函数",
+        "arq 不需要任何外部存储，任务全部在进程内内存队列中排队",
+        "arq 的任务只能用 celery 的协议序列化，且必须配合 RabbitMQ 使用"
+      ],
+      "answer": 0,
+      "explanation": "arq 的定位就是 asyncio 原生的任务队列，Worker 以事件循环运行，任务函数是协程，队列与结果状态都放在 Redis 里。B 错在把 asyncio 说成多线程；C 忽略了 Redis 这一必需依赖；D 是把 celery 的生态强行安到 arq 上。",
+      "error_tag": "概念混淆",
+      "variant_group": "arq.基础定位"
+    },
+    {
+      "kp": "py.mq.arq",
+      "type": "single_choice",
+      "question": "在 arq 中，创建 Worker 并让它监听队列的典型入口是下面哪个？",
+      "options": [
+        "通过 WorkerSettings 类集中声明 functions、redis_settings 等配置，再用 arq 命令行或 Worker 对象启动",
+        "通过继承 threading.Thread 并重写 run 方法启动",
+        "通过装饰器把一个函数直接注册成操作系统守护进程",
+        "通过 asyncio.create_task 直接创建，无需任何配置"
+      ],
+      "answer": 0,
+      "explanation": "arq 的惯用做法是定义一个 WorkerSettings 类，把任务函数列表 functions、Redis 连接配置 redis_settings、队列名、并发数等写在里面，随后用 arq 命令或以编程方式构造 Worker 启动。其余选项描述的机制并不存在于 arq 的启动模型中。",
+      "error_tag": "记忆缺失",
+      "variant_group": "arq.启动配置"
+    },
+    {
+      "kp": "py.mq.arq",
+      "type": "multi_choice",
+      "question": "关于 arq 与 celery 的区别，下列说法正确的有？（多选）",
+      "options": [
+        "arq 原生基于 asyncio，任务函数是协程；celery 传统上以同步任务为主",
+        "arq 依赖 Redis 作为 broker/结果存储；celery 支持多种 broker（如 RabbitMQ、Redis）",
+        "arq 属于轻量级异步任务队列，配置集中在 WorkerSettings 中",
+        "arq 的功能与 celery 完全等价，可以无缝互相替换任务定义"
+      ],
+      "answer": [
+        0,
+        1,
+        2
+      ],
+      "explanation": "arq 是 asyncio 原生、以 Redis 为核心、以 WorkerSettings 集中配置的轻量异步队列；celery 支持多 broker 且以同步任务为主。D 错在“完全等价、无缝替换”，二者的任务定义与配置模型并不通用。",
+      "error_tag": "概念混淆",
+      "variant_group": "arq.与其他队列对比"
+    },
+    {
+      "kp": "py.mq.arq",
+      "type": "multi_choice",
+      "question": "以下哪些属于 arq WorkerSettings 中常见可配置项？（多选）",
+      "options": [
+        "functions：注册可被 Worker 执行的任务函数列表",
+        "redis_settings：Redis 连接参数",
+        "max_jobs：单个 Worker 的并发任务上限",
+        "queue_name：指定监听的队列名",
+        "thread_count：操作系统级线程池大小，arq 强制要求配置"
+      ],
+      "answer": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "explanation": "functions、redis_settings、max_jobs、queue_name 都是 arq 配置中的常见项。thread_count 并非 arq 的强制配置项，arq 基于 asyncio 而非以线程池为核心。",
+      "error_tag": "记忆缺失",
+      "variant_group": "arq.配置项"
+    },
+    {
+      "kp": "py.mq.arq",
+      "type": "multi_choice",
+      "question": "在 arq 任务中，哪些做法有助于正确处理“任务被取消/超时”这类情况？（多选）",
+      "options": [
+        "对可能长时间等待的操作设置合理超时，避免任务无期限挂起",
+        "捕获 asyncio.CancelledError 时做必要的清理后再按需抛出",
+        "任务中打开的外部资源（连接、文件等）在 finally 中释放",
+        "依赖 Worker 强制杀进程来回收资源，任务代码里无需处理清理"
+      ],
+      "answer": [
+        0,
+        1,
+        2
+      ],
+      "explanation": "超时设置、对取消异常的合理处理、finally 中释放资源，都是应对取消/超时的正确实践。把资源回收完全交给进程被杀会导致泄漏或状态不一致，是错误做法。",
+      "error_tag": "概念混淆",
+      "variant_group": "arq.取消与超时"
+    },
+    {
+      "kp": "py.mq.arq",
+      "type": "fill_blank",
+      "question": "在 arq 的 Worker 配置中，用于声明“可被 Worker 执行的任务函数列表”的配置项名称是 ______。",
+      "options": [],
+      "answer": [
+        "functions",
+        "WorkerSettings.functions",
+        "functions 属性"
+      ],
+      "explanation": "arq 通过 WorkerSettings 的 functions 属性登记任务函数，只有出现在该列表中的函数名才能被 enqueue_job 使用。",
+      "error_tag": "记忆缺失",
+      "variant_group": "arq.配置项"
+    },
+    {
+      "kp": "py.mq.arq",
+      "type": "fill_blank",
+      "question": "arq 任务函数约定的第一个位置参数通常命名为 ______，用于承载任务上下文（如 job_id、redis 连接、重试次数等）。",
+      "options": [],
+      "answer": [
+        "ctx",
+        "上下文 ctx",
+        "context",
+        "ctx（上下文对象）"
+      ],
+      "explanation": "arq 任务函数签名约定第一个参数是上下文对象，惯例命名为 ctx。通过它访问 redis、job_id、job_try 等信息。",
+      "error_tag": "记忆缺失",
+      "variant_group": "arq.任务函数签名"
+    },
+    {
+      "kp": "py.mq.arq",
+      "type": "code_reading",
+      "question": "阅读下面的 arq 任务定义，回答问题：\n\nasync def add(ctx, a: int, b: int) -> int:\n    return a + b\n\n若调用方执行 `await redis.enqueue_job('add', 3, 5)`，Worker 执行该任务时，函数接收到的参数是哪些？最终返回什么？",
+      "options": [],
+      "answer": "Worker 会调用 add(ctx, 3, 5)：ctx 为 Worker 注入的任务上下文对象，a=3、b=5；函数返回 8，该返回值会作为任务结果写入 arq 的结果存储，可被调用方查询。",
+      "explanation": "enqueue_job 的第一个参数是任务函数名，其后按位置传入业务参数，arq 在调度执行时会自动把上下文对象作为位置参数 0 注入，因此业务参数 a、b 分别对应 3 和 5，返回值 8 作为任务结果保存。",
+      "error_tag": "概念混淆",
+      "variant_group": "arq.入队与执行"
+    },
+    {
+      "kp": "py.mq.arq",
+      "type": "code_reading",
+      "question": "阅读下面的代码并说明其行为：\n\nfrom arq import Retry\n\nasync def flaky(ctx, n: int):\n    if ctx['job_try'] < 3:\n        raise Retry(defer=1)\n    return n * 2\n\n问：这段任务在什么条件下会重试、重试几次后成功返回？",
+      "options": [],
+      "answer": "当任务被执行的次数（job_try）小于 3 时抛出 Retry，任务会被延迟约 1 后重新入队执行；当尝试次数达到 3 时不再重试，直接返回 n*2 作为结果。即最多重试两次、第 3 次尝试时成功返回。",
+      "explanation": "arq 的任务上下文中 job_try 表示当前是第几次尝试；抛出 Retry 会按 defer 指定的延迟重新调度。job_try 从 1 开始计数，小于 3 时（第 1、2 次）重试，第 3 次满足条件直接返回。",
+      "error_tag": "边界错误",
+      "variant_group": "arq.重试机制"
+    },
+    {
+      "kp": "py.mq.arq",
+      "type": "scenario",
+      "question": "工程场景：你在一个 asyncio Web 服务中使用 arq 做异步任务队列。上线后发现高峰期大量“发送邮件”任务互相抢占，个别慢任务会把 Worker 的并发额度占满，导致后续紧急任务（如支付回调通知）长时间排队。你希望在不引入新组件的前提下缓解这一问题。请说明你的解决思路。",
+      "options": [],
+      "answer": null,
+      "explanation": "核心是把不同优先级的任务拆到不同队列，用 queue_name 区分，并给关键队列分配独立 Worker（或调整 max_jobs 隔离并发额度），使慢任务无法挤占紧急任务的执行资源。",
+      "error_tag": "概念混淆",
+      "variant_group": "arq.队列隔离",
+      "required_keywords": [
+        "隔离",
+        "并发"
+      ]
+    },
+    {
+      "kp": "py.mq.arq",
+      "type": "scenario",
+      "question": "工程场景：同事把 arq 配置写在模块级变量里，直接在 WorkerSettings 中用同步库（如 requests）发起网络请求，任务函数也是普通 def。压测时并发始终上不去，且偶发阻塞整个 Worker。请分析原因并给出改造方向。",
+      "options": [],
+      "answer": null,
+      "explanation": "arq 基于 asyncio，任务函数必须是协程（async def），在协程中调用同步阻塞库（如 requests）会阻塞事件循环，导致并发无法提升甚至整个 Worker 卡住。改造方向是把任务函数改成协程，使用异步库或把阻塞调用放到线程池执行，同时保证 Redis 等连接复用。",
+      "error_tag": "概念混淆",
+      "variant_group": "arq.异步正确性",
+      "required_keywords": [
+        "asyncio",
+        "Redis",
+        "并发",
+        "异步",
+        "协程"
+      ]
+    },
+    {
+      "kp": "py.mq.arq",
+      "type": "single_choice",
+      "question": "某个 arq 任务函数在执行过程中抛出了未捕获的异常，默认情况下会发生什么？",
+      "options": [
+        "异常被 Worker 捕获并记录，任务被标记为失败，其它任务继续正常执行",
+        "整个 Worker 进程崩溃退出，正在排队的任务全部丢失",
+        "异常被静默吞掉，任务被当作成功完成写入结果",
+        "Worker 会无限重试该任务直到成功，不再处理其它任务"
+      ],
+      "answer": 0,
+      "explanation": "arq 中单个任务抛异常不会拖垮 Worker，异常会被捕获并记入日志，该次执行记为失败。不会静默当成功，也不会导致进程崩溃或无限重试（重试需显式配置）。",
+      "error_tag": "概念混淆",
+      "variant_group": "arq.任务失败处理"
+    },
+    {
+      "kp": "py.mq.arq",
+      "type": "single_choice",
+      "question": "arq 的 Worker 配置文件里，用于指定单个 Worker 同时并发执行任务数量的参数是？",
+      "options": [
+        "max_jobs",
+        "pool_size",
+        "num_workers",
+        "semaphore"
+      ],
+      "answer": 0,
+      "explanation": "WorkerSettings 中的 max_jobs 控制一个 Worker 在任一时刻并发执行的任务上限。pool_size 是数据库连接池概念，num_workers 是 arq 命令行的进程数参数，semaphore 不是 Worker 配置项。",
+      "error_tag": "记忆缺失",
+      "variant_group": "arq.并发控制"
+    },
+    {
+      "kp": "py.mq.arq",
+      "type": "single_choice",
+      "question": "下面的任务函数签名，哪个符合 arq 对任务函数的约定？",
+      "options": [
+        "async def send_email(ctx, user_id: int) -> str",
+        "def send_email(user_id: int) -> str",
+        "async def send_email() -> str（不接受任何参数）",
+        "async def send_email(ctx) -> str（只能有一个参数）"
+      ],
+      "answer": 0,
+      "explanation": "arq 的任务函数必须是协程，且第一个位置参数约定为上下文对象 ctx（承载 job_id、redis、重试次数等信息），之后才是业务参数。B 缺 async 与 ctx；C 缺 ctx 无法访问任务上下文；D 把 ctx 当成唯一参数也不对，业务参数是可选的。",
+      "error_tag": "边界错误",
+      "variant_group": "arq.任务函数签名"
+    },
+    {
+      "kp": "py.mq.arq",
+      "type": "single_choice",
+      "question": "arq 中任务重试（retry）通常是怎么触发的？",
+      "options": [
+        "在任务内部抛出 arq 提供的重试异常（如 Retry），或依赖配置的 max_tries 在失败后重试",
+        "只要任务返回 False 就会自动无限重试",
+        "必须手动重新调用 enqueue_job 才算重试，没有内置机制",
+        "在 Redis 里执行 RETRY 命令即可"
+      ],
+      "answer": 0,
+      "explanation": "arq 支持在协程里抛出 Retry 来主动要求重试，同时可通过 WorkerSettings 的 max_tries 等设置限定失败重试次数。返回值决定重试、无限重试、手动重试、Redis 命令重试都是常见误解。",
+      "error_tag": "概念混淆",
+      "variant_group": "arq.重试机制"
+    },
+    {
+      "kp": "py.mq.arq",
+      "type": "single_choice",
+      "question": "关于 arq 中队列名与 Redis key 的关系，正确的是？",
+      "options": [
+        "每个队列在 Redis 中以带前缀的 key 组织，默认队列名为 arq:queue，可通过 queue_name 配置",
+        "队列是操作系统级别的命名管道，与 Redis 无关",
+        "队列名必须是 UUID，不能使用 arq:queue 这种字符串",
+        "队列名只影响日志输出，实际所有任务都进同一个全局列表"
+      ],
+      "answer": 0,
+      "explanation": "arq 用 Redis 中带前缀的 key 表示队列，默认队列名是 arq:queue，可用 queue_name 自定义。队列不是命名管道，不要求 UUID，队列名确实决定任务进哪个 key 列表，不是只影响日志。",
+      "error_tag": "记忆缺失",
+      "variant_group": "arq.队列命名"
+    },
+    {
+      "kp": "py.mq.arq",
+      "type": "single_choice",
+      "question": "arq 任务的延迟执行（比如 10 分钟后执行）通常怎么实现？",
+      "options": [
+        "在入队时指定 _defer_by 或 _defer_until 等参数，任务先进入 Redis 的有序结构，到期后由 Worker 取走",
+        "在任务函数里写 time.sleep(600) 阻塞当前 Worker",
+        "开一个独立线程轮询时间，到点再手动调用函数",
+        "延迟执行在 arq 中不被支持，必须借助外部定时器"
+      ],
+      "answer": 0,
+      "explanation": "arq 支持延迟任务：入队时用 _defer_by（相对时间）或 _defer_until（绝对时间），任务不立即进主队列而是按时间排序，到期后由 Worker 调度执行。sleep 阻塞会浪费并发额度，开线程或断言不支持都是误解。",
+      "error_tag": "概念混淆",
+      "variant_group": "arq.延迟任务"
+    },
+    {
+      "kp": "py.mq.arq",
+      "type": "single_choice",
+      "question": "调用 enqueue_job 时传入一个并不存在的任务函数名，会发生什么？",
+      "options": [
+        "入队时会报错提示该函数未注册，任务不会进入队列",
+        "入队成功，Worker 执行到该任务时会自动跳过且不留痕",
+        "入队成功，Worker 执行时自动把函数名当作命令在系统 shell 中执行",
+        "入队成功，并且会被自动注册为临时函数"
+      ],
+      "answer": 0,
+      "explanation": "arq 在入队阶段会检查函数名是否已注册（在 WorkerSettings.functions 中声明），未注册会直接报错，避免任务被静默丢弃。跳过、当 shell 执行、自动注册都不是 arq 的行为。",
+      "error_tag": "边界错误",
+      "variant_group": "arq.入队校验"
+    },
+    {
+      "kp": "py.mq.arq",
+      "type": "single_choice",
+      "question": "关于 arq 任务中访问 Redis，正确的做法是？",
+      "options": [
+        "通常通过任务第一个参数 ctx 拿到已连接的 redis 客户端（如 ctx['redis']）使用",
+        "在任务里用 new Redis() 手动创建新连接，并保证不关闭",
+        "任务函数不能访问 Redis，只能操作本地变量",
+        "必须通过 os.system 调用 redis-cli 才能操作"
+      ],
+      "answer": 0,
+      "explanation": "arq 把复用的 redis 客户端放在任务上下文 ctx 中，任务直接用 ctx 里的连接即可，避免每次新建连接。手动 new 且不关闭会泄漏连接；说不能访问或必须用 redis-cli 都是误解。",
+      "error_tag": "概念混淆",
+      "variant_group": "arq.上下文使用"
+    }
+  ]
+}

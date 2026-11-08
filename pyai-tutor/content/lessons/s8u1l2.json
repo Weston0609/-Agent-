@@ -1,0 +1,643 @@
+{
+  "id": "s8u1l2",
+  "title": "s8u1l2",
+  "kps": [
+    "arch.dist.deepspeed",
+    "arch.dist.megatron"
+  ],
+  "theory": "## arch.dist.deepspeed\n\n# DeepSpeed：让大模型训练跑得更快、更省显存\n\n## 一句话直觉\n\n当你训练的模型大到单张 GPU 装不下、或者慢得离谱时，DeepSpeed 就是那把“把模型切碎、把显存省下来、把速度提上去”的瑞士军刀。\n\n---\n\n## 1. 为什么需要 DeepSpeed？\n\n大模型（Large Language Model, LLM）训练有两个核心痛点：\n\n1. **显存不够**：模型参数、梯度、优化器状态（optimizer states）加在一起，动辄是参数量的 16 倍以上。\n2. **训练太慢**：单卡算力有限，数据并行（Data Parallelism, DP）通信开销大。\n\nDeepSpeed 是微软开源的一个深度学习优化库，核心目标是：**用更少的显存、更少的通信、更少的代码改动，训练更大的模型**。\n\n它最著名的技术是 **ZeRO（Zero Redundancy Optimizer）**，通过把优化器状态、梯度、参数分片（shard）到多张 GPU 上，消除数据并行中的内存冗余。\n\n```python\n# 直觉演示：一个 1.5B 参数的模型，传统数据并行下每张卡要存多少？\n# 假设用 Adam，混合精度训练\nparams = 1.5e9\nbytes_per_param_fp16 = 2  # 模型参数 + 梯度\nbytes_per_param_adam = 12  # Adam: fp32 参数副本 + m + v\n\nper_gpu_gb = params * (bytes_per_param_fp16 + bytes_per_param_adam) / (1024**3)\nprint(f\"传统 DP 每张卡至少需要: {per_gpu_gb:.1f} GB 显存\")\n# 输出约 19.6 GB，还没算激活值（activation）\n```\n\n---\n\n## 2. ZeRO 的三个阶段：从“人人有份”到“按需分配”\n\nZeRO 把训练状态分成三块：**优化器状态（Optimizer States）**、**梯度（Gradients）**、**参数（Parameters）**。\n\n| 阶段 | 分片对象 | 显存节省 | 通信量 |\n|------|----------|----------|--------|\n| ZeRO-1 | 优化器状态 | ~4x | 低 |\n| ZeRO-2 | + 梯度 | ~8x | 中 |\n| ZeRO-3 | + 参数 | 线性于 GPU 数 | 高 |\n\n```python\n# 用一个简单的比喻理解 ZeRO 分片\n# 假设 4 张 GPU，每张卡原本都要存完整的 100 份状态\nfull_states = 100\ngpus = 4\n\nzero1 = full_states / gpus + full_states + full_states  # 只分片优化器状态\nzero2 = full_states / gpus * 2 + full_states            # 分片优化器状态+梯度\nzero3 = full_states / gpus * 3                          # 三者都分片\n\nprint(f\"ZeRO-1 每卡: {zero1:.0f}, ZeRO-2 每卡: {zero2:.0f}, ZeRO-3 每卡: {zero3:.0f}\")\n# ZeRO-1 每卡: 225, ZeRO-2 每卡: 150, ZeRO-3 每卡: 75\n```\n\n**关键结论**：ZeRO 阶段越高，显存越省，但通信越多。工程上常从 ZeRO-2 起步，显存实在不够再上 ZeRO-3。\n\n---\n\n## 3. 最小可运行示例：用 DeepSpeed 训练一个玩具模型\n\nDeepSpeed 的使用流程和 PyTorch 几乎一样，只是多了一个 `deepspeed.initialize()` 和配置文件（JSON）。\n\n```python\n# train_deepspeed.py\nimport torch\nimport torch.nn as nn\nimport deepspeed\n\n# 1. 定义模型\ndef make_model():\n    return nn.Sequential(\n        nn.Linear(128, 256),\n        nn.ReLU(),\n        nn.Linear(256, 10),\n    )\n\n# 2. DeepSpeed 配置：这里用 ZeRO-2 + 混合精度\nds_config = {\n    \"train_batch_size\": 64,\n    \"optimizer\": {\"type\": \"Adam\", \"params\": {\"lr\": 1e-3}},\n    \"fp16\": {\"enabled\": True},\n    \"zero_optimization\": {\"stage\": 2},\n}\n\n# 3. 初始化 DeepSpeed 引擎\nmodel = make_model()\nengine, optimizer, _, _ = deepspeed.initialize(\n    model=model,\n    model_parameters=model.parameters(),\n    config=ds_config,\n)\n\n# 4. 正常训练循环\ndevice = engine.device\nfor step in range(10):\n    x = torch.randn(64, 128).to(device)\n    y = torch.randint(0, 10, (64,)).to(device)\n    loss = nn.CrossEntropyLoss()(engine(x), y)\n    engine.backward(loss)\n    engine.step()\n    if step % 5 == 0:\n        print(f\"step {step}, loss={loss.item():.4f}\")\n```\n\n启动方式（单机多卡）：\n\n```bash\ndeepspeed --num_gpus=2 train_deepspeed.py\n```\n\n---\n\n## 4. 工程级要点：配置、通信与检查点\n\n### 4.1 配置文件是核心\n\nDeepSpeed 的 JSON 配置决定了性能表现，常见字段：\n\n- `train_batch_size` / `train_micro_batch_size_per_gpu`：全局与单卡 batch。\n- `gradient_accumulation_steps`：梯度累积。\n- `zero_optimization.stage`：ZeRO 阶段。\n- `fp16` 或 `bf16`：混合精度。\n- `offload_optimizer` / `offload_param`：把状态卸载到 CPU/NVMe，用时间换显存。\n\n```python\n# 一个更工程化的 ZeRO-3 配置片段\nzero3_config = {\n    \"train_batch_size\": 128,\n    \"train_micro_batch_size_per_gpu\": 4,\n    \"gradient_accumulation_steps\": 4,\n    \"bf16\": {\"enabled\": True},\n    \"zero_optimization\": {\n        \"stage\": 3,\n        \"offload_optimizer\": {\"device\": \"cpu\"},\n        \"offload_param\": {\"device\": \"cpu\"},\n    },\n}\n# 注意：offload 会显著降低速度，只在显存极度紧张时使用\n```\n\n### 4.2 检查点（Checkpoint）\n\nDeepSpeed 提供 `engine.save_checkpoint()` 和 `engine.load_checkpoint()`，能正确处理分片状态。\n\n```python\n# 保存与加载\nengine.save_checkpoint(\"./ckpt\", tag=\"step_100\")\n# engine.load_checkpoint(\"./ckpt\", tag=\"step_100\")\n```\n\n### 4.3 与 Hugging Face 集成\n\n实际项目里常用 `transformers` + `accelerate` + DeepSpeed：\n\n```python\n# 伪代码示意\nfrom transformers import Trainer, TrainingArguments\n\nargs = TrainingArguments(\n    output_dir=\"./out\",\n    deepspeed=\"ds_config.json\",  # 直接指定 DeepSpeed 配置\n    per_device_train_batch_size=4,\n)\ntrainer = Trainer(model=model, args=args, train_dataset=dataset)\ntrainer.train()\n```\n\n---\n\n## 5. 什么时候用、怎么选？\n\n- **模型 < 1B**：普通 DDP（Distributed Data Parallel）通常够用。\n- **1B ~ 10B**：ZeRO-2 + 混合精度，性价比最高。\n- **> 10B 或单卡装不下**：ZeRO-3，必要时加 CPU offload。\n- **超大模型 + 多机**：ZeRO-3 + 张量并行（Tensor Parallelism）/流水线并行（Pipeline Parallelism）。\n\n**核心权衡**：显存 ↔ 通信 ↔ 速度。DeepSpeed 给你旋钮，工程上要按硬件和模型规模调。\n\n---\n\n## 动手练习\n\n**任务**：在本机（或 Colab 单卡）上，用 DeepSpeed 训练一个两层 MLP 做 MNIST 分类。\n\n要求：\n1. 写一份 `ds_config.json`，启用 ZeRO-2 和 fp16。\n2. 用 `deepspeed.initialize()` 包装模型和优化器。\n3. 训练 1 个 epoch，打印每 100 步的 loss。\n4. 对比：把 `zero_optimization.stage` 改成 0（即关闭 ZeRO），观察 `torch.cuda.max_memory_allocated()` 的变化。\n\n提示：单卡也能跑 DeepSpeed，只是分片效果不明显；重点是跑通流程、理解配置。\n\n---\n\n## 常见误区\n\n1. **以为 DeepSpeed 只支持多卡**：单卡也能用，只是 ZeRO 分片收益小。\n2. **无脑上 ZeRO-3**：通信开销大，小模型反而更慢。\n3. **忘记设置 `train_batch_size`**：DeepSpeed 会报错或行为异常。\n4. **offload 当默认选项**：CPU/NVMe offload 会显著拖慢训练，只在显存不够时用。\n5. **直接 `torch.save` 保存 DeepSpeed 模型**：分片状态会丢，必须用 `engine.save_checkpoint()`。\n\n## arch.dist.megatron\n\n# Megatron 分布式训练架构入门\n\n> **一句话直觉**：当模型大到一张 GPU 装不下时，Megatron 告诉你如何把模型“切”到多张 GPU 上，让它们协同训练，同时尽量不浪费算力。\n\nMegatron（全称 Megatron-LM，最初由 NVIDIA 提出）是一套用于**大规模语言模型分布式训练**（distributed training）的架构与工程实践集合。它要解决的核心问题是：模型参数量、激活值（activation）和优化器状态（optimizer state）会远超单卡显存，必须把训练任务拆分到多张 GPU 上。\n\n本讲义用 5 个小节带你从“为什么要并行”走到“Megatron 的三种并行怎么配合”。\n\n---\n\n## 1. 为什么需要分布式训练？\n\n训练一个神经网络需要三类显存：\n\n- **参数**（parameters）：模型权重。\n- **梯度**（gradients）：反向传播算出的每个参数的导数。\n- **优化器状态**（optimizer state）：如 Adam 的动量和方差，通常每个参数还要多占 2 份。\n\n粗略估算，用 Adam 训练一个 `P` 参数的模型，单卡显存需求约为 `16P` 字节（fp16 参数 2 + fp16 梯度 2 + fp32 主权重 4 + 优化器状态 8）。一个 100 亿参数模型仅状态就要约 160 GB，远超单张 GPU。\n\n因此必须并行（parallelism）。Megatron 把并行分成两大类：\n\n- **数据并行**（Data Parallelism, DP）：每张卡有完整模型，但喂不同的数据。\n- **模型并行**（Model Parallelism, MP）：把模型本身切开，包括**张量并行**（Tensor Parallelism, TP）和**流水线并行**（Pipeline Parallelism, PP）。\n\n---\n\n## 2. 数据并行（DP）与它的瓶颈\n\n数据并行的做法是：复制模型到 N 张卡，每张卡处理一个 mini-batch 的分片，反向传播后通过 **All-Reduce**（全归约）同步梯度。\n\n```python\n# 概念演示：数据并行中的梯度平均（用 PyTorch DDP 的伪代码结构）\nimport torch\nimport torch.distributed as dist\n\n# 假设已初始化进程组：dist.init_process_group(\"nccl\")\n# 每个 rank 持有一份完整模型和不同数据分片\nmodel = torch.nn.Linear(1024, 1024).cuda()\noptimizer = torch.optim.SGD(model.parameters(), lr=0.01)\n\n# 前向 + 反向\nloss = model(torch.randn(8, 1024).cuda()).sum()\nloss.backward()\n\n# 关键步骤：对每个参数的梯度做 All-Reduce，得到全局平均梯度\nfor p in model.parameters():\n    dist.all_reduce(p.grad, op=dist.ReduceOp.SUM)\n    p.grad /= dist.get_world_size()\n\noptimizer.step()\n```\n\n**瓶颈**：每张卡仍要存完整模型、梯度和优化器状态。当模型本身超过单卡容量时，DP 就失效了，需要模型并行。\n\n---\n\n## 3. 张量并行（TP）：把矩阵乘法切开\n\n张量并行是 Megatron 的招牌技术。以 Transformer 里的线性层 `Y = XA` 为例，可以按两种方式切：\n\n- **列并行**（Column Parallel）：把权重 `A` 按列切成 `[A1, A2]`，每张卡算一部分输出列，然后拼接。\n- **行并行**（Row Parallel）：把 `A` 按行切，每张卡得到部分和，最后 All-Reduce 求和。\n\nMegatron 在 Transformer 的 MLP 和 Attention 中精心安排“列并行 → 行并行”的配对，使得中间只需少量通信。\n\n```python\nimport torch\nimport torch.distributed as dist\n\n# 模拟列并行线性层：权重按输出维度切成 2 份，分给 2 个 rank\nclass ColumnParallelLinear(torch.nn.Module):\n    def __init__(self, in_features, out_features, world_size, rank):\n        super().__init__()\n        self.out_per_rank = out_features // world_size\n        # 每张卡只保存自己那部分权重\n        self.weight = torch.nn.Parameter(torch.randn(self.out_per_rank, in_features))\n        self.rank = rank\n\n    def forward(self, x):\n        # 每张卡计算自己的输出列\n        local_out = x @ self.weight.t()\n        # 收集所有卡的结果并拼接（实际用 all_gather / 或后续行并行直接对接）\n        gathered = [torch.zeros_like(local_out) for _ in range(dist.get_world_size())]\n        dist.all_gather(gathered, local_out)\n        return torch.cat(gathered, dim=-1)\n```\n\n**直觉**：张量并行把一层内的计算切细，通信发生在层内，适合单机多卡（NVLink 带宽高）。\n\n---\n\n## 4. 流水线并行（PP）：按层切开\n\n流水线并行把模型按层切成多个阶段（stage），每个阶段放到不同 GPU。数据被切成多个 micro-batch，像工厂流水线一样依次经过各阶段。\n\n关键概念是 **气泡**（bubble）：流水线启动和排空阶段会有 GPU 空闲。常用优化是 **1F1B**（One Forward One Backward）调度，让前向和反向交错，减少气泡。\n\n```python\n# 概念演示：流水线并行的 micro-batch 调度思路\nnum_micro_batches = 4\nnum_stages = 3  # 3 个流水线阶段\n\n# 简化模拟：每个阶段处理一个 micro-batch 需要 1 个时间单位\nschedule = []\nfor t in range(num_micro_batches + num_stages - 1):\n    for stage in range(num_stages):\n        mb = t - stage\n        if 0 <= mb < num_micro_batches:\n            schedule.append((t, stage, mb))\n\nfor t, stage, mb in schedule:\n    print(f\"时间 {t}: 阶段 {stage} 处理 micro-batch {mb}\")\n```\n\n**直觉**：流水线并行通信量小（只在阶段边界传激活），适合跨机扩展；但会引入气泡，需要足够多的 micro-batch 来掩盖。\n\n---\n\n## 5. Megatron 的三维并行：TP × PP × DP\n\n真实的大模型训练会同时使用三种并行，称为 **3D 并行**（3D Parallelism）：\n\n- **TP** 在节点内切层，利用高带宽 NVLink。\n- **PP** 跨节点切层，通信量小。\n- **DP** 复制剩余部分，扩大全局 batch size。\n\n总 GPU 数 = `TP_size × PP_size × DP_size`。\n\nMegatron 的工程价值在于：它把这三者的通信组（process group）管理、调度顺序、显存优化（如激活重计算 activation recomputation）都封装好，并提供高效实现。\n\n```python\n# 概念演示：计算 3D 并行下每个 rank 的身份\nTP, PP, DP = 8, 4, 2\nworld_size = TP * PP * DP\nprint(f\"总 GPU 数: {world_size}\")\n\n# 给定全局 rank，解析出它在 TP/PP/DP 中的坐标\nrank = 33\ntp_rank = rank % TP\npp_rank = (rank // TP) % PP\ndp_rank = rank // (TP * PP)\nprint(f\"rank {rank}: tp={tp_rank}, pp={pp_rank}, dp={dp_rank}\")\n```\n\n**记忆口诀**：TP 切“宽”，PP 切“深”，DP 切“数据”。\n\n---\n\n## 动手练习\n\n**任务**：用纯 Python（不依赖 GPU）模拟一个 3D 并行配置。\n\n1. 定义 `TP=2, PP=3, DP=2`。\n2. 编写函数 `parse_rank(global_rank, TP, PP, DP)`，返回 `(tp_rank, pp_rank, dp_rank)`。\n3. 遍历所有全局 rank，打印每个 rank 的三维坐标。\n4. 额外计算：同一个 `dp_rank` 且同一个 `tp_rank`、不同 `pp_rank` 的 rank 是否属于同一个流水线组？用代码验证你的答案。\n\n完成后你就能理解 Megatron 中 `mpu`（model parallel unit）如何根据全局 rank 推导出各种通信组。\n\n---\n\n## 小结\n\n- Megatron 解决的是“模型大到单卡放不下”的问题。\n- 三种并行：TP 切层内矩阵、PP 切层间、DP 切数据。\n- 3D 并行组合起来，才能训练千亿级模型。\n- 核心权衡：显存节省 vs 通信开销 vs GPU 利用率（气泡）。\n",
+  "quiz": [
+    {
+      "kp": "arch.dist.deepspeed",
+      "type": "single_choice",
+      "question": "在使用 DeepSpeed 进行分布式训练时，配置文件中的 train_batch_size 指的是什么？",
+      "options": [
+        "整个训练过程中所有 GPU 上的总批大小",
+        "单个 GPU 上的批大小",
+        "每个数据并行组的批大小",
+        "模型一次前向传播处理的样本数上限"
+      ],
+      "answer": 0,
+      "explanation": "DeepSpeed 的 train_batch_size 是全局批大小，等于单卡批大小乘以数据并行度（GPU 数量）。这是分布式训练中常用的约定，便于统一配置不同规模下的训练。",
+      "error_tag": "概念混淆",
+      "variant_group": "deepspeed_batch_size"
+    },
+    {
+      "kp": "arch.dist.deepspeed",
+      "type": "single_choice",
+      "question": "以下关于 DeepSpeed ZeRO 优化器状态分片的描述，哪一项是正确的？",
+      "options": [
+        "ZeRO-1 分片优化器状态，ZeRO-2 额外分片梯度，ZeRO-3 额外分片模型参数",
+        "ZeRO-1 分片模型参数，ZeRO-2 分片梯度，ZeRO-3 分片优化器状态",
+        "ZeRO-1 同时分片优化器状态和梯度，ZeRO-2 再加入模型参数分片",
+        "ZeRO 只能分片优化器状态，梯度与参数始终在各卡上完整保留"
+      ],
+      "answer": 0,
+      "explanation": "ZeRO 的三个阶段依次增加分片对象：Stage 1 分片优化器状态，Stage 2 在此基础上分片梯度，Stage 3 再分片模型参数。这是 ZeRO 最核心的分级设计。",
+      "error_tag": "概念混淆",
+      "variant_group": "zero_stage"
+    },
+    {
+      "kp": "arch.dist.deepspeed",
+      "type": "single_choice",
+      "question": "使用 DeepSpeed 的 ZeRO Stage 3 时，每张卡上保存的模型参数是什么状态？",
+      "options": [
+        "仅保存参数的一个分片，前向/反向时按需 all-gather 完整参数",
+        "保存完整参数，但与优化器状态分片",
+        "不保存任何参数，全部放在 CPU",
+        "只保存参数副本用于梯度同步"
+      ],
+      "answer": 0,
+      "explanation": "ZeRO-3 将参数划分为分片，每卡只持有一部分，计算时通过 all-gather 临时重建完整参数，用完即释放，从而大幅降低单卡参数显存。",
+      "error_tag": "概念混淆",
+      "variant_group": "zero_stage"
+    },
+    {
+      "kp": "arch.dist.deepspeed",
+      "type": "single_choice",
+      "question": "DeepSpeed 配置中 \"zero_optimization\": {\"stage\": 0} 表示什么？",
+      "options": [
+        "禁用 ZeRO 分片，相当于普通数据并行",
+        "启用 ZeRO-1",
+        "启用 ZeRO-2",
+        "启用 ZeRO-3"
+      ],
+      "answer": 0,
+      "explanation": "stage 0 表示不启用 ZeRO 分片，此时 DeepSpeed 行为接近标准数据并行；stage 1/2/3 分别对应逐级增加的分片策略。",
+      "error_tag": "概念混淆",
+      "variant_group": "zero_stage"
+    },
+    {
+      "kp": "arch.dist.deepspeed",
+      "type": "single_choice",
+      "question": "在 DeepSpeed 训练中出现 loss 为 NaN，最不可能的原因是以下哪项？",
+      "options": [
+        "梯度累积步数设置得太大",
+        "学习率过高导致发散",
+        "FP16 动态 loss scaling 失效导致梯度下溢",
+        "数据中存在异常值"
+      ],
+      "answer": 0,
+      "explanation": "梯度累积步数大本身不会直接导致 NaN；学习率过高、loss scaling 失效、数据异常都是常见诱因，梯度累积只会改变有效批大小。",
+      "error_tag": "因果误判",
+      "variant_group": "nan_loss"
+    },
+    {
+      "kp": "arch.dist.deepspeed",
+      "type": "single_choice",
+      "question": "DeepSpeed 的 checkpoint 保存时，若开启 ZeRO Stage 3，默认保存的模型权重是什么形式？",
+      "options": [
+        "按分片保存，需要合并后才能得到完整权重",
+        "始终保存合并后的完整权重",
+        "只保存优化器状态，不保存权重",
+        "只保存配置文件"
+      ],
+      "answer": 0,
+      "explanation": "ZeRO-3 下各卡只持有参数分片，直接保存的是分片权重，加载到单卡推理前通常需要合并；也可以通过配置保存合并后的权重。",
+      "error_tag": "概念混淆",
+      "variant_group": "checkpoint"
+    },
+    {
+      "kp": "arch.dist.deepspeed",
+      "type": "single_choice",
+      "question": "与普通 PyTorch DDP 相比，DeepSpeed 最核心的额外能力是什么？",
+      "options": [
+        "通过 ZeRO 等技术对优化器状态、梯度和参数进行分片以降低单卡显存",
+        "自动提升模型准确率",
+        "完全取代反向传播",
+        "不再需要任何通信"
+      ],
+      "answer": 0,
+      "explanation": "DDP 只做梯度同步，而 DeepSpeed 在此之上提供 ZeRO 分片、混合精度、offload 等显存优化机制，使其能训练更大模型，但通信仍然存在，精度也不会自动提升。",
+      "error_tag": "概念混淆",
+      "variant_group": "ddp_vs_deepspeed"
+    },
+    {
+      "kp": "arch.dist.deepspeed",
+      "type": "single_choice",
+      "question": "DeepSpeed 配置中设置 \"train_micro_batch_size_per_gpu\": 2 且 \"gradient_accumulation_steps\": 8，在有 4 张 GPU 时全局批大小是多少？",
+      "options": [
+        "64",
+        "16",
+        "8",
+        "32"
+      ],
+      "answer": 0,
+      "explanation": "全局批大小 = micro_batch_size_per_gpu × gradient_accumulation_steps × GPU 数量 = 2 × 8 × 4 = 64。",
+      "error_tag": "计算错误",
+      "variant_group": "batch_size"
+    },
+    {
+      "kp": "arch.dist.deepspeed",
+      "type": "single_choice",
+      "question": "使用 DeepSpeed 的 activation checkpointing（梯度检查点）主要目的是什么？",
+      "options": [
+        "用额外的前向计算换取激活显存的降低",
+        "减少模型参数量",
+        "加快数据加载速度",
+        "避免使用优化器"
+      ],
+      "answer": 0,
+      "explanation": "梯度检查点不保存全部中间激活，反向时重新计算，从而显著降低激活显存，代价是增加计算量；它不改变参数量，也与数据加载和优化器无关。",
+      "error_tag": "概念混淆",
+      "variant_group": "activation_checkpointing"
+    },
+    {
+      "kp": "arch.dist.deepspeed",
+      "type": "single_choice",
+      "question": "关于 DeepSpeed 的 pipeline parallelism，以下描述正确的是？",
+      "options": [
+        "它把模型按层切分到不同设备上，micro-batch 在设备间流水执行",
+        "它把同一层的计算复制到所有设备",
+        "它只能用于单卡训练",
+        "它通过缩小模型来加速训练"
+      ],
+      "answer": 0,
+      "explanation": "流水线并行把模型的不同层分配到不同设备，并通过 micro-batch 调度形成流水线以提高利用率；它不是复制计算，也不缩小模型，且需要多设备。",
+      "error_tag": "概念混淆",
+      "variant_group": "pipeline_parallel"
+    },
+    {
+      "kp": "arch.dist.deepspeed",
+      "type": "single_choice",
+      "question": "在 DeepSpeed 中，如果显存充足但训练速度偏慢，优先考虑调整哪类配置？",
+      "options": [
+        "降低 ZeRO stage 或增大 bucket size 以减少通信次数",
+        "增大 offload 到 NVMe 的比例",
+        "把 fp16 改为 fp32 以提升精度",
+        "增加 gradient_accumulation_steps"
+      ],
+      "answer": 0,
+      "explanation": "显存充足时，过高的 ZeRO 分片或 offload 会带来额外通信/传输开销拖慢速度，降低 stage 或增大桶大小可减少通信；增大累积步数不会直接提速，改成 fp32 通常更慢。",
+      "error_tag": "因果误判",
+      "variant_group": "performance_tuning"
+    },
+    {
+      "kp": "arch.dist.deepspeed",
+      "type": "single_choice",
+      "question": "DeepSpeed 的 \"steps_per_print\" 配置项的作用是什么？",
+      "options": [
+        "控制每隔多少训练步打印一次日志",
+        "控制每步使用的 GPU 数量",
+        "设置学习率的步长",
+        "设置梯度裁剪的阈值"
+      ],
+      "answer": 0,
+      "explanation": "steps_per_print 决定日志打印频率，属于监控配置，与 GPU 数量、学习率步长、梯度裁剪阈值均无关。",
+      "error_tag": "概念混淆",
+      "variant_group": "logging"
+    },
+    {
+      "kp": "arch.dist.deepspeed",
+      "type": "single_choice",
+      "question": "使用 DeepSpeed 训练时开启了 ZeRO Stage 3，相比 Stage 2 最直接的额外收益是什么？",
+      "options": [
+        "可以在单卡显存有限时训练更大参数量的模型",
+        "训练速度一定比 Stage 2 更快",
+        "不再需要数据并行",
+        "可以完全避免通信开销"
+      ],
+      "answer": 0,
+      "explanation": "ZeRO-3 在分片优化器状态和梯度的基础上进一步分片模型参数，使单卡参数显存大幅下降，从而支持更大模型；但通信量增加，速度不一定更快，数据并行仍然需要，通信也无法完全避免。",
+      "error_tag": "因果误判",
+      "variant_group": "zero_stage"
+    },
+    {
+      "kp": "arch.dist.deepspeed",
+      "type": "single_choice",
+      "question": "在 DeepSpeed 配置中设置 \"fp16\": {\"enabled\": true}，主要作用是什么？",
+      "options": [
+        "让模型参数、梯度和激活以半精度存储与计算，并通常配合动态 loss scaling",
+        "只把优化器状态转成半精度，模型参数仍为单精度",
+        "只在推理时使用半精度，训练时仍用单精度",
+        "自动把 batch size 减半以避免溢出"
+      ],
+      "answer": 0,
+      "explanation": "DeepSpeed 的 fp16 配置启用混合精度训练，模型与计算以 FP16 为主，并通过 loss scaling 避免梯度下溢。优化器状态通常保留 FP32 以保证数值稳定。",
+      "error_tag": "概念混淆",
+      "variant_group": "mixed_precision"
+    },
+    {
+      "kp": "arch.dist.deepspeed",
+      "type": "single_choice",
+      "question": "使用 DeepSpeed 的梯度累积（gradient accumulation）时，如果 gradient_accumulation_steps=4，train_batch_size=32，那么 micro batch size 是多少？",
+      "options": [
+        "8",
+        "4",
+        "32",
+        "128"
+      ],
+      "answer": 0,
+      "explanation": "micro batch size = train_batch_size / gradient_accumulation_steps = 32 / 4 = 8。梯度累积通过在多个 micro step 上累加梯度来模拟更大的全局批大小。",
+      "error_tag": "计算错误",
+      "variant_group": "gradient_accumulation"
+    },
+    {
+      "kp": "arch.dist.deepspeed",
+      "type": "single_choice",
+      "question": "关于 DeepSpeed 的 offload 功能，以下说法哪项正确？",
+      "options": [
+        "可以把优化器状态或参数卸载到 CPU 内存甚至 NVMe，以显存换速度",
+        "卸载后模型精度会自动提升",
+        "卸载只能用于推理，不能用于训练",
+        "卸载后训练速度必然提升"
+      ],
+      "answer": 0,
+      "explanation": "offload 将优化器状态、参数等转移到 CPU 内存或 NVMe，缓解显存压力，但会增加数据传输开销，通常以速度换显存，精度不受影响，训练和推理均可使用。",
+      "error_tag": "因果误判",
+      "variant_group": "offload"
+    },
+    {
+      "kp": "arch.dist.deepspeed",
+      "type": "single_choice",
+      "question": "DeepSpeed 的通信优化中，all-gather 和 reduce-scatter 的主要作用是？",
+      "options": [
+        "在数据并行卡之间高效地聚合和分发梯度或参数分片",
+        "在单卡内部复制张量以加速计算",
+        "压缩模型参数以减少存储",
+        "替代优化器进行参数更新"
+      ],
+      "answer": 0,
+      "explanation": "all-gather 收集各卡分片拼成完整张量，reduce-scatter 在归约的同时把结果分片回各卡，二者是 ZeRO 等分片策略中通信的核心原语。",
+      "error_tag": "概念混淆",
+      "variant_group": "communication"
+    },
+    {
+      "kp": "arch.dist.deepspeed",
+      "type": "single_choice",
+      "question": "DeepSpeed 中的 ZeRO-Offload 主要将哪部分卸载到 CPU？",
+      "options": [
+        "优化器状态及其计算",
+        "模型的前向激活",
+        "数据加载器",
+        "学习率调度器"
+      ],
+      "answer": 0,
+      "explanation": "ZeRO-Offload 把优化器状态和优化器计算卸载到 CPU，从而在单卡上支持更大模型；激活值通常不在卸载范围内，数据加载器和调度器与 offload 无关。",
+      "error_tag": "概念混淆",
+      "variant_group": "offload"
+    },
+    {
+      "kp": "arch.dist.deepspeed",
+      "type": "single_choice",
+      "question": "使用 DeepSpeed 初始化分布式训练时，以下哪种做法是正确的？",
+      "options": [
+        "先用 deepspeed.initialize 包装模型和优化器，再用返回的引擎进行反向与步进",
+        "直接调用 torch.distributed.init_process_group 即可获得 DeepSpeed 全部特性",
+        "手动把模型参数除以 GPU 数量",
+        "必须把模型转换为单精度才能启动"
+      ],
+      "answer": 0,
+      "explanation": "DeepSpeed 需要通过 deepspeed.initialize 返回引擎对象，由引擎接管前向、反向和优化器步进，从而启用 ZeRO、混合精度、offload 等特性。",
+      "error_tag": "API误用",
+      "variant_group": "initialize"
+    },
+    {
+      "kp": "arch.dist.deepspeed",
+      "type": "single_choice",
+      "question": "关于 DeepSpeed 中的 reduce_bucket_size 配置项，以下理解正确的是？",
+      "options": [
+        "它控制梯度归约时桶的大小，影响通信与显存的权衡",
+        "它控制模型隐藏层维度",
+        "它决定数据加载的线程数",
+        "它设置学习率的衰减系数"
+      ],
+      "answer": 0,
+      "explanation": "reduce_bucket_size 指定梯度归约时使用的桶大小，较大的桶可提高带宽利用率但增加显存占用，是通信与显存之间的权衡参数。",
+      "error_tag": "概念混淆",
+      "variant_group": "bucket_size"
+    },
+    {
+      "kp": "arch.dist.megatron",
+      "type": "single_choice",
+      "question": "在大规模分布式训练框架中，模型并行和数据并行的核心区别是什么？",
+      "options": [
+        "数据并行将模型参数拆分到不同设备，模型并行将数据拆分到不同设备",
+        "数据并行将数据拆分到不同设备而模型副本相同，模型并行将模型参数拆分到不同设备",
+        "两者完全相同，只是命名不同",
+        "数据并行只用于推理，模型并行只用于训练"
+      ],
+      "answer": 1,
+      "explanation": "数据并行是每个设备持有完整模型副本但处理不同数据批次；模型并行是把模型参数（层或张量）拆分到不同设备上。两者常结合使用。",
+      "error_tag": "概念混淆",
+      "variant_group": "并行策略基础概念"
+    },
+    {
+      "kp": "arch.dist.megatron",
+      "type": "single_choice",
+      "question": "在大规模 Transformer 模型训练中，流水线并行（Pipeline Parallelism）相比张量并行（Tensor Parallelism）的主要优势是什么？",
+      "options": [
+        "流水线并行不需要通信",
+        "流水线并行将不同层分配到不同设备，通信量较小，但需要处理流水线气泡",
+        "张量并行不能用于 Transformer",
+        "流水线并行只能用于推理阶段"
+      ],
+      "answer": 1,
+      "explanation": "流水线并行按层切分模型到不同设备，层间通信量远小于张量并行中每层内的 all-reduce 通信，但会引入流水线气泡（bubble）导致设备空闲。",
+      "error_tag": "概念混淆",
+      "variant_group": "流水线并行 vs 张量并行"
+    },
+    {
+      "kp": "arch.dist.megatron",
+      "type": "multi_choice",
+      "question": "以下哪些属于常见的分布式训练并行策略？（多选）",
+      "options": [
+        "数据并行",
+        "张量并行",
+        "流水线并行",
+        "序列并行",
+        "随机并行"
+      ],
+      "answer": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "explanation": "数据并行、张量并行、流水线并行和序列并行（Sequence Parallelism）都是常见的分布式训练策略。“随机并行”不是一种标准并行策略。",
+      "error_tag": "概念混淆",
+      "variant_group": "并行策略基础概念"
+    },
+    {
+      "kp": "arch.dist.megatron",
+      "type": "multi_choice",
+      "question": "关于 ZeRO 优化器，以下哪些说法是正确的？（多选）",
+      "options": [
+        "ZeRO-1 分片优化器状态",
+        "ZeRO-2 分片梯度和优化器状态",
+        "ZeRO-3 分片参数、梯度和优化器状态",
+        "ZeRO 可以减少单卡显存占用",
+        "ZeRO 会增加通信量"
+      ],
+      "answer": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "explanation": "ZeRO-1/2/3 分别分片优化器状态、梯度和参数，均能减少单卡显存占用，但分片带来的通信开销会增加（尤其是 ZeRO-3 需要参数 all-gather）。",
+      "error_tag": "记忆缺失",
+      "variant_group": "ZeRO 分片阶段"
+    },
+    {
+      "kp": "arch.dist.megatron",
+      "type": "multi_choice",
+      "question": "以下哪些因素会影响流水线并行的气泡（bubble）大小？（多选）",
+      "options": [
+        "流水线阶段数（pipeline stages）",
+        "micro-batch 数量",
+        "梯度累积步数",
+        "节点间网络带宽"
+      ],
+      "answer": [
+        0,
+        1
+      ],
+      "explanation": "气泡大小主要取决于流水线阶段数和 micro-batch 数量。micro-batch 越多，气泡占比越小。梯度累积步数和网络带宽影响吞吐但不直接决定气泡比例。",
+      "error_tag": "边界错误",
+      "variant_group": "流水线调度策略"
+    },
+    {
+      "kp": "arch.dist.megatron",
+      "type": "multi_choice",
+      "question": "关于张量并行中的行并行（Row Parallel）线性层，以下哪些描述正确？（多选）",
+      "options": [
+        "权重按输入维度（行）切分",
+        "每个设备接收部分输入并计算部分结果",
+        "输出需要跨设备求和（all-reduce）",
+        "输入需要完整的权重才能计算"
+      ],
+      "answer": [
+        0,
+        1,
+        2
+      ],
+      "explanation": "行并行将权重按输入维度切分，每个设备接收部分输入并计算部分输出，最终需要 all-reduce 求和得到完整输出。输入不需要完整权重。",
+      "error_tag": "概念混淆",
+      "variant_group": "张量并行切分方式"
+    },
+    {
+      "kp": "arch.dist.megatron",
+      "type": "multi_choice",
+      "question": "在混合并行训练中，以下哪些通信操作是常见的？（多选）",
+      "options": [
+        "数据并行的梯度 all-reduce",
+        "张量并行的 all-gather 和 reduce-scatter",
+        "流水线并行的点对点 send/recv",
+        "序列并行的 all-gather 用于 LayerNorm 等操作"
+      ],
+      "answer": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "explanation": "数据并行用 all-reduce 同步梯度；张量并行用 all-gather/reduce-scatter 组合行/列并行；流水线并行用点对点通信；序列并行在特定操作（如 LayerNorm）前后需要 all-gather。",
+      "error_tag": "记忆缺失",
+      "variant_group": "并行通信模式"
+    },
+    {
+      "kp": "arch.dist.megatron",
+      "type": "fill_blank",
+      "question": "在 ZeRO 优化器中，第三阶段（ZeRO-3）除了分片优化器状态和梯度外，还会对______进行分片，以进一步降低单卡显存占用。",
+      "options": [],
+      "answer": [
+        "模型参数",
+        "参数",
+        "parameters",
+        "模型参数(parameters)"
+      ],
+      "explanation": "ZeRO-3 在 ZeRO-1 和 ZeRO-2 的基础上，进一步对模型参数进行分片，使得每张卡只保存部分参数，从而大幅降低单卡显存需求。",
+      "error_tag": "记忆缺失",
+      "variant_group": "ZeRO 分片阶段"
+    },
+    {
+      "kp": "arch.dist.megatron",
+      "type": "fill_blank",
+      "question": "在流水线并行中，将一个全局 batch 拆分成多个______，可以让不同流水线阶段同时处理不同批次的数据，从而减少流水线气泡。",
+      "options": [],
+      "answer": [
+        "micro-batch",
+        "micro batch",
+        "微批次",
+        "microbatches",
+        "micro-batches"
+      ],
+      "explanation": "micro-batch 是流水线并行中的关键概念，将 batch 拆分后可以让各阶段并行工作，填充流水线，减少气泡比例。",
+      "error_tag": "记忆缺失",
+      "variant_group": "流水线调度策略"
+    },
+    {
+      "kp": "arch.dist.megatron",
+      "type": "code_reading",
+      "question": "假设一个训练任务使用 4 路数据并行和 2 路张量并行，全局 micro-batch size 为 8，梯度累积步数为 2。请问全局 batch size 是多少？请写出计算过程。",
+      "options": [],
+      "answer": "全局 batch size = micro-batch size × 数据并行度 × 梯度累积步数 = 8 × 4 × 2 = 64。张量并行度不影响全局 batch size 的计算。",
+      "explanation": "全局 batch size 只与 micro-batch size、数据并行度和梯度累积步数有关。张量并行只是将模型参数拆分到多卡，不增加有效数据并行副本数。",
+      "error_tag": "边界错误",
+      "variant_group": "全局 batch size 计算"
+    },
+    {
+      "kp": "arch.dist.megatron",
+      "type": "code_reading",
+      "question": "在一个使用 4 级流水线并行的训练任务中，共有 16 个 micro-batch。请计算流水线气泡占整体时间的比例（假设每个 micro-batch 的前向和反向时间相同，忽略其他开销）。",
+      "options": [],
+      "answer": "气泡比例为 (p-1)/(m+p-1) = (4-1)/(16+4-1) = 3/19 ≈ 15.8%。其中 p 为流水线阶段数，m 为 micro-batch 数量。",
+      "explanation": "流水线气泡的经典公式为 (p-1)/(m+p-1)，p 为流水线阶段数，m 为 micro-batch 数。micro-batch 越多，气泡占比越小。",
+      "error_tag": "边界错误",
+      "variant_group": "流水线调度策略"
+    },
+    {
+      "kp": "arch.dist.megatron",
+      "type": "scenario",
+      "question": "你正在为一个 175B 参数的大语言模型设计分布式训练方案。集群有 64 张 GPU，分为 8 个节点，每个节点 8 张 GPU，节点内 NVLink 带宽很高，节点间 InfiniBand 带宽相对较低。模型单层参数量较大，单卡无法容纳完整模型。请描述你会如何组合使用数据并行、张量并行和流水线并行，并说明理由。",
+      "options": [],
+      "answer": null,
+      "explanation": "合理的方案是：在节点内使用张量并行（利用高带宽 NVLink），跨节点使用流水线并行（减少跨节点通信频率），最外层使用数据并行（进一步扩展吞吐）。这样可以把高通信量的张量并行限制在节点内，降低对跨节点低带宽网络的依赖。",
+      "error_tag": "概念混淆",
+      "variant_group": "并行策略选择",
+      "required_keywords": [
+        "张量并行",
+        "流水线并行",
+        "数据并行",
+        "NVLink",
+        "InfiniBand"
+      ]
+    },
+    {
+      "kp": "arch.dist.megatron",
+      "type": "single_choice",
+      "question": "张量并行（Tensor Parallelism）中，对 Transformer 的多头注意力（Multi-Head Attention）进行切分时，常见的做法是什么？",
+      "options": [
+        "将每个注意力头的维度进一步拆分为两半",
+        "按注意力头（head）维度切分，每个设备负责一部分头",
+        "只在 batch 维度上切分",
+        "只在序列长度维度上切分"
+      ],
+      "answer": 1,
+      "explanation": "多头注意力天然适合按头维度切分，每个设备计算一部分注意力头，之后通过列并行/行并行线性层组合结果，这是 Megatron-LM 中的经典做法。",
+      "error_tag": "概念混淆",
+      "variant_group": "张量并行切分方式"
+    },
+    {
+      "kp": "arch.dist.megatron",
+      "type": "scenario",
+      "question": "你的团队在训练一个大规模模型时发现 GPU 显存不足（OOM），但模型参数量本身并没有超出单卡容量。经过分析发现优化器状态（如 Adam 的动量和方差）占用了大量显存。你会推荐使用哪种技术来缓解这个问题？请说明该技术的原理和可能的副作用。",
+      "options": [],
+      "answer": null,
+      "explanation": "推荐使用 ZeRO 优化器（特别是 ZeRO-1 或 ZeRO-2），它通过将优化器状态（乃至梯度）分片到各数据并行设备上，减少单卡显存占用。副作用是分片带来的额外通信开销，可能降低训练吞吐。",
+      "error_tag": "概念混淆",
+      "variant_group": "ZeRO 分片阶段",
+      "required_keywords": [
+        "并行",
+        "分片"
+      ]
+    },
+    {
+      "kp": "arch.dist.megatron",
+      "type": "single_choice",
+      "question": "在混合并行训练中（数据并行 + 张量并行 + 流水线并行），全局 batch size 通常如何计算？",
+      "options": [
+        "等于单卡 micro-batch size",
+        "等于 micro-batch size × 数据并行度 × 梯度累积步数",
+        "等于 micro-batch size × 张量并行度",
+        "等于 micro-batch size × 流水线并行度"
+      ],
+      "answer": 1,
+      "explanation": "全局 batch size = micro-batch size × 数据并行度 × 梯度累积步数。张量并行和流水线并行不增加有效数据并行副本数（流水线并行需考虑 micro-batch 数量）。",
+      "error_tag": "边界错误",
+      "variant_group": "全局 batch size 计算"
+    },
+    {
+      "kp": "arch.dist.megatron",
+      "type": "single_choice",
+      "question": "在流水线并行中，1F1B（one-forward-one-backward）调度的主要目的是什么？",
+      "options": [
+        "减少张量并行的通信量",
+        "减少流水线气泡，提高设备利用率",
+        "增加每个设备的内存占用",
+        "降低模型参数量"
+      ],
+      "answer": 1,
+      "explanation": "1F1B 调度让每个设备在完成一次前向传播后立即开始反向传播，交错进行，从而减小流水线气泡，提高设备利用率，同时减少峰值激活内存。",
+      "error_tag": "概念混淆",
+      "variant_group": "流水线调度策略"
+    },
+    {
+      "kp": "arch.dist.megatron",
+      "type": "single_choice",
+      "question": "以下关于 ZeRO（Zero Redundancy Optimizer）优化器状态分片的描述，哪项是正确的？",
+      "options": [
+        "ZeRO-1 仅对优化器状态进行分片",
+        "ZeRO-1 对优化器状态、梯度和参数都进行分片",
+        "ZeRO-3 仅对梯度进行分片",
+        "ZeRO 与模型并行互斥，不能同时使用"
+      ],
+      "answer": 0,
+      "explanation": "ZeRO 分为三个阶段：ZeRO-1 分片优化器状态，ZeRO-2 额外分片梯度，ZeRO-3 再额外分片模型参数。ZeRO 是数据并行的内存优化技术，可与模型并行结合使用。",
+      "error_tag": "记忆缺失",
+      "variant_group": "ZeRO 分片阶段"
+    },
+    {
+      "kp": "arch.dist.megatron",
+      "type": "single_choice",
+      "question": "在张量并行中，对一个线性层 Y = XW 进行列并行切分，切分的是哪个维度？",
+      "options": [
+        "输入 X 的特征维度",
+        "权重 W 的输出维度（列）",
+        "权重 W 的输入维度（行）",
+        "batch 维度"
+      ],
+      "answer": 1,
+      "explanation": "列并行（Column Parallel）将权重 W 按输出维度（列）切分，每个设备计算输出的一部分，输入 X 是完整的，输出需要拼接或后续处理。",
+      "error_tag": "概念混淆",
+      "variant_group": "张量并行切分方式"
+    },
+    {
+      "kp": "arch.dist.megatron",
+      "type": "single_choice",
+      "question": "在流水线并行中，micro-batch 的作用是什么？",
+      "options": [
+        "减小模型参数量",
+        "将全局 batch 拆分为更小的批次以填充流水线，减少气泡",
+        "替代梯度累积",
+        "减少张量并行通信"
+      ],
+      "answer": 1,
+      "explanation": "micro-batch 是将一个 batch 进一步拆分成的小批次，让不同流水线阶段可以并行处理不同 micro-batch，从而填充流水线、减少气泡，提高设备利用率。",
+      "error_tag": "概念混淆",
+      "variant_group": "流水线调度策略"
+    },
+    {
+      "kp": "arch.dist.megatron",
+      "type": "single_choice",
+      "question": "以下哪种并行方式需要在每次前向和反向传播中进行 all-reduce 通信以同步梯度？",
+      "options": [
+        "张量并行",
+        "数据并行",
+        "流水线并行",
+        "以上都不需要"
+      ],
+      "answer": 1,
+      "explanation": "数据并行中每个设备计算不同数据上的梯度，需要通过 all-reduce 同步梯度以保持模型副本一致。张量并行使用 all-gather/reduce-scatter，流水线并行使用点对点通信。",
+      "error_tag": "概念混淆",
+      "variant_group": "并行通信模式"
+    },
+    {
+      "kp": "arch.dist.megatron",
+      "type": "single_choice",
+      "question": "在混合并行中，通常认为选择并行策略时优先考虑的因素是什么？",
+      "options": [
+        "优先使用最高程度的张量并行",
+        "根据模型大小、集群拓扑（节点内/节点间带宽）和内存限制综合选择",
+        "只使用数据并行即可",
+        "仅根据 batch size 决定"
+      ],
+      "answer": 1,
+      "explanation": "并行策略选择需要综合考虑模型参数量、单卡显存、节点内 NVLink 带宽、节点间网络带宽等因素。通常节点内用张量并行，节点间用流水线并行或数据并行。",
+      "error_tag": "概念混淆",
+      "variant_group": "并行策略选择"
+    }
+  ]
+}

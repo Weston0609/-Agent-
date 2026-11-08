@@ -1,0 +1,624 @@
+{
+  "id": "s7u3l4",
+  "title": "s7u3l4",
+  "kps": [
+    "agent.pattern.memory_short",
+    "agent.pattern.memory_long"
+  ],
+  "theory": "## agent.pattern.memory_short\n\n# agent.pattern.memory_short：让 Agent 记住刚才发生了什么\n\n> **一句话直觉**：Agent（智能体）每一轮调用都是「无状态」的——模型不记得上一句话说了什么；短期记忆（short-term memory）就是我们在调用之间手动维护的「最近对话窗口」，让多轮对话、工具调用和任务续跑成为可能。\n\n---\n\n## 1. 为什么要学「短期记忆」？\n\n大语言模型（LLM, Large Language Model）API 是**无状态**的（stateless）：你每次 `client.chat(...)` 传入的消息列表就是全部上下文，模型不会自己保留历史。\n\n因此一个「Agent」想要像人类一样多轮对话、记住上一步调用了哪个工具、上一步的参数是什么，就必须由我们**在外层维护一份消息列表**。这份列表就是「短期记忆」。\n\n- **没有短期记忆**：Agent 是「失忆的金鱼」，每轮都从零开始。\n- **有短期记忆**：Agent 能指代消解（「它」「刚才那个文件」）、能接续工具调用结果、能完成多步任务。\n- **短期记忆 vs 长期记忆**：短期 = 当前会话窗口内的消息；长期（long-term）= 跨会话持久化的向量库 / 数据库。本节只讲短期。\n\n一句话：**短期记忆 = 你手动传给模型的 messages 列表 + 有效的裁剪策略**。\n\n---\n\n## 2. 最简形态：一个 `list` 就够了\n\nPython 的 `list` 就是最天然的短期记忆容器。每条消息是一个 `dict`（OpenAI 风格）或一个对象。\n\n```python\n# 最简短期记忆：一个 list[dict]\nmessages = [\n    {\"role\": \"system\", \"content\": \"你是一个简洁的助手。\"},\n]\n\ndef chat(history, user_input):\n    # 1) 把用户输入追加进记忆\n    history.append({\"role\": \"user\", \"content\": user_input})\n    # 2) 假装调用模型（此处用占位函数替代真实 API）\n    reply = fake_llm(history)\n    # 3) 把模型回复也追加进记忆，供下一轮使用\n    history.append({\"role\": \"assistant\", \"content\": reply})\n    return reply\n\ndef fake_llm(history):\n    # 演示用：回显最后一条用户消息\n    return f\"你说的是：{history[-2]['content']}\"\n\nprint(chat(messages, \"你好\"))\nprint(chat(messages, \"我上句说了什么？\"))\nprint(messages)  # 可以看到完整的历史被保留了\n```\n\n**关键点**：\n- 每条消息有 `role`（system / user / assistant / tool）和 `content`。\n- 记忆是**逐步 append**的，不是覆盖的。\n- 模型只看到你传进去的 `messages`，看不到「上一次调用」。\n\n---\n\n## 3. 用「双端队列 + 滑动窗口」限制长度\n\n记忆不能无限增长：模型有上下文窗口（context window）上限，token 越多越贵、越慢。\n\n最常见的做法是**保留最近 N 条消息**（sliding window）。Python 的 `collections.deque` 带 `maxlen`，天然适合做这个。\n\n```python\nfrom collections import deque\n\nclass ShortTermMemory:\n    def __init__(self, max_turns: int = 5, system_prompt: str = \"你是一个助手。\"):\n        # 注意：system 消息通常「固定保留」，不参与淘汰\n        self.system = {\"role\": \"system\", \"content\": system_prompt}\n        # maxlen 表示最多存 2*max_turns 条（一问一答算一轮）\n        self.history = deque(maxlen=max_turns * 2)\n\n    def add_user(self, text: str):\n        self.history.append({\"role\": \"user\", \"content\": text})\n\n    def add_assistant(self, text: str):\n        self.history.append({\"role\": \"assistant\", \"content\": text})\n\n    def to_messages(self) -> list[dict]:\n        # 每次拼装：system 永远在最前，然后才是窗口内的历史\n        return [self.system, *self.history]\n\nmem = ShortTermMemory(max_turns=2)\nmem.add_user(\"我叫小明\")\nmem.add_assistant(\"你好，小明！\")\nmem.add_user(\"我今年 10 岁\")\nmem.add_assistant(\"记住了。\")\nmem.add_user(\"我最喜欢的颜色是蓝色\")\nmem.add_assistant(\"好的。\")\nmem.add_user(\"我叫什么？\")  # 超过窗口，早期信息被挤掉\n\nfor m in mem.to_messages():\n    print(m)\n```\n\n**关键点**：\n- `deque(maxlen=...)` 自动丢弃最老的条目，**O(1)** 效率。\n- `system` 消息通常固定在队首，不参与淘汰。\n- 窗口的「容量」应按**轮数（turn）**而不是条数思考，避免 system / tool 消息打乱节奏。\n\n---\n\n## 4. 进阶：把「工具调用」也纳入记忆\n\n真实 Agent 常常调用工具（tool use）。工具调用的请求与结果也是记忆的一部分，否则模型会重复调用或找不到结果。\n\n```python\nimport json\n\nclass ToolAwareMemory(ShortTermMemory):\n    def add_tool_call(self, call_id: str, name: str, args: dict):\n        # assistant 发起的 tool_call\n        self.history.append({\n            \"role\": \"assistant\",\n            \"content\": None,\n            \"tool_calls\": [{\n                \"id\": call_id,\n                \"type\": \"function\",\n                \"function\": {\"name\": name, \"arguments\": json.dumps(args)},\n            }],\n        })\n\n    def add_tool_result(self, call_id: str, result: str):\n        # 工具执行结果，用 tool_call_id 关联\n        self.history.append({\n            \"role\": \"tool\",\n            \"tool_call_id\": call_id,\n            \"content\": result,\n        })\n\nmem = ToolAwareMemory(max_turns=3)\nmem.add_user(\"北京现在天气如何？\")\nmem.add_tool_call(\"call_1\", \"get_weather\", {\"city\": \"北京\"})\nmem.add_tool_result(\"call_1\", \"晴，25℃\")\nmem.add_assistant(\"北京现在晴，25℃。\")\n\nfor m in mem.to_messages():\n    print(m)\n```\n\n**关键点**：\n- `tool_call.id` 与 `tool_call_id` **必须配对**，否则 API 会报错。\n- 裁剪窗口时，不能把某对 (tool_call, tool_result) 切成两半——这是最常见的坑。\n\n---\n\n## 5. 工程化：什么时候该「压缩」而不是「截断」\n\n滑动窗口简单粗暴，但会丢失早期重要信息（如用户姓名）。\n\n工程上常见策略：\n\n1. **滑动窗口**：只保留最近 K 轮。简单、便宜。\n2. **摘要压缩（summarization）**：把最老的若干轮交给模型生成一段摘要，替换掉原始消息。\n3. **混合策略**：system + 摘要 + 最近 K 轮。\n\n```python\ndef compress(memory: ShortTermMemory, llm_summarize) -> str:\n    \"\"\"把当前所有历史压成一句摘要。\"\"\"\n    text = \"\\n\".join(f\"{m['role']}: {m['content']}\" for m in memory.history)\n    return llm_summarize(text)\n\n# 示意：真实场景下 llm_summarize 会调一次模型\ndef fake_summarize(text):\n    return \"用户叫小明，10 岁，喜欢蓝色。\"\n\nsummary = compress(mem, fake_summarize)\nnew_messages = [mem.system, {\"role\": \"system\", \"content\": f\"历史摘要：{summary}\"}]\nprint(new_messages)\n```\n\n**关键点**：\n- 压缩能保留「事实」，代价是一次额外模型调用。\n- 摘要本身也可能丢信息，需要定期回到窗口中的原文。\n- 生产环境通常还会对记忆做**持久化**（如 SQLite / Redis），下次会话再加载。\n\n---\n\n## 小结\n\n| 层级 | 结构 | 适用场景 |\n|---|---|---|\n| 最简 | `list[dict]` + append | Demo、单轮任务 |\n| 滑窗 | `deque(maxlen=N)` | 多轮对话、成本敏感 |\n| 工具感知 | 带 `tool_calls` / `tool_call_id` | Function Calling Agent |\n| 摘要 | window + LLM summarize | 长会话、需保留早期事实 |\n\n**核心心智模型**：短期记忆不是模型的能力，而是**你在调用之间维护的一个列表**；你要为它的**长度、结构、淘汰规则**负责。\n\n---\n\n## 动手练习\n\n**任务**：实现一个 `ChatAgent` 类，满足：\n\n1. 内部持有 `ShortTermMemory`，窗口大小为 **3 轮**，`system` prompt 固定为「你是一个中文客服助手。」\n2. 提供一个 `reply(user_text: str) -> str` 方法；由于本节不依赖任何真实 LLM，**模拟模型**只需返回：\n   ```\n   \"[收到] \" + user_text + \" | 记忆中共有 N 轮对话\"\n   ```\n   其中 N 是当前窗口中实际存有的轮数。\n3. 连续调用 `reply` 对话 6 次，最后打印 `to_messages()` 的输出，验证：\n   - `system` 始终在第一行；\n   - 记忆里最多只有 3 轮 user/assistant 消息对；\n   - 更早的对话已经被淘汰。\n4. **加分项**：为淘汰的历史生成一句「摘要」消息，插在 `system` 之后，并在最终 `print` 中展示出来。\n\n**提交形式**：一个可 `python agent.py` 直接运行的脚本，末尾用注释写出你观察到窗口生效的证据（哪几轮被丢弃了）。\n\n```python\nfrom collections import deque\n\nclass ShortTermMemory:\n    def __init__(self, max_turns=3, system_prompt=\"你是一个中文客服助手。\"):\n        self.system = {\"role\": \"system\", \"content\": system_prompt}\n        self.max_turns = max_turns\n        self.history = deque(maxlen=max_turns * 2)\n\n    def add_user(self, text):\n        self.history.append({\"role\": \"user\", \"content\": text})\n\n    def add_assistant(self, text):\n        self.history.append({\"role\": \"assistant\", \"content\": text})\n\n    def turn_count(self):\n        return sum(1 for m in self.history if m[\"role\"] == \"user\")\n\n    def to_messages(self):\n        return [self.system, *self.history]\n\nclass ChatAgent:\n    def __init__(self):\n        self.memory = ShortTermMemory(max_turns=3)\n\n    def reply(self, user_text):\n        self.memory.add_user(user_text)\n        # 模拟模型：真实场景下这里会调用 LLM\n        n = self.memory.turn_count()\n        answer = f\"[收到] {user_text} | 记忆中共有 {n} 轮对话\"\n        self.memory.add_assistant(answer)\n        return answer\n\nif __name__ == \"__main__\":\n    agent = ChatAgent()\n    for i in range(1, 7):\n        print(agent.reply(f\"第 {i} 次提问\"))\n    print(\"\\n--- 最终记忆 ---\")\n    for m in agent.memory.to_messages():\n        print(m)\n```\n\n## agent.pattern.memory_long\n\n# agent.pattern.memory_long：让 Agent 拥有\"长期记忆\"\n\n> **一句话直觉**：如果你每次问 AI 助手都要重新介绍自己，你一定会烦——`memory_long` 就是让 Agent 把\"你是谁、聊过什么、知道什么\"跨会话持久保存下来的那套机制。\n\n---\n\n## 1. 为什么要学它？\n\n大语言模型（LLM, Large Language Model）有一个硬伤：**无状态（stateless）**。它的每次调用都像失忆症患者醒来，只能看见你这次塞进去的上下文（context），一旦会话结束，之前所有对话全都烟消云散。\n\n短期记忆（short-term memory）靠的是把当前对话历史一股脑塞进上下文窗口（context window）——简单，但有几个致命问题：\n\n1. **窗口有限**：即使是 128K token 的模型，也装不下你和用户一年的对话。\n2. **成本线性上涨**：每次都要把全部历史重新发一遍，token 费越滚越多。\n3. **无法跨会话**：今天聊过的偏好，明天开新窗口就归零了。\n\n**长期记忆（long-term memory）** 就是为了解决这三件事而出现的：把对话中值得留下的信息提取出来，存储到外部（向量数据库、键值存储、文件），在需要时按相关性检索回来，拼进新的上下文。\n\n这是所有\"像样的\" Agent 系统的核心组件之一。\n\n---\n\n## 2. 长期记忆的四个核心动作\n\n长期记忆不是\"把对话原文存下来\"那么粗暴，它要经过一条**流水线**：\n\n| 阶段 | 英文 | 做什么 |\n|------|------|--------|\n| 提取 | extract | 从对话里挑出值得长期记住的事实/偏好 |\n| 存储 | store | 把提取结果写入外部存储（可带 embedding） |\n| 检索 | retrieve | 新对话开始时按相关性获取相关记忆 |\n| 注入 | inject | 把检索到的记忆拼进 prompt |\n\n下面我们用最朴素的方式实现这四步（用 Python 标准库，不依赖任何第三方包）。\n\n```python\nimport json\nimport re\n\n# ---------- 阶段 1：提取（extract） ----------\n# 用规则模拟 LLM 的\"记忆提取\"：只挑含关键词的句子\ndef extract_memories(utterance: str) -> list[str]:\n    \"\"\"从一段话中抽取值得长期记住的句子。\"\"\"\n    keywords = [\"我叫\", \"我的\", \"我喜欢\", \"我不喜欢\", \"我住在\", \"我是\"]\n    sentences = re.split(r\"[。！？!?.]\", utterance)\n    return [s.strip() for s in sentences if s.strip() and any(k in s for k in keywords)]\n\n# ---------- 阶段 2：存储（store） ----------\n# 用 JSON 文件当作简易持久层\nclass LongTermStore:\n    def __init__(self, path: str = \"memory.json\") -> None:\n        self.path = path\n        try:\n            with open(path, \"r\", encoding=\"utf-8\") as f:\n                self.data: list[str] = json.load(f)\n        except FileNotFoundError:\n            self.data = []\n\n    def add(self, items: list[str]) -> None:\n        for x in items:\n            if x not in self.data:       # 简单去重\n                self.data.append(x)\n        self._flush()\n\n    def _flush(self) -> None:\n        with open(self.path, \"w\", encoding=\"utf-8\") as f:\n            json.dump(self.data, f, ensure_ascii=False, indent=2)\n\n# ---------- 阶段 3：检索（retrieve） ----------\n# 这里用一个极简的\"关键词重合度\"打分，真实工程会用 embedding\ndef retrieve(store: LongTermStore, query: str, top_k: int = 3) -> list[str]:\n    q_tokens = set(query)\n    scored = [(len(q_tokens & set(m)), m) for m in store.data]\n    scored.sort(reverse=True)\n    return [m for s, m in scored[:top_k] if s > 0]\n\n# ---------- 阶段 4：注入（inject） ----------\ndef build_prompt(user_query: str, memories: list[str]) -> str:\n    if not memories:\n        return user_query\n    joined = \"\\n\".join(f\"- {m}\" for m in memories)\n    return f\"已知用户信息：\\n{joined}\\n\\n用户问：{user_query}\"\n```\n\n**要点**：生产环境里，阶段 1 交给 LLM 做（让它返回 JSON 列表），阶段 2 用向量数据库（Chroma/Pinecone/pgvector），阶段 3 用 embedding 相似度做检索。骨架完全一样。\n\n---\n\n## 3. 一次完整的\"写入 + 读取\"演示\n\n把四大动作串起来看，逻辑就非常直观了——**第一轮对话产生记忆，第二轮对话消费记忆**。\n\n```python\nstore = LongTermStore(\"memory.json\")\n\n# 第一轮：用户说了个人信息\nturn1 = \"我叫小林。我住在杭州。我喜欢喝美式咖啡。\"\nstore.add(extract_memories(turn1))\nprint(\"存储后：\", store.data)\n# => ['我叫小林', '我住在杭州', '我喜欢喝美式咖啡']\n\n# 第二次会话（新进程，用户换了话题）\nstore2 = LongTermStore(\"memory.json\")            # 重新加载，模拟新会话\nturn2 = \"帮我推荐一家附近适合办公的咖啡馆？\"\nmemories = retrieve(store2, turn2, top_k=2)\nprint(\"检索到：\", memories)\nprint(build_prompt(turn2, memories))\n```\n\n注意 $\texttt{store2}$ 是重新 `LongTermStore(\"memory.json\")` 出来的，但这不关键——关键是文件在磁盘上，进程重启后记忆仍在。这就是长期记忆与短期记忆的本质区别。\n\n---\n\n## 4. 长期记忆的三种典型策略\n\n工程中常见三种模式，按需选择：\n\n1. **Profile（画像式）**\n   只存\"事实\"：姓名、职业、偏好。适合客服、个性化助手。\n   优点：token 省；缺点：丢失语境。\n\n2. **Episodic（事件式）**\n   存\"发生过的事\"：某天讨论过某 bug、某次会议结论。\n   优点：能回答\"我们上次聊到哪了\"；缺点：需要时间戳和去重。\n\n3. **Summary（摘要式）**\n   把历史压缩成一段滚动摘要，每次新对话结束就更新它。\n   优点：无上限；缺点：细节会丢，且需要 LLM 参与。\n\n实际系统往往是三者的混合：画像常驻 prompt 顶部，事件按相关性检索，摘要兜底。\n\n---\n\n## 5. 工程上必须处理的三件事\n\n- **去重**：用户会说\"我住在杭州\"十遍，不能存十条。用键值合并（key = 事实类型，value = 内容）。\n- **时效**：住址变了，旧地址要失效。给每条记忆加 `updated_at` 字段，检索时优先新版本。\n- **隐私**：长期记忆里可能有 PII（personally identifiable information），要能按用户删除（GDPR 的\"被遗忘权\"）。\n\n下面这段代码演示\"覆盖式\"更新——同一个 key 只保留最新值：\n\n```python\nfrom datetime import datetime\n\nclass KeyedMemory:\n    \"\"\"按 key 覆盖的长期记忆，解决去重与时效问题。\"\"\"\n    def __init__(self) -> None:\n        self.data: dict[str, dict] = {}\n\n    def upsert(self, key: str, value: str) -> None:\n        self.data[key] = {\"value\": value, \"updated_at\": datetime.now().isoformat()}\n\n    def get(self, key: str) -> str | None:\n        item = self.data.get(key)\n        return item[\"value\"] if item else None\n\nmem = KeyedMemory()\nmem.upsert(\"city\", \"杭州\")\nmem.upsert(\"city\", \"上海\")   # 覆盖旧地址\nprint(mem.get(\"city\"))        # => 上海\n```\n\n---\n\n## 6. 动手练习\n\n**任务**：写一个 `personal_agent.py`，实现一个带长期记忆的命令行小助手，要求：\n\n1. 用循环不断 `input()` 读取用户输入，输入 `exit` 退出。\n2. 每轮输入先用 `extract_memories()` 看看是否需要写入长期记忆；如果需要，写入 `memory.json`。\n3. 每次回答前，先调用 `retrieve()` 拿到相关记忆，用 `build_prompt()` 拼好后打印出来（不需要真的调用 LLM）。\n4. **加分项**：把 `LongTermStore` 换成第 5 节的 `KeyedMemory` 版本，让\"我住在杭州\"这句再被说出来时能覆盖旧地址。\n\n**验收标准**：\n- 关闭程序再重启，输入\"我住哪儿？\"时，能检索出之前存的地址。\n- 同一句\"我叫小林\"说两遍，文件里只有一条。\n- 说\"我搬到北京了\"后，`memory.json` 里的 `city` 只保留最新的值。\n\n**提示**：先让四个函数各自跑通，再串起来。做到第 3 步就已经是一个能用的长期记忆原型了；真正的生产版本只是把\"规则\"换成\"LLM + 向量数据库\"，骨架完全一致。\n",
+  "quiz": [
+    {
+      "kp": "agent.pattern.memory_short",
+      "type": "single_choice",
+      "question": "在实现一个多轮对话 Agent 时，把最近 N 轮问答原样拼进每次请求的 prompt，而更早的内容被丢弃。这种做法最准确的理解是？",
+      "options": [
+        "这是短期记忆的一种落地方式，只能保留有限上下文，超出窗口的信息会丢失",
+        "这是长期记忆，因为所有历史都会被持久化到数据库",
+        "这不是任何形式的记忆，只是无状态的单次调用",
+        "这是摘要式记忆，因为原文被压缩成了要点"
+      ],
+      "answer": 0,
+      "explanation": "只保留最近若干轮、超出部分丢弃，属于典型的短期/工作记忆窗口机制，容量有限且旧信息丢失。B 错，因为没有持久化；C 错，因为保留了多轮上下文说明有状态；D 错，因为没有做摘要压缩。",
+      "error_tag": "概念混淆",
+      "variant_group": "memory_short_basic"
+    },
+    {
+      "kp": "agent.pattern.memory_short",
+      "type": "single_choice",
+      "question": "某 Agent 依赖对话历史来消解代词，但把历史全部无条件拼接后请求频繁超出模型的上下文长度限制。最合理的改进方向是？",
+      "options": [
+        "对历史做裁剪或摘要，只保留与当前任务相关的部分",
+        "把 temperature 调成 0 以减少 token 消耗",
+        "把系统提示词删掉，腾出空间给历史",
+        "改用流式输出，让长历史不再计入上下文"
+      ],
+      "answer": 0,
+      "explanation": "上下文超限应从历史管理入手：裁剪、摘要或按相关性筛选。B 错，temperature 不影响输入长度；C 错，删除系统提示会破坏行为约束，且不解决根本问题；D 错，流式输出只是返回方式，不减少输入 token。",
+      "error_tag": "方案误选",
+      "variant_group": "memory_short_overflow"
+    },
+    {
+      "kp": "agent.pattern.memory_short",
+      "type": "single_choice",
+      "question": "在构建 Agent 时，把「当前任务的目标与约束」以系统提示词形式固定放入每次请求，而不是依赖对话历史携带。这样做的主要理由是？",
+      "options": [
+        "关键约束不会因短期记忆窗口裁剪而丢失",
+        "系统提示词的 token 不计入上下文长度",
+        "系统提示词会被模型持久化到磁盘",
+        "系统提示词能覆盖用户的错误输入"
+      ],
+      "answer": 0,
+      "explanation": "把关键约束放在始终保留的位置，可避免被滑动窗口淘汰。B 错，系统提示词同样计入上下文；C 无依据；D 夸大其作用。",
+      "error_tag": "方案误选",
+      "variant_group": "memory_short_pinning"
+    },
+    {
+      "kp": "agent.pattern.memory_short",
+      "type": "single_choice",
+      "question": "某 Agent 在同一会话内表现正常，但用户第二天重新打开后，Agent 完全不记得之前的偏好。最直接的解释是？",
+      "options": [
+        "此前只使用了会话内的短期记忆，没有跨会话的持久化与检索",
+        "模型在夜间被重新训练了",
+        "用户的偏好属于模型无法理解的类型",
+        "该会话的 temperature 设置过高"
+      ],
+      "answer": 0,
+      "explanation": "会话内有效、跨会话失效正是短期记忆的特征，要跨会话需额外持久化。B、C、D 均无依据。",
+      "error_tag": "因果误判",
+      "variant_group": "memory_short_vs_long"
+    },
+    {
+      "kp": "agent.pattern.memory_short",
+      "type": "single_choice",
+      "question": "对话很长时，即使没有超上下文限制，模型仍可能忽略中间部分的历史信息。对这一现象的合理解释是？",
+      "options": [
+        "长上下文中相关信息可能被稀释，位置与显著性会影响模型对它的利用",
+        "模型只会读取最后一条消息，其余全部丢弃",
+        "只要在上下文窗口内，任何位置的信息都会被同等利用",
+        "历史消息会被自动压缩为哈希值"
+      ],
+      "answer": 0,
+      "explanation": "研究表明长上下文中的信息利用并非均匀，位置与显著性有影响，这也是需要检索/摘要的原因之一。B 过于绝对；C 与现象矛盾；D 无依据。",
+      "error_tag": "机理误解",
+      "variant_group": "memory_short_attention"
+    },
+    {
+      "kp": "agent.pattern.memory_short",
+      "type": "single_choice",
+      "question": "在短期记忆的实现里，把历史消息按「轮」裁剪与按「token 数」裁剪相比，按 token 数裁剪的主要优势是？",
+      "options": [
+        "更贴近模型的实际输入限制，避免长短不一的单轮消息导致超限或浪费",
+        "能保证语义完整性，绝不会截断一条消息",
+        "能自动生成对话摘要",
+        "可以完全替代长期记忆"
+      ],
+      "answer": 0,
+      "explanation": "token 计数直接对应模型输入上限，能更精细化控制预算。B 错，按 token 裁剪可能截断消息；C、D 都不是裁剪策略本身的功能。",
+      "error_tag": "对比误判",
+      "variant_group": "memory_short_trim"
+    },
+    {
+      "kp": "agent.pattern.memory_short",
+      "type": "single_choice",
+      "question": "某团队发现 Agent 在多轮对话中反复询问用户已经提供过的信息。最应该优先检查的是？",
+      "options": [
+        "历史消息是否被正确保留并传入了本次请求",
+        "模型的参数量是否足够大",
+        "是否开启了流式输出",
+        "API 的调用频率是否受限"
+      ],
+      "answer": 0,
+      "explanation": "重复询问通常意味着前文未被有效保留/传入。B、C、D 与该症状缺乏直接因果联系。",
+      "error_tag": "排查方向错误",
+      "variant_group": "memory_short_window"
+    },
+    {
+      "kp": "agent.pattern.memory_short",
+      "type": "single_choice",
+      "question": "如果每条历史消息都原样保留、从不裁剪，随着会话变长最可能出现的情况是？",
+      "options": [
+        "请求 token 持续增长，最终超出上下文限制或显著增加成本与延迟",
+        "模型会自动删除最旧的消息以腾出空间",
+        "上下文长度不受历史条数影响",
+        "模型会自动把历史转成长期记忆"
+      ],
+      "answer": 0,
+      "explanation": "无裁剪会导致输入持续膨胀直至超限或成本攀升。B 错，消息管理由调用方负责；C、D 无依据。",
+      "error_tag": "后果误判",
+      "variant_group": "memory_short_overflow"
+    },
+    {
+      "kp": "agent.pattern.memory_short",
+      "type": "single_choice",
+      "question": "关于短期记忆中的「摘要」策略，下列描述正确的是？",
+      "options": [
+        "用一段压缩文本替代早期多轮原文，能在有限 token 内保留大意，但可能丢失细节",
+        "摘要能无损还原全部历史细节",
+        "摘要后就可以取消上下文窗口限制",
+        "摘要只能由用户手动提供"
+      ],
+      "answer": 0,
+      "explanation": "摘要是有损压缩，节省 token 但会损失细节。B 错，摘要非无损；C 错，摘要本身也占 token；D 错，摘要可由系统自动生成。",
+      "error_tag": "概念混淆",
+      "variant_group": "memory_short_summary"
+    },
+    {
+      "kp": "agent.pattern.memory_short",
+      "type": "single_choice",
+      "question": "下列场景中，哪一项最能说明「短期记忆」不足从而导致任务失败？",
+      "options": [
+        "多步任务中 Agent 忘了前面步骤已确认的参数，导致重复确认或前后矛盾",
+        "Agent 的回答风格偶尔变化",
+        "Agent 的响应速度随并发上升而下降",
+        "Agent 在某次调用中返回了错误码"
+      ],
+      "answer": 0,
+      "explanation": "遗忘已确认参数是短期记忆失效的典型表现。B 属风格波动，C 属性能问题，D 属接口错误，均非记忆缺失。",
+      "error_tag": "场景误判",
+      "variant_group": "memory_short_basic"
+    },
+    {
+      "kp": "agent.pattern.memory_short",
+      "type": "single_choice",
+      "question": "在实现短期记忆时，把用户消息与助手回复都保存到历史中、而不只保存用户消息。这样做的主要好处是？",
+      "options": [
+        "模型能知晓自己先前的回答，从而保持一致并避免重复",
+        "可以降低每次请求的 token 数",
+        "可以让模型绕过系统提示词",
+        "可以自动形成跨会话的长期记忆"
+      ],
+      "answer": 0,
+      "explanation": "助手回复构成模型对自身状态的记录，有助于一致性与避免重复。B 错，保留更多内容会增加 token；C、D 无依据。",
+      "error_tag": "因果误判",
+      "variant_group": "memory_short_trim"
+    },
+    {
+      "kp": "agent.pattern.memory_short",
+      "type": "single_choice",
+      "question": "某团队为节省成本，把每次请求的历史裁剪到只剩最近两轮，结果多步工具调用任务频繁中断。若要在控制成本的同时改善，最合理的做法是？",
+      "options": [
+        "保留任务相关关键信息（如摘要、已确定的参数）并适当放宽近期窗口",
+        "完全关闭历史，改为每轮独立请求",
+        "把 temperature 提高以增强模型的记忆",
+        "把模型换成更小的版本以减少 token"
+      ],
+      "answer": 0,
+      "explanation": "解法是在成本与信息保留之间做权衡，保留关键状态并适度放宽窗口。B 会丧失多步状态；C 与记忆无关；D 可能降低能力且不解决历史丢失问题。",
+      "error_tag": "权衡缺失",
+      "variant_group": "memory_short_window"
+    },
+    {
+      "kp": "agent.pattern.memory_short",
+      "type": "single_choice",
+      "question": "关于「短期记忆」与「长期记忆」的区别，下列说法正确的是？",
+      "options": [
+        "短期记忆通常只在当前会话/任务内有效，长期记忆需要额外的存储与检索机制跨会话保留",
+        "短期记忆必须写入向量数据库，长期记忆只能放在内存里",
+        "两者的唯一区别是存储介质是内存还是硬盘",
+        "只要保存了历史记录，就一定是长期记忆"
+      ],
+      "answer": 0,
+      "explanation": "短期记忆服务于当前会话窗口，长期记忆需要持久化和检索以跨会话复用。B 恰好说反；C 把区别简化为介质，忽略了生命周期与检索方式；D 忽略了「跨会话可检索」这一关键。",
+      "error_tag": "概念混淆",
+      "variant_group": "memory_short_vs_long"
+    },
+    {
+      "kp": "agent.pattern.memory_short",
+      "type": "single_choice",
+      "question": "一个客服 Agent 在每轮只把「上一条用户消息 + 上一条助手回复」送入模型。用户在第 1 轮说明了订单号，第 5 轮问「刚才那个订单能改地址吗」，Agent 答不出。问题根因是？",
+      "options": [
+        "短期记忆窗口太窄，关键信息已被挤出上下文",
+        "模型不具备中文理解能力",
+        "订单号必须写在系统提示词里才生效",
+        "地址修改属于模型知识截止日期之后的事件"
+      ],
+      "answer": 0,
+      "explanation": "仅保留一轮导致早前信息丢失，是短期记忆窗口过窄的典型症状。B、D 与现象无关；C 是一种做法建议，但根因是历史被丢弃而非存放位置。",
+      "error_tag": "因果误判",
+      "variant_group": "memory_short_window"
+    },
+    {
+      "kp": "agent.pattern.memory_short",
+      "type": "single_choice",
+      "question": "下列哪种做法最能缓解「短期记忆只保留最近若干轮，导致早期关键约束丢失」的问题？",
+      "options": [
+        "对早期对话生成摘要，并把摘要与最近若干轮原文一起放入上下文",
+        "把最近若干轮的轮数调小，让上下文更干净",
+        "每次请求都重新初始化对话，避免历史干扰",
+        "把历史消息的 role 全部改成 system"
+      ],
+      "answer": 0,
+      "explanation": "摘要 + 近期原文是常见的滑动窗口加压缩策略，兼顾长程信息与细节。B 会加剧丢失；C 等于放弃多轮状态；D 改变角色会破坏对话结构语义，并非记忆管理手段。",
+      "error_tag": "方案误选",
+      "variant_group": "memory_short_summary"
+    },
+    {
+      "kp": "agent.pattern.memory_short",
+      "type": "single_choice",
+      "question": "在多轮对话中，把历史消息按时间顺序追加到消息列表，这体现了短期记忆的什么特性？",
+      "options": [
+        "顺序性/时序性，模型依赖消息先后顺序理解指代与因果",
+        "幂等性，重复发送同样的历史不会影响结果",
+        "可持久性，进程重启后历史自动恢复",
+        "随机性，顺序对理解没有影响"
+      ],
+      "answer": 0,
+      "explanation": "对话历史的顺序承载了指代消解与因果推断信息。B、C 描述的特性并不由追加历史保证；D 与事实相反。",
+      "error_tag": "概念混淆",
+      "variant_group": "memory_short_order"
+    },
+    {
+      "kp": "agent.pattern.memory_short",
+      "type": "single_choice",
+      "question": "某实现为节省 token，在每轮结束后把历史中所有助手回复删掉，只留用户消息。最可能出现的后果是？",
+      "options": [
+        "模型看不到自己此前的承诺与结论，容易自相矛盾或重复提问",
+        "模型会因此获得更强的推理能力",
+        "上下文长度会显著增加",
+        "用户消息的语义会被自动补全"
+      ],
+      "answer": 0,
+      "explanation": "助手回复中往往包含已确认的结论与承诺，删除后模型失去自身状态的记录，导致不一致。B 无依据；C 恰恰相反；D 无依据。",
+      "error_tag": "后果误判",
+      "variant_group": "memory_short_trim"
+    },
+    {
+      "kp": "agent.pattern.memory_short",
+      "type": "single_choice",
+      "question": "关于短期记忆的「窗口大小」选择，下列理解最合理的是？",
+      "options": [
+        "需要在信息保留与 token 成本/延迟之间权衡，窗口过小会丢信息，过大则成本和延迟上升",
+        "窗口越大越好，应始终使用模型支持的最大上下文",
+        "窗口越小越好，因为历史越少模型越准确",
+        "窗口大小与应用场景无关，可按固定值设定"
+      ],
+      "answer": 0,
+      "explanation": "窗口大小是成本、延迟与信息完整度的权衡。B 忽略成本与「中间信息被稀释」的效应；C 会丢失关键上下文；D 忽视场景差异。",
+      "error_tag": "权衡缺失",
+      "variant_group": "memory_short_window"
+    },
+    {
+      "kp": "agent.pattern.memory_short",
+      "type": "single_choice",
+      "question": "用户说「帮我订下周三的机票」，Agent 询问出发城市，用户回答「北京」。若这轮请求只带了最近一条用户消息，Agent 最可能？",
+      "options": [
+        "无法确定「北京」是出发地还是目的地，也可能忘了要订机票这件事",
+        "仍能准确完成订票，因为北京已包含在消息中",
+        "会自动从模型训练数据里推断出目的地",
+        "会把北京理解为航班号"
+      ],
+      "answer": 0,
+      "explanation": "缺少前文时，单条消息的指代与意图无法确定，这是短期记忆缺失的直接体现。B、C、D 都假设了不存在的上下文或能力。",
+      "error_tag": "因果误判",
+      "variant_group": "memory_short_context"
+    },
+    {
+      "kp": "agent.pattern.memory_short",
+      "type": "single_choice",
+      "question": "下列哪一项最不属于「短期记忆」的管理手段？",
+      "options": [
+        "把用户画像写入向量库，后续会话按相似度检索调用",
+        "滑动窗口保留最近若干轮对话",
+        "对早期对话生成摘要后拼接进上下文",
+        "在上下文即将超限时丢弃最旧的消息"
+      ],
+      "answer": 0,
+      "explanation": "向量库持久化 + 跨会话相似度检索属于长期记忆的典型机制。B、C、D 都是会话内上下文窗口的管理方式。",
+      "error_tag": "归类错误",
+      "variant_group": "memory_short_vs_long"
+    },
+    {
+      "kp": "agent.pattern.memory_long",
+      "type": "single_choice",
+      "question": "在构建一个长期对话 Agent 时，用户在第一轮提到「我对花生过敏」，之后的对话主题换了好几轮。关于「长期记忆（long-term memory）」最准确的理解是：",
+      "options": [
+        "长期记忆就是把整个对话历史原文一直塞进 prompt",
+        "长期记忆是把跨会话/跨轮次仍值得保留的信息抽取、存储，并在需要时检索回来",
+        "长期记忆是模型的参数，训练后不会改变",
+        "长期记忆只能存用户最近说的 3 句话"
+      ],
+      "answer": 1,
+      "explanation": "长期记忆的核心是持久化地保留跨轮次/跨会话仍有价值的信息，并以检索方式按需注入，而非简单堆积全部历史。把全部历史塞进 prompt 属于短期上下文，会带来长度和成本问题；模型参数是权重知识，不是运行时记忆。",
+      "error_tag": "概念混淆",
+      "variant_group": "长记忆定义"
+    },
+    {
+      "kp": "agent.pattern.memory_long",
+      "type": "single_choice",
+      "question": "关于「短期上下文」与「长期记忆」的区别，下列说法正确的是：",
+      "options": [
+        "短期上下文通常指当前会话窗口内的消息，长期记忆则跨越会话持续存在",
+        "短期上下文必须写入数据库，长期记忆只在内存里",
+        "两者完全等价，只是叫法不同",
+        "长期记忆一定比短期上下文更准确，所以可以直接丢弃上下文"
+      ],
+      "answer": 0,
+      "explanation": "短期上下文局限于当前会话窗口，长期记忆需要持久化存储、可跨会话检索。二者互补，长期记忆检索有噪声，不能完全替代上下文。",
+      "error_tag": "概念混淆",
+      "variant_group": "长短记忆区别"
+    },
+    {
+      "kp": "agent.pattern.memory_long",
+      "type": "single_choice",
+      "question": "把检索到的长期记忆注入 prompt 时，下面哪种做法最稳妥？",
+      "options": [
+        "把所有召回的记忆原文无缝拼在用户消息前面，不加任何说明",
+        "用明确的分隔与标签标明这是「历史记忆」并注明时间，避免模型把它当成当前指令",
+        "把记忆混进系统提示词里的安全规则部分",
+        "直接覆盖用户当前的输入"
+      ],
+      "answer": 1,
+      "explanation": "记忆注入需与当前指令区分，并标注时间/来源，防止提示注入或时间混淆。直接拼接或混入安全规则容易引发误用。",
+      "error_tag": "边界错误",
+      "variant_group": "记忆注入"
+    },
+    {
+      "kp": "agent.pattern.memory_long",
+      "type": "multi_choice",
+      "question": "下列哪些属于设计长期记忆系统时需要重点考虑的问题？（多选）",
+      "options": [
+        "写入时抽取哪些信息值得长期保留",
+        "如何处理信息更新与冲突（如用户搬家）",
+        "如何按用户隔离与保护隐私",
+        "如何控制记忆库规模并做过期淘汰",
+        "如何把长期记忆直接编译进模型权重"
+      ],
+      "answer": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "explanation": "写入筛选、冲突更新、隔离隐私、规模控制都是长期记忆的核心工程问题。把记忆编译进模型权重不是运行时长期记忆的常规做法。",
+      "error_tag": "概念混淆",
+      "variant_group": "长记忆设计要点"
+    },
+    {
+      "kp": "agent.pattern.memory_long",
+      "type": "multi_choice",
+      "question": "以下哪些做法有助于提升长期记忆检索的准确度？（多选）",
+      "options": [
+        "为记忆条目附加时间与来源等元数据",
+        "在向量召回后加入重排步骤",
+        "按当前查询改写/扩展再检索",
+        "把所有历史不加过滤地全量召回后塞进 prompt"
+      ],
+      "answer": [
+        0,
+        1,
+        2
+      ],
+      "explanation": "元数据、重排、查询改写都能提高召回质量；全量召回会引入噪声并挤占上下文，反而降低准确度。",
+      "error_tag": "边界错误",
+      "variant_group": "检索与重排"
+    },
+    {
+      "kp": "agent.pattern.memory_long",
+      "type": "multi_choice",
+      "question": "关于长期记忆与短期上下文的配合，下列说法正确的有？（多选）",
+      "options": [
+        "短期上下文负责当前会话的连贯性，长期记忆补充跨会话的稳定信息",
+        "长期记忆检索结果也需占用 prompt 预算，应控制数量",
+        "有了长期记忆就可以完全丢弃当前会话上下文",
+        "两者可以结合使用，但要注意注入内容与当前指令的区分"
+      ],
+      "answer": [
+        0,
+        1,
+        3
+      ],
+      "explanation": "二者互补而非替代。检索记忆占用上下文预算需限额；完全丢弃当前上下文会破坏对话连贯性和指代解析。",
+      "error_tag": "概念混淆",
+      "variant_group": "长短记忆区别"
+    },
+    {
+      "kp": "agent.pattern.memory_long",
+      "type": "fill_blank",
+      "question": "长期记忆中，把用户「搬到了上海」这条新信息覆盖旧的「住在北京」，这种处理方式通常称为记忆的______（填一个词，描述对已存在信息的处理）。",
+      "options": [],
+      "answer": [
+        "更新",
+        "update",
+        "覆盖",
+        "冲突消解",
+        "更新/覆盖"
+      ],
+      "explanation": "对已存在记忆的处理称为更新（update），常配合冲突消解与时间戳优先策略。",
+      "error_tag": "记忆缺失",
+      "variant_group": "记忆更新与冲突"
+    },
+    {
+      "kp": "agent.pattern.memory_long",
+      "type": "fill_blank",
+      "question": "在多用户 Agent 中，检索长期记忆时必须按______（如用户 ID 或租户 ID）做过滤，保证不会把其他人的记忆返回给当前用户。",
+      "options": [],
+      "answer": [
+        "用户",
+        "用户ID",
+        "user_id",
+        "userId",
+        "租户",
+        "tenant",
+        "租户ID",
+        "用户/租户"
+      ],
+      "explanation": "按用户或租户标识隔离是隐私保护与正确个性化的前提。",
+      "error_tag": "边界错误",
+      "variant_group": "多用户隔离"
+    },
+    {
+      "kp": "agent.pattern.memory_long",
+      "type": "code_reading",
+      "question": "阅读下面的伪代码（描述的是长期记忆写入流程），回答问题：\n\n```\ndef remember(user_id, utterance, memory_store):\n    info = extract(utterance)          # 从用户话语抽取关键信息\n    if info is None:\n        return\n    existing = memory_store.query(user_id, info.key)\n    if existing:\n        memory_store.update(existing.id, value=info.value, ts=now())\n    else:\n        memory_store.insert(user_id, info.key, info.value, ts=now())\n```\n\n问：这段流程主要解决了长期记忆设计中的哪个关键问题？请简要说明。",
+      "options": [],
+      "answer": "解决了信息更新与去重的问题：先抽取关键信息，再按（用户, 键）查询是否已存在，存在则更新（覆盖旧值并刷新时间戳），不存在才插入，从而避免同一事实重复存储、并让新信息覆盖过期信息。",
+      "explanation": "该流程展示了「抽取—查重—更新或插入」的典型写入模式，核心是防止重复和保证新信息优先。",
+      "error_tag": "概念混淆",
+      "variant_group": "写入策略"
+    },
+    {
+      "kp": "agent.pattern.memory_long",
+      "type": "code_reading",
+      "question": "阅读下面描述检索流程的伪代码：\n\n```\ndef build_prompt(user_id, query, memory_store):\n    candidates = memory_store.search(user_id, query, top_k=20)   # 向量召回\n    ranked = rerank(candidates, query, w_time=0.3, w_importance=0.2)\n    selected = ranked[:3]\n    return format_memory_block(selected) + \"\\n\" + query\n```\n\n问：`top_k=20` 后接 `ranked[:3]` 的设计意图是什么？为什么不是直接把 20 条都放进 prompt？",
+      "options": [],
+      "answer": "先用较大的 top_k 做粗召回以保证相关记忆不被漏掉，再用重排按相关性与时效/重要性精选前 3 条注入。不全部放入的原因是 prompt 预算有限，过多低相关记忆会引入噪声、稀释关键信息并增加成本。",
+      "explanation": "体现「粗召回 + 精排 + 限额注入」的经典两阶段检索思想。",
+      "error_tag": "边界错误",
+      "variant_group": "检索与重排"
+    },
+    {
+      "kp": "agent.pattern.memory_long",
+      "type": "scenario",
+      "question": "工程场景：你的对话 Agent 上线后，有用户反馈「它竟然忘记我上周告诉它我换了工作」。排查发现长期记忆库中存着两年前的旧职业信息，新职业信息从未写入。请说明你的排查思路与改进方案。",
+      "options": [],
+      "answer": null,
+      "explanation": "问题可能出在写入阶段的抽取或触发条件未覆盖该类信息，或写入后未做冲突更新。需要检查抽取规则、写入时机，并引入时间戳与冲突消解，确保新信息覆盖旧值，同时确认检索能拿到最新条目。",
+      "error_tag": "记忆缺失",
+      "variant_group": "写入策略",
+      "required_keywords": [
+        "长期记忆",
+        "写入阶段",
+        "抽取规则",
+        "冲突消解",
+        "时间戳"
+      ]
+    },
+    {
+      "kp": "agent.pattern.memory_long",
+      "type": "scenario",
+      "question": "工程场景：你的团队计划为多租户 SaaS 的 Agent 增加长期记忆。安全团队最担心的是「A 公司的对话记忆出现在 B 公司的回复里」。请给出你在检索与存储设计上的关键防护措施。",
+      "options": [],
+      "answer": null,
+      "explanation": "需在存储层按租户/用户分区或打标，在检索层强制附加租户过滤条件，并做权限校验与测试，防止跨租户召回；不能只依赖向量相似度而忽略过滤条件。",
+      "error_tag": "边界错误",
+      "variant_group": "多用户隔离",
+      "required_keywords": [
+        "租户隔离",
+        "最小权限",
+        "访问控制",
+        "过滤条件",
+        "跨租户召回"
+      ]
+    },
+    {
+      "kp": "agent.pattern.memory_long",
+      "type": "single_choice",
+      "question": "在一个客服 Agent 中，如果把用户每一轮的原话不加筛选地全部写入长期记忆库，最可能带来的主要问题是：",
+      "options": [
+        "存储成本反而下降",
+        "检索时噪声大、相关性下降，且可能把过时或矛盾的信息也召回",
+        "模型会自动过滤掉所有无用信息",
+        "长期记忆会自动变成模型参数"
+      ],
+      "answer": 1,
+      "explanation": "长期记忆需要写入筛选（哪些值得记）与更新（如覆盖过时信息）。全量写入会导致检索库噪声高、召回矛盾信息，降低回答质量。",
+      "error_tag": "边界错误",
+      "variant_group": "写入策略"
+    },
+    {
+      "kp": "agent.pattern.memory_long",
+      "type": "single_choice",
+      "question": "关于长期记忆中「写入」与「检索」两个阶段，下面哪种描述最合理？",
+      "options": [
+        "只需要写入，不需要检索，因为写入后模型自然能想起来",
+        "只需要检索，不需要写入，因为历史本来就在日志里",
+        "写入决定「存什么、存多久、如何合并」，检索决定「当前这轮把哪些记忆取回来用」",
+        "写入和检索都必须同步阻塞主流程，不能异步"
+      ],
+      "answer": 2,
+      "explanation": "写入负责抽取/去重/更新/过期，检索负责按当前查询召回相关记忆。两者职责不同，且写入常可异步进行以避免阻塞响应。",
+      "error_tag": "概念混淆",
+      "variant_group": "写入与检索职责"
+    },
+    {
+      "kp": "agent.pattern.memory_long",
+      "type": "single_choice",
+      "question": "用户先说「我住在北京」，两周后说「我搬到上海了」。良好的长期记忆设计应当如何处理？",
+      "options": [
+        "两条都保留，检索时随机返回一条",
+        "保留两条，但用时间戳标注，检索时优先返回较新的那条并可覆盖旧值",
+        "只保留最早的那条，因为先说的更真实",
+        "两条都删除，避免矛盾"
+      ],
+      "answer": 1,
+      "explanation": "长期记忆要处理信息更新：通常用时间戳或冲突消解策略，让较新的信息优先，必要时覆盖或标记旧值失效，而不是随机返回或全部删除。",
+      "error_tag": "边界错误",
+      "variant_group": "记忆更新与冲突"
+    },
+    {
+      "kp": "agent.pattern.memory_long",
+      "type": "single_choice",
+      "question": "在设计长期记忆时，为记忆条目附加元数据（如时间、来源、用户 ID、置信度）最主要的目的是：",
+      "options": [
+        "让存储文件看起来更整齐",
+        "支持按时间/来源/用户过滤与排序，并支持冲突消解和过期淘汰",
+        "提高模型参数量",
+        "减少必要的检索开销"
+      ],
+      "answer": 1,
+      "explanation": "元数据使记忆可过滤、可排序、可去重、可过期，是多用户隔离和冲突消解的基础，而非仅仅为了整齐。",
+      "error_tag": "概念混淆",
+      "variant_group": "记忆元数据"
+    },
+    {
+      "kp": "agent.pattern.memory_long",
+      "type": "single_choice",
+      "question": "下列哪一项最不属于「长期记忆」的典型内容？",
+      "options": [
+        "用户的稳定偏好（如语言、称呼方式）",
+        "用户长期目标或身份信息",
+        "当前这一轮临时传入的一段待总结文本",
+        "过去会话中达成的关键结论"
+      ],
+      "answer": 2,
+      "explanation": "当前轮次的临时文本属于工作/短期上下文，处理完通常不需要长期保留。稳定偏好、身份、跨会话结论才是长期记忆的典型对象。",
+      "error_tag": "概念混淆",
+      "variant_group": "长记忆定义"
+    },
+    {
+      "kp": "agent.pattern.memory_long",
+      "type": "single_choice",
+      "question": "关于长期记忆的「过期/淘汰」策略，下面说法正确的是：",
+      "options": [
+        "长期记忆一旦写入就永远不能删除",
+        "可以基于时间、访问频率或重要性对记忆做衰减和淘汰，避免无限膨胀",
+        "过期策略只适用于缓存，与长期记忆无关",
+        "淘汰必须一次删除全部记忆"
+      ],
+      "answer": 1,
+      "explanation": "长期记忆库若无淘汰会无限膨胀且噪声上升。基于时间衰减、访问频次、重要性评分等策略可控制规模，是常见工程做法。",
+      "error_tag": "边界错误",
+      "variant_group": "记忆过期与淘汰"
+    },
+    {
+      "kp": "agent.pattern.memory_long",
+      "type": "single_choice",
+      "question": "在多用户场景下，检索长期记忆时最容易被忽略但非常关键的约束是：",
+      "options": [
+        "按用户/租户隔离，确保不会把 A 的记忆返回给 B",
+        "必须一次性召回全部用户的记忆",
+        "检索结果必须按字母序排列",
+        "检索只能返回一条记忆"
+      ],
+      "answer": 0,
+      "explanation": "多用户场景必须做隔离过滤，否则会造成隐私泄露和错误个性化。其他选项不是关键约束甚至是误解。",
+      "error_tag": "边界错误",
+      "variant_group": "多用户隔离"
+    },
+    {
+      "kp": "agent.pattern.memory_long",
+      "type": "single_choice",
+      "question": "长期记忆检索通常会先做向量相似度召回，再加入重排（rerank）。加入重排的主要价值是：",
+      "options": [
+        "让存储量变小",
+        "在粗召回结果中按相关性/重要性/时效性等更精细地排序，提高进入 prompt 的记忆质量",
+        "把长期记忆转成模型参数",
+        "替代写入阶段"
+      ],
+      "answer": 1,
+      "explanation": "向量召回偏重语义相近但精度有限，重排可用更精细的模型或规则（时效、重要性、来源可信度）优化最终注入顺序，提升质量。",
+      "error_tag": "记忆缺失",
+      "variant_group": "检索与重排"
+    }
+  ]
+}

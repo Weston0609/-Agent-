@@ -1,0 +1,929 @@
+{
+  "id": "s2u1l5",
+  "title": "s2u1l5",
+  "kps": [
+    "py.oop.dunder_intro",
+    "py.oop.repr_str",
+    "py.oop.eq_hash"
+  ],
+  "theory": "## py.oop.dunder_intro\n\n# 魔法方法入门（Dunder Methods）\n\n## 一句话直觉\n\n**魔术方法（magic methods）**，又叫 **dunder methods**（double underscore，双下划线方法），是 Python 中形如 `__xxx__` 的特殊方法。它们让你自定义的类可以像内置类型一样工作——能被 `print`、能被 `len` 取长度、能用 `+` 相加、能用 `for` 遍历。**学习它们，就是让你的对象从\"能用\"变成\"好用\"。**\n\n---\n\n## 1. 为什么需要魔法方法？\n\n先看一个普通类：\n\n```python\nclass Dog:\n    def __init__(self, name):\n        self.name = name\n\nd = Dog('旺财')\nprint(d)   # <__main__.Dog object at 0x...>\n```\n\n`print(d)` 输出的是一串看不懂的地址。我们希望能打印出 `Dog(旺财)`，希望两个 Dog 能相加，希望 `len(d)` 有意义——这一切都靠魔法方法。\n\n**核心直觉**：Python 的设计哲学是\"一切皆对象\"，而对象之间靠一套**协议（protocol）**沟通。魔法方法就是协议的钩子（hook）。你实现它，Python 就会在对应语法场景自动调用它。\n\n---\n\n## 2. `__init__` 与 `__repr__` / `__str__`\n\n- `__init__(self, ...)`：构造对象时自动调用，用来初始化属性。\n- `__repr__(self)`：给开发者看的字符串，目标是无歧义（理想情况下能 `eval` 回去）。\n- `__str__(self)`：给用户看的字符串，`print` 时优先用它。若没定义 `__str__`，会退回到 `__repr__`。\n\n```python\nclass Point:\n    def __init__(self, x, y):\n        self.x, self.y = x, y\n\n    def __repr__(self):\n        # 开发者视角：Python 交互式环境直接显示这个\n        return f'Point({self.x}, {self.y})'\n\n    def __str__(self):\n        # 用户视角：print() 时显示这个\n        return f'({self.x}, {self.y})'\n\np = Point(1, 2)\nprint(p)        # (1, 2)      -> __str__\np               # Point(1, 2) -> __repr__\n```\n\n---\n\n## 3. 容器协议：`__len__` 与 `__getitem__`\n\n实现这两个方法后，你的对象就\"像一个序列\"了：支持 `len()`、下标访问、`for` 循环。\n\n```python\nclass Playlist:\n    def __init__(self, songs):\n        self.songs = list(songs)\n\n    def __len__(self):\n        # 支持 len(playlist)\n        return len(self.songs)\n\n    def __getitem__(self, i):\n        # 支持 playlist[0] 和 for 循环（for 会自动从 0 开始调用直到 IndexError）\n        return self.songs[i]\n\npl = Playlist(['A', 'B', 'C'])\nprint(len(pl))            # 3\nprint(pl[1])              # B\nfor s in pl:              # for 循环靠 __getitem__ 驱动\n    print(s)\n```\n\n> **小知识**：只要类实现了 `__getitem__`，`for` 循环就能工作，因为 Python 会一直用 `0,1,2,...` 去索引直到抛 `IndexError`。\n\n---\n\n## 4. 运算符重载：`__add__`、`__eq__`\n\n`+`、`==`、`<` 等运算符都可以被重载。\n\n```python\nclass Vector:\n    def __init__(self, x, y):\n        self.x, self.y = x, y\n\n    def __add__(self, other):\n        # 支持 v1 + v2\n        return Vector(self.x + other.x, self.y + other.y)\n\n    def __eq__(self, other):\n        # 支持 v1 == v2\n        return (self.x, self.y) == (other.x, other.y)\n\n    def __repr__(self):\n        return f'Vector({self.x}, {self.y})'\n\nv = Vector(1, 2) + Vector(3, 4)\nprint(v)                       # Vector(4, 6)\nprint(Vector(1, 2) == Vector(1, 2))  # True\n```\n\n> **注意**：定义了 `__eq__` 后，对象默认变得不可哈希（unhashable），因为 Python 认为你改变了\"相等\"的语义。如果还想放进 `set` 或做 `dict` 的键，需要一并实现 `__hash__`。\n\n---\n\n## 5. 工程视角：魔法方法让自定义类融入 Python 生态\n\n当你的类实现了 `__iter__`、`__len__`、`__getitem__`、`__contains__` 等，它就能直接被`list()`、`sum()`、`in`、解构赋值、`sorted()` 等内置函数使用，无需适配层。这就是**协议导向编程（protocol-oriented programming）**的威力。\n\n```python\nclass MyRange:\n    def __init__(self, n):\n        self.n = n\n\n    def __iter__(self):\n        # 支持 for / list() / sum() 等\n        return iter(range(self.n))\n\n    def __contains__(self, v):\n        # 支持 3 in obj\n        return 0 <= v < self.n\n\nprint(list(MyRange(3)))   # [0, 1, 2]\nprint(sum(MyRange(4)))    # 6\nprint(2 in MyRange(5))    # True\n```\n\n---\n\n## 动手练习\n\n**任务**：实现一个 `Matrix2x2` 类，表示 2×2 矩阵。要求：\n\n1. `__init__(self, a, b, c, d)` 保存四个元素（行优先：`[[a, b], [c, d]]`）。\n2. `__repr__` 输出 `Matrix2x2(a, b, c, d)` 格式。\n3. `__str__` 输出类似 `[a b; c d]` 的矩阵形状。\n4. `__add__` 支持两个矩阵相加，返回新矩阵。\n5. `__eq__` 判断两个矩阵元素是否全等。\n6. `__getitem__` 支持 `m[0]` 返回第一行 `[a, b]`（提示：`i` 为 0 或 1）。\n\n**验证代码**：\n\n```python\nm1 = Matrix2x2(1, 2, 3, 4)\nm2 = Matrix2x2(5, 6, 7, 8)\n\nassert repr(m1) == 'Matrix2x2(1, 2, 3, 4)'\nassert str(m1) == '[1 2; 3 4]'\nassert (m1 + m2) == Matrix2x2(6, 8, 10, 12)\nassert m1[0] == [1, 2] and m1[1] == [3, 4]\nprint('All passed!')\n```\n\n**延伸挑战**：加上 `__mul__` 实现矩阵乘法（2×2 乘 2×2）。\n\n```python\nclass Point:\n    def __init__(self, x, y):\n        self.x, self.y = x, y\n\n    def __repr__(self):\n        return f'Point({self.x}, {self.y})'\n\n    def __str__(self):\n        return f'({self.x}, {self.y})'\n\n    def __add__(self, other):\n        return Point(self.x + other.x, self.y + other.y)\n\n    def __eq__(self, other):\n        return (self.x, self.y) == (other.x, other.y)\n\n\nif __name__ == '__main__':\n    p1 = Point(1, 2)\n    p2 = Point(3, 4)\n    print(p1)              # (1, 2)\n    print(repr(p1))        # Point(1, 2)\n    print(p1 + p2)         # (4, 6)\n    print(p1 == Point(1, 2))  # True\n```\n\n## py.oop.repr_str\n\n# Python 对象表示：`__repr__` 与 `__str__`\n\n> **一句话直觉**：当你 `print(obj)` 或在交互式解释器里输入 `obj`、在调试器里查看变量、在 Jupyter 里显示对象时，Python 到底显示什么，完全由 `__repr__` 和 `__str__` 这两个“魔法方法（magic method / dunder method）”决定。学会它们，你的代码可调试性、可读性与工程化水平立刻上一个台阶。\n\n本讲所属课程：`s2u1l5`，知识点 `py.oop.repr_str`，前置无（起点）。\n\n---\n\n## 1. 为什么需要“对象的字符串表示”？\n\n在任何语言里，把对象“变成一段文字”是极高频的操作：打印日志、报错信息、调试、序列化前的预览、Jupyter 单元格的展示……\n\nPython 为这件事设计了两套接口：\n\n- `__repr__(self)`：**面向开发者（developer）**的表示，目标是**无歧义（unambiguous）**，理想情况下能被 `eval()` 还原成等值对象。\n- `__str__(self)`：**面向用户（user）**的表示，目标是**可读（readable）**。\n\n内置函数 `repr(x)` 调用 `x.__repr__()`，`str(x)` 调用 `x.__str__()`，`print(x)` 内部使用 `str(x)`，而交互式解释器与容器（list/dict）内部使用 `repr(x)`。\n\n```python\n# demo1.py —— 默认行为：所有对象都存在 __repr__/__str__\nclass Point:\n    def __init__(self, x, y):\n        self.x, self.y = x, y\n\np = Point(1, 2)\nprint(repr(p))   # <__main__.Point object at 0x...> —— 只有地址，很不友好\nprint(str(p))    # 同上（因为默认 __str__ 会回退到 __repr__）\nprint([p, p])    # 列表里用的是 repr，所以看到 <__main__.Point object at ...>\n```\n\n**结论**：不定义这两个方法，你就只能看到类型名和内存地址，调试成本和协作成本都很高。\n\n---\n\n## 2. `__repr__`：开发者的“可复原”表示\n\n工程约定（参见 Python 官方文档 `repr()` 与 PEP 3140 精神）：\n\n1. `repr` 的返回值应尽量是**合法的 Python 表达式**；\n2. 能唯一标识对象的关键状态；\n3. 优先用 `Class(...)` 形式，字段用 `name=value`；\n4. 不要返回 `None`，必须返回 `str`。\n\n```python\n# demo2.py —— 实现符合约定的 __repr__\nclass Point:\n    def __init__(self, x, y):\n        self.x, self.y = x, y\n\n    def __repr__(self) -> str:\n        # 推荐模式：ClassName(field=value, ...)\n        return f\"Point(x={self.x!r}, y={self.y!r})\"\n\np = Point(1, 2)\nprint(repr(p))        # Point(x=1, y=2)\nprint(p)              # 若未定义 __str__，print 会用 __repr__ → Point(x=1, y=2)\nprint([p, p])         # [Point(x=1, y=2), Point(x=1, y=2)]  ——容器也友好\n# 用 eval 验证可复原性（危险操作，仅演示，请勿对不受控字符串用 eval）\np2 = eval(repr(p))\nprint(p2.x, p2.y)     # 1 2\n```\n\n注意上面用到的 `!r`：这是 f-string 的**转换标志（conversion flag）**，等价于 `repr(value)`。对字符串字段来说，`!r` 会带上引号，从而保持 `repr` 结果仍是合法表达式。\n\n---\n\n## 3. `__str__`：用户友好的显示\n\n`__str__` 不需要可 eval，只需要“好看、好懂”。当类没定义 `__str__` 时，Python 会**自动回退**到 `__repr__`。\n\n```python\n# demo3.py —— 同时定义 __repr__ 和 __str__\nclass Point:\n    def __init__(self, x, y):\n        self.x, self.y = x, y\n\n    def __repr__(self) -> str:\n        return f\"Point(x={self.x!r}, y={self.y!r})\"\n\n    def __str__(self) -> str:\n        return f\"({self.x}, {self.y})\"\n\np = Point(3, 4)\nprint(repr(p))    # Point(x=3, y=4)     ← 开发者视角\nprint(str(p))     # (3, 4)              ← 用户视角\nprint(p)          # (3, 4)              ← print 走 __str__\nprint([p])         # [Point(x=3, y=4)]  ← 容器走 __repr__\nf\"{p}\"            # '(3, 4)'            ← f-string 默认走 __str__\nf\"{p!r}\"          # 'Point(x=3, y=4)'   ← 强制走 __repr__\n```\n\n**记忆口诀（口诀很重要）**：\n\n- `repr` —— 给代码、给日志、给容器、给调试器；\n- `str` —— 给终端用户、给 `print`、给 f-string 默认。\n\n---\n\n## 4. 与其他 OOP 机制的配合\n\n### 4.1 与 `__eq__` 配合\n如果重写 `__eq__`，通常也应重写 `__repr__`（便于比较失败时定位问题）。反之 `__repr__` 不依赖 `__eq__`。\n\n```python\n# demo4.py —— __eq__ 与 __repr__ 协作\nclass Point:\n    def __init__(self, x, y):\n        self.x, self.y = x, y\n\n    def __repr__(self) -> str:\n        return f\"Point(x={self.x!r}, y={self.y!r})\"\n\n    def __eq__(self, other) -> bool:\n        if not isinstance(other, Point):\n            return NotImplemented\n        return (self.x, self.y) == (other.x, other.y)\n\nassert Point(1, 2) == Point(1, 2)\nassert Point(1, 2) != Point(2, 1)\nprint(Point(1, 2) == Point(1, 2))   # True\n```\n\n返回 `NotImplemented`（不是 `False`）是让 Python 尝试反向比较的关键工程细节。\n\n### 4.2 与 `dataclasses` 配合（工程化简易路径）\n标准库 `dataclasses` 会自动生成 `__repr__`（可以通过 `repr=False` 关闭）。\n\n```python\n# demo5.py —— 用 dataclass 自动生成 __repr__\nfrom dataclasses import dataclass\n\n@dataclass\nclass Point:\n    x: float\n    y: float\n\nprint(repr(Point(1, 2)))   # Point(x=1, y=2)\n```\n\n### 4.3 递归对象要小心\n如果对象互相引用，直接递归 `repr` 会导致 `RecursionError`。标准做法是用 `reprlib.recursive_repr` 装饰。\n\n```python\n# demo6.py —— 防止 repr 无限递归\nfrom reprlib import recursive_repr\n\nclass Node:\n    def __init__(self, name):\n        self.name = name\n        self.parent = None\n\n    @recursive_repr()\n    def __repr__(self) -> str:\n        parent = self.parent.name if self.parent else None\n        return f\"Node(name={self.name!r}, parent={parent!r})\"\n\nroot = Node(\"root\")\nchild = Node(\"child\")\nchild.parent = root\nroot.parent = child      # 制造循环引用\nprint(repr(root))        # Node(name='root', parent='child') —— 不会爆栈\n```\n\n---\n\n## 5. 工程级实践与常见误区速览\n\n- **不要**在 `__repr__` 里做**有副作用（side effect）**的事情，比如发网络请求、读文件、写数据库。\n- **不要**返回非字符串。如果返回 `None`，`repr(obj)` 会抛 `TypeError`。\n- **不要**让 `__str__` 与 `__repr__` 完全一样 —— 除非你只有一个视角需要服务，且愿意这样省事（很多“小工具类”确实这么干）。\n- **应当**让 `repr` 输出包含所有关键属性，字段较多时可考虑 `reprlib` 截断长序列。\n- **应当**在 f-string 中习惯用 `!r` 打印调试信息，因为你看到的是无歧义形式（字符串带引号，`None` 显式）。\n- 对**敏感信息**（例如密码）不要在 `__repr__` 中泄露明文。\n\n```python\n# demo7.py —— 敏感字段脱敏\nclass Credential:\n    def __init__(self, user, password):\n        self.user = user\n        self.password = password\n\n    def __repr__(self) -> str:\n        return f\"Credential(user={self.user!r}, password=***)\"\n\nprint(repr(Credential(\"alice\", \"s3cr3t\")))\n# Credential(user='alice', password=***)\n```\n\n---\n\n## 动手练习（建议 20 分钟）\n\n实现一个 `Money` 类，要求：\n\n1. 属性：`amount`（分，整数）与 `currency`（如 `\"CNY\"`、`\"USD\"`）。\n2. `__repr__` 返回形如 `Money(amount=1250, currency='CNY')` 的字符串，并通过 `eval` 能复原一个等值对象。\n3. `__str__` 返回形如 `12.50 CNY` 的字符串（`amount` 以分换算为两位小数的金额）。\n4. 实现 `__eq__`：仅当 `amount` 和 `currency` 均相同才认为相等；对不同类型返回 `NotImplemented`。\n5. 附加：写一小段自测代码，验证\n   - `repr(m)` 结果可通过 `eval` 还原出相等对象；\n   - `str(m)` 符合“`X.XX CUR`”格式；\n   - `[m]` 打印时与 `repr(m)` 结果一致。\n\n**学习目标对照**：完成这个练习后，你应该能清晰区分“开发者视角 / 用户视角”，并能在任何自定义类中习惯性地补上 `__repr__`。\n\n```python\n# money.py —— 综合示例：__repr__ / __str__ / __eq__ 的完整落地\nfrom __future__ import annotations\n\n\nclass Money:\n    \"\"\"表示一定货币金额，amount 以“分”为单位避免浮点误差。\"\"\"\n\n    def __init__(self, amount: int, currency: str = \"CNY\") -> None:\n        if not isinstance(amount, int):\n            raise TypeError(\"amount must be int (units of minor currency)\")\n        self.amount = amount\n        self.currency = currency.upper()\n\n    # 开发者视角：无歧义、可 eval 复原\n    def __repr__(self) -> str:\n        return f\"Money(amount={self.amount!r}, currency={self.currency!r})\"\n\n    # 用户视角：可读\n    def __str__(self) -> str:\n        major, minor = divmod(abs(self.amount), 100)\n        sign = \"-\" if self.amount < 0 else \"\"\n        return f\"{sign}{major}.{minor:02d} {self.currency}\"\n\n    # 与 __repr__ 配套：让比较语义明确\n    def __eq__(self, other: object) -> bool:\n        if not isinstance(other, Money):\n            return NotImplemented\n        return (self.amount, self.currency) == (other.amount, other.currency)\n\n    # 因为定义了 __eq__，显式关闭 __hash__ 或按需实现；这里选择按值可哈希\n    def __hash__(self) -> int:\n        return hash((self.amount, self.currency))\n\n\nif __name__ == \"__main__\":\n    m = Money(1250, \"cny\")\n    print(repr(m))          # Money(amount=1250, currency='CNY')\n    print(str(m))           # 12.50 CNY\n    print(m)                # 12.50 CNY\n    print([m, Money(-5, \"USD\")])  # 容器用 repr\n\n    # 可 eval 复原\n    m2 = eval(repr(m))\n    print(\"roundtrip eq:\", m == m2)    # True\n    print(\"hash eq:\", hash(m) == hash(m2))  # True\n\n    # f-string 两种视角\n    print(f\"user={m}\")      # user=12.50 CNY\n    print(f\"dev={m!r}\")     # dev=Money(amount=1250, currency='CNY')\n```\n\n## py.oop.eq_hash\n\n# py.oop.eq_hash：让对象“可比较、可去重、可当字典键”\n\n> **一句话直觉**：当你想判断两个对象是不是“同一个东西”、想把它们放进 `set` 或当 `dict` 的键时，Python 需要你告诉它“什么算相等、相等时哈希值是多少”。学会 `__eq__`（equal，相等比较）和 `__hash__`（hash，哈希值），你的自定义对象才能像内置类型一样自然地去重、查找、比较。\n\n---\n\n## 1. 为什么需要 `__eq__` 和 `__hash__`？\n\nPython 中每个对象默认来自 `object` 类。默认规则很“物理”：\n\n- **默认 `__eq__`**：比较两个变量是否指向同一个内存地址（即 `is` 的效果）。\n- **默认 `__hash__`**：根据对象的 `id()` 生成一个整数。\n\n这意味着：两个内容完全一样的对象，默认并不相等，也不能在 `set` 里被去重。\n\n```python\nclass Point:\n    def __init__(self, x, y):\n        self.x = x\n        self.y = y\n\np1 = Point(1, 2)\np2 = Point(1, 2)\n\nprint(p1 == p2)        # False：默认比较的是地址\nprint(len({p1, p2}))   # 2：默认哈希基于 id，两个对象被当成两个不同元素\n```\n\n工程上我们往往希望“值相等”就视为同一个对象，例如：两个坐标相同的点、两个内容相同的订单行、两个字段一致的配置项。这时就需要自定义 `__eq__` 和 `__hash__`。\n\n---\n\n## 2. 只实现 `__eq__` 会发生什么？\n\n`__eq__` 决定了 `==` 的结果。实现它之后，两个值相同的对象就“相等”了：\n\n```python\nclass Point:\n    def __init__(self, x, y):\n        self.x = x\n        self.y = y\n\n    def __eq__(self, other):\n        # 只与同类对象比较，避免 AttributeError\n        if not isinstance(other, Point):\n            return NotImplemented\n        return self.x == other.x and self.y == other.y\n\np1 = Point(1, 2)\np2 = Point(1, 2)\n\nprint(p1 == p2)        # True\nprint(len({p1, p2}))   # 2：仍然无法去重！\n```\n\n**关键结论**：在 Python 中，只要你定义了 `__eq__` 而没定义 `__hash__`，Python 会把该类的 `__hash__` 自动设为 `None`，使实例**不可哈希（unhashable）**。\n\n`set` 和 `dict` 键都依赖哈希。上面这段代码如果直接放入 `set`，在某些 Python 版本中会抛 `TypeError: unhashable type`。这就是初学者最常见的坑：**改了相等规则，忘了同步哈希规则**。\n\n---\n\n## 3. `__hash__` 的契约：相等必同哈希\n\n自定义 `__hash__` 必须满足两个契约（contract，约定）：\n\n1. **一致性**：同一次运行中，同一个对象多次调用 `__hash__` 应返回相同值（对象属性若可变，就不要改用于哈希的属性）。\n2. **相等必同哈希**：若 `a == b`，则 `hash(a) == hash(b)` 必须成立。反之不要求：哈希相同不一定相等（哈希碰撞，hash collision，正常现象）。\n\n推荐做法：把参与相等判断的字段组成一个元组，交给内置 `hash()`：\n\n```python\nclass Point:\n    def __init__(self, x, y):\n        self.x = x\n        self.y = y\n\n    def __eq__(self, other):\n        if not isinstance(other, Point):\n            return NotImplemented\n        return (self.x, self.y) == (other.x, other.y)\n\n    def __hash__(self):\n        # 用与 __eq__ 相同的字段计算哈希，天然满足契约\n        return hash((self.x, self.y))\n\np1 = Point(1, 2)\np2 = Point(1, 2)\n\nprint(p1 == p2)              # True\nprint(hash(p1) == hash(p2))  # True\nprint(len({p1, p2}))         # 1：成功去重\nprint({p1: 'origin-like'})   # 可作为 dict 键\n```\n\n---\n\n## 4. 与 `is`、`=` 赋值、`__ne__`、`dataclass` 的关系\n\n- **`a is b`** 判断身份（同一对象），**`a == b`** 判断相等。永远不要用 `==` 判断 `None`，应使用 `is None`。\n- `a = b` 只是让两个名字指向同一对象，与相等无关。\n- 定义了 `__eq__` 后，`!=` 默认是 `__eq__` 结果取反，通常无需额外写 `__ne__`。\n- 如果类要作为**字典键或集合元素**，请保证用于哈希与相等的字段是**不可变字段**；若字段可变，就把类设计为不可哈希（`__hash__ = None`）并改用 `list` 存。\n- `dataclasses.dataclass`（数据类）在 `frozen=True` 时会自动生成基于字段的 `__eq__` 和 `__hash__`；`frozen=False` 时生成 `__eq__` 但 `__hash__` 为 `None`。\n\n```python\nfrom dataclasses import dataclass\n\n@dataclass(frozen=True)   # 冻结：字段不可变，自动生成 __eq__ 与 __hash__\nclass PointDC:\n    x: int\n    y: int\n\nprint(len({PointDC(1, 2), PointDC(1, 2)}))  # 1\n\n@dataclass                # 非冻结：有 __eq__，但不可哈希\nclass MutablePoint:\n    x: int\n    y: int\n\ntry:\n    {MutablePoint(1, 2)}\nexcept TypeError as e:\n    print('TypeError:', e)  # unhashable type: 'MutablePoint'\n```\n\n---\n\n## 5. 工程级实践清单\n\n1. **成对出现**：只要实现了 `__eq__`，就要明确 `__hash__` 是“按字段算”还是“禁用”。\n2. **不可变才可哈希**：参与 `__eq__`/`__hash__` 的字段应不可变；否则对象放入 `set` 后改字段会“找不到自己”。\n3. **`NotImplemented` 而非 `False`**：`__eq__` 遇到不支持的类型应返回 `NotImplemented`，让 Python 尝试反向比较，而不是直接判 `False`。\n4. **优先 `dataclass`**：纯数据类用 `@dataclass(frozen=True)` 少写样板代码。\n5. **可读性**：`__hash__` 使用与 `__eq__` 完全相同的字段元组，契约自动成立。\n\n---\n\n## 动手练习\n\n在本地创建 `inventory.py`，完成以下任务：\n\n1. 定义类 `Product`，字段 `sku: str`、`name: str`、`price: float`。\n2. 实现 `__eq__`：仅当 `sku` 相同时视为同一商品（价格变动不影响相等性）。\n3. 实现 `__hash__`：保证与 `__eq__` 契约一致，使 `Product` 可作为 `set` 元素与 `dict` 键。\n4. 用至少 3 个 `Product` 实例验证：\n   - 相同 `sku`、不同 `price` 的两个对象相等且哈希相同；\n   - 放入 `set` 后被正确去重；\n   - 用其中一个对象作 `dict` 键存储库存数量并能正确读出。\n5. 再写一个 `MutableProduct` 类（`@dataclass` 非 frozen），尝试放入 `set`，观察并解释 `TypeError`。\n\n**提示**：只要 `__hash__` 基于 `(self.sku,)` 计算，与 `__eq__` 的判断字段一致即可。\n\n```python\nfrom dataclasses import dataclass\n\n\nclass Product:\n    \"\"\"商品：以 sku（stock keeping unit，库存单位）作为唯一标识。\"\"\"\n\n    def __init__(self, sku: str, name: str, price: float):\n        self.sku = sku\n        self.name = name\n        self.price = price\n\n    def __eq__(self, other):\n        # 只与 Product 比较；不认识的类型交给对方或返回 NotImplemented\n        if not isinstance(other, Product):\n            return NotImplemented\n        return self.sku == other.sku\n\n    def __hash__(self):\n        # 与 __eq__ 使用的字段保持一致，满足“相等必同哈希”契约\n        return hash((self.sku,))\n\n    def __repr__(self):\n        return f\"Product(sku={self.sku!r}, name={self.name!r}, price={self.price})\"\n\n\n# --- 验证相等与哈希 ---\np1 = Product(\"A100\", \"键盘\", 199.0)\np2 = Product(\"A100\", \"键盘\", 259.0)  # sku 相同、价格不同\na3 = Product(\"B200\", \"鼠标\", 89.0)\n\nprint(\"p1 == p2 :\", p1 == p2)               # True\nprint(\"hash equal:\", hash(p1) == hash(p2))   # True\nprint(\"p1 == a3 :\", p1 == a3)               # False\n\n# --- 在 set 中去重 ---\nbucket = {p1, p2, a3}\nprint(\"set size :\", len(bucket))             # 2，p1 与 p2 去重\n\n# --- 作为 dict 键 ---\nstock = {p1: 10}\nstock[p2] = stock.get(p2, 0) + 5             # 同一 sku，累加库存\nprint(\"stock    :\", stock[p1])               # 15\n\n# --- 对照：非 frozen 的 dataclass 有 __eq__ 但不可哈希 ---\n@dataclass\nclass MutableProduct:\n    sku: str\n    name: str\n    price: float\n\ntry:\n    {MutableProduct(\"A100\", \"键盘\", 199.0)}\nexcept TypeError as e:\n    print(\"TypeError:\", e)                    # unhashable type: 'MutableProduct'\n```\n",
+  "quiz": [
+    {
+      "kp": "py.oop.dunder_intro",
+      "type": "single_choice",
+      "question": "在 Python 中，形如 __init__、__str__ 的方法通常被称为「魔术方法」（magic methods）或「双下划线方法」（dunder methods）。以下关于它们的说法，哪一项正确？",
+      "options": [
+        "它们必须由开发者显式调用才会生效，例如手动写 obj.__str__()",
+        "它们通常由 Python 的内置操作（如 print、len、+ 等）自动触发",
+        "它们只能定义在模块级别，不能定义在类里",
+        "它们的名字前后各有一个下划线，例如 _init_"
+      ],
+      "answer": 1,
+      "explanation": "魔术方法是被内置语法/内置函数隐式调用的钩子，如 print(obj) 会触发 __str__，len(obj) 会触发 __len__。选项 A 错在「必须显式调用」；选项 C 错在它们正是定义在类中的；选项 D 描述的是单下划线，名称不正确。",
+      "error_tag": "概念混淆",
+      "variant_group": "dunder_intro_basic"
+    },
+    {
+      "kp": "py.oop.dunder_intro",
+      "type": "single_choice",
+      "question": "以下代码执行后会输出什么？\n\nclass Point:\n    def __init__(self, x):\n        self.x = x\n    def __str__(self):\n        return f'Point({self.x})'\n\nprint(Point(3))",
+      "options": [
+        "Point(3)",
+        "<__main__.Point object at 0x...>",
+        "3",
+        "报错，因为 __str__ 不能返回字符串"
+      ],
+      "answer": 0,
+      "explanation": "print() 会调用对象的 __str__ 方法，返回 'Point(3)' 并打印。选项 B 是没有定义 __str__ 时的默认表示；选项 C 忽略了格式化字符串；选项 D 说反了，__str__ 正是要求返回字符串。",
+      "error_tag": "语法理解错误",
+      "variant_group": "dunder_str"
+    },
+    {
+      "kp": "py.oop.dunder_intro",
+      "type": "single_choice",
+      "question": "以下哪种做法会导致对象在 print() 时抛出异常（而不是打印默认表示）？",
+      "options": [
+        "没有定义 __str__ 也没有定义 __repr__",
+        "定义了 __str__ 但返回了一个整数",
+        "只定义了 __repr__ 且返回字符串",
+        "定义了 __str__ 且返回字符串"
+      ],
+      "answer": 1,
+      "explanation": "__str__ 必须返回字符串，返回非字符串会引发 TypeError。选项 A、C、D 都不会抛出异常：A 用默认表示，C 使用 __repr__ 作为回退，D 正常返回字符串。",
+      "error_tag": "返回值类型错误",
+      "variant_group": "dunder_str_return"
+    },
+    {
+      "kp": "py.oop.dunder_intro",
+      "type": "single_choice",
+      "question": "以下代码中，a == b 会得到什么结果？\n\nclass Item:\n    def __init__(self, v):\n        self.v = v\n    def __eq__(self, other):\n        return self.v == other.v\n\na = Item(1)\nb = Item(1)\nprint(a == b)",
+      "options": [
+        "True",
+        "False",
+        "报错，因为 __eq__ 不能自定义",
+        "None"
+      ],
+      "answer": 0,
+      "explanation": "a == b 会调用 a.__eq__(b)，比较两个实例的 v 值均为 1，返回 True。若未定义 __eq__，默认为基于身份比较，此时可能为 False；但本题已重载。C、D 明显错误。",
+      "error_tag": "运算符重载理解错误",
+      "variant_group": "dunder_eq"
+    },
+    {
+      "kp": "py.oop.dunder_intro",
+      "type": "single_choice",
+      "question": "以下代码会输出什么？\n\nclass Temp:\n    def __init__(self, t):\n        self.t = t\n    def __repr__(self):\n        return f'Temp({self.t})'\n\nx = Temp(20)\nprint(x)",
+      "options": [
+        "Temp(20)",
+        "<__main__.Temp object at 0x...>",
+        "20",
+        "报错，因为没有定义 __str__"
+      ],
+      "answer": 0,
+      "explanation": "当未定义 __str__ 时，print() 会回退到 __repr__，从而打印 'Temp(20)'。选项 B 是完全没有定义两者的默认情况；选项 D 错误，__str__ 不是必需的。",
+      "error_tag": "回退规则理解错误",
+      "variant_group": "dunder_repr_fallback"
+    },
+    {
+      "kp": "py.oop.dunder_intro",
+      "type": "single_choice",
+      "question": "以下关于魔术方法的说法，哪一项最准确？",
+      "options": [
+        "魔术方法都必须在类中显式以 obj.__method__() 方式调用",
+        "魔术方法的名称由 Python 语言规范定义，实现后可让对象与内置语法自然协作",
+        "任意双下划线开头和结尾的方法都是魔术方法",
+        "魔术方法只能用于数字类型"
+      ],
+      "answer": 1,
+      "explanation": "魔术方法的名字是语言规范约定的，实现后能让对象支持 +、len、print 等操作。选项 A 与「由内置操作隐式调用」相悖；选项 C 错误，需是规范定义的名字；选项 D 错误，任何类都可用。",
+      "error_tag": "概念混淆",
+      "variant_group": "dunder_intro_basic"
+    },
+    {
+      "kp": "py.oop.dunder_intro",
+      "type": "single_choice",
+      "question": "以下哪个方法可以让对象支持在 for 循环中迭代？",
+      "options": [
+        "__loop__",
+        "__iter__",
+        "__for__",
+        "__next__ 单独即可，无需 __iter__"
+      ],
+      "answer": 1,
+      "explanation": "iter(obj) 与 for 循环会调用 __iter__ 获取迭代器；迭代器自身需实现 __next__。单有 __next__ 而没有 __iter__ 通常不足以让对象直接用于 for，因为缺少获取迭代器的入口。__loop__ 和 __for__ 不是 Python 内置魔术方法。",
+      "error_tag": "方法名混淆",
+      "variant_group": "dunder_iter"
+    },
+    {
+      "kp": "py.oop.dunder_intro",
+      "type": "single_choice",
+      "question": "以下代码在执行时会发生什么？\n\nclass Bad:\n    def __len__(self):\n        return 'ten'\n\nb = Bad()\nprint(len(b))",
+      "options": [
+        "打印 ten",
+        "打印 3",
+        "引发 TypeError，因为 __len__ 必须返回非负整数",
+        "print 会忽略 __len__ 并打印 0"
+      ],
+      "answer": 2,
+      "explanation": "__len__ 要求返回非负整数，返回字符串会触发 TypeError。选项 A、B、D 都假设 Python 会接受或忽略错误返回值，与语言规范不符。",
+      "error_tag": "返回值类型错误",
+      "variant_group": "dunder_len_return"
+    },
+    {
+      "kp": "py.oop.dunder_intro",
+      "type": "single_choice",
+      "question": "以下关于 __getitem__ 的说法，哪一项正确？",
+      "options": [
+        "只有在使用切片语法时才会被调用",
+        "obj[key] 这样的下标访问会调用它",
+        "它必须返回一个整数",
+        "它与 __setitem__ 完全一样"
+      ],
+      "answer": 1,
+      "explanation": "obj[key] 会触发 __getitem__；传入切片对象时也可处理切片。它不要求返回整数，且与负责赋值 obj[key] = value 的 __setitem__ 职责不同。因此 A、C、D 错误。",
+      "error_tag": "概念混淆",
+      "variant_group": "dunder_getitem"
+    },
+    {
+      "kp": "py.oop.dunder_intro",
+      "type": "single_choice",
+      "question": "以下代码输出什么？\n\nclass Repr:\n    def __repr__(self):\n        return 'R'\n    def __str__(self):\n        return 'S'\n\nobj = Repr()\nprint(obj)\nprint(repr(obj))",
+      "options": [
+        "S 然后 R",
+        "R 然后 R",
+        "S 然后 S",
+        "R 然后 S"
+      ],
+      "answer": 0,
+      "explanation": "print(obj) 使用 __str__ 输出 'S'；内置函数 repr(obj) 使用 __repr__ 输出 'R'。因此顺序为 S、R。选项 B、C、D 都混淆了两者的调用来源。",
+      "error_tag": "概念混淆",
+      "variant_group": "dunder_repr_str"
+    },
+    {
+      "kp": "py.oop.dunder_intro",
+      "type": "single_choice",
+      "question": "如果希望在对象被销毁时执行清理逻辑（例如关闭文件），应该实现哪个魔术方法？",
+      "options": [
+        "__del__",
+        "__destroy__",
+        "__close__",
+        "__end__"
+      ],
+      "answer": 0,
+      "explanation": "对象被垃圾回收时会调用 __del__，可用于清理，但不保证及时执行。__destroy__、__close__、__end__ 都不是 Python 中对象销毁对应的魔术方法；__close__ 常用于上下文管理器，但需搭配 __enter__/__exit__。",
+      "error_tag": "方法名混淆",
+      "variant_group": "dunder_del"
+    },
+    {
+      "kp": "py.oop.dunder_intro",
+      "type": "single_choice",
+      "question": "以下关于魔术方法 __add__ 与内置函数 operator.add 的关系，哪一项正确？",
+      "options": [
+        "operator.add(a, b) 会绕过 __add__，直接做数值加法",
+        "operator.add(a, b) 最终也会调用 a.__add__(b)，行为一致",
+        "两者完全无关",
+        "只有 operator.add 能处理自定义对象"
+      ],
+      "answer": 1,
+      "explanation": "operator.add(a, b) 与 a + b 语义相同，都会调用 a.__add__(b)（在可行时）。它不会绕过魔术方法，也不是只能用于自定义对象，因此 A、C、D 错误。",
+      "error_tag": "概念混淆",
+      "variant_group": "dunder_add"
+    },
+    {
+      "kp": "py.oop.dunder_intro",
+      "type": "single_choice",
+      "question": "小明写了一个类，希望 len(obj) 能返回其中元素的个数。他应该实现哪个方法？",
+      "options": [
+        "__size__",
+        "__length__",
+        "__len__",
+        "__count__"
+      ],
+      "answer": 2,
+      "explanation": "内置函数 len(obj) 会调用对象的 __len__ 方法。__size__、__length__、__count__ 都不是 Python 中与 len() 对应的魔术方法，属于命名上的常见误解。",
+      "error_tag": "方法名混淆",
+      "variant_group": "dunder_len"
+    },
+    {
+      "kp": "py.oop.dunder_intro",
+      "type": "single_choice",
+      "question": "以下代码中 a + b 会触发哪个方法？\n\nclass Vec:\n    def __init__(self, v):\n        self.v = v\n    def __add__(self, other):\n        return Vec(self.v + other.v)\n\na = Vec(1)\nb = Vec(2)\nc = a + b",
+      "options": [
+        "a 的 __add__ 方法，且 other 是 b",
+        "b 的 __add__ 方法，且 other 是 a",
+        "内置函数 add()",
+        "Python 会随机选择一方的方法调用"
+      ],
+      "answer": 0,
+      "explanation": "a + b 等价于 a.__add__(b)，即调用左侧对象的 __add__ 并传入右侧对象。Python 不会默认调用右侧或使用随机选择。内置的 operator.add 最终也是走 __add__，但不是直接命中。",
+      "error_tag": "运算符重载理解错误",
+      "variant_group": "dunder_add"
+    },
+    {
+      "kp": "py.oop.dunder_intro",
+      "type": "single_choice",
+      "question": "以下哪一组方法名都是 Python 中真实存在的魔术方法？",
+      "options": [
+        "__init__、__str__、__len__、__eq__",
+        "__init__、__print__、__size__、__equal__",
+        "__construct__、__str__、__length__、__compare__",
+        "__new__、__say__、__count__、__same__"
+      ],
+      "answer": 0,
+      "explanation": "__init__、__str__、__len__、__eq__ 都是 Python 内置的魔术方法。其余选项中的 __print__、__size__、__equal__、__construct__、__length__、__compare__、__say__、__count__、__same__ 均不是 Python 定义的魔术方法。",
+      "error_tag": "方法名混淆",
+      "variant_group": "dunder_intro_names"
+    },
+    {
+      "kp": "py.oop.dunder_intro",
+      "type": "single_choice",
+      "question": "关于 __repr__ 和 __str__ 的区别，以下说法正确的是：",
+      "options": [
+        "两者必须返回完全相同的字符串",
+        "__str__ 面向用户友好展示，__repr__ 更偏向开发者调试时的准确表示",
+        "只有 __repr__ 会被 print() 使用，__str__ 完全不会被调用",
+        "如果只定义了 __repr__，print() 一定不会使用它"
+      ],
+      "answer": 1,
+      "explanation": "__str__ 期望返回对用户友好的字符串；__repr__ 期望返回对开发者更有用、可重建对象的字符串。print() 优先调用 __str__，若未定义 __str__ 会退回到 __repr__，因此选项 C、D 错误；选项 A 错误，两者通常不同。",
+      "error_tag": "概念混淆",
+      "variant_group": "dunder_repr_str"
+    },
+    {
+      "kp": "py.oop.dunder_intro",
+      "type": "single_choice",
+      "question": "以下代码执行后，哪一个说法正确？\n\nclass Box:\n    def __init__(self, n):\n        self.n = n\n\nb = Box(5)\nprint(b.n)\nprint(b)",
+      "options": [
+        "两行都会打印 5",
+        "第一行打印 5，第二行打印类似 <__main__.Box object at 0x...> 的默认表示",
+        "第一行报错，因为 n 是私有属性",
+        "第二行报错，因为 Box 没有 __str__"
+      ],
+      "answer": 1,
+      "explanation": "b.n 可直接访问打印 5；由于 Box 未定义 __str__ 或 __repr__，print(b) 会使用 object 的默认表示。属性 n 并非私有，没有 __str__ 也不会导致 print 报错，因此 A、C、D 错误。",
+      "error_tag": "默认行为理解错误",
+      "variant_group": "dunder_default_repr"
+    },
+    {
+      "kp": "py.oop.dunder_intro",
+      "type": "single_choice",
+      "question": "小华想让他的类支持 in 运算符，例如 x in obj。他应该实现哪个魔术方法？",
+      "options": [
+        "__in__",
+        "__contains__",
+        "__has__",
+        "__find__"
+      ],
+      "answer": 1,
+      "explanation": "in 运算符会调用右侧对象的 __contains__ 方法。__in__、__has__、__find__ 都不是 Python 中与 in 对应的魔术方法，属于常见臆造名称。",
+      "error_tag": "方法名混淆",
+      "variant_group": "dunder_contains"
+    },
+    {
+      "kp": "py.oop.dunder_intro",
+      "type": "single_choice",
+      "question": "以下关于 __init__ 的说法，哪一项正确？",
+      "options": [
+        "__init__ 负责创建对象并返回该对象",
+        "__init__ 在对象已经创建之后被调用，用于初始化实例属性",
+        "__init__ 必须显式 return self",
+        "__init__ 与 __new__ 是完全等价的"
+      ],
+      "answer": 1,
+      "explanation": "__init__ 是在实例被创建（由 __new__ 完成）之后调用的初始化方法，用于设置实例属性，不应返回对象。选项 A、C 把 __new__ 的职责错放到 __init__ 上；选项 D 错误，两者职责不同。",
+      "error_tag": "概念混淆",
+      "variant_group": "dunder_init_new"
+    },
+    {
+      "kp": "py.oop.dunder_intro",
+      "type": "single_choice",
+      "question": "以下代码执行结果是什么？\n\nclass Counter:\n    def __init__(self):\n        self.data = [1, 2, 3]\n    def __len__(self):\n        return len(self.data)\n\nc = Counter()\nprint(len(c))",
+      "options": [
+        "0",
+        "3",
+        "报错，因为自定义对象不能用于 len()",
+        "打印对象本身"
+      ],
+      "answer": 1,
+      "explanation": "len(c) 会调用 c.__len__()，返回 self.data 的长度 3。因为已定义 __len__，自定义对象同样可用于 len()，所以选项 C 错误；A、D 均不符合代码逻辑。",
+      "error_tag": "语法理解错误",
+      "variant_group": "dunder_len"
+    },
+    {
+      "kp": "py.oop.repr_str",
+      "type": "single_choice",
+      "question": "在 Python 中，`__str__` 和 `__repr__` 都用于把对象转成字符串。关于二者的定位，下列说法正确的是？",
+      "options": [
+        "`__str__` 面向最终用户，应返回可读性好的描述；`__repr__` 面向开发者，应尽量返回能重建对象的信息",
+        "`__repr__` 面向最终用户，`__str__` 面向开发者",
+        "两者完全等价，Python 总是优先调用 `__str__`",
+        "`__str__` 只用于交互式解释器显示，`__repr__` 只用于 `print`"
+      ],
+      "answer": 0,
+      "explanation": "官方约定：`__repr__` 目标是「无歧义、面向开发者、理想情况下可用 eval 重建」，`__str__` 目标是「可读、面向用户」。当只定义了 `__repr__` 时，`str()` 会退回到 `__repr__`；反过来则不成立。",
+      "error_tag": "概念混淆",
+      "variant_group": "repr_str_定位"
+    },
+    {
+      "kp": "py.oop.repr_str",
+      "type": "single_choice",
+      "question": "如果一个类只定义了 `__repr__` 而没有定义 `__str__`，那么 `str(obj)` 的行为是？",
+      "options": [
+        "抛出 AttributeError",
+        "返回 `<object object at 0x...>` 形式",
+        "退回到调用 `__repr__` 的结果",
+        "返回空字符串"
+      ],
+      "answer": 2,
+      "explanation": "`object.__str__` 的默认实现就是调用 `__repr__`。所以只重写 `__repr__` 时，`str()`、`print()`、f-string 都会使用该 `__repr__` 的结果。",
+      "error_tag": "边界错误",
+      "variant_group": "repr_str_回退"
+    },
+    {
+      "kp": "py.oop.repr_str",
+      "type": "multi_choice",
+      "question": "关于 `__repr__` 与 `__str__` 的关系，下列说法正确的有？",
+      "options": [
+        "只定义 `__repr__` 时，`str()` 会使用 `__repr__`",
+        "只定义 `__str__` 时，`repr()` 会使用 `__str__`",
+        "`print(obj)` 通常使用 `str(obj)`",
+        "交互式解释器回显使用 `repr(obj)`",
+        "容器（如 list）打印内部元素时，使用元素的 `__repr__`"
+      ],
+      "answer": [
+        0,
+        2,
+        3,
+        4
+      ],
+      "explanation": "回退关系是单向的：`__str__` 缺失时退到 `__repr__`，但 `__repr__` 缺失不会退到 `__str__`。print 用 str，解释器回显用 repr，容器内元素的显示用 repr。",
+      "error_tag": "概念混淆",
+      "variant_group": "repr_str_回退"
+    },
+    {
+      "kp": "py.oop.repr_str",
+      "type": "multi_choice",
+      "question": "下列哪些做法符合编写 `__repr__` 的良好实践？（多选）",
+      "options": [
+        "包含类名，便于在复杂输出中识别对象类型",
+        "对属性值使用 `!r` 转换，保证字符串等值显示无歧义",
+        "为避免泄露信息，把 `__repr__` 固定返回 `'<object>'`",
+        "返回能唯一区分对象的关键属性值",
+        "把耗时 I/O 或网络请求放进 `__repr__` 以显示实时数据"
+      ],
+      "answer": [
+        0,
+        1,
+        3
+      ],
+      "explanation": "repr 应无歧义、信息量够、且调用开销小、无副作用。固定返回占位字符串会丢失可辨识性；在 repr 中做 I/O 会在调试/日志中产生意外副作用。",
+      "error_tag": "记忆缺失",
+      "variant_group": "repr_str_写法"
+    },
+    {
+      "kp": "py.oop.repr_str",
+      "type": "multi_choice",
+      "question": "阅读代码：\n\n```python\nclass Money:\n    def __init__(self, amount):\n        self.amount = amount\n    def __repr__(self):\n        return f\"Money({self.amount!r})\"\n    def __str__(self):\n        return f\"{self.amount:.2f} 元\"\n```\n\n下列输出正确的是？（多选）",
+      "options": [
+        "`print(m)` 输出 `10.00 元`",
+        "`print([m])` 显示 `[Money(10)]`",
+        "`print(repr(m))` 输出 `10.00 元`",
+        "`f\"{m}\"` 输出 `Money(10)`",
+        "`print(str(m))` 输出 `10.00 元`"
+      ],
+      "answer": [
+        0,
+        1,
+        4
+      ],
+      "explanation": "`str(m)` 与 f-string 默认走 `__str__`，`repr(m)` 走 `__repr__`，容器 `[m]` 打印元素时用 repr，所以显示 `[Money(10)]`。",
+      "error_tag": "概念混淆",
+      "variant_group": "repr_str_回退"
+    },
+    {
+      "kp": "py.oop.repr_str",
+      "type": "multi_choice",
+      "question": "关于 `__repr__` 可能引发的陷阱，下列说法正确的有？（多选）",
+      "options": [
+        "返回非字符串会在调用 repr() 时抛 TypeError",
+        "`__repr__` 内部的递归调用可能导致递归深度错误",
+        "在 `__repr__` 中调用 `str(self)` 且 `__str__` 又调用 `repr(self)` 会死循环",
+        "`__repr__` 只能被显式调用，打印容器时不会被使用",
+        "若 `__repr__` 依赖的属性尚未初始化，可能抛 AttributeError"
+      ],
+      "answer": [
+        0,
+        1,
+        2,
+        4
+      ],
+      "explanation": "打印容器时会对元素调用 repr，所以选项 D 错误。其余都是常见陷阱：类型错误、self 引用导致的递归、str/repr 互相调用导致无限递归、初始化未完成时访问属性失败。",
+      "error_tag": "边界错误",
+      "variant_group": "repr_str_陷阱"
+    },
+    {
+      "kp": "py.oop.repr_str",
+      "type": "fill_blank",
+      "question": "在 Python 的字符串格式化中，要让对象以 `__repr__` 形式嵌入，f-string 应使用转换标志 `{value____}`（填一个符号）。",
+      "options": [],
+      "answer": [
+        "!r",
+        "!r`",
+        "!r ",
+        "r"
+      ],
+      "explanation": "f-string 用 `{value!r}` 调用 repr(value)，`!s` 调用 str，`!a` 调用 ascii。",
+      "error_tag": "记忆缺失",
+      "variant_group": "repr_str_写法"
+    },
+    {
+      "kp": "py.oop.repr_str",
+      "type": "fill_blank",
+      "question": "当类只定义了 `__repr__` 而没有定义 `__str__` 时，`str(obj)` 实际调用的是 ________（填方法名）。",
+      "options": [],
+      "answer": [
+        "__repr__",
+        "__repr__(self)",
+        "object.__repr__"
+      ],
+      "explanation": "`object.__str__` 默认委托给 `__repr__`。所以 `str()` 在缺少 `__str__` 时会使用 `__repr__`。",
+      "error_tag": "记忆缺失",
+      "variant_group": "repr_str_回退"
+    },
+    {
+      "kp": "py.oop.repr_str",
+      "type": "code_reading",
+      "question": "阅读代码，写出 `print(list_of_p)` 的输出（不含空格差异）：\n\n```python\nclass P:\n    def __init__(self, n):\n        self.n = n\n    def __repr__(self):\n        return f\"P({self.n!r})\"\n    def __str__(self):\n        return f\"p-{self.n}\"\n\nlist_of_p = [P(1), P(2)]\nprint(list_of_p)\n```\n",
+      "options": [],
+      "answer": "[P(1), P(2)]",
+      "explanation": "列表打印时对每个元素使用 repr。因为定义了 `__repr__` 返回 `P(n)`，因此输出 `[P(1), P(2)]`；若用 str 则会得到 `[p-1, p-2]`。",
+      "error_tag": "概念混淆",
+      "variant_group": "repr_str_容器显示"
+    },
+    {
+      "kp": "py.oop.repr_str",
+      "type": "code_reading",
+      "question": "阅读代码，说明运行结果并解释原因：\n\n```python\nclass A:\n    def __repr__(self):\n        return 123\n\na = A()\nprint(repr(a))\n```\n",
+      "options": [],
+      "answer": "抛出 TypeError：__repr__ returned non-string (type int)。因为 __repr__ 必须返回 str 类型，返回 int 时 repr() 会报错。",
+      "explanation": "__repr__ 的返回值会被 `object.__repr__` 或内置 repr() 直接使用；若非字符串类型，解释器在拼装结果时抛 TypeError。",
+      "error_tag": "边界错误",
+      "variant_group": "repr_str_返回值"
+    },
+    {
+      "kp": "py.oop.repr_str",
+      "type": "scenario",
+      "question": "你在维护一个 `Config` 类，它在启动时读取 `self.path` 和 `self.options` 两个属性。运维反馈：日志里打印 Config 对象时全是 `<Config object at 0x...>`，无法辨别是哪个配置文件。你打算怎么改造这个类？",
+      "options": [],
+      "answer": null,
+      "explanation": "调试和日志场景应实现 `__repr__`，返回包含类名和关键属性的字符串，对属性值使用 `!r` 保证无歧义。这样 repr、日志、容器显示都能识别对象。",
+      "error_tag": "概念混淆",
+      "variant_group": "repr_str_场景",
+      "required_keywords": [
+        "__repr__",
+        "!r",
+        "类名",
+        "关键属性",
+        "日志"
+      ]
+    },
+    {
+      "kp": "py.oop.repr_str",
+      "type": "scenario",
+      "question": "你的团队要为终端用户生成报告文本，类 `Report` 需要在邮件正文里以「第 3 季度报告（共 12 页）」这样的可读文案呈现；同期开发同事调试时希望能看到 `Report(title='Q3', pages=12)`。你打算怎么设计这两个字符串表示？并说明为什么不能把两个用途合并到一个方法里。",
+      "options": [],
+      "answer": null,
+      "explanation": "应向用户展示时实现 `__str__` 返回可读文案；面向开发者调试时实现 `__repr__` 返回含类名与关键属性的无歧义字符串。二者用途不同，混用会导致用户看到难以理解的内部状态，或调试时信息不足。",
+      "error_tag": "概念混淆",
+      "variant_group": "repr_str_场景",
+      "required_keywords": [
+        "__str__",
+        "__repr__",
+        "可读文案",
+        "无歧义字符串",
+        "调试"
+      ]
+    },
+    {
+      "kp": "py.oop.repr_str",
+      "type": "single_choice",
+      "question": "如果只重写了 `__str__` 而没有重写 `__repr__`，在交互式解释器中直接输入对象名并回车，显示的是？",
+      "options": [
+        "`__str__` 返回的内容",
+        "默认的 `<ClassName object at 0x...>` 形式",
+        "`TypeError`",
+        "对象的 `__dict__` 内容"
+      ],
+      "answer": 1,
+      "explanation": "交互式解释器使用 `repr()` 来显示表达式结果，而 `repr()` 不会退回到 `__str__`。因此只重写 `__str__` 时，交互式显示的仍是默认的 `__repr__`。",
+      "error_tag": "概念混淆",
+      "variant_group": "repr_str_回退"
+    },
+    {
+      "kp": "py.oop.repr_str",
+      "type": "single_choice",
+      "question": "下面哪个 `__repr__` 实现最符合官方约定？",
+      "options": [
+        "`return self.name`",
+        "`return f\"<{type(self).__name__} name={self.name!r}>\"`",
+        "`return str(self.__dict__)`",
+        "`return \"对象\"`"
+      ],
+      "answer": 1,
+      "explanation": "规范做法是包含类名和关键属性，并对属性值用 `!r` 保证无歧义（字符串带引号、可区分类型）。只返回属性值或固定提示文本都缺乏可辨识性。",
+      "error_tag": "记忆缺失",
+      "variant_group": "repr_str_写法"
+    },
+    {
+      "kp": "py.oop.repr_str",
+      "type": "single_choice",
+      "question": "阅读下面的代码：\n\n```python\nclass Point:\n    def __init__(self, x, y):\n        self.x = x\n        self.y = y\n\np = Point(1, 2)\nprint(repr(p))\n```\n输出最可能是？",
+      "options": [
+        "`Point(1, 2)`",
+        "`<__main__.Point object at 0x...>`",
+        "`{'x': 1, 'y': 2}`",
+        "抛出异常"
+      ],
+      "answer": 1,
+      "explanation": "没有定义 `__repr__` 时，使用 `object.__repr__`，返回形如 `<模块名.类名 object at 地址>` 的字符串。具体地址每次运行不同。",
+      "error_tag": "概念混淆",
+      "variant_group": "repr_str_默认行为"
+    },
+    {
+      "kp": "py.oop.repr_str",
+      "type": "single_choice",
+      "question": "关于 `__repr__` 应返回的内容，下列说法正确的是？",
+      "options": [
+        "可以返回非字符串类型，Python 会自动转换",
+        "必须返回字符串，否则会抛 TypeError",
+        "只能返回单行字符串，多行会报错",
+        "返回 None 表示使用默认实现"
+      ],
+      "answer": 1,
+      "explanation": "`__repr__`（以及 `__str__`）必须返回字符串对象，返回非 str 会在调用 repr() 时抛 TypeError。多行是允许的，只是惯例上单行更友好。",
+      "error_tag": "边界错误",
+      "variant_group": "repr_str_返回值"
+    },
+    {
+      "kp": "py.oop.repr_str",
+      "type": "single_choice",
+      "question": "下面关于 f-string 中 `!r` 转换标志的说法，正确的是？",
+      "options": [
+        "`!r` 表示对表达式结果调用 `repr()`，`!s` 表示调用 `str()`",
+        "`!r` 表示对表达式结果调用 `str()`",
+        "`!r` 只在调试模式下生效",
+        "`!r` 只能用于自定义对象，不能用于字符串"
+      ],
+      "answer": 0,
+      "explanation": "`{value!r}` 调用 repr(value)，`{value!s}` 调用 str(value)，`{value!a}` 调用 ascii(value)。在 `__repr__` 中给属性加 `!r` 可以保证嵌套值的显示无歧义。",
+      "error_tag": "记忆缺失",
+      "variant_group": "repr_str_写法"
+    },
+    {
+      "kp": "py.oop.repr_str",
+      "type": "single_choice",
+      "question": "有一个容器类 `Box` 持有列表 `self.items`。下面哪种 `__repr__` 写法最能体现「嵌套元素用 repr」的惯例？",
+      "options": [
+        "`return f\"Box({self.items})\"`",
+        "`return f\"Box({self.items!r})\"`",
+        "`return \"Box(\" + str(self.items) + \")\"`",
+        "`return \"Box(\" + len(self.items) + \")\"`"
+      ],
+      "answer": 1,
+      "explanation": "`!r` 保证列表中的字符串等元素带引号显示（如 `['a']` 而非 `[a]`），符合 repr 的无歧义要求。直接插值调用的是 `str`。",
+      "error_tag": "概念混淆",
+      "variant_group": "repr_str_写法"
+    },
+    {
+      "kp": "py.oop.repr_str",
+      "type": "single_choice",
+      "question": "下面哪一项最能说明「`__repr__` 理想上可被 eval 重建对象」这一约定的含义？",
+      "options": [
+        "`__repr__` 的返回值必须能被 `json.loads` 解析",
+        "对于简单对象，`eval(repr(obj))` 应能构造出一个等价对象",
+        "`__repr__` 必须调用构造函数",
+        "`__repr__` 的返回值必须是对象的序列化字节"
+      ],
+      "answer": 1,
+      "explanation": "官方的建议是「如果可能，让 repr 看起来像能重建该对象的表达式」。这适用于简单值对象；对含不可重建状态的对象不做强求。",
+      "error_tag": "概念混淆",
+      "variant_group": "repr_str_定位"
+    },
+    {
+      "kp": "py.oop.repr_str",
+      "type": "single_choice",
+      "question": "关于 `__str__` 的适用场景，下列说法最恰当的是？",
+      "options": [
+        "日志调试时展示对象内部状态",
+        "在交互式解释器中查看对象",
+        "向终端用户展示友好信息，如错误提示、界面文本",
+        "为对象生成唯一编码"
+      ],
+      "answer": 2,
+      "explanation": "`__str__` 面向最终用户，用于 `print`、界面文本等场景；调试和解释器显示属于 `__repr__` 的职责。",
+      "error_tag": "概念混淆",
+      "variant_group": "repr_str_定位"
+    },
+    {
+      "kp": "py.oop.eq_hash",
+      "type": "single_choice",
+      "question": "在 Python 中，关于自定义类实例的可哈希性，下列说法正确的是？",
+      "options": [
+        "任何自定义类的实例默认都是可哈希的",
+        "只有定义了 __eq__ 的类实例才可哈希",
+        "定义了 __eq__ 但未定义 __hash__ 的类，其 __hash__ 会被设为 None，实例不可哈希",
+        "定义了 __hash__ 的类实例一定可哈希，与 __eq__ 无关"
+      ],
+      "answer": 2,
+      "explanation": "当类定义了 __eq__ 而没有定义 __hash__ 时，Python 会把该类的 __hash__ 隐式置为 None，导致实例不可哈希。若希望保持可哈希，需显式定义 __hash__。",
+      "error_tag": "概念混淆",
+      "variant_group": "eq_hash_default"
+    },
+    {
+      "kp": "py.oop.eq_hash",
+      "type": "single_choice",
+      "question": "以下关于 Python 中「相等的对象必须具有相同的哈希值」这一约定的理解，正确的是？",
+      "options": [
+        "两个对象若不相等，则它们的哈希值一定不同",
+        "两个对象若相等，则它们的哈希值必须相同",
+        "哈希值相同的对象一定相等",
+        "对象的哈希值与其相等性判断完全无关"
+      ],
+      "answer": 1,
+      "explanation": "这是哈希协议的核心约定：若 a == b 为真，则 hash(a) 必须等于 hash(b)。反过来不成立：哈希相同的对象不一定相等（允许哈希冲突）。",
+      "error_tag": "概念混淆",
+      "variant_group": "hash_contract"
+    },
+    {
+      "kp": "py.oop.eq_hash",
+      "type": "multi_choice",
+      "question": "以下哪些做法可能违反哈希协议、导致 dict 或 set 行为异常？（多选）",
+      "options": [
+        "定义了 __eq__ 但未定义 __hash__",
+        "__hash__ 基于参与 __eq__ 的属性计算",
+        "对象存入 set 后修改了参与哈希的属性",
+        "__eq__ 与 __hash__ 基于不同的属性集"
+      ],
+      "answer": [
+        0,
+        2,
+        3
+      ],
+      "explanation": "选项 0 会使实例不可哈希；选项 2 会让哈希值在存入后改变，导致查找失败；选项 3 违反「相等则哈希相同」。选项 1 是正确做法。",
+      "error_tag": "概念混淆",
+      "variant_group": "hash_contract"
+    },
+    {
+      "kp": "py.oop.eq_hash",
+      "type": "multi_choice",
+      "question": "关于可哈希对象的条件，下列说法正确的有？（多选）",
+      "options": [
+        "对象在其生命周期内哈希值应保持稳定",
+        "可变对象通常不应参与哈希计算",
+        "任何对象只要不是 None 就可哈希",
+        "实现 __hash__ 时通常应基于不可变属性"
+      ],
+      "answer": [
+        0,
+        1,
+        3
+      ],
+      "explanation": "可哈希要求哈希值在对象作为键的期间稳定，因此应基于不可变属性。可变对象参与哈希容易破坏稳定性。选项 2 错误：不可哈希的对象很多，如 list、dict、set。",
+      "error_tag": "概念混淆",
+      "variant_group": "hashable_condition"
+    },
+    {
+      "kp": "py.oop.eq_hash",
+      "type": "multi_choice",
+      "question": "下面关于 __eq__ 的默认行为，描述正确的有？（多选）",
+      "options": [
+        "默认的 __eq__ 比较的是对象身份（id），即是否为同一对象",
+        "默认的 __eq__ 会逐属性比较",
+        "两个内容相同但不同的实例默认不相等",
+        "重写 __eq__ 会影响该类的 __hash__ 默认行为"
+      ],
+      "answer": [
+        0,
+        2,
+        3
+      ],
+      "explanation": "默认 __eq__ 基于身份比较，内容相同但不同实例默认不相等。重写 __eq__ 时若未定义 __hash__，Python 会把 __hash__ 置为 None，从而改变默认可哈希行为，故选项 3 正确；选项 1 是错的（逐属性比较需要自己实现）。",
+      "error_tag": "概念混淆",
+      "variant_group": "eq_hash_default"
+    },
+    {
+      "kp": "py.oop.eq_hash",
+      "type": "multi_choice",
+      "question": "你若希望某个类的实例能安全地作为字典键并被正确判等，实现时应注意哪些点？（多选）",
+      "options": [
+        "同时实现 __eq__ 与 __hash__",
+        "确保相等对象返回相同哈希",
+        "用于哈希和相等判断的属性应保持不可变",
+        "让 __hash__ 返回 id(self) 即可"
+      ],
+      "answer": [
+        0,
+        1,
+        2
+      ],
+      "explanation": "选项 0、1、2 都是保证哈希容器正确工作的要点。选项 3 不合适：基于 id 的哈希与基于属性的相等判断不一致，会违反「相等则哈希相同」的约定。",
+      "error_tag": "概念混淆",
+      "variant_group": "eq_hash_default"
+    },
+    {
+      "kp": "py.oop.eq_hash",
+      "type": "fill_blank",
+      "question": "在 Python 中，若一个类只定义了 __eq__ 而没有定义 __hash__，那么 Python 会将该类的 __hash__ 设置为 ______（填一个特殊值）。",
+      "options": [],
+      "answer": [
+        "None",
+        "none",
+        "None值"
+      ],
+      "explanation": "定义 __eq__ 而未定义 __hash__ 时，Python 会把该类的 __hash__ 隐式设为 None，使实例不可哈希。",
+      "error_tag": "记忆缺失",
+      "variant_group": "eq_without_hash"
+    },
+    {
+      "kp": "py.oop.eq_hash",
+      "type": "fill_blank",
+      "question": "要让自定义对象可哈希，通常应使其哈希基于一组 ______ 属性来计算，以保证对象使用期间哈希值稳定。",
+      "options": [],
+      "answer": [
+        "不可变",
+        "immutable",
+        "不可变属性"
+      ],
+      "explanation": "基于不可变属性计算哈希，才能保证对象作为键期间哈希值不变，避免查找失败。",
+      "error_tag": "概念混淆",
+      "variant_group": "hashable_condition"
+    },
+    {
+      "kp": "py.oop.eq_hash",
+      "type": "fill_blank",
+      "question": "哈希协议要求：如果 a == b 为真，那么必须满足 hash(a) == ______。",
+      "options": [],
+      "answer": [
+        "hash(b)",
+        "hash（b）",
+        "hash(b)的值"
+      ],
+      "explanation": "这是哈希协议的核心约定：相等对象必须有相同的哈希值。",
+      "error_tag": "记忆缺失",
+      "variant_group": "hash_contract"
+    },
+    {
+      "kp": "py.oop.eq_hash",
+      "type": "scenario",
+      "question": "工程场景：你需要实现一个表示「用户账号」的类，希望它能作为字典键用于缓存查找，并且两个账号名相同的实例应被视为相等。团队中有同事只写了 __eq__。请说明你会如何设计，以及为什么。",
+      "options": [],
+      "answer": null,
+      "explanation": "必须同时实现 __eq__ 与 __hash__，并保证基于同一组属性（如账号名）计算，且这些属性应不可变，以满足「相等则哈希相同」并保证哈希值稳定。",
+      "error_tag": "概念混淆",
+      "variant_group": "eq_hash_default",
+      "required_keywords": [
+        "__eq__",
+        "__hash__",
+        "哈希值稳定",
+        "不可变属性",
+        "相等则哈希相同"
+      ]
+    },
+    {
+      "kp": "py.oop.eq_hash",
+      "type": "scenario",
+      "question": "工程场景：一个对象被放入 set 后，其某个用于哈希计算的属性被代码意外修改，之后用相同内容查询却查不到。请解释原因并给出修复思路。",
+      "options": [],
+      "answer": null,
+      "explanation": "对象存入 set/dict 时其哈希值决定存放位置。若参与哈希的属性被修改，哈希值改变，原位置无法再被定位，导致查找失败。修复思路是让参与哈希的属性不可变，或在修改后重新插入。",
+      "error_tag": "边界错误",
+      "variant_group": "mutable_key",
+      "required_keywords": [
+        "哈希值",
+        "可变对象",
+        "不可变属性",
+        "重新插入",
+        "set"
+      ]
+    },
+    {
+      "kp": "py.oop.eq_hash",
+      "type": "single_choice",
+      "question": "下面哪一组方法必须保持一致，才能让对象在 dict 和 set 中正确工作？",
+      "options": [
+        "__init__ 与 __new__",
+        "__eq__ 与 __hash__",
+        "__str__ 与 __repr__",
+        "__len__ 与 __getitem__"
+      ],
+      "answer": 1,
+      "explanation": "__eq__ 定义了相等性语义，__hash__ 定义了哈希值。二者必须遵循「相等则哈希相同」的约定，否则在基于哈希的容器中会出现查找失败、重复元素等问题。",
+      "error_tag": "概念混淆",
+      "variant_group": "hash_contract"
+    },
+    {
+      "kp": "py.oop.eq_hash",
+      "type": "single_choice",
+      "question": "关于可变对象作为 dict 的键，下列说法正确的是？",
+      "options": [
+        "可变对象只要实现了 __hash__ 就适合作为键",
+        "列表等可变内置类型不可哈希，因此不能作为 dict 的键",
+        "字典的键可以是任意对象，包括列表",
+        "字符串是不可变的，所以不能作为 dict 的键"
+      ],
+      "answer": 1,
+      "explanation": "list、dict、set 等可变内置类型未实现 __hash__（其 __hash__ 为 None），因此不可哈希，不能作键。字符串不可变且可哈希，完全可以作键。",
+      "error_tag": "边界错误",
+      "variant_group": "mutable_key"
+    },
+    {
+      "kp": "py.oop.eq_hash",
+      "type": "single_choice",
+      "question": "一个类只重写了 __eq__ 而没有重写 __hash__，把它的实例放入 set 会发生什么？",
+      "options": [
+        "正常放入，且能正确去重",
+        "抛出 TypeError: unhashable type",
+        "抛出 ValueError: hash not defined",
+        "能放入，但相等对象会被当成不同元素"
+      ],
+      "answer": 1,
+      "explanation": "重写 __eq__ 而未定义 __hash__ 时，Python 会将该类的 __hash__ 设为 None，尝试哈希会抛出 TypeError: unhashable type。",
+      "error_tag": "边界错误",
+      "variant_group": "eq_without_hash"
+    },
+    {
+      "kp": "py.oop.eq_hash",
+      "type": "single_choice",
+      "question": "为了让自定义对象在 dict 中既能用作键，又能按业务语义判定相等，正确的做法是？",
+      "options": [
+        "只定义 __eq__，让 Python 自动推导哈希",
+        "只定义 __hash__，相等性用默认的同一性判断",
+        "同时定义 __eq__ 和 __hash__，并保证相等对象的哈希一致",
+        "定义 __eq__，并在每次比较时手动更新哈希"
+      ],
+      "answer": 2,
+      "explanation": "要同时支持语义相等和哈希容器，必须同时实现 __eq__ 与 __hash__，且二者满足「相等则哈希相同」的约定。",
+      "error_tag": "概念混淆",
+      "variant_group": "eq_hash_default"
+    },
+    {
+      "kp": "py.oop.eq_hash",
+      "type": "single_choice",
+      "question": "关于默认的 __hash__，下列说法正确的是？",
+      "options": [
+        "默认的 __hash__ 基于对象的内存地址（id）计算，因此同一对象在生命周期内哈希值一般稳定",
+        "默认的 __hash__ 基于对象的所有属性值计算",
+        "默认的 __hash__ 每次调用都会返回不同的随机值",
+        "默认的 __hash__ 对于任何对象都会抛出异常"
+      ],
+      "answer": 0,
+      "explanation": "object 的默认 __hash__ 基于 id 计算，同一对象在其生命周期内哈希值保持稳定。它不考虑属性值，因此两个内容相同但不同实例的对象默认不相等、哈希也不同。",
+      "error_tag": "概念混淆",
+      "variant_group": "default_hash"
+    },
+    {
+      "kp": "py.oop.eq_hash",
+      "type": "single_choice",
+      "question": "以下哪一项最可能导致对象在 dict 中「存进去了却查不到」？",
+      "options": [
+        "对象实现了 __eq__ 但没有实现 __hash__",
+        "对象参与哈希的属性在存入后被修改",
+        "对象实现了 __hash__ 返回常量",
+        "对象没有实现 __repr__"
+      ],
+      "answer": 1,
+      "explanation": "对象存入 dict 时其哈希值被用于定位桶。如果参与哈希计算的属性之后被修改，哈希值改变，原来存入的位置就找不到了，导致查找失败。",
+      "error_tag": "边界错误",
+      "variant_group": "mutable_key"
+    },
+    {
+      "kp": "py.oop.eq_hash",
+      "type": "single_choice",
+      "question": "两个不同类的实例，只要它们的属性值相同就应该相等——这种设计在 Python 中会带来什么风险？",
+      "options": [
+        "违反「相等则哈希相同」的约定，可能破坏哈希容器",
+        "完全没有风险，是推荐做法",
+        "会导致 __eq__ 无法被调用",
+        "会使对象自动变为可哈希"
+      ],
+      "answer": 0,
+      "explanation": "如果让不同类的实例在属性相同时相等，就必须保证它们的 __hash__ 也一致。否则在 dict/set 中会出现相等对象哈希不同、查找失败的情况，违反哈希协议。",
+      "error_tag": "概念混淆",
+      "variant_group": "cross_class_eq"
+    },
+    {
+      "kp": "py.oop.eq_hash",
+      "type": "single_choice",
+      "question": "下列哪种做法能满足「相等则哈希相同」的约定？",
+      "options": [
+        "让 __hash__ 返回固定常量 0",
+        "让 __hash__ 基于与 __eq__ 相同的一组属性计算",
+        "让 __hash__ 返回 id(self)",
+        "不实现 __eq__，仅实现 __hash__"
+      ],
+      "answer": 1,
+      "explanation": "只要 __hash__ 基于与 __eq__ 判定相同的那组属性计算，相等的对象就必然得到相同的哈希值。返回常量也能满足约定，但会严重降低性能；返回 id(self) 与基于属性的相等判断不一致。",
+      "error_tag": "概念混淆",
+      "variant_group": "hash_contract"
+    }
+  ]
+}

@@ -1,0 +1,648 @@
+{
+  "id": "s3u6l2",
+  "title": "s3u6l2",
+  "kps": [
+    "py.async.backpressure",
+    "py.async.rate_limit"
+  ],
+  "theory": "## py.async.backpressure\n\n# py.async.backpressure：异步世界里的\"限流器\"\n\n## 一句话直觉\n\n> **背压（Backpressure）** 就是让\"生产数据的速度\"被\"消费数据的速度\"限制住，防止内存被无限堆积的任务撑爆。\n\n想象一家奶茶店：前面来了 100 个顾客不停点单，后厨只有 2 个员工做奶茶。如果没有背压，收银台会一直接把订单\"甩\"进后厨，桌子堆满订单纸，最后连走路的地方都没有。有了背压，收银台最多只允许 10 张订单在\"等待区\"，满了就暂停接单——这就是背压的意义。\n\n---\n\n## 1. 为什么需要背压：生产者-消费者速度不匹配\n\n在 `asyncio` 里，最常见的场景是：一个协程（coroutine）不停地产生数据（生产者，producer），另一个协程慢悠悠地处理（消费者，consumer）。如果完全没有限制，生产者会瞬间把队列塞满，内存爆炸。\n\n```python\nimport asyncio\n\nasync def producer(q: asyncio.Queue):\n    # 没有背压：疯狂生产，永不等待\n    i = 0\n    while i < 1_000_000:\n        q.put_nowait(i)   # 从不 await，队列无限增长\n        i += 1\n\nasync def consumer(q: asyncio.Queue):\n    while True:\n        item = await q.get()\n        await asyncio.sleep(0.001)  # 假装处理很慢\n\nasync def main():\n    q = asyncio.Queue()  # 无界队列，危险\n    await asyncio.gather(producer(q), consumer(q))\n\n# asyncio.run(main())  # 会很快吃光内存\n```\n\n**结论**：无界队列（unbounded queue）在异步代码里等同于\"把炸弹埋在内存里\"。\n\n---\n\n## 2. 核心武器：`asyncio.Queue(maxsize=N)`\n\n解决方式非常直接——给队列设一个上限 `maxsize`。当队列满时，`await q.put(item)` 会**自动挂起生产者协程**，直到消费者腾出空位。这就是最基础的背压机制。\n\n```python\nimport asyncio\n\nasync def producer(q: asyncio.Queue):\n    for i in range(10):\n        await q.put(i)          # 队列满时会阻塞在这里\n        print(f\"[P] 放入 {i}, 队列大小={q.qsize()}\")\n    await q.put(None)           # 哨兵，通知消费者结束\n\nasync def consumer(q: asyncio.Queue):\n    while True:\n        item = await q.get()\n        if item is None:\n            break\n        await asyncio.sleep(0.2)  # 消费慢\n        print(f\"    [C] 取出 {item}\")\n        q.task_done()\n\nasync def main():\n    q = asyncio.Queue(maxsize=3)  # ★ 关键：容量 3，形成背压\n    await asyncio.gather(producer(q), consumer(q))\n\nasyncio.run(main())\n```\n\n**观察输出**：生产者永远不会比消费者\"领先超过 3 个\"。这就是背压在做工。\n\n---\n\n## 3. `task_done()` 与 `join()`：什么时候整批处理完毕？\n\n光有 `maxsize` 还不够，工程里经常还要知道\"所有任务都被处理完了\"。`asyncio.Queue` 提供了一对 API：\n\n- `q.task_done()`：消费者说\"我刚取的那条我处理完了\"。\n- `await q.join()`：一直等到队列里所有被取走的任务都被 `task_done()` 标记为止。\n\n```python\nimport asyncio\n\nasync def worker(q: asyncio.Queue, name: str):\n    while True:\n        item = await q.get()\n        if item is None:\n            q.task_done()\n            return\n        await asyncio.sleep(0.1)\n        print(f\"worker-{name} 处理完 {item}\")\n        q.task_done()\n\nasync def main():\n    q: asyncio.Queue = asyncio.Queue(maxsize=5)\n    workers = [asyncio.create_task(worker(q, str(i))) for i in range(3)]\n\n    for i in range(20):\n        await q.put(i)          # 队列满时自动等待\n\n    await q.join()              # 阻塞直到所有任务被消费并 task_done\n    print(\"全部处理完毕\")\n\n    for _ in workers:\n        await q.put(None)       # 通知 worker 退出\n    await asyncio.gather(*workers)\n\nasyncio.run(main())\n```\n\n**工程要点**：`q.join()` 是判断\"批处理结束\"的标准做法，比手动计数器可靠。\n\n---\n\n## 4. 更高级的背压：Stream 层与信号量\n\n### 4.1 网络 Stream 的 `write` 与 `drain`\n\n`asyncio` 的 `StreamWriter` 内部也有缓冲区。写入太快、对端读得太慢时，缓冲区会积压。此时 `await writer.drain()` 就是\"等待直到可以继续写\"的背压接口。\n\n```python\nimport asyncio\n\nasync def handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter):\n    for i in range(1000):\n        writer.write(f\"line {i}\\n\".encode())\n        await writer.drain()   # ★ 背压：写太急就挂起\n    writer.close()\n    await writer.wait_closed()\n\nasync def main():\n    server = await asyncio.start_server(handle, \"127.0.0.1\", 8888)\n    async with server:\n        await server.serve_forever()\n\n# asyncio.run(main())\n```\n\n### 4.2 `asyncio.Semaphore`：自定义并发上限\n\n当你不是在做\"生产者-消费者\"，而是想\"同时对下游发起不超过 N 个请求\"时，信号量（semaphore）就是最直接的背压工具。\n\n```python\nimport asyncio\n\nasync def fetch(sem: asyncio.Semaphore, i: int):\n    async with sem:                # 最多允许 3 个并发\n        print(f\"开始 {i}\")\n        await asyncio.sleep(0.5)\n        print(f\"结束 {i}\")\n\nasync def main():\n    sem = asyncio.Semaphore(3)\n    await asyncio.gather(*(fetch(sem, i) for i in range(10)))\n\nasyncio.run(main())\n```\n\n---\n\n## 5. 总结：什么时候用哪种背压\n\n| 场景 | 推荐工具 |\n|------|----------|\n| 生产者-消费者，内部任务分发 | `asyncio.Queue(maxsize=N)` + `task_done()`/`join()` |\n| 网络收发，防止写缓冲爆炸 | `StreamWriter.drain()` |\n| 限制对下游的并发请求数 | `asyncio.Semaphore(N)` |\n| 想丢弃\"过老\"数据只保留最新 | `asyncio.Queue(maxsize=1)` + 取出前清空 |\n\n**一句话记住**：背压不是\"减少并发\"，而是\"让快的一方等一等慢的一方\"——保证系统在过载时**优雅地降速**，而不是崩溃。\n\n---\n\n## 动手练习\n\n**任务**：写一个异步\"图片抓取模拟器\"。\n\n要求：\n1. 一个生产者协程，每 0.05 秒生成一个\"图片编号\"（共 50 个），放入 `asyncio.Queue(maxsize=5)`。\n2. 两个消费者协程（worker），从队列里取编号，用 `asyncio.sleep(random.uniform(0.1, 0.3))` 模拟下载，打印 `worker-X: 下载图片 i 完成`。\n3. 使用 `q.join()` 等待全部下载完毕后再打印 `全部完成`。\n4. 用 `time.perf_counter()` 统计总耗时，并试着把 `maxsize` 改成 1、50，观察耗时变化并解释原因。\n\n**验收标准**：程序结束时队列为空，所有 50 张图片都被处理，且能说清\"扩容 maxsize 为什么不一定更快\"。\n\n```python\nimport asyncio\nimport random\nimport time\n\nasync def producer(q: asyncio.Queue):\n    for i in range(50):\n        await q.put(i)                     # 队列满时自动挂起（背压生效）\n        await asyncio.sleep(0.05)\n\nasync def worker(q: asyncio.Queue, name: str):\n    while True:\n        item = await q.get()\n        if item is None:\n            q.task_done()\n            return\n        await asyncio.sleep(random.uniform(0.1, 0.3))\n        print(f\"worker-{name}: 下载图片 {item} 完成\")\n        q.task_done()\n\nasync def main():\n    q: asyncio.Queue = asyncio.Queue(maxsize=5)\n    workers = [asyncio.create_task(worker(q, str(i))) for i in range(2)]\n\n    t0 = time.perf_counter()\n    await producer(q)\n    await q.join()                          # 等待所有任务 task_done\n    elapsed = time.perf_counter() - t0\n    print(f\"全部完成，耗时 {elapsed:.2f}s\")\n\n    for _ in workers:\n        await q.put(None)\n    await asyncio.gather(*workers)\n\nasyncio.run(main())\n```\n\n## py.async.rate_limit\n\n# py.async.rate_limit：异步限流完全入门\n\n> 一句话直觉：当你用 `asyncio` 并发请求 1000 个网页、调用 1000 次 API 时，服务器或第三方接口往往有「每秒最多 N 次」的硬限制——限流（rate limiting）就是让你「跑得快，但不越界」的那道闸门。\n\n前置知识：本讲假设你已能写基本的 `async def` / `await` 协程（coroutine），并知道 `asyncio.run()` 怎么启动事件循环（event loop）。如果还不熟悉，先看一眼官方 asyncio 的 Hello World 即可。\n\n---\n\n## 1. 为什么需要限流：并发会「压垮」对端\n\n`asyncio` 的价值在于「IO 等待时切换去干别的活」。可一旦你把 10 万个请求同时 `gather` 出去，对端服务器会瞬间收到海量连接。轻则返回 429（Too Many Requests），重则把你 IP 封禁。\n\n限流的目标不是「变慢」，而是**把并发速率控制在对端允许的范围内，仍保持高吞吐**。\n\n下面是最朴素的「不限流」写法，先看它的威力（本地模拟 API）：\n\n```python\nimport asyncio\nimport time\n\nasync def call_api(i: int) -> int:\n    # 模拟一次 0.1 秒的网络请求\n    await asyncio.sleep(0.1)\n    return i\n\nasync def main():\n    start = time.perf_counter()\n    # 100 个请求全部同时发出\n    results = await asyncio.gather(*(call_api(i) for i in range(100)))\n    elapsed = time.perf_counter() - start\n    print(f\"完成 {len(results)} 个请求，耗时 {elapsed:.2f}s\")\n\nasyncio.run(main())\n```\n\n运行后你会看到约 0.1 秒就完成了——因为在等待时全部并发。但如果对端每秒只允许 5 次，这就直接违规了。\n\n---\n\n## 2. 方案一：Semaphore（信号量）控制并发数\n\n`asyncio.Semaphore(n)` 是最简单、最常用的手段：同一时刻最多只有 n 个协程能进入临界区。它不是严格意义上的「每秒 N 次」，而是「同时 N 个」——这叫**并发限制（concurrency limit）**。\n\n```python\nimport asyncio\nimport time\n\nasync def call_api(i: int, sem: asyncio.Semaphore) -> int:\n    async with sem:                # 进入临界区，占用一个名额\n        await asyncio.sleep(0.1)   # 模拟网络请求\n        return i\n\nasync def main():\n    sem = asyncio.Semaphore(5)     # 同时最多 5 个请求\n    start = time.perf_counter()\n    results = await asyncio.gather(*(call_api(i, sem) for i in range(100)))\n    elapsed = time.perf_counter() - start\n    print(f\"完成 {len(results)} 个，耗时 {elapsed:.2f}s\")\n\nasyncio.run(main())\n```\n\n**直觉公式**：如果每个请求耗时 t 秒，并发为 n，则总耗时约为 `总请求数 / n * t`。上例 100 个请求、并发 5、每个 0.1s：约 2 秒左右完成。\n\n适用场景：对端限制的是「同时在线的连接数」，比如数据库连接池、爬虫的并发上限。\n\n---\n\n## 3. 方案二：令牌桶（Token Bucket）实现「每秒 N 次」\n\n很多 API 的限制是「每秒最多 N 次（RPS，Requests Per Second）」，对短突发（burst）也敏感。这时 Semaphore 不够——因为它只约束同时并发，不约束速率。\n\n**令牌桶算法**：想象一个桶，容量为 `capacity`，以每秒 `rate` 个的速度往桶里放令牌。请求需要先从桶里取一个令牌，取不到就等。\n\n下面是一个最小可用的异步令牌桶：\n\n```python\nimport asyncio\nimport time\n\nclass TokenBucket:\n    \"\"\"异步令牌桶：每秒补充 rate 个令牌，桶容量 capacity。\"\"\"\n    def __init__(self, rate: float, capacity: float):\n        self.rate = rate                 # 每秒补充的令牌数\n        self.capacity = capacity         # 桶容量（应对突发）\n        self.tokens = capacity           # 当前令牌数\n        self.updated = time.monotonic()  # 上次补充时间\n        self.lock = asyncio.Lock()       # 保护状态，避免竞态\n\n    async def acquire(self) -> None:\n        async with self.lock:\n            while True:\n                now = time.monotonic()\n                # 按经过的时间补充令牌，但不超过容量\n                elapsed = now - self.updated\n                self.tokens = min(self.capacity,\n                                  self.tokens + elapsed * self.rate)\n                self.updated = now\n\n                if self.tokens >= 1:\n                    self.tokens -= 1\n                    return\n                # 令牌不足，计算需要等多久\n                wait = (1 - self.tokens) / self.rate\n                await asyncio.sleep(wait)\n```\n\n使用示例：\n\n```python\nasync def worker(i: int, bucket: TokenBucket) -> int:\n    await bucket.acquire()\n    return i\n\nasync def main():\n    bucket = TokenBucket(rate=5, capacity=5)   # 每秒 5 次，突发上限 5\n    start = time.perf_counter()\n    await asyncio.gather(*(worker(i, bucket) for i in range(20)))\n    elapsed = time.perf_counter() - start\n    print(f\"20 个请求耗时 {elapsed:.2f}s（理论 ≈ {(20-5)/5:.1f}s + 首次突发）\")\n\nasyncio.run(main())\n```\n\n**关键点**：`asyncio.Lock` 保证「补充 + 检查 + 扣减」是原子操作；`await asyncio.sleep` 让出控制权，其他协程得以继续，不会阻塞整个事件循环。\n\n---\n\n## 4. 方案三：固定窗口（Fixed Window）——简单但有边界问题\n\n如果只想限制「每 N 秒内最多 M 次」，可以每秒/每窗口检查计数。写法最简，但窗口切换处可能出现 2 倍突发（边界问题）。工程上更推荐令牌桶或滑动窗口（sliding window）。这里写一个仅供理解：\n\n```python\nimport asyncio\nimport time\n\nclass FixedWindowLimiter:\n    def __init__(self, max_calls: int, window: float = 1.0):\n        self.max_calls = max_calls\n        self.window = window\n        self.count = 0\n        self.window_start = time.monotonic()\n        self.lock = asyncio.Lock()\n\n    async def acquire(self) -> None:\n        async with self.lock:\n            now = time.monotonic()\n            if now - self.window_start >= self.window:\n                # 进入新窗口，重置\n                self.window_start = now\n                self.count = 0\n            if self.count < self.max_calls:\n                self.count += 1\n                return\n            # 本窗口已满，等到下一个窗口\n            wait = self.window - (now - self.window_start)\n            await asyncio.sleep(wait)\n```\n\n**什么时候用哪种**：\n- 需要「同时并发 ≤ N」→ `Semaphore`。\n- 需要「速率 ≤ N/s」→ `TokenBucket`。\n- 需要「每固定窗口 ≤ N」→ 固定/滑动窗口。\n\n---\n\n## 5. 工程化：把限流封装成装饰器\n\n零基础到工程级的关键差别是「能否复用」。把令牌桶写成装饰器，一行接入任何异步函数：\n\n```python\nimport asyncio\nimport functools\n\ndef rate_limit(rate: float, capacity: float):\n    \"\"\"异步限流装饰器：每秒最多 rate 次，突发上限 capacity。\"\"\"\n    bucket = TokenBucket(rate=rate, capacity=capacity)\n\n    def decorator(func):\n        @functools.wraps(func)\n        async def wrapper(*args, **kwargs):\n            await bucket.acquire()\n            return await func(*args, **kwargs)\n        return wrapper\n    return decorator\n\n# 使用\n@rate_limit(rate=2, capacity=2)\nasync def call_remote(i: int):\n    await asyncio.sleep(0.05)\n    return i\n```\n\n**工程注意点**：\n- 每个需要独立速率的目标用各自的 bucket（例如不同域名各自限流）。\n- 在微服务/爬虫中，通常配合 `aiohttp`、`httpx.AsyncClient` 使用。\n- 生产级更复杂的场景可参考 `aiolimiter` 库，它就是令牌桶的成熟实现。\n\n---\n\n## 小结表\n\n| 方案 | 约束 | 是否有突发 | 复杂度 |\n|------|------|-----------|--------|\n| Semaphore | 同时并发数 | 无 | ★ |\n| TokenBucket | 平均速率 | 有（≤容量） | ★★ |\n| FixedWindow | 每窗口次数 | 边界可能 2 倍 | ★ |\n| 滑动窗口 | 平均速率，无边界问题 | 无 | ★★★ |\n\n核心心法：**限流是为了保护对方，同时也是为了保护你自己不被封禁**。选择哪种算法由对端的限制语义决定，不是越复杂越好。\n\n```python\nimport asyncio\nimport time\nimport functools\n\n\nclass TokenBucket:\n    \"\"\"异步令牌桶：每秒补充 rate 个令牌，桶容量 capacity（允许突发）。\"\"\"\n\n    def __init__(self, rate: float, capacity: float):\n        self.rate = rate\n        self.capacity = capacity\n        self.tokens = capacity\n        self.updated = time.monotonic()\n        self.lock = asyncio.Lock()\n\n    async def acquire(self) -> None:\n        async with self.lock:\n            while True:\n                now = time.monotonic()\n                elapsed = now - self.updated\n                self.tokens = min(self.capacity, self.tokens + elapsed * self.rate)\n                self.updated = now\n\n                if self.tokens >= 1:\n                    self.tokens -= 1\n                    return\n                await asyncio.sleep((1 - self.tokens) / self.rate)\n\n\ndef rate_limit(rate: float, capacity: float):\n    \"\"\"异步限流装饰器。\"\"\"\n    bucket = TokenBucket(rate=rate, capacity=capacity)\n\n    def decorator(func):\n        @functools.wraps(func)\n        async def wrapper(*args, **kwargs):\n            await bucket.acquire()\n            return await func(*args, **kwargs)\n        return wrapper\n    return decorator\n\n\n@rate_limit(rate=5, capacity=5)   # 每秒最多 5 次，突发上限 5\nasync def call_api(i: int) -> int:\n    await asyncio.sleep(0.05)     # 模拟网络往返\n    return i\n\n\nasync def main():\n    start = time.perf_counter()\n    results = await asyncio.gather(*(call_api(i) for i in range(20)))\n    elapsed = time.perf_counter() - start\n    print(f\"完成 {len(results)} 个请求，耗时 {elapsed:.2f}s\")\n    # 前 5 个瞬间完成，之后约每 0.2s 一个，总耗时 ≈ 3s 左右\n\n\nif __name__ == \"__main__\":\n    asyncio.run(main())\n```\n",
+  "quiz": [
+    {
+      "kp": "py.async.backpressure",
+      "type": "single_choice",
+      "question": "在 asyncio 中，生产者的速度远快于消费者时，如果生产者持续调用 queue.put_nowait(item)，最可能出现的现象是：",
+      "options": [
+        "队列会自动丢弃旧元素，内存保持稳定",
+        "队列会无限增长，内存占用持续上升，甚至导致程序崩溃",
+        "put_nowait 会自动切换为阻塞等待，从而自然限速",
+        "事件循环会检测到不平衡并暂停生产者任务"
+      ],
+      "answer": 1,
+      "explanation": "put_nowait 不会等待，队列无上界时元素不断堆积，会造成内存膨胀。它不会自动丢弃、不会自动阻塞，事件循环也不会自动暂停生产者。",
+      "error_tag": "概念混淆",
+      "variant_group": "asyncio_backpressure_basic"
+    },
+    {
+      "kp": "py.async.backpressure",
+      "type": "single_choice",
+      "question": "要在一个 asyncio 队列上实现背压，最直接的机制是：",
+      "options": [
+        "把队列的 maxsize 设置为一个有限值，并让生产者在 put 时等待",
+        "把所有 put_nowait 改成多次重试",
+        "把消费者改为同步函数",
+        "在事件循环中手动调用 gc.collect()"
+      ],
+      "answer": 0,
+      "explanation": "有界队列配合 await queue.put() 会在队列满时挂起生产者，从而把压力反馈给上游，这是 asyncio 中常见的背压手段。",
+      "error_tag": "概念混淆",
+      "variant_group": "asyncio_backpressure_basic"
+    },
+    {
+      "kp": "py.async.backpressure",
+      "type": "single_choice",
+      "question": "某异步爬虫的解析协程把结果放入无界队列，写入协程从队列取出后落盘。磁盘写入较慢。若要加入背压，最合适的位置是：",
+      "options": [
+        "在解析协程和写入协程之间使用有界队列，并让解析协程 await put",
+        "在解析协程内部加 asyncio.sleep(0)",
+        "在写入协程内部使用无限循环重试",
+        "把队列容量设为 0，表示无限制"
+      ],
+      "answer": 0,
+      "explanation": "在速率不匹配的边界处引入有界队列并等待写入空间，是标准背压做法。sleep(0) 不限制速率，maxsize=0 表示无界。",
+      "error_tag": "方案选择错误",
+      "variant_group": "asyncio_backpressure_apply"
+    },
+    {
+      "kp": "py.async.backpressure",
+      "type": "single_choice",
+      "question": "关于 asyncio.Queue(maxsize=0) 的含义，正确的是：",
+      "options": [
+        "队列容量为零，任何 put 都会抛异常",
+        "队列无界，put 永远不会因为满而等待",
+        "队列容量为 1",
+        "该写法在 asyncio 中非法"
+      ],
+      "answer": 1,
+      "explanation": "maxsize=0 是默认值，表示无界队列。它不会抛异常，也不是容量 1，写法合法。",
+      "error_tag": "API 误用",
+      "variant_group": "asyncio_backpressure_api"
+    },
+    {
+      "kp": "py.async.backpressure",
+      "type": "single_choice",
+      "question": "当生产者使用 await q.put(x) 而有界队列已满时，当前协程的状态是：",
+      "options": [
+        "被挂起，事件循环可以去执行其他任务",
+        "被终止，需要重新创建任务",
+        "阻塞整个事件循环直到有空位",
+        "进入忙等待，不断轮询队列"
+      ],
+      "answer": 0,
+      "explanation": "await put 会挂起当前协程，把控制权交还事件循环；它不会阻塞整个循环，也不会忙等待或终止任务。",
+      "error_tag": "机制误解",
+      "variant_group": "asyncio_backpressure_basic"
+    },
+    {
+      "kp": "py.async.backpressure",
+      "type": "single_choice",
+      "question": "某日志收集服务用异步队列聚合日志。压力测试发现内存增长很快。检查代码发现生产者使用 put_nowait，队列无界。最合适的修改是：",
+      "options": [
+        "设置有界 maxsize，并改用 await put",
+        "把 put_nowait 放在 try/except 中忽略 QueueFull",
+        "把消费者改成 while True: pass",
+        "给队列加锁"
+      ],
+      "answer": 0,
+      "explanation": "有界加 await put 能产生背压。忽略 QueueFull 会丢日志且不解决速率差；忙等和加锁都不是解决背压的正确方式。",
+      "error_tag": "方案选择错误",
+      "variant_group": "asyncio_backpressure_apply"
+    },
+    {
+      "kp": "py.async.backpressure",
+      "type": "single_choice",
+      "question": "以下哪项是背压（backpressure）的核心含义？",
+      "options": [
+        "下游向上游传递压力，使上游放慢生产速度",
+        "上游向下游加速推送数据",
+        "系统自动删除多余数据以保护内存",
+        "通过增加线程数提升吞吐量"
+      ],
+      "answer": 0,
+      "explanation": "背压的本质是下游通过等待/拒绝信号让上游降速。它与加速推送、静默丢弃、加线程都不同。",
+      "error_tag": "概念混淆",
+      "variant_group": "asyncio_backpressure_concept"
+    },
+    {
+      "kp": "py.async.backpressure",
+      "type": "single_choice",
+      "question": "在 asyncio 中，queue.join() 与背压的关系是：",
+      "options": [
+        "join 等待队列中所有元素被处理完，可用于等待积压清空，但它本身不是限速机制",
+        "join 会在队列满时阻塞生产者，是背压的主要手段",
+        "join 会清空队列并丢弃元素",
+        "join 是同步阻塞函数，会卡住事件循环"
+      ],
+      "answer": 0,
+      "explanation": "join 等待未完成任务计数归零，常用于汇合点；限速依赖有界队列与 await put。join 是协程，不会清空队列。",
+      "error_tag": "概念混淆",
+      "variant_group": "asyncio_backpressure_api"
+    },
+    {
+      "kp": "py.async.backpressure",
+      "type": "single_choice",
+      "question": "生产者协程中写了：\n\nfor item in items:\n    q.put_nowait(item)\n\nq 是一个无界 asyncio.Queue。程序结束时可能出现的问题是：",
+      "options": [
+        "主程序退出时仍有大量元素未被消费，且内存已涨高",
+        "put_nowait 会抛 RuntimeError，程序立即崩溃",
+        "消费者会自动加速以跟上生产者",
+        "事件循环会拒绝该调用"
+      ],
+      "answer": 0,
+      "explanation": "put_nowait 无背压，生产者会快速填满队列并结束；消费者可能还没处理完，造成积压。它不会抛 RuntimeError，也不会自动加速。",
+      "error_tag": "现象判断错误",
+      "variant_group": "asyncio_backpressure_basic"
+    },
+    {
+      "kp": "py.async.backpressure",
+      "type": "single_choice",
+      "question": "某团队想在不改变队列为有界的前提下引入背压，下列哪种做法相对合理？",
+      "options": [
+        "定期检查 qsize()，超过阈值时让生产者 await asyncio.sleep 一段时间",
+        "把 put_nowait 改成 put",
+        "让消费者抛异常",
+        "关闭事件循环"
+      ],
+      "answer": 0,
+      "explanation": "在有界队列不可行时，按队列长度主动降速是一种软背压；put 在无界队列上不会等待，其余选项不合理。",
+      "error_tag": "方案选择错误",
+      "variant_group": "asyncio_backpressure_apply"
+    },
+    {
+      "kp": "py.async.backpressure",
+      "type": "single_choice",
+      "question": "以下关于 asyncio 背压与线程池/进程池的关系，正确的是：",
+      "options": [
+        "线程池/进程池的 pending 任务堆积也会形成类似的压力问题，仍需要限制提交速率或使用有界等待",
+        "线程池天然具有背压，不需要任何限制",
+        "进程池与背压无关",
+        "只要使用 asyncio.to_thread 就不会有积压"
+      ],
+      "answer": 0,
+      "explanation": "执行器的待处理任务队列同样可能无限堆积，需要配合有界队列或限流。to_thread 不会自动解决积压。",
+      "error_tag": "概念混淆",
+      "variant_group": "asyncio_backpressure_concept"
+    },
+    {
+      "kp": "py.async.backpressure",
+      "type": "single_choice",
+      "question": "在生产者-消费者模式中，如果消费者处理速度偶尔变慢，哪种设计更可能造成内存问题？",
+      "options": [
+        "生产者使用无界队列并调用 put_nowait",
+        "生产者使用有界队列并 await put",
+        "生产者使用有界队列并在满时等待",
+        "消费者使用 await q.get()"
+      ],
+      "answer": 0,
+      "explanation": "无界队列加 put_nowait 在消费者变慢时会无限制堆积；有界队列配合 await put 会把压力反馈给生产者。",
+      "error_tag": "现象判断错误",
+      "variant_group": "asyncio_backpressure_basic"
+    },
+    {
+      "kp": "py.async.backpressure",
+      "type": "single_choice",
+      "question": "以下代码：\n\nimport asyncio\n\nasync def producer(q):\n    for i in range(100):\n        await q.put(i)\n\nasync def consumer(q):\n    while True:\n        item = await q.get()\n        await asyncio.sleep(1)\n\n如果 q = asyncio.Queue()，程序运行一段时间后最可能发生什么？",
+      "options": [
+        "生产者被消费者限速，队列长度始终不超过 1",
+        "生产者很快跑完并把 100 个元素全部放入队列，消费者缓慢消费",
+        "消费者会因为队列为空而抛出 QueueEmpty",
+        "producer 和 consumer 会因为队列而互相阻塞，无法完成"
+      ],
+      "answer": 1,
+      "explanation": "无界队列不会阻塞 put，生产者会迅速填满队列。消费者使用 await q.get() 不会抛 QueueEmpty。两边也不会互相死锁。",
+      "error_tag": "现象判断错误",
+      "variant_group": "asyncio_backpressure_basic"
+    },
+    {
+      "kp": "py.async.backpressure",
+      "type": "single_choice",
+      "question": "如果把上题中的队列改为 asyncio.Queue(maxsize=5)，会发生什么变化？",
+      "options": [
+        "生产者仍然不受影响，只是消费者读取变慢",
+        "队列满时 await q.put(i) 会挂起生产者，直到消费者取出元素腾出空间",
+        "队列满时 put 会立即抛出 asyncio.QueueFull",
+        "maxsize 只影响 get 的等待时间，不影响 put"
+      ],
+      "answer": 1,
+      "explanation": "有界队列满时，await put() 会等待消费者腾出空间；只有 put_nowait() 才会在满时抛 QueueFull。maxsize 主要限制的是写入。",
+      "error_tag": "概念混淆",
+      "variant_group": "asyncio_backpressure_basic"
+    },
+    {
+      "kp": "py.async.backpressure",
+      "type": "single_choice",
+      "question": "关于 queue.put_nowait() 与 await queue.put() 的区别，下列说法正确的是：",
+      "options": [
+        "put_nowait 在队列满时会阻塞事件循环，put 不会",
+        "put 在队列满时会挂起当前任务，put_nowait 在队列满时抛 QueueFull",
+        "两者都会阻塞，只是 put_nowait 不返回 Future",
+        "put_nowait 会自动创建新队列，put 不会"
+      ],
+      "answer": 1,
+      "explanation": "await put() 在满时挂起任务等待空间；put_nowait() 不等待，满时抛 asyncio.QueueFull。二者都不会阻塞整个事件循环。",
+      "error_tag": "API 误用",
+      "variant_group": "asyncio_backpressure_api"
+    },
+    {
+      "kp": "py.async.backpressure",
+      "type": "single_choice",
+      "question": "某下载器使用一个无界 asyncio.Queue 存放待下载 URL，生产者不断解析网页并放入新 URL。运行一段时间后内存不断增长。在不改变整体架构的前提下，最合理的修复是：",
+      "options": [
+        "把 Queue 改成有界并让生产者 await put",
+        "把 Queue 改成 list，用 append 替代 put",
+        "给生产者加 time.sleep(0.01)",
+        "把消费者改成多线程"
+      ],
+      "answer": 0,
+      "explanation": "有界队列加 await put 能对上游形成背压。list 没有等待机制，同步 sleep 会阻塞事件循环，多线程并不能解决无界堆积。",
+      "error_tag": "方案选择错误",
+      "variant_group": "asyncio_backpressure_apply"
+    },
+    {
+      "kp": "py.async.backpressure",
+      "type": "single_choice",
+      "question": "以下哪种场景本质上不属于背压问题？",
+      "options": [
+        "Web 服务接收请求的速度超过后端处理速度",
+        "日志生产者写入速度超过日志落盘速度",
+        "一个 CPU 密集型函数被放进 asyncio.to_thread 运行",
+        "消息队列消费慢于生产"
+      ],
+      "answer": 2,
+      "explanation": "把 CPU 密集型任务放到线程执行是调度/执行器选择问题，不直接涉及上下游速率不匹配的背压。其余三项都是典型的速率不匹配。",
+      "error_tag": "概念误判",
+      "variant_group": "asyncio_backpressure_apply"
+    },
+    {
+      "kp": "py.async.backpressure",
+      "type": "single_choice",
+      "question": "在 asyncio 中，消费者如果先 await q.get() 再处理，而生产者用 put_nowait 写入无界队列，最直接的背压缺失表现是：",
+      "options": [
+        "get 会一直返回 None",
+        "队列长度会不断累积，直到内存不足",
+        "消费者任务会被自动取消",
+        "事件循环会抛 RuntimeError"
+      ],
+      "answer": 1,
+      "explanation": "无界队列加 put_nowait 不会限制生产速率，队列会持续变长。不会返回 None，不会自动取消，也不会因此抛 RuntimeError。",
+      "error_tag": "现象判断错误",
+      "variant_group": "asyncio_backpressure_basic"
+    },
+    {
+      "kp": "py.async.backpressure",
+      "type": "single_choice",
+      "question": "要观察 asyncio 队列是否积压，最直接的指标是：",
+      "options": [
+        "queue.qsize()",
+        "queue.empty() 的返回值类型",
+        "len(asyncio.all_tasks())",
+        "queue.maxsize 是否等于 0"
+      ],
+      "answer": 0,
+      "explanation": "qsize() 返回当前队列中的元素数量，可反映积压程度。empty() 只给布尔值，all_tasks 是任务数，maxsize 是配置项。",
+      "error_tag": "API 误用",
+      "variant_group": "asyncio_backpressure_api"
+    },
+    {
+      "kp": "py.async.backpressure",
+      "type": "single_choice",
+      "question": "有界队列设为 maxsize=10，消费者取出一个元素后，下列哪一项最可能立刻发生？",
+      "options": [
+        "一个此前在 await put 上等待的生产者被唤醒",
+        "所有消费者任务重启",
+        "队列被自动扩容到 20",
+        "事件循环停止"
+      ],
+      "answer": 0,
+      "explanation": "消费者腾出空间后，队列会唤醒等待写入的生产者任务。队列不会自动扩容，其余选项与队列行为无关。",
+      "error_tag": "机制误解",
+      "variant_group": "asyncio_backpressure_basic"
+    },
+    {
+      "kp": "py.async.rate_limit",
+      "type": "single_choice",
+      "question": "在 asyncio 中实现「限流」时，最常用的原语是下面哪一个？",
+      "options": [
+        "asyncio.Lock",
+        "asyncio.Semaphore",
+        "asyncio.Event",
+        "asyncio.Queue"
+      ],
+      "answer": 1,
+      "explanation": "Semaphore 通过维护一个计数器来限制同时进入临界区的协程数量，是异步限流最直接的原语。Lock 只能允许 1 个，Event 只做通知，Queue 用于生产者-消费者解耦而非限流。",
+      "error_tag": "概念混淆",
+      "variant_group": "async_rate_limit_primitive"
+    },
+    {
+      "kp": "py.async.rate_limit",
+      "type": "single_choice",
+      "question": "下面哪种说法正确描述了「固定窗口」限流与「滑动窗口」限流的区别？",
+      "options": [
+        "固定窗口按固定时间片计数，滑动窗口按最近一段时间计数，后者能避免窗口边界的突发流量",
+        "固定窗口只能用于同步代码，滑动窗口只能用于异步代码",
+        "固定窗口必须用 Redis，滑动窗口必须用内存",
+        "两者完全等价，只是命名不同"
+      ],
+      "answer": 0,
+      "explanation": "固定窗口把时间切成对齐的区间计数，窗口边界处可能放行两倍流量；滑动窗口以「当前时刻往前推 N 秒」为界，边界突发更平滑。",
+      "error_tag": "概念混淆",
+      "variant_group": "rate_limit_window_type"
+    },
+    {
+      "kp": "py.async.rate_limit",
+      "type": "single_choice",
+      "question": "下面关于「限流」与「并发限制」的区别，正确的是？",
+      "options": [
+        "两者完全等价",
+        "限流通常限制单位时间内的请求速率（QPS/每秒次数），并发限制限制同一时刻正在处理的请求数",
+        "并发限制只能用线程实现",
+        "限流只能限制每秒 1 个请求"
+      ],
+      "answer": 1,
+      "explanation": "Semaphore 限制「同一时刻」的活动数量即并发限制；限流关注「单位时间速率」。二者常结合使用：既可限制瞬时并发，也可限制每秒放行数。",
+      "error_tag": "概念混淆",
+      "variant_group": "rate_limit_vs_concurrency"
+    },
+    {
+      "kp": "py.async.rate_limit",
+      "type": "multi_choice",
+      "question": "下列关于 asyncio.Semaphore 的说法，正确的有？",
+      "options": [
+        "Semaphore(0) 创建的信号量初始计数为 0，任何 await acquire() 都会阻塞直到有 release",
+        "acquire() 是协程方法，必须 await",
+        "release() 是普通方法，不需要 await",
+        "Semaphore 的计数可以无限增长，永远不会超过初始值"
+      ],
+      "answer": [
+        0,
+        1,
+        2
+      ],
+      "explanation": "A 正确：初始为 0 时 acquire 会挂起等待。B、C 正确：acquire 是协程需 await，release 是同步方法。D 错误：普通 Semaphore 计数可以因多余 release 而超过初始值，BoundedSemaphore 才会检查。",
+      "error_tag": "边界错误",
+      "variant_group": "async_semaphore_usage"
+    },
+    {
+      "kp": "py.async.rate_limit",
+      "type": "multi_choice",
+      "question": "在设计异步限流器时，下面哪些考虑是合理的？",
+      "options": [
+        "需要考虑多实例部署时的全局一致性",
+        "需要为等待中的协程设置超时，避免无限等待",
+        "需要考虑限流触发时的降级策略（如返回 429 或排队）",
+        "限流器的状态必须放在全局变量里，不能用实例属性"
+      ],
+      "answer": [
+        0,
+        1,
+        2
+      ],
+      "explanation": "A、B、C 都是生产级限流器的关键设计点。D 错误：状态放哪里取决于作用域，全局变量并非必须，反而容易造成跨测试污染。",
+      "error_tag": "概念混淆",
+      "variant_group": "rate_limit_design"
+    },
+    {
+      "kp": "py.async.rate_limit",
+      "type": "multi_choice",
+      "question": "下面哪些算法可以用作限流策略？",
+      "options": [
+        "固定窗口计数",
+        "滑动窗口计数",
+        "令牌桶",
+        "漏桶",
+        "冒泡排序"
+      ],
+      "answer": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "explanation": "前四种均是经典限流算法；冒泡排序是排序算法，与限流无关。",
+      "error_tag": "概念混淆",
+      "variant_group": "rate_limit_algorithms"
+    },
+    {
+      "kp": "py.async.rate_limit",
+      "type": "fill_blank",
+      "question": "在 asyncio 中要把同时运行的协程数量限制为 n，最直接的做法是创建一个 asyncio.______(n)，并在每个协程进入临界区前 await 获取、退出时释放。（填该原语类名）",
+      "options": [],
+      "answer": [
+        "Semaphore",
+        "asyncio.Semaphore",
+        "BoundedSemaphore",
+        "asyncio.BoundedSemaphore"
+      ],
+      "explanation": "Semaphore 通过计数限制并发进入数量；BoundedSemaphore 是其加强版，能检测多余 release。二者都可实现并发上限。",
+      "error_tag": "记忆缺失",
+      "variant_group": "async_semaphore_usage"
+    },
+    {
+      "kp": "py.async.rate_limit",
+      "type": "fill_blank",
+      "question": "滑动窗口限流相比固定窗口限流，主要解决了后者的______问题。（用一句话描述）",
+      "options": [],
+      "answer": [
+        "窗口边界处的流量突刺",
+        "边界突发",
+        "在窗口切换瞬间可能出现两倍流量",
+        "固定窗口边界导致的双倍放行"
+      ],
+      "explanation": "固定窗口在窗口边界两侧可能各放行一次完整配额，导致瞬时流量翻倍；滑动窗口以「最近 N 秒」为界，避免了这种边界突刺。",
+      "error_tag": "概念混淆",
+      "variant_group": "rate_limit_window_type"
+    },
+    {
+      "kp": "py.async.rate_limit",
+      "type": "fill_blank",
+      "question": "在分布式服务中做全局限流，进程内的 asyncio.Semaphore 不再适用，通常需要借助______这类共享存储来维护全局计数或令牌。",
+      "options": [],
+      "answer": [
+        "Redis",
+        "redis",
+        "集中式缓存/存储",
+        "共享存储"
+      ],
+      "explanation": "Redis 提供了原子计数、过期和 Lua 脚本能力，是分布式限流的常见选择；任何能提供原子共享状态的存储也可。",
+      "error_tag": "概念混淆",
+      "variant_group": "rate_limit_distributed"
+    },
+    {
+      "kp": "py.async.rate_limit",
+      "type": "code_reading",
+      "question": "阅读下面代码，说明程序会打印多少次 'go' 以及在什么情况下会阻塞：\n\nimport asyncio\n\nasync def worker(sem, i):\n    async with sem:\n        print('go', i)\n        await asyncio.sleep(1)\n\nasync def main():\n    sem = asyncio.Semaphore(2)\n    await asyncio.gather(*(worker(sem, i) for i in range(5)))\n\nasyncio.run(main())",
+      "options": [],
+      "answer": "会打印 5 次 'go'；由于信号量初始为 2，任意时刻最多两个 worker 处于 async with 内部，其余的 worker 会在 await acquire()（async with 进入）处阻塞，直到前面的 worker 离开 async with 释放信号量为止。所以输出整体是分批放行的，但次数固定为 5 次。",
+      "explanation": "async with sem 在进入时 await acquire，退出时 release。Semaphore(2) 限定同时进入临界区的最多 2 个协程，其余挂起等待，因此总打印次数仍为 5。",
+      "error_tag": "边界错误",
+      "variant_group": "async_semaphore_usage"
+    },
+    {
+      "kp": "py.async.rate_limit",
+      "type": "code_reading",
+      "question": "阅读下面代码，指出它在限流意义上有什么缺陷：\n\nsem = asyncio.Semaphore(5)\n\nasync def limited(fn):\n    if sem._value > 0:\n        await sem.acquire()\n        try:\n            return await fn()\n        finally:\n            sem.release()\n    else:\n        return None",
+      "options": [],
+      "answer": "该代码直接读取信号量内部私有属性 _value 来判断是否放行，属于依赖实现细节的脆弱写法；且「先判断再 acquire」不是原子操作，多个协程可能同时看到 _value>0 而都尝试 acquire，导致部分协程被迫等待或因分支判断失误被直接拒绝。正确做法是直接 await sem.acquire()（或 async with sem），由 Semaphore 本身来排队决定放行顺序，并通过超时/取消机制处理等待过久的情况。",
+      "explanation": "检查 _value 不是原子操作，且在协程间共享状态下会产生竞态。Semaphore 的 acquire 本身就是排队原语，应直接使用，不要读取私有属性。",
+      "error_tag": "边界错误",
+      "variant_group": "async_semaphore_usage"
+    },
+    {
+      "kp": "py.async.rate_limit",
+      "type": "scenario",
+      "question": "场景：你负责一个基于 asyncio 的爬虫服务，需要并发请求上千个外部接口。原先用 asyncio.gather 一把发起所有请求，结果对方服务频繁返回 429。要求在保持吞吐的前提下，既能限制瞬时并发，又能控制每秒请求数，并处理超时与重试。请给出你的设计思路。",
+      "options": [],
+      "answer": null,
+      "explanation": "典型的异步限流设计题。应结合并发信号量限制同时进行的请求数，用令牌桶/滑动窗口控制每秒放行数，并针对 429、超时设定退避重试与并发上限，避免对端压力过大。",
+      "error_tag": "概念混淆",
+      "variant_group": "rate_limit_design",
+      "required_keywords": [
+        "限流",
+        "重试",
+        "并发",
+        "异步"
+      ]
+    },
+    {
+      "kp": "py.async.rate_limit",
+      "type": "single_choice",
+      "question": "关于令牌桶（Token Bucket）算法，下面描述正确的是？",
+      "options": [
+        "桶满时新令牌直接丢弃，因此无法应对突发流量",
+        "令牌以固定速率生成，桶有容量上限，请求需先取到令牌才被放行，因此允许一定程度的突发",
+        "令牌桶必须配合信号量使用，否则无法实现",
+        "令牌桶只统计请求总数，不关心时间"
+      ],
+      "answer": 1,
+      "explanation": "令牌桶以固定速率补充令牌，桶容量决定了允许的最大突发量。桶满时多余令牌丢弃（不是请求丢弃），请求取不到令牌时才被限流。",
+      "error_tag": "概念混淆",
+      "variant_group": "rate_limit_token_bucket"
+    },
+    {
+      "kp": "py.async.rate_limit",
+      "type": "scenario",
+      "question": "场景：线上服务由 8 个进程组成，每个进程内用 asyncio.Semaphore(100) 限制同时处理的任务数。压测发现对外部 API 的瞬时并发达到了 800，超过了对方限定的 200。请分析原因并给出修复方向。",
+      "options": [],
+      "answer": null,
+      "explanation": "asyncio.Semaphore 只在单个事件循环/进程内计数，8 个进程各自有 100 的配额，合起来就是 800。要保证全局 200，需要集中式限流（如基于 Redis 的原子计数或令牌桶）或网关层统一限流。",
+      "error_tag": "概念混淆",
+      "variant_group": "rate_limit_distributed",
+      "required_keywords": [
+        "asyncio.Semaphore",
+        "Redis",
+        "限流"
+      ]
+    },
+    {
+      "kp": "py.async.rate_limit",
+      "type": "scenario",
+      "question": "场景：某个使用令牌桶限流的异步服务，压测时发现当流量突然增大时，短时间内容许了远超平均速率的请求，导致下游被打挂。请解释为什么，并给出改进建议。",
+      "options": [],
+      "answer": null,
+      "explanation": "令牌桶在空闲期会积累令牌，桶满时一次性放行一批请求，这是设计使然。若不允许突发，应调小桶容量，或改用漏桶算法以恒定速率输出，并辅以并发上限防止下游瞬时过载。",
+      "error_tag": "概念混淆",
+      "variant_group": "rate_limit_token_bucket",
+      "required_keywords": [
+        "令牌桶",
+        "空闲期",
+        "积累令牌",
+        "桶容量",
+        "漏桶算法"
+      ]
+    },
+    {
+      "kp": "py.async.rate_limit",
+      "type": "single_choice",
+      "question": "在使用 asyncio.Semaphore 限流时，为什么要用 async with 而不是在 acquire 之后忘记 release？",
+      "options": [
+        "async with 会自动调用 acquire 和 release，即使协程抛异常也能正确释放计数器",
+        "async with 比 acquire 更快",
+        "acquire 是同步方法，不能单独使用",
+        "release 只能被事件循环调用"
+      ],
+      "answer": 0,
+      "explanation": "async with sem 等价于 try/finally 中 acquire + release。手动管理容易在异常路径上漏掉 release，导致计数器永远无法归还，后续协程全部阻塞。",
+      "error_tag": "边界错误",
+      "variant_group": "async_semaphore_usage"
+    },
+    {
+      "kp": "py.async.rate_limit",
+      "type": "single_choice",
+      "question": "关于 asyncio.Semaphore 与 asyncio.BoundedSemaphore 的区别，正确的是？",
+      "options": [
+        "两者完全一样，只是名字不同",
+        "BoundedSemaphore 在 release 次数超过初始值时抛 ValueError，能及早发现漏 release 的 bug",
+        "Semaphore 只能用于多进程，BoundedSemaphore 用于多线程",
+        "BoundedSemaphore 不支持 async with"
+      ],
+      "answer": 1,
+      "explanation": "BoundedSemaphore 会检查计数是否超过初始值，超过则抛 ValueError，有助于暴露过度 release 的错误；普通 Semaphore 不会检查。",
+      "error_tag": "记忆缺失",
+      "variant_group": "async_semaphore_usage"
+    },
+    {
+      "kp": "py.async.rate_limit",
+      "type": "single_choice",
+      "question": "下面代码想限制并发为 3，哪一处会导致限流失效？\n\nsem = asyncio.Semaphore(3)\nasync def task():\n    sem.acquire()\n    try:\n        await do_work()\n    finally:\n        sem.release()",
+      "options": [
+        "Semaphore(3) 参数写错",
+        "sem.acquire() 没有 await，返回的是协程对象而没真正获取信号量",
+        "finally 中不应 release",
+        "do_work 必须是同步函数"
+      ],
+      "answer": 1,
+      "explanation": "asyncio.Semaphore.acquire 是协程方法，必须 await sem.acquire()。少写 await 时协程未执行，信号量计数不会减少，限流形同虚设。",
+      "error_tag": "边界错误",
+      "variant_group": "async_semaphore_usage"
+    },
+    {
+      "kp": "py.async.rate_limit",
+      "type": "single_choice",
+      "question": "当限流器触发、协程需要等待时，下面哪种做法更适合高并发服务而非直接抛异常拒绝？",
+      "options": [
+        "在 while 循环里忙等（busy loop）",
+        "await asyncio.sleep(固定小间隔) 后重试",
+        "让协程 await 一个由限流器控制的 Future/Semaphore，由限流器在令牌可用时唤醒",
+        "直接 sys.exit 终止进程"
+      ],
+      "answer": 2,
+      "explanation": "忙等浪费 CPU；固定 sleep 会造成不必要的延迟且抖动大。让协程挂起等待令牌发放（如通过 Semaphore 或 Future 通知）是最贴合事件循环模型的做法。",
+      "error_tag": "概念混淆",
+      "variant_group": "async_rate_limit_wait"
+    },
+    {
+      "kp": "py.async.rate_limit",
+      "type": "single_choice",
+      "question": "关于「漏桶（Leaky Bucket）」算法，下面说法正确的是？",
+      "options": [
+        "请求以任意速率进入桶，桶以固定速率漏出，因此输出速率恒定，不产生突发",
+        "桶的容量必须为 1",
+        "漏桶与令牌桶完全等价",
+        "漏桶只能用于多进程限流"
+      ],
+      "answer": 0,
+      "explanation": "漏桶把请求排队，以恒定速率处理，输出平滑；令牌桶允许在桶容量内突发。两者行为不同。",
+      "error_tag": "概念混淆",
+      "variant_group": "rate_limit_leaky_bucket"
+    },
+    {
+      "kp": "py.async.rate_limit",
+      "type": "single_choice",
+      "question": "在多进程部署的服务中，仅用进程内的 asyncio.Semaphore 做限流会出现什么问题？",
+      "options": [
+        "Semaphore 在多进程下会报错",
+        "每个进程各自计数，整体限流阈值被放大为 N 倍，无法保证全局速率",
+        "Semaphore 会自动跨进程同步",
+        "没有任何问题"
+      ],
+      "answer": 1,
+      "explanation": "asyncio.Semaphore 只在本事件循环/进程内有效。多进程或多实例时各自统计，全局流量是进程数倍。全局限流需要共享存储（如 Redis）或集中式限流服务。",
+      "error_tag": "概念混淆",
+      "variant_group": "rate_limit_distributed"
+    },
+    {
+      "kp": "py.async.rate_limit",
+      "type": "single_choice",
+      "question": "关于异步限流的「令牌补充」实现，下面哪种方式是符合 asyncio 事件循环模型的？",
+      "options": [
+        "启动一个后台协程，周期性 await asyncio.sleep(interval) 后往桶里补充令牌并唤醒等待者",
+        "用 threading.Timer 在新线程里补充令牌",
+        "用忙循环在主协程里不断检查时间",
+        "用 signal.alarm 定时触发"
+      ],
+      "answer": 0,
+      "explanation": "异步环境里应用后台协程配合 asyncio.sleep 定时补充令牌，不会阻塞事件循环。新线程或忙循环都会破坏异步模型或浪费资源。",
+      "error_tag": "概念混淆",
+      "variant_group": "rate_limit_token_refill"
+    }
+  ]
+}

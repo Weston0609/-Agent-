@@ -1,0 +1,41 @@
+请为下列知识点生成 {{ n }} 道测验题，用于随堂测验。
+
+题型配比（务必混合，不要全部出成单选）：
+- 约 60% 单项选择题（single_choice）
+- 约 15% 多项选择题（multi_choice，2 个及以上正确项）
+- 约 15% 填空/代码阅读题（fill_blank 或 code_reading）
+- 约 10% 场景分析题（scenario，一段真实工程场景，问怎么做/为什么）
+
+各题型的 JSON 结构（type 字段必须与之一致）：
+- single_choice: {"type":"single_choice","stem":str,"options":[4 个 str],
+                  "answer":int(正确项下标 0..3)}
+- multi_choice:  {"type":"multi_choice","stem":str,"options":[4~5 个 str],
+                  "answer":[正确项下标 int 数组，至少 2 个]}
+- fill_blank:    {"type":"fill_blank","stem":str,
+                  "answer":[可接受的答案字符串数组，含常见等价写法]}
+- code_reading:  {"type":"code_reading","stem":"一段代码 + 问输出/问为什么",
+                  "answer":str(标准答案文字)}
+- scenario:      {"type":"scenario","stem":str(工程场景提问),
+                  "required_keywords":[必须出现在正确答案里的关键词数组]}
+
+每题都还必须带：
+- "explanation": 解析，讲清为什么（不能为空）
+- "error_tag": 错误类型标签，如「概念混淆」「边界错误」「记忆缺失」
+- "variant_group": 变体组名（同一考点的题归到一组）
+
+要求：
+- 题干考察理解而非死记硬背，尽量给一段代码或场景。
+- 正确项与干扰项都要有依据（干扰项是常见误解，不能胡编）。
+- 输出 JSON 数组，不要输出 JSON 以外的任何文字。
+
+【禁止编造 API —— 最重要】
+- 下面的「知识点 ID」是本教学系统的内部编号（形如 `py.env.install`），**不是** Python
+  的模块名、类名或函数名。绝不要把它当成 API 来引用。
+- **严禁**把 ID 拼成 `py.env.install()`、`py.env.install.install()` 这类调用形式，
+  也不要写「在 py.env.install 模块中」「xxx() 函数的返回值是」这种把 ID 当代码的题干。
+- 题干里只允许出现**真实存在**的 Python 语法、标准库或第三方库 API；拿不准就不要写
+  具体函数名，改用概念描述（例如「安装包时」「创建虚拟环境时」）。
+- 需要指代本知识点时，用自然语言描述它的主题，不要写 ID。
+
+知识点 ID（仅作标识，不是代码）：{{ kp_id }}
+知识点主题：{{ title }}

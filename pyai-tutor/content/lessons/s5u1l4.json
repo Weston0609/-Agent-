@@ -1,0 +1,631 @@
+{
+  "id": "s5u1l4",
+  "title": "s5u1l4",
+  "kps": [
+    "py.web.middleware",
+    "py.web.auth_jwt"
+  ],
+  "theory": "## py.web.middleware\n\n# py.web.middleware：Web 中间件教学讲义\n\n## 一句话直觉\n\n中间件（middleware）就是「横切在请求与响应之间的处理流水线」——你的业务代码只关心「谁请求了什么」，而认证、日志、限流、CORS 等公共逻辑都可以放到中间件里，让每个请求自动经过它们。\n\n---\n\n## 1. 为什么需要中间件：从「每个视图手写一遍」说起\n\n假设你写了一个最朴素的 Web 应用。每写一个接口，你都要：记录日志、检查登录、加上 CORS 头、捕获异常。如果每个函数都复制这些代码，维护就是灾难。\n\n中间件把这条「请求进来 → 处理 → 响应出去」的公共通道抽象成一个可插拔的函数。在 Python 生态里，最主流的两类中间件模型是：\n\n- **WSGI 中间件**：以 Flask / Django 传统模式为代表，中间件是一个 `callable(environ, start_response)`。\n- **ASGI 中间件**：以 FastAPI / Starlette 为代表，中间件是一个 `async def (scope, receive, send)`。\n\n先用一个最小的 WSGI 例子感受「中间件 = 包在应用外层的函数」。\n\n```python\n# 一个最朴素的 WSGI 应用：接收 environ，返回响应\n# WSGI 规定应用必须是 callable(environ, start_response)\ndef app(environ, start_response):\n    start_response(\"200 OK\", [(\"Content-Type\", \"text/plain\")])\n    return [b\"Hello, world\"]\n\n# 手写一个中间件：在应用外面套一层日志\n# 注意它接收一个 app，返回一个新的 app（装饰器模式）\ndef logging_middleware(inner_app):\n    def wrapped(environ, start_response):\n        print(f\"[REQ] {environ['REQUEST_METHOD']} {environ['PATH_INFO']}\")\n        return inner_app(environ, start_response)\n    return wrapped\n\n# 组合：wrapped_app 才是最终运行的应用\nwrapped_app = logging_middleware(app)\n\n# 用标准库 wsgi 简单跑一下（Python 3 内置 wsgiref）\nfrom wsgiref.simple_server import make_server\n\nwith make_server(\"\", 8000, wrapped_app) as httpd:\n    print(\"Serving on http://localhost:8000\")\n    httpd.handle_request()  # 只处理一个请求，便于演示\n```\n\n**关键结论**：中间件本质是「高阶函数」——输入一个 app，输出一个增强后的 app。多个中间件可以层层嵌套，形成「洋葱模型」。\n\n---\n\n## 2. 洋葱模型：请求下行，响应上行\n\n当你有多个中间件时，执行顺序是这样的：\n\n```\nClient → MW1 → MW2 → MW3 → 你的视图\nClient ← MW1 ← MW2 ← MW3 ← 你的视图\n```\n\n请求先经过 MW1、MW2、MW3 的**前置逻辑**，到达视图；响应再按相反顺序经过 MW3、MW2、MW1 的**后置逻辑**。理解这个「套娃」顺序，是排查中间件 bug 的第一把钥匙。\n\n```python\n# 演示洋葱模型：用嵌套函数模拟三层中间件\ndef make_mw(name):\n    def middleware(inner):\n        def wrapped(req):\n            print(f\"-> {name} 进入\")       # 请求下行阶段\n            resp = inner(req)               # 调用内层\n            print(f\"<- {name} 离开\")       # 响应上行阶段\n            return resp\n        return wrapped\n    return middleware\n\n@make_mw(\"MW1\")\n@make_mw(\"MW2\")\n@make_mw(\"MW3\")\ndef view(req):\n    print(\"== 到达视图 ==\")\n    return \"ok\"\n\nview(\"请求\")\n# 输出顺序:\n# -> MW1 进入\n# -> MW2 进入\n# -> MW3 进入\n# == 到达视图 ==\n# <- MW3 离开\n# <- MW2 离开\n# <- MW1 离开\n```\n\n**关键结论**：越靠外的中间件越早看到请求、越晚看到响应。想做「全局计时」的中间件要放在最外层；想做「异常兜底」的中间件也应尽量放外层。\n\n---\n\n## 3. ASGI 中间件：异步时代的现代写法\n\nFastAPI、Starlette、Django 3+ 都基于 ASGI 协议。ASGI 中间件是 `async def (scope, receive, send)`，其中 `scope` 描述连接信息，`receive` 是接收消息的异步函数，`send` 是发送消息的异步函数。\n\n```python\n# 一个 ASGI 中间件的最小骨架（不依赖任何框架）\nimport asyncio\n\n# 真正的应用：发一条 http.response.start 和一条 http.response.body\nasync def app(scope, receive, send):\n    assert scope[\"type\"] == \"http\"\n    await send({\n        \"type\": \"http.response.start\",\n        \"status\": 200,\n        \"headers\": [(b\"content-type\", b\"text/plain\")],\n    })\n    await send({\n        \"type\": \"http.response.body\",\n        \"body\": b\"Hello ASGI\",\n    })\n\n# 中间件：给每个响应加一个自定义头 X-Elapsed\n# 并在应用执行前后统计耗时\ndef timing_middleware(inner_app):\n    async def wrapped(scope, receive, send):\n        if scope[\"type\"] != \"http\":\n            return await inner_app(scope, receive, send)\n\n        import time\n        start = time.perf_counter()\n\n        # 劫持 send，在响应开始前插入自定义头\n        async def send_wrapper(message):\n            if message[\"type\"] == \"http.response.start\":\n                headers = list(message.get(\"headers\", []))\n                elapsed = time.perf_counter() - start\n                headers.append((b\"x-elapsed\", f\"{elapsed:.4f}\".encode()))\n                message = {**message, \"headers\": headers}\n            await send(message)\n\n        await inner_app(scope, receive, send_wrapper)\n\n    return wrapped\n\n# 用 uvicorn 运行（pip install uvicorn）\n# 保存为 demo.py，然后执行: uvicorn demo:timing_middleware(app) 需要包一层\n# 更简单的方式：直接用 asyncio 手动驱动一次，便于验证\nasync def _manual_test():\n    sent = []\n    async def send(msg):\n        sent.append(msg)\n    async def receive():\n        return {\"type\": \"http.request\"}\n\n    scope = {\"type\": \"http\", \"method\": \"GET\", \"path\": \"/\"}\n    await timing_middleware(app)(scope, receive, send)\n    print(sent)\n\nasyncio.run(_manual_test())\n```\n\n**关键结论**：ASGI 中间件通过「包装 send / receive」来改写通信过程。这一思想在 FastAPI 中表现为 `@app.middleware(\"http\")`，在 Starlette 中表现为 `BaseHTTPMiddleware`。\n\n---\n\n## 4. 在真实框架里用中间件：FastAPI 快速上手\n\nFastAPI 直接提供了 `@app.middleware(\"http\")` 装饰器，让你不用手写 ASGI 细节。\n\n```python\n# 需要: pip install fastapi uvicorn\nimport time\nfrom fastapi import FastAPI, Request\n\napp = FastAPI()\n\n# 一个记录耗时的中间件，给每个响应加上 X-Process-Time 头\n@app.middleware(\"http\")\nasync def add_process_time_header(request: Request, call_next):\n    start = time.perf_counter()\n    response = await call_next(request)   # 调用后续中间件或视图\n    elapsed = time.perf_counter() - start\n    response.headers[\"X-Process-Time\"] = f\"{elapsed:.4f}\"\n    return response\n\n@app.get(\"/\")\nasync def read_root():\n    return {\"message\": \"Hello\"}\n\n# 运行: uvicorn <文件名>:app --reload\n# 然后 curl -i http://127.0.0.1:8000/ 可以看到 X-Process-Time 头\n```\n\n**关键结论**：框架级中间件 = 帮你把 ASGI 的「包装 send/receive」变成更友好的 `(request, call_next)` 接口。你只需关心 `call_next` 前后放什么逻辑。\n\n---\n\n## 5. 中间件的工程实践：顺序、异常与副作用\n\n工程中，中间件最常见的用途有四类：\n\n1. **日志 / 可观测性**：记录耗时、状态码、请求 ID。\n2. **认证鉴权**：解析 token，注入 `request.state.user`。\n3. **跨域（CORS）**：统一加 `Access-Control-Allow-*` 头。\n4. **限流 / 熔断**：在进入业务前拦截。\n\n顺序非常重要。比如认证中间件必须比业务路由先执行（放外层）；CORS 中间件通常也应该靠外层，否则错误响应不会被加上 CORS 头。\n\n```python\n# FastAPI 中注册多个中间件：注册顺序决定洋葱顺序\n# 先 add_middleware 的在外层，后 add_middleware 的在内层\n# from fastapi.middleware.cors import CORSMiddleware\n# app.add_middleware(CORSMiddleware, allow_origins=[\"*\"])\n# app.add_middleware(OtherMiddleware)   # 这层在内侧\n```\n\n**关键结论**：中间件执行顺序 = 注册顺序；调试时如果发现响应头缺失或异常没被兜住，先检查「洋葱」的层序。\n\n---\n\n## 动手练习\n\n**任务**：写一个 FastAPI 应用，实现一个「请求 ID」中间件。\n\n要求：\n1. 每个请求进入时生成一个 UUID（或递增序号），写入 `request.state.request_id`。\n2. 在响应头中加入 `X-Request-ID`。\n3. 在中间件里 `print` 一行日志：`[request_id] METHOD path`。\n4. 定义两个接口：`GET /hello` 和 `GET /bye`，各自返回带 `request_id` 的 JSON。\n5. 用 `curl -i` 验证：响应头里有 `X-Request-ID`，且 JSON 里的 id 与响应头一致。\n\n提示：在中间件里用 `request.state.request_id = str(uuid.uuid4())`，视图函数通过 `request: Request` 参数读取。\n\n进阶（可选）：再加一个「限流中间件」，对同一 IP 每秒最多 2 次请求，超出返回 429。\n\n## py.web.auth_jwt\n\n# py.web.auth_jwt —— 从零理解 Web 身份认证与 JWT\n\n> **一句话直觉**：Web 服务器天生“健忘”，每个请求都是陌生人；JWT（JSON Web Token，JSON 网络令牌）就是服务器发给客户端的一张“防伪身份证”，客户端每次访问出示它，服务器不用查数据库也能立刻验证“你是谁、你能干什么、这张证什么时候过期”。\n\n学完本节，你将能：说清认证（Authentication）与授权（Authorization）的区别；理解 JWT 的三段结构；用 Python 独立签发和校验 Token；并知道工程中必须避开的坑。\n\n---\n\n## 1. 为什么需要 JWT：HTTP 是“无状态”的\n\nHTTP（HyperText Transfer Protocol，超文本传输协议）是**无状态（stateless）**协议：服务器收到第 2 个请求时，默认完全不记得第 1 个请求是谁发的。但登录后的页面显然需要“记住我”，于是有两种主流方案：\n\n- **Session（会话）+ Cookie**：服务器把登录状态存在自己的内存/数据库里，只给客户端一个随机 ID（Session ID）。缺点是服务器要存状态，多台机器要共享存储。\n- **Token（令牌）**：服务器把“身份信息”本身**签名后交给客户端保管**，客户端每次带上它。服务器不存状态，只要用密钥验证签名即可——这就是 JWT 的思路。\n\nJWT 的核心价值：**无状态、可自包含（self-contained）、跨服务易传递**。代价是：一旦签发，在过期前很难主动作废（后面会讲缓解方案）。\n\n---\n\n## 2. 认证 vs 授权，以及 JWT 的三段结构\n\n- **认证（Authentication，你是谁）**：验证用户名密码、验签 Token。\n- **授权（Authorization，你能干什么）**：检查 Token 里的角色/权限（scope、role）。\n\n一个 JWT 是形如 `xxxxx.yyyyy.zzzzz` 的字符串，由**三个 Base64URL 编码段**用点号拼接：\n\n1. **Header（头部）**：说明签名算法，如 `{\"alg\": \"HS256\", \"typ\": \"JWT\"}`。\n2. **Payload（载荷）**：存放声明（claims），如 `sub`（主体）、`exp`（过期时间）、`iat`（签发时间）以及自定义字段。\n3. **Signature（签名）**：用密钥对 `header.payload` 做 HMAC（Hash-based Message Authentication Code，基于哈希的消息认证码）或 RSA/ECDSA 签名。\n\n⚠️ **关键认知**：Header 和 Payload 只是 Base64URL 编码，**不是加密**！任何人都能解开看到内容。JWT 保证的是**完整性（没被篡改）**，不是**机密性（不被看见）**。\n\n---\n\n## 3. 用 Python 亲手签发与校验一个 JWT\n\n工业界标准库是 `PyJWT`：`pip install PyJWT`。下面代码演示 HS256 的完整流程。\n\n```python\nimport jwt  # 需要先 pip install PyJWT\nimport time\n\nSECRET = \"dev-secret-do-not-use-in-prod\"  # 生产环境请从环境变量/密钥管理服务读取\n\n# 1) 签发 Token\ndef create_token(user_id: str) -> str:\n    payload = {\n        \"sub\": user_id,          # subject：这个 token 代表谁\n        \"role\": \"admin\",         # 自定义声明：授权信息\n        \"iat\": int(time.time()), # issued at：签发时间\n        \"exp\": int(time.time()) + 3600,  # expiration：1 小时后过期\n    }\n    # 用密钥 + HS256 算法签名\n    return jwt.encode(payload, SECRET, algorithm=\"HS256\")\n\n# 2) 校验 Token\ndef verify_token(token: str) -> dict | None:\n    try:\n        # decode 会自动校验签名与 exp，失败会抛异常\n        return jwt.decode(token, SECRET, algorithms=[\"HS256\"])\n    except jwt.ExpiredSignatureError:\n        print(\"Token 已过期\")\n    except jwt.InvalidTokenError as e:\n        print(f\"Token 非法: {e}\")\n    return None\n\ntoken = create_token(\"user-42\")\nprint(\"Token:\", token)\nprint(\"解出的 payload:\", verify_token(token))\n\n# 篡改一个字符，签名立刻失效\nbad = token[:-1] + (\"a\" if token[-1] != \"a\" else \"b\")\nprint(\"篡改后:\", verify_token(bad))\n```\n\n跑一遍你会看到：正常 Token 能解出 payload；篡改后 `InvalidTokenError` 被触发。这验证了“防伪身份证”的比喻——**改动一个字，防伪标记就不匹配**。\n\n---\n\n## 4. 在 Web 框架中使用：从请求头取出 Token\n\n真实场景中，客户端通常把 Token 放在 HTTP 头：`Authorization: Bearer <token>`。下面用 FastAPI 风格演示一个最小中间件。\n\n```python\n# 伪代码风格，示范拦截与校验流程\ndef get_current_user(request):\n    auth = request.headers.get(\"Authorization\", \"\")\n    if not auth.startswith(\"Bearer \"):\n        raise Exception(\"缺少认证头\")\n    token = auth.removeprefix(\"Bearer \")\n    payload = verify_token(token)   # 复用上一节的函数\n    if payload is None:\n        raise Exception(\"未认证\")\n    return payload\n```\n\n**工程要点**：\n- 用 `algorithms=[\"HS256\"]` **白名单**，避免 `alg=none` 攻击（攻击者把算法改成 none 绕过签名）。\n- 密钥**不要硬编码**，放在环境变量或密钥管理服务。\n- 生产多服务建议用 **RS256**（RSA 非对称签名），签名私钥只有认证服务持有，其他服务用公钥验签。\n\n---\n\n## 5. 进阶：无状态带来的三个必修课\n\n1. **过期与刷新**：`exp` 要短（如 15 分钟），配合 **Refresh Token（刷新令牌）** 单独换新，兼顾安全与体验。\n2. **注销（unable to revoke）难题**：JWT 撤不回来。解决方案：维护一个短生命周期的**黑名单（blocklist）**，或把关键状态放进服务端 Redis 并以 jti（JWT ID）为键。\n3. **不要在 Payload 放敏感数据**：它只是 Base64 编码，密码、身份证号会被任何人读到。\n\n---\n\n## 动手练习\n\n**任务**：写一个 `jwt_demo.py`，包含：\n\n1. `create_token(user_id, role, ttl=60)`：`ttl` 为有效期秒数。\n2. `verify_token(token)`：校验签名、过期时间，返回 payload 或 `None`。\n3. 用 `time.sleep(2)` 签发一个 `ttl=1` 的 Token，再验证，断言它已过期（`assert verify_token(t) is None`）。\n4. **加分项**：把 SECRET 从 `os.environ[\"JWT_SECRET\"]` 读取；再加一个字段 `scope`，写一个 `require_role(payload, role)` 返回 bool。\n\n完成后你在本机就能完整跑通“签发 → 传输 → 校验 → 过期”的闭环。\n\n> 小提醒：`pip install PyJWT` 装的包名是小写 `jwt`，不要和 Django 的 `djangorestframework-simplejwt` 混淆。\n",
+  "quiz": [
+    {
+      "kp": "py.web.middleware",
+      "type": "single_choice",
+      "question": "在一个基于 ASGI 的 Web 框架中，你想要为每个进入的请求记录处理耗时。以下哪种做法最符合「Web 中间件」的思想？",
+      "options": [
+        "在处理函数内部，每条业务逻辑前后都手动记录一次时间",
+        "编写一个可插拔的组件，包裹后续的请求处理流程，在处理前后记录时间，并可选择放行或拦截请求",
+        "在服务器启动脚本里注册一个全局变量，把开始时间写入文件供处理函数读取",
+        "为每个 URL 路由单独注册一个装饰器，在每个视图函数里重复相同的计时代码"
+      ],
+      "answer": 1,
+      "explanation": "中间件的核心是「包裹并串联请求处理流程」的可插拔组件，可以在请求进入视图前后统一插入横切逻辑；其他选项要么重复代码、要么破坏分层，不属于中间件式做法。",
+      "error_tag": "中间件概念混淆",
+      "variant_group": "py.web.middleware-context"
+    },
+    {
+      "kp": "py.web.middleware",
+      "type": "single_choice",
+      "question": "在一个 Web 框架的中间件链中，中间件 A 在调用下游之前打印“A 前”，调用下游之后打印“A 后”；中间件 B 同样。请求最终到达视图。如果中间件链按 A→B 的顺序注册，日志顺序最可能是？",
+      "options": [
+        "A 前、A 后、B 前、B 后",
+        "B 前、B 后、A 前、A 后",
+        "A 前、B 前、B 后、A 后",
+        "A 前、B 前、A 后、B 后"
+      ],
+      "answer": 2,
+      "explanation": "中间件采用包裹式调用，进入时按注册顺序执行「前」逻辑，到达视图后按相反顺序执行「后」逻辑，因此是 A 前→B 前→B 后→A 后。",
+      "error_tag": "调用顺序理解错误",
+      "variant_group": "py.web.middleware-order"
+    },
+    {
+      "kp": "py.web.middleware",
+      "type": "single_choice",
+      "question": "在 Web 应用中，CORS 相关响应头需要在所有 API 响应上统一添加。最合适放置这段逻辑的位置通常是？",
+      "options": [
+        "每个视图函数内部手动设置一次",
+        "在中间件中统一为经过的响应添加 CORS 头",
+        "在前端 JavaScript 中拦截响应后添加",
+        "在数据库触发器中为查询结果附加 CORS 信息"
+      ],
+      "answer": 1,
+      "explanation": "CORS 是典型的横切关注点，中间件统一处理可避免每个视图重复；视图重复易漏，前端无法修改服务端响应头，数据库触发器与此无关。",
+      "error_tag": "横切关注点处理位置错误",
+      "variant_group": "py.web.middleware-cors"
+    },
+    {
+      "kp": "py.web.middleware",
+      "type": "single_choice",
+      "question": "关于中间件的「前处理」与「后处理」，下列说法正确的是？",
+      "options": [
+        "一个中间件只能有前处理，不能有后处理",
+        "前处理在调用下游之前执行，后处理在调用下游返回之后执行",
+        "后处理必须在视图函数内部编写，不能出现在中间件里",
+        "前处理和后处理必须分别写在两个不同的中间件中"
+      ],
+      "answer": 1,
+      "explanation": "包裹式中间件天然支持在调用下游前后分别执行逻辑；A、C、D 都是对中间件能力的错误限制。",
+      "error_tag": "前后处理概念混淆",
+      "variant_group": "py.web.middleware-pre-post"
+    },
+    {
+      "kp": "py.web.middleware",
+      "type": "single_choice",
+      "question": "某中间件使用全局可变列表缓存所有请求的 IP，且未做并发保护。上线后该列表频繁被并发修改。这最可能导致？",
+      "options": [
+        "数据竞争导致缓存内容错乱或程序异常",
+        "Python 解释器自动将列表改为线程安全",
+        "请求会被自动串行化执行",
+        "网络带宽自动翻倍"
+      ],
+      "answer": 0,
+      "explanation": "中间件共享状态需考虑并发安全，未加锁的可变结构在并发下会出现竞争；Python 不会自动保护自定义列表的复合操作，也不保证请求串行化；带宽与题干无关。",
+      "error_tag": "并发安全意识不足",
+      "variant_group": "py.web.middleware-concurrency"
+    },
+    {
+      "kp": "py.web.middleware",
+      "type": "single_choice",
+      "question": "在为 Web 应用编写限流功能时，把限流逻辑放入中间件而非视图的主要好处是？",
+      "options": [
+        "能够统一拦截所有目标请求，避免在每个视图里重复编写限流代码",
+        "可以让限流完全绕过网络层，直接修改 TCP 协议",
+        "可以让限流逻辑运行在浏览器而不是服务器上",
+        "可以让限流结果自动写入数据库表结构"
+      ],
+      "answer": 0,
+      "explanation": "中间件的价值在于对目标请求统一生效，减少重复；限流仍在应用层、服务器侧完成，与 TCP、浏览器执行、修改数据库结构无关。",
+      "error_tag": "中间件收益理解偏差",
+      "variant_group": "py.web.middleware-rate-limit"
+    },
+    {
+      "kp": "py.web.middleware",
+      "type": "single_choice",
+      "question": "某中间件在调用下游后检查响应状态码，若为 404 则替换为统一的 JSON 错误体。关于此做法，下列说法正确的是？",
+      "options": [
+        "属于中间件的合法用途，因为它在响应阶段对统一路径的响应做了后处理",
+        "不合法，中间件只能修改请求，不能修改响应",
+        "不合法，404 必须在路由层拦截，中间件无法看到",
+        "不合法，因为状态码是只读的，任何层都无法改变"
+      ],
+      "answer": 0,
+      "explanation": "响应后处理中间件可以检查并修改响应状态码或响应体，用于统一错误格式；B、C、D 都是对响应修改能力的错误否定。",
+      "error_tag": "响应后处理能力误解",
+      "variant_group": "py.web.middleware-response"
+    },
+    {
+      "kp": "py.web.middleware",
+      "type": "single_choice",
+      "question": "关于中间件对请求和响应的处理时机，下列说法正确的是？",
+      "options": [
+        "请求阶段从链头到链尾，响应阶段从链尾到链头，形成包裹结构",
+        "请求阶段和响应阶段都按注册顺序从链头到链尾执行",
+        "请求阶段从链尾到链头，响应阶段也从链尾到链头执行",
+        "请求阶段和响应阶段没有固定方向，取决于视图函数"
+      ],
+      "answer": 0,
+      "explanation": "包裹式中间件链在进入请求时从外层到内层，响应返回时从内层到外层，因此请求与响应方向相反。",
+      "error_tag": "请求响应方向理解错误",
+      "variant_group": "py.web.middleware-order"
+    },
+    {
+      "kp": "py.web.middleware",
+      "type": "single_choice",
+      "question": "你希望为所有请求统一添加一个请求 ID，并在日志中输出该 ID。下列哪种设计最符合中间件思路？",
+      "options": [
+        "在每个视图函数开头生成 UUID 并打印日志",
+        "在中间件中为请求生成请求 ID，并把它放入请求上下文，供下游视图和日志使用",
+        "在前端页面的 JavaScript 中生成 ID，然后通过 Cookie 传给后端",
+        "在数据库中为每个请求插入一行，视图再从数据库读取该 ID"
+      ],
+      "answer": 1,
+      "explanation": "中间件适合集中生成请求级上下文（如请求 ID）并向下游透传；视图重复、前端生成不可信、依赖数据库读回增加耦合与开销，均不是首选。",
+      "error_tag": "上下文透传方案错误",
+      "variant_group": "py.web.middleware-context"
+    },
+    {
+      "kp": "py.web.middleware",
+      "type": "single_choice",
+      "question": "某框架中，中间件在调用下游时忘记把请求对象传下去（或使用了错误的参数），最可能的结果是？",
+      "options": [
+        "请求处理链断裂，下游中间件或视图无法正确获得请求，导致报错或行为异常",
+        "框架会自动补全参数，使用者无需关心",
+        "下游视图会自动改用上一个请求的数据继续运行",
+        "浏览器会自动重新发起一次请求"
+      ],
+      "answer": 0,
+      "explanation": "中间件链依赖正确传递请求/响应等对象，传参错误会破坏链式调用；框架不会替开发者补全，也不会复用旧请求或让浏览器自动重发。",
+      "error_tag": "链式调用传参错误",
+      "variant_group": "py.web.middleware-chain"
+    },
+    {
+      "kp": "py.web.middleware",
+      "type": "single_choice",
+      "question": "关于「中间件」与「装饰器」在 Web 开发中的关系，下列说法最恰当的是？",
+      "options": [
+        "两者完全等价，中间件必然由装饰器实现",
+        "两者都可用于横切逻辑，但中间件通常作用于整个请求处理链，装饰器通常作用于单个函数或视图",
+        "装饰器只能用于类，中间件只能用于函数",
+        "中间件在浏览器执行，装饰器在服务器执行"
+      ],
+      "answer": 1,
+      "explanation": "两者都是横切关注点的实现手段，但作用范围与机制不同；中间件作用于请求链，装饰器作用于被装饰对象，二者并不必然互相实现。",
+      "error_tag": "概念关系混淆",
+      "variant_group": "py.web.middleware-decorator"
+    },
+    {
+      "kp": "py.web.middleware",
+      "type": "single_choice",
+      "question": "某中间件在接收到请求时，将请求体（body）完整读入内存以便后续校验，但该接口可能上传大文件。这最可能带来的风险是？",
+      "options": [
+        "请求体被读取后无法再被下游读取，导致下游拿不到数据",
+        "中间件会自动把大文件上传到磁盘",
+        "服务器内存占用激增，甚至引发内存不足",
+        "框架会自动拒绝所有超过 1KB 的请求"
+      ],
+      "answer": 2,
+      "explanation": "把大请求体一次性放入内存会造成内存压力；A 是否可重复读取取决于具体框架与实现，并非必然；B、D 与题干行为无直接因果关系。",
+      "error_tag": "请求体处理风险忽视",
+      "variant_group": "py.web.middleware-body"
+    },
+    {
+      "kp": "py.web.middleware",
+      "type": "single_choice",
+      "question": "你写了一个请求日志中间件，但发现有些请求绕过了它。下列哪种情况最可能导致这种绕过？",
+      "options": [
+        "中间件在收到请求后只记录了 GET 请求，忽略了 POST 请求",
+        "中间件未在框架规定的注册位置挂载，或某些特殊路由/静态资源在中间件链之前就被处理",
+        "中间件里使用了 print 而不是 logging 模块",
+        "中间件把请求的 User-Agent 当作大小写敏感字段来处理"
+      ],
+      "answer": 1,
+      "explanation": "中间件只有被正确注册并处于请求处理链上才会生效；未挂载或某些路径在链路之前被提前处理都会导致绕过。选项 A 并非“绕过”，而是过滤逻辑；C、D 与是否执行无关。",
+      "error_tag": "生效条件理解错误",
+      "variant_group": "py.web.middleware-registration"
+    },
+    {
+      "kp": "py.web.middleware",
+      "type": "single_choice",
+      "question": "关于 Web 中间件与视图（处理函数）的职责划分，下列理解最恰当的是？",
+      "options": [
+        "中间件应该尽量包含业务逻辑，视图只负责返回模板",
+        "中间件适合处理认证、日志、CORS 等横切关注点，视图应聚焦于具体业务",
+        "中间件与视图职责完全相同，可以随意替换",
+        "中间件只能处理请求，不能影响响应内容"
+      ],
+      "answer": 1,
+      "explanation": "中间件的定位是处理跨多个视图的横切关注点（认证、日志、CORS、压缩等），视图聚焦业务逻辑；中间件也能处理后端返回的响应。",
+      "error_tag": "职责划分误解",
+      "variant_group": "py.web.middleware-responsibility"
+    },
+    {
+      "kp": "py.web.middleware",
+      "type": "single_choice",
+      "question": "某中间件在请求进入视图之前检查用户是否已登录。未登录时，它直接返回一个重定向响应，而不继续调用下游。这种中间件的行为称为？",
+      "options": [
+        "短路（提前拦截并返回响应，不再继续调用后续处理）",
+        "回滚（撤销已经执行的事务）",
+        "熔断（因错误率过高而暂停服务）",
+        "缓存穿透（请求绕过缓存直接打到后端）"
+      ],
+      "answer": 0,
+      "explanation": "中间件不调用下游而直接产生响应称为短路；回滚是事务概念，熔断是容错策略，缓存穿透是缓存场景，均不符合题干。",
+      "error_tag": "中间件行为术语混淆",
+      "variant_group": "py.web.middleware-short-circuit"
+    },
+    {
+      "kp": "py.web.middleware",
+      "type": "single_choice",
+      "question": "在一个基于类的 Web 框架风格中，中间件通常以某种「调用下一个处理者」的形式串联。以下哪个概念最准确地描述了这种串联机制？",
+      "options": [
+        "中间件之间通过全局变量直接互相调用",
+        "每个中间件接收一个表示「链中后续处理」的可调用对象，并在合适时机调用它",
+        "中间件之间通过数据库表传递请求对象",
+        "中间件由浏览器按顺序逐个发起 HTTP 请求来执行"
+      ],
+      "answer": 1,
+      "explanation": "中间件链的典型实现是把「后续处理」作为参数传递给当前中间件，由它决定何时继续；其他选项把进程内调用误解为全局变量、数据库或浏览器行为。",
+      "error_tag": "中间件链机制误解",
+      "variant_group": "py.web.middleware-chain"
+    },
+    {
+      "kp": "py.web.middleware",
+      "type": "single_choice",
+      "question": "某中间件在响应阶段读取并修改了由视图返回的响应对象。关于这一做法，下列说法正确的是？",
+      "options": [
+        "中间件无权访问响应对象，因此该做法一定会报错",
+        "中间件可以访问并修改响应，只要框架允许在调用下游之后获得响应对象",
+        "只有在响应已经发送给客户端之后，中间件才能修改响应",
+        "中间件修改响应会导致请求被重新路由到其他视图"
+      ],
+      "answer": 1,
+      "explanation": "包裹式中间件在调用下游后可拿到响应对象并修改（如加响应头、压缩、改写内容）；A 过于绝对，C 时序错误，D 与路由无关。",
+      "error_tag": "响应阶段能力误解",
+      "variant_group": "py.web.middleware-response"
+    },
+    {
+      "kp": "py.web.middleware",
+      "type": "single_choice",
+      "question": "你想让中间件在视图抛出未捕获异常时统一记录日志并返回自定义错误页。合理的位置是？",
+      "options": [
+        "在调用下游处理的代码块外使用 try/except 包裹，捕获异常后构造并返回错误响应",
+        "在中间件初始化时用 try/except 包裹注册语句，注册失败时返回错误页",
+        "在视图函数内部用 try/except 包裹，每个视图重复写一次",
+        "在服务器的启动参数里加上 --error-page，由运行时自动生成"
+      ],
+      "answer": 0,
+      "explanation": "中间件包裹下游调用，可在其外围捕获异常并统一处理，是异常处理中间件的典型实现；初始化时包裹注册语句与请求无关，视图内重复违背中间件初衷，启动参数不涉及异常页生成。",
+      "error_tag": "异常处理位置误解",
+      "variant_group": "py.web.middleware-exception"
+    },
+    {
+      "kp": "py.web.middleware",
+      "type": "single_choice",
+      "question": "关于中间件的「顺序」，下列说法正确的是？",
+      "options": [
+        "中间件的执行顺序由字母顺序决定，与注册顺序无关",
+        "认证中间件一般应放在日志中间件之前，以便未认证请求不被记录",
+        "中间件的顺序会影响请求与响应阶段的执行次序，应结合依赖关系合理安排",
+        "中间件的顺序不会影响功能，只要都注册了就能保证正确性"
+      ],
+      "answer": 2,
+      "explanation": "中间件顺序同时影响请求进入方向与响应返回方向的执行次序，依赖关系不同会改变结果，需要合理编排；字母顺序、固定前后、顺序无关的说法均不成立。",
+      "error_tag": "中间件顺序重要性忽视",
+      "variant_group": "py.web.middleware-order"
+    },
+    {
+      "kp": "py.web.middleware",
+      "type": "single_choice",
+      "question": "某个中间件在每次请求时都新建数据库连接，但从不关闭。这最可能引发的问题是？",
+      "options": [
+        "连接数持续增长，最终耗尽数据库连接资源",
+        "中间件将被框架自动卸载",
+        "请求会被自动重定向到 /health",
+        "视图函数将无法再被调用"
+      ],
+      "answer": 0,
+      "explanation": "中间件中管理连接属于资源生命周期问题，只创建不释放会导致连接泄漏；B、C、D 描述的行为与连接未关闭没有因果关系。",
+      "error_tag": "资源管理意识不足",
+      "variant_group": "py.web.middleware-resource"
+    },
+    {
+      "kp": "py.web.auth_jwt",
+      "type": "single_choice",
+      "question": "在基于令牌的 Web 认证中，JWT 由三部分组成，它们依次是：",
+      "options": [
+        "Header、Payload、Signature",
+        "Username、Password、Token",
+        "Session、Cookie、Nonce",
+        "Public Key、Private Key、Hash"
+      ],
+      "answer": 0,
+      "explanation": "JWT 结构固定为头部(Header)声明算法与类型、载荷(Payload)放声明、签名(Signature)用于校验完整性，三者以点号连接。",
+      "error_tag": "概念混淆",
+      "variant_group": "jwt_structure"
+    },
+    {
+      "kp": "py.web.auth_jwt",
+      "type": "single_choice",
+      "question": "JWT 的 Payload 部分默认是 Base64Url 编码的，这带来的安全含义是：",
+      "options": [
+        "Payload 被加密，只有持有密钥者能读取",
+        "Payload 可被任何人解码读取，因此不应放敏感信息",
+        "Payload 一旦编码就无法修改",
+        "Payload 只有签名验证通过后才能解码"
+      ],
+      "answer": 1,
+      "explanation": "Base64Url 是编码而非加密，任何人都能解开查看内容，所以载荷中不能存放密码等敏感数据；防篡改靠的是签名。",
+      "error_tag": "概念混淆",
+      "variant_group": "jwt_payload"
+    },
+    {
+      "kp": "py.web.auth_jwt",
+      "type": "single_choice",
+      "question": "以下哪种信息不适合放进 JWT 的 Payload？",
+      "options": [
+        "用户的角色标识",
+        "令牌的签发时间 iat",
+        "用户的明文登录密码",
+        "令牌的唯一编号 jti"
+      ],
+      "answer": 2,
+      "explanation": "Payload 可被任何持有者解码读取，明文密码属于敏感信息绝不能放入；角色、iat、jti 等声明是常见且合适的用法。",
+      "error_tag": "概念混淆",
+      "variant_group": "jwt_payload"
+    },
+    {
+      "kp": "py.web.auth_jwt",
+      "type": "multi_choice",
+      "question": "在设计基于 JWT 的认证时，下列哪些措施有助于降低安全风险？（多选）",
+      "options": [
+        "服务端显式限定允许的签名算法白名单",
+        "在 Payload 中存放用户明文密码以便免查库",
+        "设置合理的短有效期并支持刷新令牌",
+        "仅在 HTTPS 下传输令牌",
+        "把签名密钥硬编码在客户端代码里"
+      ],
+      "answer": [
+        0,
+        2,
+        3
+      ],
+      "explanation": "限定算法白名单可防算法混淆，短有效期与刷新令牌限制泄露窗口，HTTPS 防止中间人窃取。Payload 放明文密码和把密钥硬编码在客户端都是严重错误。",
+      "error_tag": "概念混淆",
+      "variant_group": "jwt_security_practices"
+    },
+    {
+      "kp": "py.web.auth_jwt",
+      "type": "multi_choice",
+      "question": "关于 JWT 校验，下列说法正确的有：（多选）",
+      "options": [
+        "必须验证签名，不能只做 Base64 解码就信任内容",
+        "必须检查 exp 等时间声明是否在有效期内",
+        "应校验 iss、aud 等声明以确认令牌由预期的签发方、面向预期的受众",
+        "只要 Payload 中有 role: admin 就可以直接授予管理员权限，无需签名校验"
+      ],
+      "answer": [
+        0,
+        1,
+        2
+      ],
+      "explanation": "JWT 内容可被任意解码，只有通过签名与声明校验才可信任；iss/aud 防止令牌被挪用到其他系统。仅凭可读字段判断权限相当于完全放弃认证。",
+      "error_tag": "概念混淆",
+      "variant_group": "jwt_verification"
+    },
+    {
+      "kp": "py.web.auth_jwt",
+      "type": "multi_choice",
+      "question": "关于访问令牌与刷新令牌，下列描述正确的有：（多选）",
+      "options": [
+        "访问令牌有效期通常较短，用于访问受保护资源",
+        "刷新令牌有效期更长，用于换取新的访问令牌",
+        "刷新令牌泄露的危害通常比访问令牌更大，应更严格保护并支持吊销",
+        "访问令牌应始终保持永久有效，避免用户重复登录"
+      ],
+      "answer": [
+        0,
+        1,
+        2
+      ],
+      "explanation": "访问令牌短命、刷新令牌长命，是常见的折中方案。刷新令牌能换取新令牌，泄露后果更严重，需要更强的保护和吊销机制；访问令牌永久有效会极大放大泄露风险。",
+      "error_tag": "概念混淆",
+      "variant_group": "jwt_token_lifecycle"
+    },
+    {
+      "kp": "py.web.auth_jwt",
+      "type": "multi_choice",
+      "question": "使用无状态 JWT 实现认证时，会面临哪些固有挑战？（多选）",
+      "options": [
+        "令牌签发后在过期前难以撤销，需要额外的黑名单或版本号机制",
+        "无法在服务端直接修改令牌中的声明，只能重新签发",
+        "令牌体积通常比会话 ID 大，会增加每次请求的传输开销",
+        "无法在 Payload 中表达用户身份信息"
+      ],
+      "answer": [
+        0,
+        1,
+        2
+      ],
+      "explanation": "无状态意味着服务端不保存储会话，撤销与修改声明需要额外机制；令牌自包含也带来体积开销。Payload 恰恰可以携带身份相关信息，故最后一项错误。",
+      "error_tag": "概念混淆",
+      "variant_group": "jwt_stateless_tradeoffs"
+    },
+    {
+      "kp": "py.web.auth_jwt",
+      "type": "fill_blank",
+      "question": "JWT 的 Payload 中表示「过期时间」的标准声明的名称是 ______（填英文缩写）。",
+      "options": [],
+      "answer": [
+        "exp",
+        "exp claim",
+        "expiration time",
+        "exp(过期时间)"
+      ],
+      "explanation": "exp 是 Expiration Time 的标准声明，用于表示令牌的过期时间点，校验时必须检查。",
+      "error_tag": "记忆缺失",
+      "variant_group": "jwt_claims"
+    },
+    {
+      "kp": "py.web.auth_jwt",
+      "type": "fill_blank",
+      "question": "在 JWT 中，用来表达「该令牌面向哪个受众（接收方）」的标准声明的名称是 ______（填英文缩写）。",
+      "options": [],
+      "answer": [
+        "aud",
+        "audience",
+        "aud claim"
+      ],
+      "explanation": "aud 即 Audience，用于限定令牌的目标接收方；校验 aud 可以防止一个系统的令牌被拿到另一个系统上使用。",
+      "error_tag": "记忆缺失",
+      "variant_group": "jwt_claims"
+    },
+    {
+      "kp": "py.web.auth_jwt",
+      "type": "code_reading",
+      "question": "阅读下面的伪代码片段：\n\ndecoded = base64url_decode(token.split('.')[1])\nif decoded.get('role') == 'admin':\n    grant_admin_access()\n\n问题：这段代码在认证上存在什么根本性问题？请说明原因。",
+      "options": [],
+      "answer": "它只对 Payload 做了 Base64Url 解码就依据其中的 role 字段授予权限，完全没有验证签名（也没有检查 exp 等声明）。由于 Payload 可被任何人解码甚至篡改，攻击者可以自行构造 role 为 admin 的载荷并得到管理员权限。正确做法是先验证签名与声明，再信任其中的内容。",
+      "explanation": "JWT 的安全性来自签名校验，而不是内容不可读。跳过验签直接使用声明等同于放弃认证，是最典型的 JWT 误用。",
+      "error_tag": "概念混淆",
+      "variant_group": "jwt_verification"
+    },
+    {
+      "kp": "py.web.auth_jwt",
+      "type": "code_reading",
+      "question": "阅读下面的伪代码片段：\n\nheader = decode_header(token)\nalg = header.get('alg')\nif alg == 'RS256':\n    verify_with_public_key(token)\nelif alg == 'HS256':\n    verify_with_shared_secret(token, public_key)\n\n问题：这段验签逻辑存在什么安全缺陷？请说明原因。",
+      "options": [],
+      "answer": "它完全信任令牌头中的 alg 字段，并在 HS256 分支里用公开的公钥当作 HMAC 共享密钥来验签。攻击者可以把 alg 改成 HS256，并用已知的公钥对伪造载荷签名，从而通过校验。正确做法是服务端用白名单固定允许的算法，绝不接受来自令牌头的任意算法选择。",
+      "explanation": "这是典型的算法混淆攻击。验签方必须自行决定算法，不能由攻击者可控的令牌头来指定。",
+      "error_tag": "边界错误",
+      "variant_group": "jwt_algorithm_confusion"
+    },
+    {
+      "kp": "py.web.auth_jwt",
+      "type": "scenario",
+      "question": "工程场景：某电商团队的前端把 JWT 存在 localStorage 中，并在每个请求的 Authorization 头里携带。近期安全审计指出存在 XSS 导致令牌被窃取的风险。团队希望保持前后端分离的架构，同时降低该风险。请给出你的改进建议，并说明每项建议针对的威胁。",
+      "options": [],
+      "answer": null,
+      "explanation": "可行的改造包括：把令牌改存到 HttpOnly + Secure 的 Cookie，使脚本无法读取以缓解 XSS 窃取；若改用 Cookie 自动携带，需引入 CSRF 防护（SameSite 或 CSRF 令牌）；全站强制 HTTPS 防止传输窃听；同时配合短有效期与刷新令牌进一步压缩泄露窗口。",
+      "error_tag": "概念混淆",
+      "variant_group": "jwt_storage",
+      "required_keywords": [
+        "XSS",
+        "CSRF",
+        "HTTPS"
+      ]
+    },
+    {
+      "kp": "py.web.auth_jwt",
+      "type": "single_choice",
+      "question": "服务端校验 JWT 时，为何必须先确认 Header 中的算法，再决定用什么方式验签？",
+      "options": [
+        "因为算法字段决定了令牌的有效期",
+        "因为不同算法的密钥长度不同",
+        "因为如果不限定算法，攻击者可能把算法改为 none 或改用非对称公钥当作对称密钥来伪造签名",
+        "因为算法字段会影响 Base64 解码结果"
+      ],
+      "answer": 2,
+      "explanation": "典型攻击包括算法置为 none 绕过验签、或把 RS256 公钥当 HS256 的密钥使用。因此服务端应显式白名单允许的算法，不能盲信令牌头。",
+      "error_tag": "边界错误",
+      "variant_group": "jwt_algorithm_confusion"
+    },
+    {
+      "kp": "py.web.auth_jwt",
+      "type": "scenario",
+      "question": "工程场景：某服务支持用户注销与「修改密码后立即让所有旧令牌失效」。但当前实现是无状态 JWT，令牌在过期前一直有效，导致注销后旧令牌仍可访问接口。请给出可行的解决方案，并简要说明其代价。",
+      "options": [],
+      "answer": null,
+      "explanation": "常见做法有：维护令牌黑名单（按 jti 标识被吊销的令牌），但需要共享存储、回到部分有状态；或者给用户维护一个令牌版本号/密钥派生计数器，改密码或注销时递增，使旧令牌版本不匹配而失效；也可缩短有效期并配合刷新令牌，把失效延迟控制在较小范围。每种方案都要在安全性与存储、复杂度之间权衡。",
+      "error_tag": "概念混淆",
+      "variant_group": "jwt_revocation",
+      "required_keywords": [
+        "版本",
+        "复杂度"
+      ]
+    },
+    {
+      "kp": "py.web.auth_jwt",
+      "type": "single_choice",
+      "question": "关于 JWT 的签名密钥，下面做法最安全的是：",
+      "options": [
+        "把密钥写在前端代码里，便于统一管理",
+        "把密钥硬编码在客户端与服务端同一份源码中",
+        "密钥只保存在服务端，通过环境变量或密钥管理服务注入，并定期轮换",
+        "把密钥放进 JWT 的 Payload 里随令牌下发"
+      ],
+      "answer": 2,
+      "explanation": "签名密钥一旦泄露即可伪造任意令牌，必须只存在于服务端，通过环境变量或专用密钥管理服务注入，并支持轮换。",
+      "error_tag": "记忆缺失",
+      "variant_group": "jwt_secret_management"
+    },
+    {
+      "kp": "py.web.auth_jwt",
+      "type": "single_choice",
+      "question": "一个 JWT 的 Payload 中包含 exp 声明。若客户端收到一个已过 exp 的令牌，正确做法是：",
+      "options": [
+        "忽略 exp，只要签名有效就继续放行",
+        "自动把 exp 改成未来的时间后重新签名使用",
+        "拒绝该令牌并要求客户端重新登录或刷新令牌",
+        "仅当请求来自内网时才放行"
+      ],
+      "answer": 2,
+      "explanation": "exp 是过期时间声明，校验通过意味着令牌已失效，服务端应拒绝并引导重新认证。放宽过期检查会显著扩大令牌泄露的窗口期。",
+      "error_tag": "边界错误",
+      "variant_group": "jwt_expiry"
+    },
+    {
+      "kp": "py.web.auth_jwt",
+      "type": "single_choice",
+      "question": "访问令牌（access token）通常设置较短有效期，配合刷新令牌（refresh token）使用。这样设计的主要目的是：",
+      "options": [
+        "减少服务端存储用户信息的空间",
+        "在令牌泄露时把攻击窗口限制在较短时间内，同时用刷新令牌维持用户体验",
+        "让每次请求都不必验签，提升性能",
+        "避免使用 HTTPS"
+      ],
+      "answer": 1,
+      "explanation": "短命访问令牌降低泄露危害，刷新令牌用于换取新的访问令牌，从而兼顾安全性与用户不必频繁登录的体验。",
+      "error_tag": "概念混淆",
+      "variant_group": "jwt_token_lifecycle"
+    },
+    {
+      "kp": "py.web.auth_jwt",
+      "type": "single_choice",
+      "question": "在浏览器中存储 JWT 时，若把它放进 HttpOnly + Secure 的 Cookie，相比放进 localStorage 的主要优势是：",
+      "options": [
+        "令牌不会被服务器读取",
+        "JavaScript 无法读取该 Cookie，降低 XSS 场景下令牌被窃取的风险",
+        "可以完全免除 CSRF 攻击",
+        "令牌长度会被自动压缩"
+      ],
+      "answer": 1,
+      "explanation": "HttpOnly 使脚本不能读取 Cookie，减小 XSS 直接偷走令牌的概率；但它并不免除 CSRF，仍需要 SameSite 或 CSRF 令牌等防护。",
+      "error_tag": "概念混淆",
+      "variant_group": "jwt_storage"
+    },
+    {
+      "kp": "py.web.auth_jwt",
+      "type": "single_choice",
+      "question": "使用 HMAC（对称）算法签名 JWT 时，验证方与签发方之间需要共享的是：",
+      "options": [
+        "一对公私钥中的私钥",
+        "一对公私钥中的公钥",
+        "同一个共享密钥",
+        "用户的明文密码"
+      ],
+      "answer": 2,
+      "explanation": "HS256 等对称算法用同一密钥签名与验签，因此双方必须安全共享该密钥；RS256 等非对称算法才使用私钥签名、公钥验签。",
+      "error_tag": "概念混淆",
+      "variant_group": "jwt_signing"
+    },
+    {
+      "kp": "py.web.auth_jwt",
+      "type": "single_choice",
+      "question": "JWT 的中间部分（Payload）属于标准的三段式结构。若收到的令牌只有两段、用点号分成两部分，正确的处理是：",
+      "options": [
+        "把它当作合法令牌，缺失的签名部分视作空串",
+        "按无效令牌拒绝，因为合法 JWT 必须包含头、载荷、签名三段",
+        "自动补一个签名段后接受",
+        "只校验前两段即可放行"
+      ],
+      "answer": 1,
+      "explanation": "JWT 的紧凑序列化格式固定为三段，任何段缺失都说明令牌不合法，应当直接拒绝而不是做容错补全。",
+      "error_tag": "边界错误",
+      "variant_group": "jwt_format_validation"
+    },
+    {
+      "kp": "py.web.auth_jwt",
+      "type": "single_choice",
+      "question": "服务端把 JWT 的校验结果缓存起来，下一次同一令牌直接复用缓存结论而不重新验签。这种做法在令牌过期时的风险是：",
+      "options": [
+        "没有风险，因为签名永远有效",
+        "缓存若未与 exp 对齐，可能在令牌已过期后仍放行请求",
+        "缓存能自动更新 exp 字段",
+        "会导致签名算法被篡改"
+      ],
+      "answer": 1,
+      "explanation": "缓存必须覆盖包含 exp 在内的全部校验结论，并确保在令牌过期前失效；否则会出现已过期令牌仍被放行的窗口。",
+      "error_tag": "边界错误",
+      "variant_group": "jwt_verification_cache"
+    }
+  ]
+}
